@@ -46,6 +46,25 @@ Naruon is the product experiment that starts in email. An inbox is not just a me
 - **맥락 종합**: 보낸 사람, 프로젝트, 관계, 타임라인, 근거를 연결합니다.
 - **판단과 실행**: 대기 작업, 일정 충돌, 답장, 위임, 확인 요청으로 이어갑니다.
 
+## Public Projects
+
+These repositories are public and are not forks.
+
+Product and tool repositories:
+
+- **[naruon](https://github.com/ContextualWisdomLab/naruon)**: 메일, 첨부, 일정, 작업을 맥락으로 묶어 판단과 실행으로 연결하는 AI 이메일 워크스페이스입니다.
+- **[pg-erd-cloud](https://github.com/ContextualWisdomLab/pg-erd-cloud)**: PostgreSQL 스키마를 리버스 엔지니어링하고 ERD와 DDL 공유 흐름으로 관리하는 클라우드 MVP입니다.
+- **[bandscope](https://github.com/ContextualWisdomLab/bandscope)**: 곡을 섹션, 역할, 템포, 연습 우선순위로 분석하는 로컬 우선 리허설 앱입니다.
+- **[codec-carver](https://github.com/ContextualWisdomLab/codec-carver)**: 긴 녹음을 메타데이터를 보존한 FLAC/Opus 조각으로 변환하는 Python CLI입니다.
+- **[newsdom-api](https://github.com/ContextualWisdomLab/newsdom-api)**: 스캔된 일본어 신문 PDF를 기사, 제목, 본문, 이미지 구조의 DOM형 JSON으로 파싱하는 API입니다.
+- **[scopeweave](https://github.com/ContextualWisdomLab/scopeweave)**: 트리 편집, 진행률 계산, CSV/JSON, 주간 Gantt를 지원하는 정적 HTML/CSS/JS WBS 플래너입니다.
+- **[VibeSec](https://github.com/ContextualWisdomLab/VibeSec)**: 바이브코딩 앱을 위한 보안 가드레일입니다. AI 개발 도구 규칙, 정적 점검, 리뷰와 수정 프롬프트를 다룹니다.
+
+Organization assets:
+
+- **[ContextualWisdomLab.github.io](https://github.com/ContextualWisdomLab/ContextualWisdomLab.github.io)**: 맥락지혜 연구실 홈페이지입니다. DIKW, Naruon, 로고, 연구와 제품 방향을 소개합니다.
+- **[.github](https://github.com/ContextualWisdomLab/.github)**: 조직 프로필과 공개 소개 자산을 관리하는 저장소입니다.
+
 ## Forked Projects
 
 These repositories started from external upstream projects and are tracked separately from lab-originated work.
