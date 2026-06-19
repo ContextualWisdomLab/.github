@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" role="img" aria-labelledby="title desc">
   <title id="title">Contextual Wisdom Lab avatar</title>
-  <desc id="desc">A square Contextual Wisdom Lab mark showing layered records threaded toward a gold judgment point.</desc>
+  <desc id="desc">A square mark showing scattered record cards connected by one line toward a next action point.</desc>
   <defs>
-    <linearGradient id="wisdomLine" x1="130" y1="372" x2="368" y2="126" gradientUnits="userSpaceOnUse">
+    <linearGradient id="connectionLine" x1="132" y1="350" x2="360" y2="150" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#287375"/>
       <stop offset="1" stop-color="#BE8F40"/>
     </linearGradient>
@@ -12,14 +12,14 @@
   </defs>
   <rect width="500" height="500" rx="104" fill="#F7F5F0"/>
   <g filter="url(#softShadow)">
-    <path d="M134 365 C173 251 255 177 372 127" fill="none" stroke="url(#wisdomLine)" stroke-width="28" stroke-linecap="round"/>
-    <path d="M114 120 H210 V216 H114 Z" fill="#D6DAD8"/>
-    <path d="M190 198 H286 V294 H190 Z" fill="#D6DAD8" opacity="0.78"/>
-    <path d="M246 280 H342 V376 H246 Z" fill="#D6DAD8" opacity="0.48"/>
-    <circle cx="132" cy="368" r="34" fill="#16263D"/>
-    <circle cx="208" cy="266" r="34" fill="#B9CECC"/>
-    <circle cx="280" cy="194" r="34" fill="#4F5968"/>
-    <circle cx="376" cy="126" r="34" fill="#BE8F40"/>
-    <path d="M126 430 H374" stroke="#16263D" stroke-width="17" stroke-linecap="round"/>
+    <rect x="108" y="112" width="112" height="88" rx="12" fill="#D6DAD8"/>
+    <rect x="188" y="172" width="112" height="88" rx="12" fill="#D6DAD8" opacity="0.76"/>
+    <rect x="268" y="238" width="112" height="88" rx="12" fill="#D6DAD8" opacity="0.5"/>
+    <path d="M132 350 L198 278 L270 224 L360 150" fill="none" stroke="url(#connectionLine)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="132" cy="350" r="34" fill="#16263D"/>
+    <circle cx="198" cy="278" r="34" fill="#B9CECC"/>
+    <circle cx="270" cy="224" r="34" fill="#4F5968"/>
+    <circle cx="360" cy="150" r="34" fill="#BE8F40"/>
+    <path d="M132 408 H368" stroke="#16263D" stroke-width="17" stroke-linecap="round"/>
   </g>
 </svg>

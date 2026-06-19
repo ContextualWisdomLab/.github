@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 260" role="img" aria-labelledby="title desc">
   <title id="title">Contextual Wisdom Lab logo</title>
-  <desc id="desc">An original logo for Contextual Wisdom Lab, showing layered records threaded into context-bound judgment beside the Korean name 맥락지혜 연구실.</desc>
+  <desc id="desc">A logo for Contextual Wisdom Lab, showing scattered record cards connected by one line beside the Korean name 맥락지혜 연구실.</desc>
   <defs>
-    <linearGradient id="wisdomLine" x1="80" y1="190" x2="220" y2="50" gradientUnits="userSpaceOnUse">
+    <linearGradient id="connectionLine" x1="86" y1="172" x2="204" y2="76" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#287375"/>
       <stop offset="1" stop-color="#BE8F40"/>
     </linearGradient>
@@ -12,16 +12,15 @@
   </defs>
 
   <rect x="40" y="34" width="188" height="188" rx="38" fill="#F7F5F0" filter="url(#softShadow)"/>
-  <path d="M82 176 C104 114 147 81 204 66" fill="none" stroke="url(#wisdomLine)" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="84" cy="178" r="15" fill="#16263D"/>
-  <circle cx="122" cy="126" r="15" fill="#287375"/>
-  <circle cx="163" cy="91" r="15" fill="#4F5968"/>
-  <circle cx="204" cy="66" r="15" fill="#BE8F40"/>
-
-  <path d="M73 74 H119 V120 H73 Z" fill="#D6DAD8"/>
-  <path d="M101 112 H147 V158 H101 Z" fill="#D6DAD8" opacity="0.74"/>
-  <path d="M133 145 H179 V191 H133 Z" fill="#D6DAD8" opacity="0.48"/>
-  <path d="M76 201 H201" stroke="#16263D" stroke-width="6" stroke-linecap="round" opacity="0.86"/>
+  <rect x="72" y="70" width="50" height="40" rx="5" fill="#D6DAD8"/>
+  <rect x="112" y="104" width="50" height="40" rx="5" fill="#D6DAD8" opacity="0.76"/>
+  <rect x="152" y="138" width="50" height="40" rx="5" fill="#D6DAD8" opacity="0.5"/>
+  <path d="M86 172 L120 134 L160 106 L204 76" fill="none" stroke="url(#connectionLine)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="86" cy="172" r="15" fill="#16263D"/>
+  <circle cx="120" cy="134" r="15" fill="#287375"/>
+  <circle cx="160" cy="106" r="15" fill="#4F5968"/>
+  <circle cx="204" cy="76" r="15" fill="#BE8F40"/>
+  <path d="M78 200 H200" stroke="#16263D" stroke-width="6" stroke-linecap="round" opacity="0.86"/>
 
   <text x="270" y="103" fill="#16263D" font-family="Inter, Pretendard, Apple SD Gothic Neo, Arial, sans-serif" font-size="44" font-weight="750" letter-spacing="0">
     Contextual Wisdom Lab
