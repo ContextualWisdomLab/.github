@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 260" role="img" aria-labelledby="title desc">
   <title id="title">Contextual Wisdom Lab logo</title>
-  <desc id="desc">An original logo for Contextual Wisdom Lab, showing context layers rising from data to wisdom beside the Korean name 맥락과 지혜 연구실.</desc>
+  <desc id="desc">An original logo for Contextual Wisdom Lab, showing layered records threaded into context-bound judgment beside the Korean name 맥락지혜 연구실.</desc>
   <defs>
     <linearGradient id="wisdomLine" x1="80" y1="190" x2="220" y2="50" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#287375"/>
@@ -27,7 +27,7 @@
     Contextual Wisdom Lab
   </text>
   <text x="272" y="150" fill="#287375" font-family="Pretendard, Apple SD Gothic Neo, Noto Sans KR, Arial, sans-serif" font-size="28" font-weight="650" letter-spacing="0">
-    맥락과 지혜 연구실
+    맥락지혜 연구실
   </text>
   <text x="272" y="191" fill="#4F5968" font-family="Inter, Pretendard, Apple SD Gothic Neo, Arial, sans-serif" font-size="22" letter-spacing="0">
     Context into judgment. Judgment into action.

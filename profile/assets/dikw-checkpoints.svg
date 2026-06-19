@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 330" role="img" aria-labelledby="title desc">
+  <title id="title">DIKW checkpoints diagram</title>
+  <desc id="desc">A horizontal flow of four checkpoints, from records through context and judgment to action.</desc>
+  <defs>
+    <linearGradient id="flow" x1="96" y1="165" x2="1024" y2="165" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#287375"/>
+      <stop offset="1" stop-color="#be8f40"/>
+    </linearGradient>
+  </defs>
+  <rect width="1120" height="330" rx="24" fill="#fff"/>
+  <path d="M126 165 H994" stroke="url(#flow)" stroke-width="12" stroke-linecap="round"/>
+  <g fill="#f7f5f0" stroke="#d6dad8" stroke-width="2">
+    <rect x="64" y="70" width="180" height="190" rx="18"/>
+    <rect x="334" y="70" width="180" height="190" rx="18"/>
+    <rect x="604" y="70" width="180" height="190" rx="18"/>
+    <rect x="874" y="70" width="180" height="190" rx="18"/>
+  </g>
+  <g>
+    <circle cx="154" cy="165" r="44" fill="#16263d"/>
+    <circle cx="424" cy="165" r="44" fill="#287375"/>
+    <circle cx="694" cy="165" r="44" fill="#4f5968"/>
+    <circle cx="964" cy="165" r="44" fill="#be8f40"/>
+  </g>
+  <g fill="#fff" font-family="Inter, Arial, sans-serif" font-size="38" font-weight="850" text-anchor="middle" dominant-baseline="middle">
+    <text x="154" y="168">D</text>
+    <text x="424" y="168">I</text>
+    <text x="694" y="168">K</text>
+    <text x="964" y="168">W</text>
+  </g>
+  <g stroke="#d6dad8" stroke-width="8" stroke-linecap="round">
+    <path d="M102 232 H206"/>
+    <path d="M372 232 H476"/>
+    <path d="M642 232 H746"/>
+    <path d="M912 232 H1016"/>
+  </g>
+</svg>

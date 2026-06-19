@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 560" role="img" aria-labelledby="title desc">
+  <title id="title">Context threading diagram</title>
+  <desc id="desc">Scattered enterprise records are threaded into one context path that ends in a gold judgment point.</desc>
+  <defs>
+    <linearGradient id="thread" x1="114" y1="430" x2="618" y2="118" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#287375"/>
+      <stop offset="0.52" stop-color="#477f7c"/>
+      <stop offset="1" stop-color="#be8f40"/>
+    </linearGradient>
+    <filter id="shadow" x="-16%" y="-16%" width="132%" height="132%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#16263d" flood-opacity="0.13"/>
+    </filter>
+  </defs>
+  <rect x="18" y="18" width="724" height="524" rx="28" fill="#fff"/>
+  <g fill="#f7f5f0" stroke="#d6dad8" stroke-width="2">
+    <rect x="70" y="80" width="150" height="110" rx="14"/>
+    <rect x="70" y="238" width="150" height="110" rx="14"/>
+    <rect x="70" y="396" width="150" height="110" rx="14"/>
+    <rect x="294" y="158" width="150" height="110" rx="14"/>
+    <rect x="294" y="318" width="150" height="110" rx="14"/>
+  </g>
+  <g stroke="#d6dad8" stroke-width="10" stroke-linecap="round">
+    <path d="M102 124 H178"/>
+    <path d="M102 154 H156"/>
+    <path d="M102 282 H178"/>
+    <path d="M102 312 H150"/>
+    <path d="M102 440 H178"/>
+    <path d="M102 470 H160"/>
+    <path d="M326 202 H402"/>
+    <path d="M326 232 H380"/>
+    <path d="M326 362 H402"/>
+    <path d="M326 392 H374"/>
+  </g>
+  <path d="M145 451 C214 345 248 280 363 274 C497 266 508 156 612 118" fill="none" stroke="url(#thread)" stroke-width="18" stroke-linecap="round"/>
+  <g filter="url(#shadow)">
+    <circle cx="145" cy="451" r="26" fill="#16263d"/>
+    <circle cx="250" cy="316" r="24" fill="#287375"/>
+    <circle cx="365" cy="274" r="24" fill="#4f5968"/>
+    <circle cx="500" cy="207" r="24" fill="#b9cecc"/>
+    <circle cx="612" cy="118" r="34" fill="#be8f40"/>
+  </g>
+  <path d="M560 250 H665 V392 H560 Z" fill="#16263d" opacity="0.96"/>
+  <path d="M585 286 H640" stroke="#fff" stroke-width="9" stroke-linecap="round"/>
+  <path d="M585 321 H626" stroke="#b9cecc" stroke-width="9" stroke-linecap="round"/>
+  <path d="M585 356 H649" stroke="#be8f40" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="612" cy="118" r="48" fill="none" stroke="#be8f40" stroke-width="3" opacity="0.34"/>
+</svg>
