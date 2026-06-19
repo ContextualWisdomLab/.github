@@ -6,9 +6,9 @@
 
 **맥락과 지혜 연구실**은 흩어진 기업 자료를 판단 가능한 구조로 바꾸는 AI 의사결정 지원 시스템을 연구하고 만듭니다.
 
-정보가 부족해서 어려운 것이 아니라, 판단해야 할 맥락이 흩어져 있어서 어렵습니다. Contextual Wisdom Lab은 문서, 메일, 로그, 회의록, VOC, 일정처럼 분산된 자료를 연결해 사람이 덜 소모되고 조직이 더 원활하게 움직이는 구조를 설계합니다.
+정보가 부족해서 어려운 것이 아니라, 판단해야 할 맥락이 흩어져 있어서 어렵습니다. 구슬이 서 말이어도 꿰어야 보배이듯, Contextual Wisdom Lab은 문서, 메일, 로그, 회의록, VOC, 일정처럼 분산된 자료를 연결해 사람이 덜 소모되고 조직이 더 원활하게 움직이는 구조를 설계합니다.
 
-[Homepage](https://contextwisdomlab.github.io/) · [GitHub](https://github.com/ContextWisdomLab)
+[Homepage](https://contextualwisdomlab.github.io/) · [GitHub](https://github.com/ContextualWisdomLab)
 
 ## What We Build
 
