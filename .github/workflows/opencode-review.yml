@@ -2664,7 +2664,15 @@ jobs:
             (
               cd "$source_root"
               if command -v actionlint >/dev/null 2>&1; then
-                actionlint -shellcheck= -pyflakes= .github/workflows/opencode-review.yml .github/workflows/strix.yml
+                workflow_files=()
+                for workflow_file in .github/workflows/opencode-review.yml .github/workflows/strix.yml; do
+                  if [ -f "$workflow_file" ]; then
+                    workflow_files+=("$workflow_file")
+                  fi
+                done
+                if [ "${#workflow_files[@]}" -gt 0 ]; then
+                  actionlint -shellcheck= -pyflakes= "${workflow_files[@]}"
+                fi
               else
                 printf 'actionlint unavailable; skipped workflow schema validation.\n'
               fi
@@ -2800,29 +2808,9 @@ jobs:
               elif approve_low_risk_changed_files_after_model_failure "$failed_check_review_body_file"; then
                 create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
               else
-                body="$(printf '%s\n' \
-                  "## Pull request overview" \
-                  "" \
-                  "OpenCode model attempts did not produce a usable control block for this run. The trusted gate verified the current-head peer GitHub Checks and human review threads, but it will not approve without source-backed current-head review evidence." \
-                  "" \
-                  "## Findings" \
-                  "" \
-                  "### 1. MEDIUM Review Evidence Missing - Rerun OpenCode with usable current-head evidence" \
-                  "- Problem: OpenCode did not return a valid control block that can be tied to the changed files for head \`${HEAD_SHA}\`." \
-                  "- Root cause: The model attempts ended with outcomes primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; the workflow cannot distinguish a real clean review from invalid or unsupported model output." \
-                  "- Fix: Rerun or repair the OpenCode review path until the review names the changed-file evidence it inspected, then let the trusted gate evaluate that valid output." \
-                  "- Regression test: Keep invalid OpenCode model output on the request-changes path even when same-head peer checks are otherwise clean." \
-                  "" \
-                  "## Summary" \
-                  "" \
-                  "All same-head peer GitHub Checks completed without failed or pending contexts, and no unresolved human review threads remained. Approval still requires a valid current-head review summary that names changed-file evidence. Invalid model output is treated as review tooling instability, not as a source-code defect." \
-                  "" \
-                  "- Result: REQUEST_CHANGES" \
-                  "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; no valid source-backed review output was available for current head \`${HEAD_SHA}\`." \
-                  "- Head SHA: \`${HEAD_SHA}\`" \
-                  "- Workflow run: ${RUN_ID}" \
-                  "- Workflow attempt: ${RUN_ATTEMPT}")"
-                create_pull_review "REQUEST_CHANGES" "$body"
+                echo "::error::OpenCode model attempts did not produce a usable control block, and deterministic fallback approval did not apply for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
+                echo "::endgroup::"
+                exit 1
               fi
             fi
             echo "::endgroup::"
@@ -3060,7 +3048,66 @@ jobs:
               fi
               ;;
             *)
-              request_changes_for_gate_failure "Approval gate result was ${gate_result:-empty}."
+              failed_check_review_body_file="$(mktemp)"
+              failed_check_review_payload_file="$(mktemp)"
+              failed_check_inline_failure_body_file="$(mktemp)"
+              failed_checks_file="$(mktemp)"
+              if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
+                echo "::error::GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}. Leaving the PR review unchanged."
+                echo "::endgroup::"
+                exit 1
+              fi
+
+              if [ -s "$failed_checks_file" ]; then
+                failed_check_evidence_file="$(mktemp)"
+                if ! collect_failed_check_evidence_or_note "$failed_check_evidence_file"; then
+                  printf "Failed GitHub Check evidence could not be collected for current head \`%s\`.\n" "$HEAD_SHA" >"$failed_check_evidence_file"
+                fi
+                if comment_for_billing_lock_if_present "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
+                  echo "::endgroup::"
+                  exit 0
+                fi
+                if run_failed_check_diagnosis "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file" "$failed_check_review_payload_file" "$failed_check_inline_failure_body_file"; then
+                  create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")" "$failed_check_review_payload_file" "$failed_check_inline_failure_body_file"
+                else
+                  build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"
+                  create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
+                fi
+              else
+                pending_checks_file="$(mktemp)"
+                set +e
+                wait_for_peer_github_checks "$pending_checks_file"
+                pending_wait_status=$?
+                set -e
+                if [ "$pending_wait_status" -eq 1 ]; then
+                  echo "::error::GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}. Leaving the PR review unchanged."
+                  echo "::endgroup::"
+                  exit 1
+                elif [ "$pending_wait_status" -ne 0 ]; then
+                  build_pending_check_body "$pending_checks_file" "$failed_check_review_body_file"
+                  create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
+                else
+                  unresolved_human_threads_file="$(mktemp)"
+                  human_thread_review_body_file="$(mktemp)"
+                  if ! collect_unresolved_human_review_threads "$unresolved_human_threads_file"; then
+                    build_human_thread_lookup_failure_body "$human_thread_review_body_file"
+                    create_pull_review "REQUEST_CHANGES" "$(cat "$human_thread_review_body_file")"
+                  elif [ -s "$unresolved_human_threads_file" ]; then
+                    build_unresolved_human_threads_body "$unresolved_human_threads_file" "$human_thread_review_body_file"
+                    create_pull_review "REQUEST_CHANGES" "$(cat "$human_thread_review_body_file")"
+                  elif request_changes_for_merge_conflict_if_present; then
+                    :
+                  elif approve_review_tooling_bootstrap_after_model_failure "$failed_check_review_body_file"; then
+                    create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
+                  elif approve_low_risk_changed_files_after_model_failure "$failed_check_review_body_file"; then
+                    create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
+                  else
+                    echo "::error::OpenCode gate result ${gate_result:-empty} was not publishable, and deterministic fallback approval did not apply for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
+                    echo "::endgroup::"
+                    exit 1
+                  fi
+                fi
+              fi
               ;;
           esac
           echo "::endgroup::"
