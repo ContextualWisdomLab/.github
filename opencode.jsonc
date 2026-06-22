@@ -1,0 +1,37 @@
+{
+  "small_model": "github-models/deepseek/deepseek-v3-0324",
+  "models": [
+    {
+      "id": "openai/gpt-5",
+      "context": 200000,
+      "output": 100000
+    },
+    {
+      "id": "deepseek/deepseek-r1-0528",
+      "context": 128000,
+      "output": 8192
+    },
+    {
+      "id": "deepseek/deepseek-v3-0324",
+      "context": 128000,
+      "output": 8192
+    }
+  ],
+  "mcp": {
+    "servers": {
+      "codegraph": {
+        "command": "codegraph",
+        "args": ["serve", "--mcp"]
+      },
+      "deepwiki": {
+        "url": "https://mcp.deepwiki.com/mcp"
+      },
+      "context7": {
+        "package": "@upstash/context7-mcp@3.1.0"
+      },
+      "web_search": {
+        "package": "@guhcostan/web-search-mcp@1.0.5"
+      }
+    }
+  }
+}

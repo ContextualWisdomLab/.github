@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 STRUCTURAL_FAILURE_PHRASES = (
     "structural exploration was not possible",
     "structural exploration not possible",
@@ -199,20 +198,19 @@ def iter_json_objects(text: str) -> list[Any]:
     decoder = json.JSONDecoder()
     values: list[Any] = []
 
-    try:
-        values.append(json.loads(text))
-    except json.JSONDecodeError:
-        # OpenCode exports may contain prose around the JSON control object.
-        pass
-
-    for index, character in enumerate(text):
-        if character != "{":
-            continue
+    index = 0
+    while True:
+        index = text.find("{", index)
+        if index == -1:
+            break
         try:
-            value, _ = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
+            value, next_index = decoder.raw_decode(text, index)
+            values.append(value)
+            index = next_index
             continue
-        values.append(value)
+        except json.JSONDecodeError:
+            pass
+        index += 1
 
     return values
 
