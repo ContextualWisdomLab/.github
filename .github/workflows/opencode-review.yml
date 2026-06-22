@@ -2152,8 +2152,23 @@ jobs:
             local output_file="$1"
             local mode="$2"
             local runs_json
+            local workflow_lookup_err
 
             runs_json="$(mktemp)"
+            workflow_lookup_err="$(mktemp)"
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+              --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
+              if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+                : >"$output_file"
+                rm -f "$runs_json" "$workflow_lookup_err"
+                return 0
+              fi
+              cat "$workflow_lookup_err" >&2
+              rm -f "$runs_json" "$workflow_lookup_err"
+              return 1
+            fi
+            rm -f "$workflow_lookup_err"
+
             if ! env HEAD_SHA="$HEAD_SHA" gh run list \
               --repo "$GH_REPOSITORY" \
               --workflow strix.yml \
