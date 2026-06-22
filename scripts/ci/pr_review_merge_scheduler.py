@@ -291,8 +291,58 @@ def print_summary(
     )
 
 
+def test_fetch_open_prs_pagination() -> None:
+    global gh_graphql
+    original_gh_graphql = gh_graphql
+    call_args_list = []
+
+    def mock_gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
+        call_args_list.append(fields)
+        cursor = fields.get("cursor")
+        if not cursor:
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "cursor1"},
+                            "nodes": [{"number": 1}, {"number": 2}]
+                        }
+                    }
+                }
+            }
+        elif cursor == "cursor1":
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": "cursor2"},
+                            "nodes": [{"number": 3}]
+                        }
+                    }
+                }
+            }
+        return {"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": False, "endCursor": ""}, "nodes": []}}}}
+
+    gh_graphql = mock_gh_graphql  # type: ignore
+    try:
+        prs = fetch_open_prs("owner/repo", 10)
+        assert len(prs) == 3
+        assert prs[0]["number"] == 1
+        assert prs[1]["number"] == 2
+        assert prs[2]["number"] == 3
+        assert len(call_args_list) == 2
+        assert call_args_list[0]["pageSize"] == 10
+        assert call_args_list[0].get("cursor") is None
+        assert call_args_list[1]["pageSize"] == 8
+        assert call_args_list[1].get("cursor") == "cursor1"
+    finally:
+        gh_graphql = original_gh_graphql  # type: ignore
+
+
 def self_test() -> None:
-    sample = {
+    test_fetch_open_prs_pagination()
+
+    sample: dict[str, Any] = {
         "number": 1,
         "headRefOid": "abc",
         "isDraft": False,
