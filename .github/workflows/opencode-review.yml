@@ -2808,7 +2808,7 @@ jobs:
               elif approve_low_risk_changed_files_after_model_failure "$failed_check_review_body_file"; then
                 create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
               else
-                echo "::error::OpenCode model attempts did not produce a usable control block, and deterministic fallback approval did not apply for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
+                echo "::error::OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; OpenCode model attempts did not produce a usable control block, and deterministic fallback approval did not apply for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
                 echo "::endgroup::"
                 exit 1
               fi
