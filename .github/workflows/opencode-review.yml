@@ -1007,7 +1007,7 @@ jobs:
         id: opencode_review_primary
         if: needs.coverage-evidence.result == 'success'
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 15
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1017,6 +1017,7 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_MODEL_ATTEMPTS: "3"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -1065,7 +1066,7 @@ jobs:
           for opencode_attempt in $(seq 1 "$opencode_attempts"); do
             rm -f "$opencode_json_file"
             set +e
-            timeout 300 opencode run "$(cat "$prompt_file")" \
+            timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-180}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review \
               --model "$MODEL" \
@@ -1136,7 +1137,7 @@ jobs:
           && needs.coverage-evidence.result == 'success'
           && steps.opencode_review_primary.outputs.review_status != 'success'
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 15
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1146,6 +1147,7 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_MODEL_ATTEMPTS: "3"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -1194,7 +1196,7 @@ jobs:
           for opencode_attempt in $(seq 1 "$opencode_attempts"); do
             rm -f "$opencode_json_file"
             set +e
-            timeout 300 opencode run "$(cat "$prompt_file")" \
+            timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-180}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \
@@ -1266,7 +1268,7 @@ jobs:
           && steps.opencode_review_primary.outputs.review_status != 'success'
           && steps.opencode_review_fallback.outputs.review_status != 'success'
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 15
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1276,6 +1278,7 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_MODEL_ATTEMPTS: "3"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -1324,7 +1327,7 @@ jobs:
           for opencode_attempt in $(seq 1 "$opencode_attempts"); do
             rm -f "$opencode_json_file"
             set +e
-            timeout 300 opencode run "$(cat "$prompt_file")" \
+            timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-180}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \
@@ -1397,7 +1400,7 @@ jobs:
           && steps.opencode_review_fallback.outputs.review_status != 'success'
           && steps.opencode_review_second_fallback.outputs.review_status != 'success'
         continue-on-error: true
-        timeout-minutes: 80
+        timeout-minutes: 20
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1407,6 +1410,7 @@ jobs:
           NO_COLOR: "1"
           OPENCODE_MODEL_CANDIDATES: "github-models/openai/o3 github-models/openai/o4-mini"
           OPENCODE_MODEL_ATTEMPTS: "2"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -1465,7 +1469,7 @@ jobs:
             for opencode_attempt in $(seq 1 "$opencode_attempts"); do
               rm -f "$opencode_json_file" "$opencode_export_file" "$candidate_output_file"
               set +e
-              timeout 600 opencode run "$(cat "$prompt_file")" \
+              timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-180}s" opencode run "$(cat "$prompt_file")" \
                 --pure \
                 --agent ci-review-fallback \
                 --model "$model_candidate" \
@@ -2805,7 +2809,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout 600 opencode run "$(cat "$prompt_file")" \
+            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-240}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \
