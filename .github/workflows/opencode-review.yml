@@ -2636,6 +2636,7 @@ jobs:
 
           self_modifying_strix_base_failure() {
             local evidence_file="$1"
+            local source_root="${OPENCODE_SOURCE_WORKDIR:-${GITHUB_WORKSPACE:-$PWD}}"
             local diff_status
 
             grep -Fq "Self-test Strix gate script" "$evidence_file" || return 1
@@ -2643,13 +2644,13 @@ jobs:
             if [ -z "${PR_BASE_SHA:-}" ] || [ -z "${PR_HEAD_SHA:-}" ]; then
               return 1
             fi
-            if ! git rev-parse --verify "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1 ||
-              ! git rev-parse --verify "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+            if ! git -C "$source_root" rev-parse --verify "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1 ||
+              ! git -C "$source_root" rev-parse --verify "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
               return 1
             fi
 
             set +e
-            git diff --quiet "${PR_BASE_SHA}...${PR_HEAD_SHA}" -- \
+            git -C "$source_root" diff --quiet "${PR_BASE_SHA}...${PR_HEAD_SHA}" -- \
               .github/workflows/opencode-review.yml \
               .github/workflows/strix.yml \
               opencode.jsonc \

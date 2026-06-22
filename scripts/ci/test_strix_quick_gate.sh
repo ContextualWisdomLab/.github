@@ -681,6 +681,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "get_validated_pr_diff_range" "failed-check fallback validates PR diff range before comparing trusted Strix inputs"
 	assert_file_contains "$workflow_file" ".github/workflows/strix.yml" "opencode inline fallback watches Strix workflow changes"
 	assert_file_contains "$workflow_file" "self_modifying_strix_base_failure" "opencode approval detects trusted-base Strix failures for self-modifying workflow PRs"
+	assert_file_contains "$workflow_file" 'local source_root="${OPENCODE_SOURCE_WORKDIR:-${GITHUB_WORKSPACE:-$PWD}}"' "opencode trusted-base Strix lag detection inspects the PR-head worktree"
+	assert_file_contains "$workflow_file" 'git -C "$source_root" diff --quiet' "opencode trusted-base Strix lag detection compares trusted-input changes in the PR-head worktree"
 	assert_file_contains "$workflow_file" "opencode.jsonc: No such file or directory" "opencode approval recognizes base-workflow Strix self-test evidence that cannot see PR-head OpenCode config"
 	assert_file_contains "$workflow_file" "Leaving the PR review unchanged; rerun same-head workflow_dispatch Strix evidence" "opencode approval avoids false request-changes reviews for trusted-base Strix self-test lag"
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "opencode.jsonc" "failed-check fallback treats OpenCode config as a trusted Strix input"
