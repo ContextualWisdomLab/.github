@@ -75,7 +75,7 @@ class Decision:
 
 
 def run(args: list[str], *, stdin: str | None = None) -> str:
-    process = subprocess.run(args, input=stdin, capture_output=True, text=True)
+    process = subprocess.run(args, input=stdin, capture_output=True, text=True, shell=False, check=False)
     if process.returncode != 0:
         raise RuntimeError(
             f"Command failed ({process.returncode}): {' '.join(args)}\n{process.stderr}"
