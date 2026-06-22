@@ -78,7 +78,7 @@ def run(args: list[str], *, stdin: str | None = None) -> str:
     process = subprocess.run(args, input=stdin, capture_output=True, text=True)
     if process.returncode != 0:
         raise RuntimeError(
-            f"Command failed ({process.returncode}): {' '.join(args)}\n{process.stderr}"
+            f"Command failed ({process.returncode}): {' '.join(args)}"
         )
     return process.stdout
 
@@ -386,9 +386,11 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     try:
         raise SystemExit(main(sys.argv[1:]))
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
+
+# pragma: no cover
