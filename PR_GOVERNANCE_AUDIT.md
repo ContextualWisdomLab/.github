@@ -17,28 +17,45 @@ OpenCode decides; GitHub Actions mutates.
 
 ## Live Repository Inventory
 
-| Repo | Flow | Default | Auto-merge | Branch policy evidence | Workflow footprint | Current gap |
-|---|---:|---:|---:|---|---|---|
-| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | Current PR #28 has current-head OpenCode success, but OpenCode requests changes because the Strix check fails. |
-| `ContextualWisdomLab/ContextualWisdomLab.github.io` | GitHub Flow | `main` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | No representative actor sample checked yet. |
-| `ContextualWisdomLab/VibeSec` | Git Flow | `develop` | on | rulesets `Lock default branch`, `PR`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | Mixed human/native auto-merge/GitHub Actions history. |
-| `ContextualWisdomLab/bandscope` | Git Flow | `develop` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | No representative actor sample checked yet. |
-| `ContextualWisdomLab/clearfolio` | GitHub Flow | `main` | off | ruleset `PR`; no classic protection | OpenCode Review; Strix | Missing PR Review Merge Scheduler and auto-merge is off. |
-| `ContextualWisdomLab/codec-carver` | GitHub Flow | `main` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; legacy Scheduled PR Review Merge; Strix | Replace legacy scheduler with central scheduler. |
-| `ContextualWisdomLab/contextual-orchestrator` | GitHub Flow | `main` | off | no ruleset returned | none matched | Needs explicit decision: opt in or keep unmanaged. |
-| `ContextualWisdomLab/naruon` | Git Flow | `develop` | on | classic strict required checks `opencode-review`, `strix`; stale dismissal on; rulesets `Lock default branch`, `PR` | OpenCode Review; PR Governance; PR Review Merge Scheduler; Strix self-test; Strix | Canonical source for strict review/coverage behavior. |
-| `ContextualWisdomLab/newsdom-api` | Git Flow | `develop` | on | rulesets `Lock default branch`, `mirror-classic-protection-main-develop`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | Open PR queue mostly blocked by review/check state. |
-| `ContextualWisdomLab/pg-erd-cloud` | GitHub Flow | `main` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; PR Review Autofix/Fix Scheduler; Strix | Good GitHub Actions bot merge samples; extra autofix workflows stay repo-local. |
-| `ContextualWisdomLab/scopeweave` | Git Flow | `develop` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix self-test; Strix | No representative actor sample checked yet. |
+Live generated: 2026-06-23 04:18 KST.
+
+| Repo | Flow | Default | Auto | Rulesets | Required checks | Stale dismissal | Merge queue | Workflows | Recent merged actor |
+|---|---:|---:|---:|---|---|---:|---:|---|---|
+| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #18 `seonghobae`; #17 `seonghobae`; #2 `seonghobae` |
+| `ContextualWisdomLab/bandscope` | Git Flow | `develop` | on | `Lock default branch` | `ci / build-and-test`, `dependency-review`, `security-audit`, `CodeQL`, `sbom`, `release-preflight`, `gate / build / windows`, `gate / build / macos`, `trivy-fs-scan` | false | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #427 `github-actions`; #408 `seonghobae`; #405 `seonghobae` |
+| `ContextualWisdomLab/clearfolio` | GitHub Flow | `main` | off | `PR` | none | false | no | OpenCode Review; Strix Security Scan | #9 `seonghobae`; #8 `seonghobae`; #7 `seonghobae` |
+| `ContextualWisdomLab/codec-carver` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; Scheduled PR Review Merge; Strix Security Scan | #94 `opencode-agent`; #93 `seonghobae`; #90 `seonghobae` |
+| `ContextualWisdomLab/contextual-orchestrator` | GitHub Flow | `main` | off | none | none | unknown | unknown | none matched | none |
+| `ContextualWisdomLab/ContextualWisdomLab.github.io` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #15 `seonghobae`; #14 `seonghobae`; #13 `github-actions` auto by `github-actions` |
+| `ContextualWisdomLab/naruon` | Git Flow | `develop` | on | `Lock default branch`, `PR` | `opencode-review`, `strix` | true | no | OpenCode Review; PR Governance; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #747 `seonghobae`; #715 `seonghobae`; #692 `seonghobae` |
+| `ContextualWisdomLab/newsdom-api` | Git Flow | `develop` | on | `Lock default branch`, `mirror-classic-protection-main-develop` | `codeql (python, actions)`, `dependency-review`, `pytest`, `quality-gate`, `scorecard` | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #163 `seonghobae`; #105 `seonghobae`; #162 `seonghobae` |
+| `ContextualWisdomLab/pg-erd-cloud` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Autofix; PR Review Fix Scheduler; PR Review Merge Scheduler; Strix Security Scan | #239 `github-actions`; #238 `seonghobae`; #236 `github-actions` |
+| `ContextualWisdomLab/scopeweave` | Git Flow | `develop` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #106 `seonghobae`; #102 `seonghobae`; #101 `seonghobae` auto by `seonghobae` |
+| `ContextualWisdomLab/VibeSec` | Git Flow | `develop` | on | `Lock default branch`, `PR` | none | false/true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #109 `seonghobae`; #67 `github-actions` auto by `github-actions`; #92 `seonghobae` auto by `seonghobae` |
+
+## Current Gaps By Repo
+
+| Repo | Gap |
+|---|---|
+| `.github` | PR #28 is blocked by the required PR-target Strix check while same-head manual Strix evidence is still running. |
+| `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. |
+| `clearfolio` | Auto-merge is off and the PR Review Merge Scheduler is missing. |
+| `codec-carver` | Latest merged sample #94 still used `opencode-agent`; replace the legacy scheduler with the central GitHub Actions path. |
+| `contextual-orchestrator` | No matching rulesets or review workflows; either opt in deliberately or mark unmanaged. |
+| `naruon` | Canonical strict check source, but open PRs still need the updated contract observed through one full outdated -> update -> new-head review trace. |
+| `newsdom-api` | Ruleset-required checks must stay GitHub-interpreted; open queue is mostly review/check blocked. |
+| `pg-erd-cloud` | Good GitHub Actions merge samples; keep autofix workflows repo-local. |
+| `scopeweave` | Has central scheduler and Strix self-test, but no current representative update/merge trace captured. |
+| `VibeSec` | Actor history is mixed; central scheduler should make GitHub Actions or native auto-merge the only mechanical path. |
 
 ## Representative Evidence
 
 | Repo | Live evidence | Adopt | Reject |
 |---|---|---|---|
-| `naruon` | `develop`, strict required checks `opencode-review` and `strix`, stale review dismissal enabled. Open PRs #740-#746 show `BEHIND`, `DIRTY`, and `CHANGES_REQUESTED` cases. | Strict current-head evidence and stale-dismissal awareness. | Treating `BEHIND` as merge-ready. |
-| `.github` | PR #28 is `MERGEABLE` but `BLOCKED`, with OpenCode `CHANGES_REQUESTED` because coverage/docstring evidence was not proven. | False-approval prevention for missing evidence. | Tooling failure as invented source finding. |
+| `naruon` | `develop`, strict required checks `opencode-review` and `strix`, stale review dismissal enabled. Open PRs show `BEHIND`, `DIRTY`, and `CHANGES_REQUESTED` cases. | Strict current-head evidence and stale-dismissal awareness. | Treating `BEHIND` as merge-ready. |
+| `.github` | PR #28 is `MERGEABLE` but `BLOCKED`; the required PR-target Strix check failed while same-head manual Strix evidence is running. | Same-head evidence for self-modifying trusted workflow changes. | Treating manual evidence as a required PR-check replacement. |
 | `pg-erd-cloud` | Recent PRs #236, #237, #239 were merged by `app/github-actions`. | GitHub Actions as mechanical merge actor with head guard. | Human-only queue draining. |
-| `codec-carver` | Recent PRs #91 and #92 were merged by `app/opencode-agent`; PR #94 dry-run returns `auto_merge`. | Native auto-merge path for current-head approved PRs. | OpenCode app as merge actor. |
+| `codec-carver` | Recent PR #94 was merged by `app/opencode-agent`, and the repo still has legacy `Scheduled PR Review Merge`. | Native auto-merge path for current-head approved PRs. | OpenCode app as merge actor. |
 | `VibeSec` | PR #108 had native auto-merge enabled; #106 merged by `app/github-actions`; #109 merged by human. | Keep native auto-merge as preferred waiting path. | Repo-by-repo actor inconsistency. |
 
 ## Current Scheduler Contract
@@ -60,9 +77,18 @@ Small proof run:
 $ python3 scripts/ci/pr_review_merge_scheduler.py --self-test
 self-test passed
 
-$ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/codec-carver --base-branch main --project-flow github-flow --dry-run --max-prs 5
-PR #94: auto_merge: current head is approved; auto-merge enabled
-{"base_branch": "main", "counts": {"auto_merge": 1}, "dry_run": true, "inspected": 1, "project_flow": "github-flow"}
+$ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/.github --base-branch main --project-flow github-flow --dry-run --max-prs 10
+PR #19: block: current-head OpenCode review requested changes
+PR #20: block: current-head OpenCode review requested changes
+PR #21: block: current-head OpenCode review requested changes
+PR #22: block: current-head OpenCode review requested changes
+PR #23: block: merge conflict: DIRTY
+PR #24: block: current-head OpenCode review requested changes
+PR #25: block: current-head OpenCode review requested changes
+PR #26: block: current-head OpenCode review requested changes
+PR #27: block: current-head OpenCode review requested changes
+PR #28: block: current-head OpenCode review requested changes
+{"base_branch": "main", "counts": {"block": 10}, "dry_run": true, "inspected": 10, "project_flow": "github-flow"}
 ```
 
 ## Rollout List
