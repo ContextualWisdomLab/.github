@@ -1,0 +1,38 @@
+FAIL: opencode approval gate refuses to approve invalid model output when peer checks and human threads are clean (missing 'it will not approve without source-backed current-head review evidence')
+FAIL: opencode model-failure fallback requests changes instead of approving invalid model output (missing 'no valid source-backed review output was available')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config declares MCP servers (missing '"mcp"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config declares the CodeGraph MCP server (missing '"codegraph"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config declares the DeepWiki MCP server (missing '"deepwiki"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config declares the Context7 MCP server (missing '"context7"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config declares the web search MCP server (missing '"web_search"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config points DeepWiki at the official remote MCP endpoint (missing '"url": "https://mcp.deepwiki.com/mcp"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config pins the Context7 MCP package (missing '"@upstash/context7-mcp@3.1.0"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config pins the web search MCP package (missing '"@guhcostan/web-search-mcp@1.0.5"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config launches CodeGraph in MCP mode (missing '"serve", "--mcp"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config uses a reachable DeepSeek V3 small model (missing '"small_model": "github-models/deepseek/deepseek-v3-0324"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config defines GitHub Models GPT-5 with full model id (missing '"openai/gpt-5"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config defines DeepSeek R1 fallback (missing '"deepseek/deepseek-r1-0528"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config defines DeepSeek V3 fallback (missing '"deepseek/deepseek-v3-0324"')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config uses the GitHub Models GPT-5 200k context window (missing '"context": 200000')
+grep: /app/opencode.jsonc: No such file or directory
+FAIL: opencode config uses the GitHub Models GPT-5 100k output window (missing '"output": 100000')
+grep: /app/opencode.jsonc: No such file or directory
+grep: /app/opencode.jsonc: No such file or directory
+grep: /app/opencode.jsonc: No such file or directory
+NO_CONCLUSION
+NO_CONCLUSION
+NO_CONCLUSION
