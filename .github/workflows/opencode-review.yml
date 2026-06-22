@@ -2529,6 +2529,67 @@ jobs:
             scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
+          approve_low_risk_changed_files_after_model_failure() {
+            local body_file="$1"
+            local changed_files_file
+            local changed_files_markdown
+
+            changed_files_file="$(mktemp)"
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate \
+              --jq '.[].filename' >"$changed_files_file"; then
+              rm -f "$changed_files_file"
+              return 1
+            fi
+            if [ ! -s "$changed_files_file" ]; then
+              rm -f "$changed_files_file"
+              return 1
+            fi
+
+            if ! awk '
+              function low_risk(path) {
+                if (path ~ /^\.github\/workflows\//) return 0
+                if (path ~ /(^|\/)(scripts?|src|app|lib|server|client|packages|migrations|infra|terraform)\//) return 0
+                if (path ~ /(^|\/)(Dockerfile|Containerfile|Makefile|package.json|package-lock.json|pnpm-lock.yaml|yarn.lock|pyproject.toml|poetry.lock|requirements[^\/]*\.txt|go.mod|go.sum|Cargo.toml|Cargo.lock)$/) return 0
+                if (path ~ /\.(sh|bash|zsh|fish|ps1|py|js|jsx|ts|tsx|mjs|cjs|go|rs|java|kt|kts|swift|c|cc|cpp|h|hpp|rb|php|cs|sql|ya?ml|json|toml|ini|env|lock)$/) return 0
+                if (path ~ /(^|\/)(README|SECURITY|CODE_OF_CONDUCT|CONTRIBUTING|SUPPORT|GOVERNANCE|LICENSE|NOTICE)(\.[^\/]+)?$/) return 1
+                if (path ~ /\.(md|mdx|txt|rst)$/) return 1
+                return 0
+              }
+              {
+                if (!low_risk($0)) {
+                  exit 1
+                }
+              }
+            ' "$changed_files_file"; then
+              rm -f "$changed_files_file"
+              return 1
+            fi
+
+            changed_files_markdown="$(
+              while IFS= read -r changed_file; do
+                printf -- '- `%s`\n' "$changed_file"
+              done <"$changed_files_file"
+            )"
+            rm -f "$changed_files_file"
+
+            {
+              printf '## Pull request overview\n\n'
+              printf 'OpenCode model attempts did not produce a usable control block, but the trusted gate verified that this PR has no failed peer GitHub Checks, no pending peer GitHub Checks, no unresolved human review threads, and no merge conflict.\n\n'
+              printf '## Findings\n\n'
+              printf 'No blocking findings.\n\n'
+              printf '## Summary\n\n'
+              printf 'Deterministic low-risk fallback approval was used because every changed file is documentation, policy, or non-executable metadata:\n\n'
+              printf '%s\n\n' "$changed_files_markdown"
+              printf 'This fallback is not used for workflow, source-code, script, dependency, infrastructure, configuration, or lockfile changes.\n\n'
+              printf -- '- Result: APPROVE\n'
+              printf -- '- Reason: OpenCode model output was unavailable, but the changed-file allowlist and trusted gate checks passed for current head `%s`.\n' "$HEAD_SHA"
+              printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
+              printf -- '- Workflow run: %s\n' "$RUN_ID"
+              printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
+            } >"$body_file"
+            return 0
+          }
+
           live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           if [ "$live_head_sha" != "$HEAD_SHA" ]; then
             echo "stale OpenCode run: event head=${HEAD_SHA}, live head=${live_head_sha}; skipping review side effects."
@@ -2599,6 +2660,8 @@ jobs:
                 create_pull_review "REQUEST_CHANGES" "$(cat "$human_thread_review_body_file")"
               elif request_changes_for_merge_conflict_if_present; then
                 :
+              elif approve_low_risk_changed_files_after_model_failure "$failed_check_review_body_file"; then
+                create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
               else
                 body="$(printf '%s\n' \
                   "## Pull request overview" \
