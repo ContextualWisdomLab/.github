@@ -104,6 +104,11 @@ jobs:
               exit 0
             fi
 
+            if [ "$review_state" = "CHANGES_REQUESTED" ]; then
+              echo "::error::Trusted OpenCode requested changes for head ${HEAD_SHA}; failing the bridge check instead of waiting for an approval that will not arrive."
+              exit 1
+            fi
+
             printf 'Waiting for trusted OpenCode approval for head %s (%s/%s, current=%s).\n' \
               "$HEAD_SHA" "$attempt" "$attempts" "$review_state"
             if [ "$attempt" -lt "$attempts" ]; then
