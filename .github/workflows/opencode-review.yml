@@ -255,7 +255,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.inputs.pr_base_sha }}
+          ref: ${{ github.event.inputs.pr_head_sha }}
 
       - name: Materialize pull request head for OpenCode review data
         env:
@@ -1822,6 +1822,8 @@ jobs:
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_FAILED_CHECK_DIAGNOSIS_FILE: ${{ runner.temp }}/opencode-failed-check-diagnosis.md
+          COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || 'skipped' }}
+          COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           MODEL: github-models/openai/gpt-5
@@ -2202,6 +2204,35 @@ jobs:
               "- Head SHA: \`${HEAD_SHA}\`" \
               "- Workflow run: ${RUN_ID}" \
               "- Workflow attempt: ${RUN_ATTEMPT}" >"$body_file"
+          }
+
+          build_coverage_evidence_failure_body() {
+            local body_file="$1"
+
+            {
+              printf '%s\n' \
+                "## Pull request overview" \
+                "" \
+                "OpenCode reviewed the current-head evidence but cannot approve because required coverage evidence did not pass." \
+                "" \
+                "## Findings" \
+                "" \
+                "### 1. HIGH .github/workflows/opencode-review.yml:1 - Coverage evidence did not prove 100% test and docstring coverage" \
+                "- Problem: The OpenCode approval path reached an APPROVE control result while the separate coverage-evidence job result was \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`." \
+                "- Root cause: Automated approval is only valid when the same-head coverage-evidence job proves both test coverage and docstring coverage at 100%; missing, failed, skipped, unavailable, not-applicable, or partial coverage evidence is a blocker." \
+                "- Fix: Install or configure the repository coverage/docstring coverage tooling, rerun the current-head coverage-evidence job, and approve only after it reports \`success\` with 100% evidence." \
+                "- Regression test: Keep the approval branch checking \`needs.coverage-evidence.result == success\` before posting APPROVE." \
+                "" \
+                "- Result: REQUEST_CHANGES" \
+                "- Reason: coverage-evidence result was \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`, so 100% test/docstring coverage was not proven for current head \`${HEAD_SHA}\`." \
+                "- Head SHA: \`${HEAD_SHA}\`" \
+                "- Workflow run: ${RUN_ID}" \
+                "- Workflow attempt: ${RUN_ATTEMPT}" \
+                "" \
+                "## Coverage evidence" \
+                ""
+              printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-Coverage evidence summary was unavailable.}" | sed -n '1,240p'
+            } >"$body_file"
           }
 
           create_pull_review_with_payload() {
@@ -3323,6 +3354,13 @@ jobs:
 
           case "$gate_result" in
             APPROVE)
+              if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+                failed_check_review_body_file="$(mktemp)"
+                build_coverage_evidence_failure_body "$failed_check_review_body_file"
+                create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
+                echo "::endgroup::"
+                exit 0
+              fi
               if request_changes_for_merge_conflict_if_present; then
                 echo "::endgroup::"
                 exit 0
