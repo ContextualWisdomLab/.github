@@ -136,12 +136,14 @@ if ! python3 "$NORMALIZER" --check-structural-approval "$TMP_JSON" >/dev/null; t
   exit 4
 fi
 
-SOURCE_ROOT="${GITHUB_WORKSPACE:-$PWD}"
+SOURCE_ROOT="${OPENCODE_SOURCE_WORKDIR:-${GITHUB_WORKSPACE:-$PWD}}"
 if ! python3 - "$SOURCE_ROOT" "$TMP_JSON" <<'PY'
 from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -149,6 +151,11 @@ from pathlib import Path
 source_root = Path(sys.argv[1]).resolve()
 control_file = Path(sys.argv[2])
 control = json.loads(control_file.read_text(encoding="utf-8"))
+pr_base_sha = os.environ.get("PR_BASE_SHA", "").strip()
+pr_head_sha = (
+    os.environ.get("PR_HEAD_SHA", "").strip()
+    or os.environ.get("HEAD_SHA", "").strip()
+)
 
 if control.get("result") != "REQUEST_CHANGES":
     raise SystemExit(0)
@@ -156,6 +163,47 @@ if control.get("result") != "REQUEST_CHANGES":
 
 def normalized_line(value: str) -> str:
     return " ".join(value.strip().split())
+
+
+def changed_new_lines(path_value: str) -> set[int]:
+    if not pr_base_sha or not pr_head_sha:
+        return set()
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source_root),
+                "diff",
+                "--unified=0",
+                "--no-ext-diff",
+                pr_base_sha,
+                pr_head_sha,
+                "--",
+                path_value,
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return set()
+    if completed.returncode not in {0, 1}:
+        return set()
+
+    line_numbers: set[int] = set()
+    hunk_header = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+    for raw_line in completed.stdout.splitlines():
+        match = hunk_header.match(raw_line)
+        if not match:
+            continue
+        start = int(match.group(1))
+        count = int(match.group(2) or "1")
+        if count <= 0:
+            continue
+        line_numbers.update(range(start, start + count))
+    return line_numbers
 
 
 def finding_is_source_backed(finding: dict[str, object]) -> bool:
@@ -183,6 +231,8 @@ def finding_is_source_backed(finding: dict[str, object]) -> bool:
 
     line_number = finding.get("line")
     if not isinstance(line_number, int) or line_number < 1 or line_number > len(source_lines):
+        return False
+    if line_number not in changed_new_lines(path_value):
         return False
 
     source_line_set = {
