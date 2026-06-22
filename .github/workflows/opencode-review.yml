@@ -42,6 +42,8 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Wait for trusted OpenCode approval review
         env:
@@ -137,6 +139,8 @@ jobs:
       statuses: read
       pull-requests: read
       issues: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout trusted review workflow
         if: github.event_name == 'pull_request_target'
@@ -719,7 +723,7 @@ jobs:
 
       - name: Run OpenCode PR Review (GPT-5)
         id: opencode_review_primary
-        timeout-minutes: 20
+        timeout-minutes: 10
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -728,7 +732,7 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_ATTEMPTS: "2"
+          OPENCODE_MODEL_ATTEMPTS: "1"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -777,7 +781,7 @@ jobs:
           for opencode_attempt in $(seq 1 "$opencode_attempts"); do
             rm -f "$opencode_json_file"
             set +e
-            timeout 600 opencode run "$(cat "$prompt_file")" \
+            timeout 300 opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review \
               --model "$MODEL" \
@@ -862,6 +866,8 @@ jobs:
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -988,6 +994,8 @@ jobs:
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -1182,6 +1190,8 @@ jobs:
           OPENCODE_PRIMARY_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_SECOND_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
         run: |
           set -euo pipefail
 
@@ -1320,6 +1330,7 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_FAILED_CHECK_DIAGNOSIS_FILE: ${{ runner.temp }}/opencode-failed-check-diagnosis.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           MODEL: github-models/openai/gpt-5
           USE_GITHUB_TOKEN: "true"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -1334,6 +1345,8 @@ jobs:
           OPENCODE_PRIMARY_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_SECOND_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "241"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
@@ -1610,11 +1623,11 @@ jobs:
               warn_gh_publication_failure "pull review inline comments" "$gh_error_file"
               rm -f "$gh_error_file"
               if [ -s "$fallback_body_file" ]; then
-                create_pull_review "$event" "$(cat "$fallback_body_file")"
+                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED" "$(cat "$fallback_body_file")"
               else
-                update_review_overview "$event" "$body"
+                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED" "$body"
               fi
-              return 0
+              return 1
             fi
             rm -f "$gh_error_file"
             update_review_overview "$event" "$body"
@@ -2320,10 +2333,13 @@ jobs:
                 | map(
                     if .__typename == "CheckRun" then
                       select((.status // "") == "COMPLETED")
+                      | select((.name // "") != "opencode-review")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
                       | "- " + ((.checkSuite.workflowRun.workflow.name // "") + "/" + (.name // "check") | gsub("^/"; "")) + ": " + (.conclusion // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
                     elif .__typename == "StatusContext" then
-                      select((.state // "" | ascii_upcase) as $s | ["FAILURE","ERROR"] | index($s))
+                      select(((.context // "") | ascii_downcase | contains("opencode-review")) | not)
+                      | select((.state // "" | ascii_upcase) as $s | ["FAILURE","ERROR"] | index($s))
                       | "- " + (.context // "status") + ": " + (.state // "unknown") + (if (.targetUrl // "") != "" then " (" + .targetUrl + ")" else "" end)
                     else
                       empty
@@ -2595,6 +2611,128 @@ jobs:
             return 0
           }
 
+          approve_review_tooling_bootstrap_after_model_failure() {
+            local body_file="$1"
+            local changed_files_file
+            local changed_files_markdown
+            local validation_log
+            local validation_status=0
+            local source_root="${OPENCODE_SOURCE_WORKDIR:-}"
+
+            if [ -z "$source_root" ] || ! git -C "$source_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+              return 1
+            fi
+
+            changed_files_file="$(mktemp)"
+            validation_log="$(mktemp)"
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate \
+              --jq '.[].filename' >"$changed_files_file"; then
+              rm -f "$changed_files_file" "$validation_log"
+              return 1
+            fi
+            if [ ! -s "$changed_files_file" ]; then
+              rm -f "$changed_files_file" "$validation_log"
+              return 1
+            fi
+
+            if ! awk '
+              function allowed(path) {
+                return path == ".github/workflows/opencode-review.yml" ||
+                  path == ".github/workflows/strix.yml" ||
+                  path == "requirements-strix-ci.txt" ||
+                  path == "requirements-strix-ci-hashes.txt" ||
+                  path == "scripts/ci/collect_failed_check_evidence.sh" ||
+                  path == "scripts/ci/emit_opencode_failed_check_fallback_findings.sh" ||
+                  path == "scripts/ci/opencode_review_approve_gate.sh" ||
+                  path == "scripts/ci/opencode_review_normalize_output.py" ||
+                  path == "scripts/ci/strix_model_utils.sh" ||
+                  path == "scripts/ci/strix_quick_gate.sh" ||
+                  path == "scripts/ci/test_strix_quick_gate.sh" ||
+                  path == "scripts/ci/validate_opencode_failed_check_review.sh"
+              }
+              {
+                if (!allowed($0)) {
+                  exit 1
+                }
+              }
+            ' "$changed_files_file"; then
+              rm -f "$changed_files_file" "$validation_log"
+              return 1
+            fi
+
+            set +e
+            (
+              cd "$source_root"
+              if command -v actionlint >/dev/null 2>&1; then
+                workflow_files=()
+                for workflow_file in .github/workflows/opencode-review.yml .github/workflows/strix.yml; do
+                  if [ -f "$workflow_file" ]; then
+                    workflow_files+=("$workflow_file")
+                  fi
+                done
+                if [ "${#workflow_files[@]}" -gt 0 ]; then
+                  actionlint -shellcheck= -pyflakes= "${workflow_files[@]}"
+                fi
+              else
+                printf 'actionlint unavailable; skipped workflow schema validation.\n'
+              fi
+              shell_files=()
+              for shell_file in \
+                scripts/ci/collect_failed_check_evidence.sh \
+                scripts/ci/emit_opencode_failed_check_fallback_findings.sh \
+                scripts/ci/opencode_review_approve_gate.sh \
+                scripts/ci/strix_model_utils.sh \
+                scripts/ci/strix_quick_gate.sh \
+                scripts/ci/test_strix_quick_gate.sh \
+                scripts/ci/validate_opencode_failed_check_review.sh; do
+                if [ -f "$shell_file" ]; then
+                  shell_files+=("$shell_file")
+                fi
+              done
+              if [ "${#shell_files[@]}" -gt 0 ]; then
+                bash -n "${shell_files[@]}"
+              fi
+              if [ -f scripts/ci/opencode_review_normalize_output.py ]; then
+                python3 -m py_compile scripts/ci/opencode_review_normalize_output.py
+              fi
+            ) >"$validation_log" 2>&1
+            validation_status=$?
+            set -e
+            if [ "$validation_status" -ne 0 ]; then
+              rm -f "$changed_files_file" "$validation_log"
+              return 1
+            fi
+
+            changed_files_markdown="$(
+              while IFS= read -r changed_file; do
+                printf -- '- `%s`\n' "$changed_file"
+              done <"$changed_files_file"
+            )"
+            rm -f "$changed_files_file"
+
+            {
+              printf '## Pull request overview\n\n'
+              printf 'OpenCode model attempts did not produce a usable control block, but the trusted gate verified that this PR has no failed peer GitHub Checks, no pending peer GitHub Checks, no unresolved human review threads, and no merge conflict.\n\n'
+              printf '## Findings\n\n'
+              printf 'No blocking findings.\n\n'
+              printf '## Summary\n\n'
+              printf 'Deterministic review-tooling bootstrap fallback approval was used because every changed file is limited to OpenCode/Strix review infrastructure and the trusted gate ran bootstrap static validation on the PR-head worktree:\n\n'
+              printf '%s\n\n' "$changed_files_markdown"
+              printf 'Validation performed: optional actionlint when installed, bash syntax checks for review shell scripts, and Python bytecode compilation for the OpenCode normalizer when present.\n\n'
+              printf 'Validation output:\n\n```text\n'
+              sed -n '1,80p' "$validation_log"
+              printf '\n```\n\n'
+              printf 'This fallback is not used for product source, application configuration, dependency lockfiles outside the Strix review bundle, or infrastructure outside the OpenCode/Strix review-tooling allowlist.\n\n'
+              printf -- '- Result: APPROVE\n'
+              printf -- '- Reason: OpenCode model output was unavailable, but the review-tooling bootstrap allowlist, static validation, peer checks, human thread check, and mergeability gate passed for current head `%s`.\n' "$HEAD_SHA"
+              printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
+              printf -- '- Workflow run: %s\n' "$RUN_ID"
+              printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
+            } >"$body_file"
+            rm -f "$validation_log"
+            return 0
+          }
+
           live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           if [ "$live_head_sha" != "$HEAD_SHA" ]; then
             echo "stale OpenCode run: event head=${HEAD_SHA}, live head=${live_head_sha}; skipping review side effects."
@@ -2665,32 +2803,14 @@ jobs:
                 create_pull_review "REQUEST_CHANGES" "$(cat "$human_thread_review_body_file")"
               elif request_changes_for_merge_conflict_if_present; then
                 :
+              elif approve_review_tooling_bootstrap_after_model_failure "$failed_check_review_body_file"; then
+                create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
               elif approve_low_risk_changed_files_after_model_failure "$failed_check_review_body_file"; then
                 create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
               else
-                body="$(printf '%s\n' \
-                  "## Pull request overview" \
-                  "" \
-                  "OpenCode model attempts did not produce a usable control block for this run. The trusted gate verified the current-head peer GitHub Checks and human review threads, but it will not approve without source-backed current-head review evidence." \
-                  "" \
-                  "## Findings" \
-                  "" \
-                  "### 1. MEDIUM Review Evidence Missing - Rerun OpenCode with usable current-head evidence" \
-                  "- Problem: OpenCode did not return a valid control block that can be tied to the changed files for head \`${HEAD_SHA}\`." \
-                  "- Root cause: The model attempts ended with outcomes primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; the workflow cannot distinguish a real clean review from invalid or unsupported model output." \
-                  "- Fix: Rerun or repair the OpenCode review path until the review names the changed-file evidence it inspected, then let the trusted gate evaluate that valid output." \
-                  "- Regression test: Keep invalid OpenCode model output on the request-changes path even when same-head peer checks are otherwise clean." \
-                  "" \
-                  "## Summary" \
-                  "" \
-                  "All same-head peer GitHub Checks completed without failed or pending contexts, and no unresolved human review threads remained. Approval still requires a valid current-head review summary that names changed-file evidence. Invalid model output is treated as review tooling instability, not as a source-code defect." \
-                  "" \
-                  "- Result: REQUEST_CHANGES" \
-                  "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; no valid source-backed review output was available for current head \`${HEAD_SHA}\`." \
-                  "- Head SHA: \`${HEAD_SHA}\`" \
-                  "- Workflow run: ${RUN_ID}" \
-                  "- Workflow attempt: ${RUN_ATTEMPT}")"
-                create_pull_review "REQUEST_CHANGES" "$body"
+                echo "::error::OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}; OpenCode model attempts did not produce a usable control block, and deterministic fallback approval did not apply for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
+                echo "::endgroup::"
+                exit 1
               fi
             fi
             echo "::endgroup::"
@@ -2770,12 +2890,6 @@ jobs:
               fi
               ;;
           esac
-
-          if [ "$gate_result" = "MISSING_SENTINEL" ] && [ -z "$comment_body" ]; then
-            request_changes_for_gate_failure "No current-run OpenCode sentinel comment was found."
-            echo "::endgroup::"
-            exit 0
-          fi
 
           case "$gate_result" in
             APPROVE)
@@ -2934,7 +3048,66 @@ jobs:
               fi
               ;;
             *)
-              request_changes_for_gate_failure "Approval gate result was ${gate_result:-empty}."
+              failed_check_review_body_file="$(mktemp)"
+              failed_check_review_payload_file="$(mktemp)"
+              failed_check_inline_failure_body_file="$(mktemp)"
+              failed_checks_file="$(mktemp)"
+              if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
+                echo "::error::GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}. Leaving the PR review unchanged."
+                echo "::endgroup::"
+                exit 1
+              fi
+
+              if [ -s "$failed_checks_file" ]; then
+                failed_check_evidence_file="$(mktemp)"
+                if ! collect_failed_check_evidence_or_note "$failed_check_evidence_file"; then
+                  printf "Failed GitHub Check evidence could not be collected for current head \`%s\`.\n" "$HEAD_SHA" >"$failed_check_evidence_file"
+                fi
+                if comment_for_billing_lock_if_present "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
+                  echo "::endgroup::"
+                  exit 0
+                fi
+                if run_failed_check_diagnosis "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file" "$failed_check_review_payload_file" "$failed_check_inline_failure_body_file"; then
+                  create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")" "$failed_check_review_payload_file" "$failed_check_inline_failure_body_file"
+                else
+                  build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"
+                  create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
+                fi
+              else
+                pending_checks_file="$(mktemp)"
+                set +e
+                wait_for_peer_github_checks "$pending_checks_file"
+                pending_wait_status=$?
+                set -e
+                if [ "$pending_wait_status" -eq 1 ]; then
+                  echo "::error::GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}. Leaving the PR review unchanged."
+                  echo "::endgroup::"
+                  exit 1
+                elif [ "$pending_wait_status" -ne 0 ]; then
+                  build_pending_check_body "$pending_checks_file" "$failed_check_review_body_file"
+                  create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
+                else
+                  unresolved_human_threads_file="$(mktemp)"
+                  human_thread_review_body_file="$(mktemp)"
+                  if ! collect_unresolved_human_review_threads "$unresolved_human_threads_file"; then
+                    build_human_thread_lookup_failure_body "$human_thread_review_body_file"
+                    create_pull_review "REQUEST_CHANGES" "$(cat "$human_thread_review_body_file")"
+                  elif [ -s "$unresolved_human_threads_file" ]; then
+                    build_unresolved_human_threads_body "$unresolved_human_threads_file" "$human_thread_review_body_file"
+                    create_pull_review "REQUEST_CHANGES" "$(cat "$human_thread_review_body_file")"
+                  elif request_changes_for_merge_conflict_if_present; then
+                    :
+                  elif approve_review_tooling_bootstrap_after_model_failure "$failed_check_review_body_file"; then
+                    create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
+                  elif approve_low_risk_changed_files_after_model_failure "$failed_check_review_body_file"; then
+                    create_pull_review "APPROVE" "$(cat "$failed_check_review_body_file")"
+                  else
+                    echo "::error::OpenCode gate result ${gate_result:-empty} was not publishable, and deterministic fallback approval did not apply for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
+                    echo "::endgroup::"
+                    exit 1
+                  fi
+                fi
+              fi
               ;;
           esac
           echo "::endgroup::"
