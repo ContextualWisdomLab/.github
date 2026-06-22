@@ -648,6 +648,9 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'repo_root="${GITHUB_WORKSPACE:-$PWD}"' "opencode failed-check fallback maps source lines from the repository root"
 	assert_file_contains "$workflow_file" "## Findings" "opencode failed-check fallback publishes line-specific repair findings"
 	assert_file_contains "$workflow_file" "emit_opencode_failed_check_fallback_findings.sh" "opencode failed-check fallback delegates deterministic Strix report expansion to tested helper"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "emit_pytest_failure_findings" "failed-check fallback explains pytest failures instead of posting URL-only evidence"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "emit_cancelled_check_findings" "failed-check fallback explains cancelled check queue states separately from source fixes"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "do not approve or post a URL-only review" "failed-check fallback rejects URL-only GitHub Check reviews"
 	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper exited non-zero; using inline fallback." "opencode failed-check fallback handles helper failures without aborting under set -e"
 	assert_file_contains "$workflow_file" "Do not depend on Copilot Review, CodeRabbitAI, or any human reviewer" "opencode review format is independent of other review agents"
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "emit_strix_report_findings" "failed-check fallback emits every Strix vulnerability report as a separate finding"
@@ -718,6 +721,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$scheduler_file" "expected_head_sha={head}" "scheduler guards branch updates with the current PR head SHA"
 	assert_file_contains "$readme_file" "github-actions[bot]" "README documents that mechanical branch updates and merges are attributed to GitHub Actions bot"
 	assert_file_contains "$readme_file" "Scratch PoC files are not committed." "README documents PoC proof artifacts are scratch evidence, not committed changes"
+	assert_file_contains "$readme_file" "Failed GitHub Checks are not reviewed as URL lists." "README documents failed-check reviews require explanations, not URL-only bullets"
 }
 
 assert_opencode_review_normalizer_accepts_transcript_json() {
@@ -1308,6 +1312,91 @@ EOF
 	assert_file_contains "$output_file" "Suggested edit: change \`frontend/next.config.ts:35\`" "fallback provides a concrete suggested edit for model reports"
 	assert_file_contains "$output_file" "Strix provider signal left current-head security evidence incomplete" "fallback still reports provider failure after vulnerability reports"
 	assert_file_not_contains "$output_file" "failed before producing vulnerability reports" "fallback does not contradict preserved Strix report windows"
+
+	rm -rf "$tmp_dir"
+}
+
+assert_opencode_failed_check_fallback_explains_pytest_and_cancelled_checks() {
+	local tmp_dir
+	local fixture_repo
+	local evidence_file
+	local output_file
+	tmp_dir="$(mktemp -d)"
+	fixture_repo="$tmp_dir/repo"
+	evidence_file="$tmp_dir/failed-check-evidence.md"
+	output_file="$tmp_dir/fallback.md"
+	mkdir -p "$fixture_repo/tests/live"
+
+	cat >"$fixture_repo/tests/live/test_live_api_sequence.py" <<'EOF'
+"""Live HTTP integration harness tests."""
+
+from pathlib import Path
+
+
+def test_live_harness_avoids_broad_url_opener_pattern() -> None:
+    source = Path(__file__).read_text(encoding="utf-8")
+    unsafe_terms = ("urllib.request", "urlopen")
+
+    for unsafe_term in unsafe_terms:
+        assert unsafe_term not in source
+EOF
+
+	cat >"$evidence_file" <<'EOF'
+# Failed GitHub Check Evidence
+
+- PR: #744
+- Head SHA: `fc6d263e9fcfdcf4d710427618ee511b64331dd0`
+- Repository: `ContextualWisdomLab/naruon`
+
+## Failed check: Application CI/backend (Python 3.14)
+
+- Type: `check_run`
+- Conclusion: `FAILURE`
+- Details URL: https://github.com/ContextualWisdomLab/naruon/actions/runs/27946373277/job/82692061303
+
+### Failed job steps
+
+- step 6: Run backend tests (failure)
+
+### Failed log excerpt
+
+```text
+backend (Python 3.14)	Run backend tests	pytest -q
+backend (Python 3.14)	Run backend tests	=================================== FAILURES ===================================
+backend (Python 3.14)	Run backend tests	______________ test_live_harness_avoids_broad_url_opener_pattern _______________
+backend (Python 3.14)	Run backend tests	    def test_live_harness_avoids_broad_url_opener_pattern() -> None:
+backend (Python 3.14)	Run backend tests	        unsafe_terms = ("urllib.request", "urlopen")
+backend (Python 3.14)	Run backend tests	>           assert unsafe_term not in source
+backend (Python 3.14)	Run backend tests	E           assert 'urllib.request' not in '"""Live HTT... in source\n'
+backend (Python 3.14)	Run backend tests	E             'urllib.request' is contained here:
+backend (Python 3.14)	Run backend tests	E               terms = ("urllib.request", "urlopen")
+backend (Python 3.14)	Run backend tests	tests/live/test_live_api_sequence.py:10: AssertionError
+backend (Python 3.14)	Run backend tests	FAILED tests/live/test_live_api_sequence.py::test_live_harness_avoids_broad_url_opener_pattern - assert 'urllib.request' not in '"""Live HTT... in source\n'
+backend (Python 3.14)	Run backend tests	1 failed, 965 passed, 15 skipped in 7.28s
+```
+
+## Failed check: PR Governance/metadata-only gate evaluation
+
+- Type: `check_run`
+- Conclusion: `CANCELLED`
+- Details URL: https://github.com/ContextualWisdomLab/naruon/actions/runs/27946373334/job/82692061348
+
+### Check annotations
+
+- .github:1-1 [failure] Canceling since a higher priority waiting request for PR Governance-744 exists
+EOF
+
+	bash "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" \
+		"$evidence_file" "$fixture_repo" >"$output_file"
+
+	assert_file_contains "$output_file" "Failed GitHub Check needs a source-backed pytest fix for test_live_harness_avoids_broad_url_opener_pattern" "fallback explains pytest failure with the test name"
+	assert_file_contains "$output_file" "tests/live/test_live_api_sequence.py:" "fallback maps pytest failure to a source file and line"
+	assert_file_contains "$output_file" "urllib.request" "fallback preserves the assertion term that caused the pytest failure"
+	assert_file_contains "$output_file" "cd backend && python -m pytest tests/live/test_live_api_sequence.py::test_live_harness_avoids_broad_url_opener_pattern -q" "fallback gives a focused pytest rerun command"
+	assert_file_contains "$output_file" "do not approve or post a URL-only review" "fallback explicitly rejects URL-only failed-check reviews"
+	assert_file_contains "$output_file" "GitHub Checks queue - PR Governance/metadata-only gate evaluation was cancelled by a newer queued request" "fallback explains cancelled governance checks as queue state"
+	assert_file_contains "$output_file" "no repository source edit is justified by this cancelled check alone" "fallback does not invent source fixes for cancelled queue state"
+	assert_file_not_contains "$output_file" "No deterministic missing-string markers" "fallback must not fall back to generic evidence-dump text when pytest evidence is actionable"
 
 	rm -rf "$tmp_dir"
 }
@@ -6143,6 +6232,8 @@ assert_opencode_review_gate_rejects_non_source_backed_findings
 assert_opencode_failed_check_review_validator_rejects_unrelated_findings
 
 assert_opencode_failed_check_fallback_emits_each_strix_report
+
+assert_opencode_failed_check_fallback_explains_pytest_and_cancelled_checks
 
 assert_opencode_failed_check_fallback_explains_trusted_base_strix_prs
 

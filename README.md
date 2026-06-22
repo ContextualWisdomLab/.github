@@ -24,6 +24,12 @@ PoC/execution result. The PoC can be a temporary scratch repro, focused test,
 lint, security check, performance probe, or UI verification command, but it must
 be actually run and cited. Scratch PoC files are not committed.
 
+Failed GitHub Checks are not reviewed as URL lists. OpenCode must explain the
+failed check name, failing step, source-backed file and line when available,
+root cause, fix direction, and focused rerun command. Cancelled or superseded
+checks must be described as queue or evidence blockers rather than invented
+source-code findings.
+
 Operational cases folded into the central policy:
 
 - `naruon`: approved PRs can become `BEHIND`; the scheduler treats that as an

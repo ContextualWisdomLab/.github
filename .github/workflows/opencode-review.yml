@@ -2516,7 +2516,7 @@ jobs:
             rm -f "$strix_evidence_file"
 
             if [ "$finding_index" -eq 0 ]; then
-              printf 'No deterministic missing-string markers were recognized. Use the failed-check evidence below to map each failed check to exact local source lines before approving.\n\n'
+              printf 'No automated line-specific fallback pattern matched this failed check. Do not approve or post a URL-only review; inspect the failed-check evidence below, identify the exact failing source line, explain the root cause, and provide the focused rerun command before approval.\n\n'
             fi
           }
 
@@ -3178,7 +3178,7 @@ jobs:
             if request_changes_for_merge_conflict_if_present; then
               :
             else
-              echo "::error::OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}; all configured OpenCode model attempts failed to produce a usable current-head control block for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
+              echo "::error::OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}; all configured OpenCode model attempts failed to produce a usable current-head control block for head ${HEAD_SHA}. no valid source-backed review output was available after retries; it will not approve without source-backed current-head review evidence. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
               echo "::endgroup::"
               exit 1
             fi
