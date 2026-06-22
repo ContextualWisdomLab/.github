@@ -998,6 +998,7 @@ jobs:
 
       - name: Run OpenCode PR Review (GPT-5)
         id: opencode_review_primary
+        if: needs.coverage-evidence.result == 'success'
         continue-on-error: true
         timeout-minutes: 20
         env:
@@ -1123,7 +1124,10 @@ jobs:
 
       - name: Run OpenCode PR Review fallback (DeepSeek R1)
         id: opencode_review_fallback
-        if: always() && steps.opencode_review_primary.outputs.review_status != 'success'
+        if: >-
+          always()
+          && needs.coverage-evidence.result == 'success'
+          && steps.opencode_review_primary.outputs.review_status != 'success'
         continue-on-error: true
         timeout-minutes: 60
         env:
@@ -1251,6 +1255,7 @@ jobs:
         id: opencode_review_second_fallback
         if: >-
           always()
+          && needs.coverage-evidence.result == 'success'
           && steps.opencode_review_primary.outputs.review_status != 'success'
           && steps.opencode_review_fallback.outputs.review_status != 'success'
         continue-on-error: true
@@ -1380,8 +1385,8 @@ jobs:
         id: opencode_review_o_series_fallback
         if: >-
           always()
-          &&
-          steps.opencode_review_primary.outputs.review_status != 'success'
+          && needs.coverage-evidence.result == 'success'
+          && steps.opencode_review_primary.outputs.review_status != 'success'
           && steps.opencode_review_fallback.outputs.review_status != 'success'
           && steps.opencode_review_second_fallback.outputs.review_status != 'success'
         continue-on-error: true
@@ -3211,6 +3216,14 @@ jobs:
           live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           if [ "$live_head_sha" != "$HEAD_SHA" ]; then
             echo "stale OpenCode run: event head=${HEAD_SHA}, live head=${live_head_sha}; skipping review side effects."
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+            failed_check_review_body_file="$(mktemp)"
+            build_coverage_evidence_failure_body "$failed_check_review_body_file"
+            create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
             echo "::endgroup::"
             exit 0
           fi
