@@ -246,6 +246,9 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     assert not parsed.trigger_reviews
 
     assert sched.main(["--self-test"]) == 0
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("DEFAULT_BRANCH", raising=False)
+    monkeypatch.delenv("PROJECT_FLOW", raising=False)
     with pytest.raises(SystemExit):
         sched.main([])
     with pytest.raises(SystemExit):
