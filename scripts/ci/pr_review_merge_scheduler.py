@@ -198,6 +198,20 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def failed_status_checks(pr: dict[str, Any]) -> list[str]:
+    failed: list[str] = []
+    for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun":
+            conclusion = (node.get("conclusion") or "").upper()
+            if conclusion in {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}:
+                failed.append(node.get("name") or "check-run")
+        else:
+            state = (node.get("state") or "").upper()
+            if state in {"FAILURE", "ERROR"}:
+                failed.append(node.get("context") or "status-context")
+    return failed
+
+
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     number = str(pr["number"])
     head = pr["headRefOid"]
@@ -291,6 +305,9 @@ def inspect_pr(
         return Decision(number, "update_branch", "latest OpenCode review approved; branch update requested")
 
     if has_current_head_approval(pr):
+        failed_checks = failed_status_checks(pr)
+        if failed_checks:
+            return Decision(number, "block", f"failed check(s): {', '.join(failed_checks[:5])}")
         if pr.get("autoMergeRequest"):
             return Decision(number, "wait", "current head is approved; auto-merge already enabled")
         if not enable_auto_merge_flag:
@@ -359,6 +376,33 @@ def self_test() -> None:
     }
     assert has_current_head_approval(sample)
     assert not has_current_head_changes_requested(sample)
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        base_branch="main",
+    )
+    assert decision.action == "auto_merge"
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"}
+    ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        base_branch="main",
+    )
+    assert decision.action == "block"
+    assert "strix" in decision.reason
+    sample["statusCheckRollup"]["contexts"]["nodes"] = []
     sample["reviews"]["nodes"].append(
         {
             "state": "APPROVED",

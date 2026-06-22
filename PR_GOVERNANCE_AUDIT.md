@@ -19,7 +19,7 @@ OpenCode decides; GitHub Actions mutates.
 
 | Repo | Flow | Default | Auto-merge | Branch policy evidence | Workflow footprint | Current gap |
 |---|---:|---:|---:|---|---|---|
-| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | Current PR #28 blocked by coverage/Strix evidence. |
+| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | Current PR #28 has current-head OpenCode success, but OpenCode requests changes because the Strix check fails. |
 | `ContextualWisdomLab/ContextualWisdomLab.github.io` | GitHub Flow | `main` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | No representative actor sample checked yet. |
 | `ContextualWisdomLab/VibeSec` | Git Flow | `develop` | on | rulesets `Lock default branch`, `PR`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | Mixed human/native auto-merge/GitHub Actions history. |
 | `ContextualWisdomLab/bandscope` | Git Flow | `develop` | on | ruleset `Lock default branch`; no classic protection | OpenCode Review; PR Review Merge Scheduler; Strix | No representative actor sample checked yet. |
@@ -49,6 +49,7 @@ The checked-in scheduler already does the minimal central path:
 - blocks `DIRTY` or `CONFLICTING`;
 - blocks unresolved review threads;
 - blocks current-head OpenCode `CHANGES_REQUESTED`;
+- blocks current-head failed check runs or status contexts before enabling auto-merge;
 - updates `BEHIND` only when the latest OpenCode review is approved, using `expected_head_sha`;
 - enables native auto-merge only for current-head OpenCode approval;
 - dispatches OpenCode when the current head has no OpenCode decision.
