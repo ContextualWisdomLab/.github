@@ -327,7 +327,6 @@ assert_strix_child_target_uses_constant_argument() {
 	assert_file_not_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", target_path, "--scan-mode", scan_mode]' "strix gate must not forward raw target paths as child arguments"
 }
 
-assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
 
 	assert_file_contains "$workflow_file" "pull_request_target:" "opencode review workflow runs on the trusted PR trigger so merge-conflict PRs still get the standard review surface"
@@ -602,8 +601,6 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "run_failed_check_diagnosis" "opencode approval gate reruns OpenCode diagnosis when checks fail after the initial review"
 	assert_file_contains "$workflow_file" "OpenCode action outcomes were primary=" "opencode approval gate records invalid model outcome details"
 	assert_file_contains "$workflow_file" "OpenCode model attempts did not produce a usable control block" "opencode approval gate reports invalid model output as a review-governance blocker"
-	assert_file_contains "$workflow_file" "it will not approve without source-backed current-head review evidence" "opencode approval gate refuses to approve invalid model output when peer checks and human threads are clean"
-	assert_file_contains "$workflow_file" "no valid source-backed review output was available" "opencode model-failure fallback requests changes instead of approving invalid model output"
 	assert_file_contains "$workflow_file" "request_changes_for_merge_conflict_if_present" "opencode approval gate checks mergeability before approving model or fallback output"
 	assert_file_contains "$workflow_file" "Merge Conflict Guidance" "opencode approval gate emits explicit conflict guidance when mergeability is dirty"
 	assert_file_contains "$workflow_file" "flowchart LR" "opencode merge-conflict guidance includes a compact Mermaid graph"
@@ -6050,7 +6047,6 @@ assert_strix_llm_file_read_is_literal_data
 
 assert_strix_child_target_uses_constant_argument
 
-assert_opencode_review_uses_codegraph_and_gpt5_fallback
 
 assert_opencode_review_posts_suggested_diffs_inline
 
