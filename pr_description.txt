@@ -1,0 +1,10 @@
+🎯 **What:** `scripts/ci/opencode_review_normalize_output.py` 파일 내의 길고 복잡했던 `valid_control` 함수를 여러 개의 작은 헬퍼 함수(`_is_valid_metadata`, `_is_valid_finding`, `_get_valid_findings`)로 분리하여 리팩토링했습니다.
+
+💡 **Why:** `valid_control` 함수가 20개 이상의 문장과 수많은 개별 검증 로직으로 이루어져 있어 가독성과 유지보수성이 떨어지는 코드 건강도(Code Health) 문제가 있었습니다. 이를 개선하여 코드를 더욱 직관적이고 관리하기 쉽게 만들었습니다.
+
+✅ **Verification:**
+- `python3 -m py_compile scripts/ci/opencode_review_normalize_output.py` 명령어를 통해 문법 오류가 없음을 확인했습니다.
+- 독립된 Python 테스트 스크립트를 작성하여 리팩토링된 헬퍼 함수들과 `valid_control` 함수가 동일한 기능을 정상적으로 수행함을 확인했습니다.
+- `scripts/ci/test_opencode_fact_gate_contract.sh` 등의 기존 계약 테스트들이 정상적으로 통과함을 확인했습니다. (전체 E2E 테스트인 `test_strix_quick_gate.sh`는 타임아웃 문제로 인해 국소적 검증을 우선 진행했습니다.)
+
+✨ **Result:** 코드의 동작 변화 없이 단일 함수의 복잡도를 크게 낮추고, 각 검증 로직을 분리함으로써 유지보수성과 가독성을 크게 개선했습니다.
