@@ -38,15 +38,15 @@
   },
   "permission": {
     "edit": "deny",
-    "bash": "deny",
+    "bash": "allow",
     "read": "allow",
     "grep": "allow",
     "glob": "allow",
     "list": "allow",
-    "task": "deny",
-    "webfetch": "deny",
-    "websearch": "deny",
-    "lsp": "deny",
+    "task": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "lsp": "allow",
     "external_directory": "allow"
   },
   "agent": {
