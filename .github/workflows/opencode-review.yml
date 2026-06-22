@@ -33,9 +33,12 @@ jobs:
   coverage-evidence:
     name: coverage-evidence
     if: >-
-      github.event_name == 'pull_request_target'
-      && github.event.pull_request.draft != true
-      && github.event.pull_request.head.repo.full_name == github.repository
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'pull_request_target'
+        && github.event.pull_request.draft != true
+        && github.event.pull_request.head.repo.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,12 +52,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
 
       - name: Measure test and docstring coverage at 100 percent
         id: measure
         env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
         run: |
           set -euo pipefail
 
@@ -995,7 +998,8 @@ jobs:
 
       - name: Run OpenCode PR Review (GPT-5)
         id: opencode_review_primary
-        timeout-minutes: 10
+        continue-on-error: true
+        timeout-minutes: 20
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1120,6 +1124,7 @@ jobs:
       - name: Run OpenCode PR Review fallback (DeepSeek R1)
         id: opencode_review_fallback
         if: always() && steps.opencode_review_primary.outputs.review_status != 'success'
+        continue-on-error: true
         timeout-minutes: 60
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
@@ -1248,6 +1253,7 @@ jobs:
           always()
           && steps.opencode_review_primary.outputs.review_status != 'success'
           && steps.opencode_review_fallback.outputs.review_status != 'success'
+        continue-on-error: true
         timeout-minutes: 60
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
@@ -1378,6 +1384,7 @@ jobs:
           steps.opencode_review_primary.outputs.review_status != 'success'
           && steps.opencode_review_fallback.outputs.review_status != 'success'
           && steps.opencode_review_second_fallback.outputs.review_status != 'success'
+        continue-on-error: true
         timeout-minutes: 80
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}

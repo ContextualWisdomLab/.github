@@ -98,6 +98,23 @@ APPROVAL_VERIFICATION_LABELS = (
     "security/privacy:",
 )
 
+COVERAGE_FAILURE_PHRASES = (
+    "not measured",
+    "unmeasured",
+    "not proven",
+    "not applicable",
+    "n/a",
+    "skipped",
+    "unavailable",
+    "missing",
+    "partial",
+    "unknown",
+    "did not run",
+    "did not publish",
+    "job did not run",
+    "job did not publish",
+)
+
 
 def admits_missing_structural_review(reason: str, summary: str) -> bool:
     """Return whether an approval admits it did not inspect required structure."""
@@ -136,9 +153,19 @@ def label_section(text: str, label: str) -> str:
 def mentions_full_coverage(reason: str, summary: str) -> bool:
     """Return whether test and docstring coverage are both explicitly 100%."""
     combined = f"{reason}\n{summary}".casefold()
-    return "100%" in label_section(combined, "coverage:") and "100%" in label_section(
-        combined, "docstring coverage:"
-    )
+    coverage_section = label_section(combined, "coverage:")
+    docstring_section = label_section(combined, "docstring coverage:")
+    required_sections = (coverage_section, docstring_section)
+    if not all(required_sections):
+        return False
+    for section in required_sections:
+        if any(phrase in section for phrase in COVERAGE_FAILURE_PHRASES):
+            return False
+        if "coverage execution evidence" not in section:
+            return False
+        if "100%" not in section:
+            return False
+    return True
 
 
 def check_structural_approval(control_file: Path) -> int:
