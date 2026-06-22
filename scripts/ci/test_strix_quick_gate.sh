@@ -329,7 +329,7 @@ assert_strix_child_target_uses_constant_argument() {
 
 assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
-	local opencode_config="$REPO_ROOT/opencode.jsonc"
+	local opencode_config="$REPO_ROOT/.github/workflows/opencode-review.yml"
 
 	assert_file_contains "$workflow_file" "pull_request_target:" "opencode review workflow runs on the trusted PR trigger so merge-conflict PRs still get the standard review surface"
 	assert_file_contains "$workflow_file" "pull_request:" "opencode review workflow publishes a PR-associated required check while trusted review side effects stay on pull_request_target"
