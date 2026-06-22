@@ -196,112 +196,134 @@ def starts_new_field(line: str) -> bool:
     )
 
 
-def parse_reports(text: str) -> list[dict[str, str]]:
-    reports: list[dict[str, str]] = []
-    in_window = False
-    window_model = ""
-    current_model = ""
-    report_model = ""
-    title = ""
-    severity = ""
-    endpoint = ""
-    method = ""
-    target = ""
-    location = ""
-    continuation = ""
+class ReportParser:
+    def __init__(self) -> None:
+        self.reports: list[dict[str, str]] = []
+        self.in_window = False
+        self.window_model = ""
+        self.current_model = ""
+        self.report_model = ""
+        self.title = ""
+        self.severity = ""
+        self.endpoint = ""
+        self.method = ""
+        self.target = ""
+        self.location = ""
+        self.continuation = ""
 
-    def finish_report() -> None:
-        nonlocal report_model, title, severity, endpoint, method, target, location
-        if title:
-            reports.append(
+    def finish_report(self) -> None:
+        if self.title:
+            self.reports.append(
                 {
-                    "model": report_model or window_model or current_model or "unknown-model",
-                    "title": title,
-                    "severity": severity,
-                    "endpoint": endpoint,
-                    "method": method,
-                    "target": target,
-                    "location": location,
+                    "model": self.report_model or self.window_model or self.current_model or "unknown-model",
+                    "title": self.title,
+                    "severity": self.severity,
+                    "endpoint": self.endpoint,
+                    "method": self.method,
+                    "target": self.target,
+                    "location": self.location,
                 }
             )
-        report_model = title = severity = endpoint = method = target = location = ""
+        self.report_model = self.title = self.severity = self.endpoint = self.method = self.target = self.location = ""
 
-    for raw_line in text.splitlines():
-        line = clean(raw_line)
-        if line.lower().startswith("### strix vulnerability report window"):
-            finish_report()
-            in_window = True
-            window_model = ""
-            match = re.search(
-                r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)",
-                line,
-                re.IGNORECASE,
-            )
-            if match:
-                window_model = match.group(1)
-                current_model = match.group(1)
-            continuation = ""
-            continue
+    def _handle_window_start(self, line: str) -> bool:
+        if not line.lower().startswith("### strix vulnerability report window"):
+            return False
+        self.finish_report()
+        self.in_window = True
+        self.window_model = ""
+        match = re.search(
+            r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            self.window_model = match.group(1)
+            self.current_model = match.group(1)
+        self.continuation = ""
+        return True
 
+    def _update_models(self, line: str) -> None:
         match = model_re.search(line) or failed_model_re.search(line)
         if match:
-            current_model = match.group(1)
-            if in_window:
-                window_model = current_model
-            if in_window and title:
-                report_model = current_model
+            self.current_model = match.group(1)
+            if self.in_window:
+                self.window_model = self.current_model
+            if self.in_window and self.title:
+                self.report_model = self.current_model
 
-        if not in_window:
-            continue
+    def _handle_continuation(self, line: str) -> bool:
+        if not self.continuation:
+            return False
+        if not line:
+            self.continuation = ""
+        elif not starts_new_field(line) and not re.match(r"^[╭╰─]+$", line) and line.lower() != "vulnerability report":
+            if self.continuation == "title":
+                self.title = f"{self.title} {line}".strip()
+            elif self.continuation == "endpoint":
+                self.endpoint = f"{self.endpoint} {line}".strip()
+            elif self.continuation == "target":
+                self.target = f"{self.target} {line}".strip()
+            return True
+        else:
+            self.continuation = ""
+        return False
 
-        if continuation:
-            if not line:
-                continuation = ""
-            elif not starts_new_field(line) and not re.match(r"^[╭╰─]+$", line) and line.lower() != "vulnerability report":
-                if continuation == "title":
-                    title = f"{title} {line}".strip()
-                elif continuation == "endpoint":
-                    endpoint = f"{endpoint} {line}".strip()
-                elif continuation == "target":
-                    target = f"{target} {line}".strip()
-                continue
-            else:
-                continuation = ""
-
-        if line.lower() == "vulnerability report":
-            continue
+    def _parse_field(self, line: str) -> None:
         field_match = re.match(r"^Title:\s+(.+)", line, re.IGNORECASE)
         if field_match:
-            finish_report()
-            title = field_match.group(1)
-            report_model = window_model
-            continuation = "title"
-            continue
+            self.finish_report()
+            self.title = field_match.group(1)
+            self.report_model = self.window_model
+            self.continuation = "title"
+            return
         field_match = re.match(r"^Severity:\s+(CRITICAL|HIGH|MEDIUM|LOW|NONE)\b", line, re.IGNORECASE)
         if field_match:
-            severity = field_match.group(1).upper()
-            continue
+            self.severity = field_match.group(1).upper()
+            return
         field_match = re.match(r"^Endpoint:\s+(.+)", line, re.IGNORECASE)
         if field_match:
-            endpoint = field_match.group(1)
-            continuation = "endpoint"
-            continue
+            self.endpoint = field_match.group(1)
+            self.continuation = "endpoint"
+            return
         field_match = re.match(r"^Method:\s+(.+)", line, re.IGNORECASE)
         if field_match:
-            method = field_match.group(1)
-            continuation = ""
-            continue
+            self.method = field_match.group(1)
+            self.continuation = ""
+            return
         field_match = re.match(r"^Target:\s+(.+)", line, re.IGNORECASE)
         if field_match:
-            target = field_match.group(1)
-            continuation = "target"
-            continue
+            self.target = field_match.group(1)
+            self.continuation = "target"
+            return
         field_match = location_re.search(line)
-        if field_match and not location:
-            location = field_match.group(1)
+        if field_match and not self.location:
+            self.location = field_match.group(1)
 
-    finish_report()
-    return [report for report in reports if report["title"] and report["severity"] != "NONE"]
+    def process_line(self, line: str) -> None:
+        if self._handle_window_start(line):
+            return
+
+        self._update_models(line)
+
+        if not self.in_window:
+            return
+
+        if self._handle_continuation(line):
+            return
+
+        if line.lower() == "vulnerability report":
+            return
+
+        self._parse_field(line)
+
+
+def parse_reports(text: str) -> list[dict[str, str]]:
+    parser = ReportParser()
+    for raw_line in text.splitlines():
+        parser.process_line(clean(raw_line))
+    parser.finish_report()
+    return [report for report in parser.reports if report["title"] and report["severity"] != "NONE"]
 
 
 def finding_text(finding: dict[str, object]) -> str:
