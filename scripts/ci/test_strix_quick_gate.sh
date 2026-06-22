@@ -186,6 +186,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
 	assert_file_contains "$GATE_SCRIPT" "sanitize_known_strix_report_warnings" "strix gate sanitizes only known internal Strix report warnings"
+	assert_file_contains "$GATE_SCRIPT" "vulnerability_file_reports_documented_opencode_env_api_key_reference" "strix gate fact-checks documented OpenCode env apiKey references before accepting secret-templating reports"
 	assert_file_contains "$GATE_SCRIPT" "iter_report_logs" "strix gate enumerates report logs through a safe walker"
 	assert_file_contains "$GATE_SCRIPT" "os.walk(root, topdown=True, followlinks=False)" "strix gate does not recurse into symlinked report directories"
 	assert_file_not_contains "$GATE_SCRIPT" 'root.rglob("*.log")' "strix gate avoids recursive pathlib glob traversal for report logs"
@@ -2499,6 +2500,32 @@ EOS
 			;;
 		esac
 		;;
+	opencode-documented-env-api-key-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/opencode-env-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-opencode-env/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-opencode-env/vulnerabilities/vuln-0001.md" <<EOS
+# Secret templating in configuration file
+
+**Severity:** HIGH
+**Target:** /workspace/$(basename -- "$target_path")/.github/workflows/opencode-review.yml
+
+The workflow contains a JSONC configuration block that directly templates
+the secret using \`"apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"\`.
+EOS
+			echo "Penetration test failed: documented OpenCode env apiKey reference"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after documented OpenCode env apiKey false positive"
+			exit 0
+			;;
+		*)
+			echo "Error: documented OpenCode env apiKey fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 27
+			;;
+		esac
+		;;
 	vertex-primary-existing-endpoint-nonrecoverable|multi-source-dirs-existing-endpoint)
 		case "${STRIX_LLM:-}" in
 		vertex_ai/existing-endpoint-primary|vertex_ai/multi-dir-primary)
@@ -3271,6 +3298,15 @@ EOS
 		echo "Penetration test failed: changed critical finding with absolute target"
 		exit 1
 		;;
+	pr-critical-changed-internal-dotdir-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed-internal-dotdir/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-changed-internal-dotdir/vulnerabilities/vuln-0001.md" <<EOS
+**Severity:** HIGH
+**Target:** /workspace/$(basename -- "$target_path")/.github/workflows/opencode-review.yml
+EOS
+		echo "Penetration test failed: changed internal dot-directory target"
+		exit 1
+		;;
 	pr-critical-changed-subdir-target)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed-subdir/vulnerabilities"
 		cat >"$STRIX_REPORTS_DIR/fake-pr-changed-subdir/vulnerabilities/vuln-0001.md" <<'EOS'
@@ -3720,6 +3756,24 @@ EOS
 		touch "$repo_root_dir/docker-compose.yml"
 		touch "$repo_root_dir/render.yaml"
 		echo '0.0.0' >"$repo_root_dir/VERSION"
+	elif [ "$scenario" = "pr-critical-changed-internal-dotdir-target" ]; then
+		mkdir -p "$repo_root_dir/.github/workflows"
+		echo 'name: OpenCode Review' >"$repo_root_dir/.github/workflows/opencode-review.yml"
+	elif [ "$scenario" = "opencode-documented-env-api-key-fallback-success" ]; then
+		mkdir -p "$repo_root_dir/.github/workflows"
+		cat >"$repo_root_dir/.github/workflows/opencode-review.yml" <<'EOS'
+name: OpenCode Review
+config: |
+  {
+    "provider": {
+      "github-models": {
+        "options": {
+          "apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"
+        }
+      }
+    }
+  }
+EOS
 	elif [ "$scenario" = "pr-large-scope-full-set" ]; then
 		mkdir -p "$repo_root_dir/backend/large-scope"
 		local large_scope_index
@@ -7333,6 +7387,27 @@ run_gate_case "vertex-primary-hallucinated-endpoint-fallback-success" \
 	"vertex_ai/hallucination-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
 
+run_gate_case "opencode-documented-env-api-key-fallback-success" \
+	"vertex_ai/opencode-env-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after documented OpenCode env apiKey false positive" \
+	"2" \
+	"vertex_ai/opencode-env-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"HIGH" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	".github/workflows/opencode-review.yml"
+
 run_gate_case "vertex-primary-existing-endpoint-nonrecoverable" \
 	"vertex_ai/existing-endpoint-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
@@ -8435,6 +8510,27 @@ run_gate_case "pr-critical-changed-absolute-target" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java"
+
+run_gate_case "pr-critical-changed-internal-dotdir-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix finding intersects files changed in this pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	".github/workflows/opencode-review.yml"
 
 run_gate_case "pr-critical-changed-subdir-target" \
 	"openai/gpt-4o-mini" \
