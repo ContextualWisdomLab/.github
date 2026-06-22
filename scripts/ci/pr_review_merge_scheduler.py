@@ -20,6 +20,7 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
         title
         isDraft
         mergeable
+        mergeStateStatus
         reviewDecision
         baseRefName
         baseRefOid
@@ -177,6 +178,18 @@ def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
     return False
 
 
+def latest_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | None:
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if is_opencode_review(review):
+            return review
+    return None
+
+
+def latest_opencode_approved(pr: dict[str, Any]) -> bool:
+    review = latest_opencode_review(pr)
+    return bool(review and (review.get("state") or "").upper() == "APPROVED")
+
+
 def has_current_head_approval(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "APPROVED")
 
@@ -191,6 +204,24 @@ def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
     run(["gh", "pr", "merge", number, "--repo", repo, "--auto", "--merge", "--match-head-commit", head])
+
+
+def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    number = str(pr["number"])
+    head = pr["headRefOid"]
+    if dry_run:
+        return
+    run(
+        [
+            "gh",
+            "api",
+            "-X",
+            "PUT",
+            f"repos/{repo}/pulls/{number}/update-branch",
+            "-f",
+            f"expected_head_sha={head}",
+        ]
+    )
 
 
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -227,6 +258,7 @@ def inspect_pr(
     dry_run: bool,
     trigger_reviews: bool,
     enable_auto_merge_flag: bool,
+    update_branches: bool,
     workflow: str,
     base_branch: str,
 ) -> Decision:
@@ -241,12 +273,22 @@ def inspect_pr(
     if head_repo != repo:
         return Decision(number, "skip", f"fork or external head repo: {head_repo}")
 
+    merge_state = (pr.get("mergeStateStatus") or "").upper()
+    if merge_state in {"DIRTY", "CONFLICTING"}:
+        return Decision(number, "block", f"merge conflict: {merge_state}")
+
     unresolved = unresolved_thread_count(pr)
     if unresolved:
         return Decision(number, "block", f"{unresolved} unresolved review thread(s)")
 
     if has_current_head_changes_requested(pr):
         return Decision(number, "block", "current-head OpenCode review requested changes")
+
+    if merge_state == "BEHIND" and latest_opencode_approved(pr):
+        if not update_branches:
+            return Decision(number, "wait", "latest OpenCode review approved; branch update disabled")
+        update_branch(repo, pr, dry_run=dry_run)
+        return Decision(number, "update_branch", "latest OpenCode review approved; branch update requested")
 
     if has_current_head_approval(pr):
         if pr.get("autoMergeRequest"):
@@ -295,6 +337,10 @@ def self_test() -> None:
     sample = {
         "number": 1,
         "headRefOid": "abc",
+        "baseRefName": "main",
+        "baseRefOid": "base",
+        "headRefName": "feature",
+        "mergeStateStatus": "CLEAN",
         "isDraft": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
         "reviewDecision": "REVIEW_REQUIRED",
@@ -336,6 +382,26 @@ def self_test() -> None:
         {"__typename": "CheckRun", "name": "opencode-review", "status": "IN_PROGRESS"}
     )
     assert opencode_in_progress(sample)
+    sample["statusCheckRollup"]["contexts"]["nodes"] = []
+    sample["mergeStateStatus"] = "BEHIND"
+    sample["reviews"]["nodes"] = [
+        {
+            "state": "APPROVED",
+            "author": {"login": "opencode-agent"},
+            "commit": {"oid": "old"},
+        }
+    ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        base_branch="main",
+    )
+    assert decision.action == "update_branch"
     print("self-test passed")
 
 
@@ -348,6 +414,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--update-branches", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--review-workflow", default="OpenCode Review")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
@@ -372,6 +439,7 @@ def main(argv: list[str]) -> int:
             dry_run=args.dry_run,
             trigger_reviews=args.trigger_reviews,
             enable_auto_merge_flag=args.enable_auto_merge,
+            update_branches=args.update_branches,
             workflow=args.review_workflow,
             base_branch=args.base_branch,
         )
