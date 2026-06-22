@@ -107,13 +107,12 @@ if ! jq -e '
   and (.result == "APPROVE" or .result == "REQUEST_CHANGES")
   and (.reason | type == "string" and length > 0)
   and (.summary | type == "string" and length > 0)
-  and (.findings | type == "array")
   and (
-    if .result == "REQUEST_CHANGES" then (.findings | length > 0)
-    else (.findings | length == 0)
+    if .result == "REQUEST_CHANGES" then (.findings | type == "array" and length > 0)
+    else ((.findings == null) or (.findings | type == "array" and length == 0))
     end
   )
-  and all(.findings[];
+  and all((.findings // [])[];
     (.path | type == "string" and length > 0)
     and ((.path | ascii_downcase) as $p | ($p != "n/a" and $p != "unknown"))
     and (.line | type == "number" and . > 0 and floor == .)
@@ -272,7 +271,7 @@ then
 fi
 
 if [ -n "$NORMALIZED_JSON_FILE" ]; then
-  jq -c '{head_sha, run_id, run_attempt, result, reason, summary, findings}' "$TMP_JSON" >"$NORMALIZED_JSON_FILE"
+  jq -c '{head_sha, run_id, run_attempt, result, reason, summary, findings:(.findings // [])}' "$TMP_JSON" >"$NORMALIZED_JSON_FILE"
 fi
 
 echo "$RESULT"
