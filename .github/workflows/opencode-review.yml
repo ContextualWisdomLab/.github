@@ -32,13 +32,7 @@ permissions:
 jobs:
   coverage-evidence:
     name: coverage-evidence
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      || (
-        github.event_name == 'pull_request_target'
-        && github.event.pull_request.draft != true
-        && github.event.pull_request.head.repo.full_name == github.repository
-      )
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
