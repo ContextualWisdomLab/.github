@@ -78,6 +78,26 @@ CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
     r"|(?<![A-Za-z0-9_])(?:Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
 )
 
+APPROVAL_VERIFICATION_LABELS = (
+    "verification posture:",
+    "linter/static:",
+    "tdd/regression:",
+    "coverage:",
+    "docstring coverage:",
+    "dag:",
+    "poc/execution:",
+    "ddd/domain:",
+    "cdd/context:",
+    "similar issues:",
+    "claim/concept check:",
+    "standards search:",
+    "compatibility/convention:",
+    "breaking-change/backcompat:",
+    "performance:",
+    "design/ux:",
+    "security/privacy:",
+)
+
 
 def admits_missing_structural_review(reason: str, summary: str) -> bool:
     """Return whether an approval admits it did not inspect required structure."""
@@ -90,6 +110,35 @@ def admits_missing_structural_review(reason: str, summary: str) -> bool:
 def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
     """Return whether an approval names at least one concrete changed file/path."""
     return bool(CHANGED_FILE_EVIDENCE_PATTERN.search(f"{reason}\n{summary}"))
+
+
+def mentions_verification_posture(reason: str, summary: str) -> bool:
+    """Return whether an approval records the concrete review surfaces checked."""
+    combined = f"{reason}\n{summary}".casefold()
+    return all(label in combined for label in APPROVAL_VERIFICATION_LABELS) and "codegraph" in combined
+
+
+def label_section(text: str, label: str) -> str:
+    """Return text after a verification label until the next known label."""
+    start = text.find(label)
+    if start == -1:
+        return ""
+    start += len(label)
+    next_starts = [
+        text.find(candidate, start)
+        for candidate in APPROVAL_VERIFICATION_LABELS
+        if candidate != label and text.find(candidate, start) != -1
+    ]
+    end = min(next_starts) if next_starts else len(text)
+    return text[start:end]
+
+
+def mentions_full_coverage(reason: str, summary: str) -> bool:
+    """Return whether test and docstring coverage are both explicitly 100%."""
+    combined = f"{reason}\n{summary}".casefold()
+    return "100%" in label_section(combined, "coverage:") and "100%" in label_section(
+        combined, "docstring coverage:"
+    )
 
 
 def check_structural_approval(control_file: Path) -> int:
@@ -111,6 +160,18 @@ def check_structural_approval(control_file: Path) -> int:
         print("NO_CONCLUSION", file=sys.stderr)
         return 4
     if value.get("result") == "APPROVE" and not mentions_changed_file_evidence(
+        str(value.get("reason", "")),
+        str(value.get("summary", "")),
+    ):
+        print("NO_CONCLUSION", file=sys.stderr)
+        return 4
+    if value.get("result") == "APPROVE" and not mentions_verification_posture(
+        str(value.get("reason", "")),
+        str(value.get("summary", "")),
+    ):
+        print("NO_CONCLUSION", file=sys.stderr)
+        return 4
+    if value.get("result") == "APPROVE" and not mentions_full_coverage(
         str(value.get("reason", "")),
         str(value.get("summary", "")),
     ):
@@ -161,6 +222,10 @@ def valid_control(
     if result == "APPROVE" and admits_missing_structural_review(reason, summary):
         return None
     if result == "APPROVE" and not mentions_changed_file_evidence(reason, summary):
+        return None
+    if result == "APPROVE" and not mentions_verification_posture(reason, summary):
+        return None
+    if result == "APPROVE" and not mentions_full_coverage(reason, summary):
         return None
 
     required_finding_fields = (
