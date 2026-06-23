@@ -137,6 +137,30 @@ def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
     return bool(CHANGED_FILE_EVIDENCE_PATTERN.search(f"{reason}\n{summary}"))
 
 
+def current_changed_files() -> set[str]:
+    """Return the exact current-head changed files when the workflow provides them."""
+    changed_files_path = os.environ.get("OPENCODE_CHANGED_FILES_FILE")
+    if not changed_files_path:
+        return set()
+    try:
+        return {
+            line.strip()
+            for line in Path(changed_files_path).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+    except OSError:
+        return set()
+
+
+def mentions_actual_changed_file(reason: str, summary: str) -> bool:
+    """Return whether an approval names an exact current-head changed file."""
+    changed_files = current_changed_files()
+    if not changed_files:
+        return mentions_changed_file_evidence(reason, summary)
+    combined = f"{reason}\n{summary}"
+    return any(changed_file in combined for changed_file in changed_files)
+
+
 def mentions_verification_posture(reason: str, summary: str) -> bool:
     """Return whether an approval records the concrete review surfaces checked."""
     combined = f"{reason}\n{summary}".casefold()
@@ -379,7 +403,7 @@ def valid_control(
         if admits_missing_structural_review(reason, summary):
             return None
         summary = repair_approval_summary(reason, summary)
-        if not mentions_changed_file_evidence(reason, summary):
+        if not mentions_actual_changed_file(reason, summary):
             return None
         if not mentions_verification_posture(reason, summary):
             return None

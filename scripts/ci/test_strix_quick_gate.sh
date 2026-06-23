@@ -1076,10 +1076,12 @@ EOF
 assert_opencode_review_gate_rejects_approve_without_changed_file_evidence() {
 	local tmp_dir
 	local output_file
+	local changed_files_file
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
+	changed_files_file="$tmp_dir/changed-files.txt"
 
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
@@ -1115,6 +1117,45 @@ EOF
 	assert_equals "4" "$rc" "opencode approval gate rejects approvals without changed-file evidence"
 	assert_equals "NO_CONCLUSION" "$gate_result" "missing changed-file evidence rejection gate result"
 	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "Before APPROVE, the summary must include at least one exact changed file path inspected as changed-file evidence" "opencode prompt requires changed-file evidence before approval"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "OPENCODE_CHANGED_FILES_FILE" "opencode workflow exports exact current-head changed files"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'diff --name-only --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA" >"$OPENCODE_CHANGED_FILES_FILE"' "opencode workflow writes exact changed files for the normalizer"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "changed-files.txt" "opencode workflow copies exact changed-file evidence into the isolated review workspace"
+
+	cat >"$changed_files_file" <<'EOF'
+.github/workflows/opencode-review.yml
+scripts/ci/opencode_review_normalize_output.py
+EOF
+
+	cat >"$output_file" <<'EOF'
+OpenCode transcript text before the review control block.
+
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting README.md.","summary":"Reviewed README.md. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered README.md to docs review path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions docs. Compatibility/convention: conventions match existing code. Breaking-change/backcompat: no public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token boundaries preserved.","findings":[]}
+EOF
+
+	set +e
+	OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
+		python3 "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" \
+		"abc123" "42" "1" "$output_file" >"$tmp_dir/nonchanged-normalize.out" 2>"$tmp_dir/nonchanged-normalize.err"
+	rc=$?
+	set -e
+
+	assert_equals "4" "$rc" "opencode normalizer rejects approvals that cite non-changed files when exact changed-file evidence is available"
+	assert_file_contains "$tmp_dir/nonchanged-normalize.err" "NO_CONCLUSION" "opencode normalizer reports no conclusion for non-changed-file approval evidence"
+
+	cat >"$output_file" <<'EOF'
+OpenCode transcript text before the review control block.
+
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml and scripts/ci/opencode_review_normalize_output.py. Verification posture: Linter/static: actionlint and Python syntax evidence passed. TDD/regression: normalizer self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to scripts/ci/opencode_review_normalize_output.py to review decision path. PoC/execution: scratch PoC executed the normalizer with exact changed-file evidence and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and Python conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+EOF
+
+	set +e
+	OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
+		python3 "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" \
+		"abc123" "42" "1" "$output_file" >"$tmp_dir/changed-normalize.out" 2>"$tmp_dir/changed-normalize.err"
+	rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "opencode normalizer accepts approvals that cite exact current changed files"
 
 	rm -rf "$tmp_dir"
 }
