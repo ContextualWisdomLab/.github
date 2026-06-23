@@ -145,6 +145,82 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(approve_without_findings_key, **kwargs)["findings"] == []
 
 
+def test_valid_control_repairs_approval_summary_from_bounded_evidence(tmp_path, monkeypatch):
+    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence.write_text(
+        """\
+# OpenCode bounded PR review evidence
+
+## CodeGraph evidence
+
+The workflow initialized CodeGraph before this evidence file was built.
+
+## Coverage execution evidence
+
+# Coverage Evidence
+
+## Coverage Decision
+
+- Result: PASS
+- Test coverage: 100%
+- Docstring coverage: 100%
+
+## Changed files
+
+M\tscripts/ci/example.py
+A\t.github/workflows/opencode-review.yml
+
+## Changed file history evidence
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+
+    repaired = norm.valid_control(
+        control(reason="Current-head review completed.", summary="No blockers were found."),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert repaired is not None
+    assert "scripts/ci/example.py" in repaired["summary"]
+    assert "CodeGraph" in repaired["summary"]
+    assert norm.mentions_verification_posture(repaired["reason"], repaired["summary"])
+    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+
+
+def test_valid_control_does_not_repair_unsafe_or_unproven_approval(tmp_path, monkeypatch):
+    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence.write_text(
+        """\
+# OpenCode bounded PR review evidence
+
+## Coverage execution evidence
+
+## Coverage Decision
+
+- Result: FAIL
+- Test coverage: not proven 100%
+- Docstring coverage: not proven 100%
+
+## Changed files
+
+M\tscripts/ci/example.py
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    kwargs = {
+        "expected_head_sha": "head",
+        "expected_run_id": "run",
+        "expected_run_attempt": "attempt",
+    }
+
+    assert norm.valid_control(control(reason="No changed files"), **kwargs) is None
+    assert norm.valid_control(control(summary="No blockers were found."), **kwargs) is None
+
+
 def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects('{"a": 1}') == [{"a": 1}, {"a": 1}]
     assert norm.iter_json_objects('prefix {"b": 2} suffix') == [{"b": 2}]
