@@ -17,6 +17,17 @@ strip_ansi() {
 	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g'
 }
 
+redact_sensitive_log() {
+	perl -pe '
+		s/\b(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/[REDACTED_GITHUB_TOKEN]/g;
+		s/\b(sk-[A-Za-z0-9_-]{20,})/[REDACTED_API_KEY]/g;
+		s/\b(xox[baprs]-[A-Za-z0-9-]{20,})/[REDACTED_SLACK_TOKEN]/g;
+		s/\b(AKIA[0-9A-Z]{16})/[REDACTED_AWS_ACCESS_KEY]/g;
+		s/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["'\'']?[^"'\''\s]+["'\'']?/${1}[REDACTED]/ig;
+		s/((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+/${1}[REDACTED]/ig;
+	'
+}
+
 emit_bounded_file() {
 	local file_path="$1"
 	local max_lines="$2"
@@ -201,20 +212,38 @@ trap cleanup EXIT
 
 manual_success_for_label() {
 	local label="$1"
+	local failed_run_id="${2:-}"
 	local key
+	local lower_label
+	local success_context
+	local success_url
+	local success_description
+	local success_run_id
 
 	key="${label##*/}"
 	key="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
-	awk -F '\t' -v key="$key" '
-		tolower($1) == key {
-			print
-			found = 1
-			exit
-		}
-		END {
-			exit found ? 0 : 1
-		}
-	' "$manual_success_contexts"
+	lower_label="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
+	case "$lower_label" in
+		"strix security scan/"*)
+			key="strix"
+			;;
+	esac
+
+	while IFS=$'\t' read -r success_context success_url success_description; do
+		if [ "$(printf '%s' "$success_context" | tr '[:upper:]' '[:lower:]')" != "$key" ]; then
+			continue
+		fi
+		success_run_id="$(printf '%s' "$success_url" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
+		if [ -n "$failed_run_id" ] &&
+			[ -n "$success_run_id" ] &&
+			[ "$failed_run_id" -ge "$success_run_id" ]; then
+			continue
+		fi
+		printf '%s\t%s\t%s\n' "$success_context" "$success_url" "$success_description"
+		return 0
+	done <"$manual_success_contexts"
+
+	return 1
 }
 
 # shellcheck disable=SC2016
@@ -350,7 +379,7 @@ while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; d
 done <"$workflow_run_contexts"
 
 while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; do
-	if success_line="$(manual_success_for_label "$label")"; then
+	if success_line="$(manual_success_for_label "$label" "$run_id")"; then
 		IFS=$'\t' read -r success_context success_url success_description <<<"$success_line"
 		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 			"$kind" \
@@ -424,7 +453,7 @@ done <"$failed_contexts"
 				stripped_log_file="$(mktemp)"
 				tmp_files+=("$log_file" "$stripped_log_file")
 				if gh run view "$run_id" --repo "$GH_REPOSITORY" --log-failed >"$log_file" 2>&1; then
-					strip_ansi <"$log_file" >"$stripped_log_file"
+					strip_ansi <"$log_file" | redact_sensitive_log >"$stripped_log_file"
 					if [ -s "$stripped_log_file" ]; then
 						emit_failure_signal_summary "$stripped_log_file" || true
 						printf '### Failed workflow run log excerpt\n\n'
@@ -441,7 +470,7 @@ done <"$failed_contexts"
 						fi
 					fi
 				else
-				strip_ansi <"$log_file" >"$stripped_log_file"
+				strip_ansi <"$log_file" | redact_sensitive_log >"$stripped_log_file"
 				printf 'No GitHub Actions job log is available for this failed workflow run.\n\n'
 				printf '```text\n'
 				emit_bounded_file "$stripped_log_file" 60
@@ -493,7 +522,7 @@ done <"$failed_contexts"
 			--repo "$GH_REPOSITORY" \
 			--job "$check_run_id" \
 			--log-failed >"$log_raw" 2>&1; then
-			strip_ansi <"$log_raw" >"$log_clean"
+			strip_ansi <"$log_raw" | redact_sensitive_log >"$log_clean"
 			if [ -s "$log_clean" ]; then
 				emit_failure_signal_summary "$log_clean" || true
 				if emit_strix_vulnerability_evidence "$log_clean"; then
@@ -509,7 +538,7 @@ done <"$failed_contexts"
 			printf 'The failed job log could not be collected with `gh run view --log-failed`.\n\n'
 			if [ -s "$log_raw" ]; then
 				printf '```text\n'
-				strip_ansi <"$log_raw" | sed -n '1,40p'
+				strip_ansi <"$log_raw" | redact_sensitive_log | sed -n '1,40p'
 				printf '\n```\n\n'
 			fi
 		fi
