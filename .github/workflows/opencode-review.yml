@@ -1,8 +1,6 @@
 name: OpenCode Review
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -36,13 +34,7 @@ permissions:
 jobs:
   coverage-evidence:
     name: coverage-evidence
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      || (
-        github.event_name == 'pull_request_target'
-        && github.event.pull_request.draft != true
-        && github.event.pull_request.head.repo.full_name == github.repository
-      )
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,7 +48,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          ref: ${{ github.event.inputs.pr_head_sha }}
 
       - name: Install Python coverage measurement tools
         run: python3 -m pip install --disable-pip-version-check -r requirements-opencode-review-ci.txt
@@ -64,7 +56,7 @@ jobs:
       - name: Measure test and docstring coverage at 100 percent
         id: measure
         env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
         run: |
           set -euo pipefail
 
@@ -226,16 +218,7 @@ jobs:
   opencode-review-target:
     name: opencode-review
     needs: [coverage-evidence]
-    if: >-
-      always()
-      && (
-        github.event_name == 'workflow_dispatch'
-        || (
-          github.event_name == 'pull_request_target'
-          && github.event.pull_request.draft != true
-          && github.event.pull_request.head.repo.full_name == github.repository
-        )
-      )
+    if: always() && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -249,15 +232,7 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout trusted review workflow
-        if: github.event_name == 'pull_request_target'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Checkout trusted review workflow for manual PR review
-        if: github.event_name == 'workflow_dispatch'
+      - name: Checkout current-head review workflow for manual PR review
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0

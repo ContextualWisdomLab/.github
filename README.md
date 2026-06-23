@@ -19,6 +19,11 @@ Branch updates and merges run through the workflow `GITHUB_TOKEN`, so GitHub
 records those mechanical mutations as `github-actions[bot]` rather than an
 OpenCode app token or a personal token.
 
+OpenCode review execution is `workflow_dispatch`-only. The scheduler dispatches
+same-head Strix evidence first, then dispatches OpenCode for the same PR head.
+This avoids running PR-head review, CodeGraph, coverage, or PoC code from a
+privileged `pull_request_target` OpenCode workflow.
+
 OpenCode approval is evidence-gated. Before approval, the review summary must
 name changed files, CodeGraph or structural MCP evidence, a Change Flow DAG,
 100% test coverage evidence, 100% docstring coverage evidence, and a concrete

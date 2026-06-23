@@ -288,6 +288,30 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     )
 
 
+def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
+    if dry_run:
+        return
+    run(
+        [
+            "gh",
+            "workflow",
+            "run",
+            workflow,
+            "--repo",
+            repo,
+            "--ref",
+            pr["baseRefName"],
+            "-f",
+            f"pr_number={pr['number']}",
+            "-f",
+            f"pr_base_sha={pr['baseRefOid']}",
+            "-f",
+            f"pr_head_sha={pr['headRefOid']}",
+        ]
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -297,6 +321,7 @@ def inspect_pr(
     enable_auto_merge_flag: bool,
     update_branches: bool,
     workflow: str,
+    security_workflow: str,
     base_branch: str,
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
@@ -343,8 +368,13 @@ def inspect_pr(
         return Decision(number, "wait", "OpenCode review is already in progress")
 
     if trigger_reviews:
+        dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
-        return Decision(number, "review_dispatch", "current head has no OpenCode approval")
+        return Decision(
+            number,
+            "review_dispatch",
+            "current head has no OpenCode approval; same-head Strix and OpenCode dispatched",
+        )
 
     return Decision(number, "block", "current head has no OpenCode approval")
 
@@ -410,6 +440,7 @@ def self_test() -> None:
         enable_auto_merge_flag=True,
         update_branches=True,
         workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
         base_branch="main",
     )
     assert decision.action == "auto_merge"
@@ -424,6 +455,7 @@ def self_test() -> None:
         enable_auto_merge_flag=True,
         update_branches=True,
         workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
         base_branch="main",
     )
     assert decision.action == "block"
@@ -469,6 +501,7 @@ def self_test() -> None:
         enable_auto_merge_flag=True,
         update_branches=True,
         workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
         base_branch="main",
     )
     assert decision.action == "review_dispatch"
@@ -481,6 +514,7 @@ def self_test() -> None:
         enable_auto_merge_flag=True,
         update_branches=True,
         workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
         base_branch="main",
     )
     assert decision.action == "update_branch"
@@ -499,6 +533,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--update-branches", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--review-workflow", default="OpenCode Review")
+    parser.add_argument("--security-workflow", default="Strix Security Scan")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -525,6 +560,7 @@ def main(argv: list[str]) -> int:
             enable_auto_merge_flag=args.enable_auto_merge,
             update_branches=args.update_branches,
             workflow=args.review_workflow,
+            security_workflow=args.security_workflow,
             base_branch=args.base_branch,
         )
         for pr in prs

@@ -70,7 +70,7 @@ The checked-in scheduler already does the minimal central path:
 - blocks current-head failed check runs or status contexts before enabling auto-merge;
 - updates `BEHIND` only when OpenCode approved the exact current head, using `expected_head_sha`;
 - enables native auto-merge only for current-head OpenCode approval;
-- dispatches OpenCode when the current head has no OpenCode decision.
+- dispatches same-head Strix evidence and then OpenCode when the current head has no OpenCode decision.
 
 Small proof run:
 
@@ -119,3 +119,4 @@ PR #36: block: merge conflict: DIRTY
 - PR #37 head `9bbf641` exposed a remaining race: OpenCode can finish before same-head manual Strix publishes the superseding `strix` status, causing stale cancelled PR-target Strix checks to become REQUEST_CHANGES. The evidence preparation step now waits, within a 40 minute bound, whenever peer checks are still running, even if completed failed check evidence is already visible.
 - The same race also showed that PR `statusCheckRollup` does not see a manual Strix `workflow_dispatch` run until it publishes a commit status. OpenCode evidence preparation now queries current-head `strix.yml` workflow runs directly and treats in-progress same-head Strix runs as peer checks.
 - Strix run `28014156427` also reported sensitive log disclosure risk in failed-check evidence handling. The collector now redacts common token, API key, password, secret, authorization, Slack token, and AWS access-key patterns before any failed logs are summarized or embedded in review evidence.
+- Strix run `28015621232` reported `GitHub Actions pull_request_target with PR Code Execution` against `.github/workflows/opencode-review.yml`. OpenCode Review is now `workflow_dispatch`-only, and the scheduler dispatches same-head Strix before same-head OpenCode. This follows GitHub's secure-use guidance to avoid `pull_request_target` with untrusted PR checkout/execution: https://docs.github.com/en/actions/reference/security/secure-use and GitHub Security Lab's "Preventing pwn requests": https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/.

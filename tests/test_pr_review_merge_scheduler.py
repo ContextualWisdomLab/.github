@@ -39,6 +39,7 @@ def inspect(pr, **overrides):
         "enable_auto_merge_flag": True,
         "update_branches": True,
         "workflow": "OpenCode Review",
+        "security_workflow": "Strix Security Scan",
         "base_branch": "main",
     }
     kwargs.update(overrides)
@@ -167,15 +168,18 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     pr = make_pr()
     sched.enable_auto_merge("owner/repo", pr, dry_run=True)
     sched.update_branch("owner/repo", pr, dry_run=True)
+    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=True)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=True)
     assert calls == []
 
     sched.enable_auto_merge("owner/repo", pr, dry_run=False)
     sched.update_branch("owner/repo", pr, dry_run=False)
+    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
     assert calls[1][:4] == ["gh", "api", "-X", "PUT"]
-    assert calls[2][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+    assert calls[2][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
+    assert calls[3][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
 
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
@@ -190,9 +194,10 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
 
     stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
     dispatched = []
+    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     monkeypatch.setattr(sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     assert inspect(stale_behind).action == "review_dispatch"
-    assert dispatched == ["OpenCode Review"]
+    assert dispatched == ["Strix Security Scan", "OpenCode Review"]
 
     behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "head")]})
     assert inspect(behind, update_branches=False).reason == "current-head OpenCode review approved; branch update disabled"
@@ -227,9 +232,10 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert inspect(running).reason == "OpenCode review is already in progress"
 
     dispatched = []
+    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     monkeypatch.setattr(sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     assert inspect(make_pr()).action == "review_dispatch"
-    assert dispatched == ["OpenCode Review"]
+    assert dispatched == ["Strix Security Scan", "OpenCode Review"]
     assert inspect(make_pr(), trigger_reviews=False).reason == "current head has no OpenCode approval"
 
 
@@ -250,6 +256,7 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     parsed = sched.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--no-trigger-reviews"])
     assert parsed.repo == "owner/repo"
     assert not parsed.trigger_reviews
+    assert parsed.security_workflow == "Strix Security Scan"
 
     assert sched.main(["--self-test"]) == 0
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
