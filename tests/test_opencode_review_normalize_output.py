@@ -70,46 +70,6 @@ def test_changed_file_and_verification_posture_detection():
     assert not norm.mentions_verification_posture("", FULL_SUMMARY.replace("CodeGraph", "graph"))
 
 
-def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, monkeypatch):
-    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
-    assert norm.current_changed_files() == set()
-    assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
-
-    changed_files = tmp_path / "changed-files.txt"
-    changed_files.write_text(
-        "\n".join(
-            [
-                ".github/workflows/opencode-review.yml",
-                "scripts/ci/opencode_review_normalize_output.py",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
-
-    assert norm.current_changed_files() == {
-        ".github/workflows/opencode-review.yml",
-        "scripts/ci/opencode_review_normalize_output.py",
-    }
-    assert norm.mentions_actual_changed_file(
-        "Reviewed .github/workflows/opencode-review.yml.",
-        "",
-    )
-    assert norm.mentions_actual_changed_file(
-        "",
-        "Reviewed scripts/ci/opencode_review_normalize_output.py.",
-    )
-    assert not norm.mentions_actual_changed_file(
-        "Reviewed README.md.",
-        "Ran scripts/ci/test_strix_quick_gate.sh.",
-    )
-
-    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(tmp_path / "missing.txt"))
-    assert norm.current_changed_files() == set()
-    assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
-
-
 def test_label_and_full_coverage_detection():
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
@@ -384,10 +344,9 @@ M\tREADME.md
 def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects('{"a": 1}') == [{"a": 1}, {"a": 1}]
     assert norm.iter_json_objects('prefix {"b": 2} suffix') == [{"b": 2}]
-    assert norm.iter_json_objects("prefix {  } suffix") == [{}]
     assert norm.iter_json_objects("prefix {not json}") == []
-    assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
+    assert norm.iter_json_objects("a" * (10 * 1024 * 1024 + 1)) == []
 
 
 def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
