@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Inspect PR review state and drive centralized OpenCode merge automation."""
+
 from __future__ import annotations
 
 import argparse
@@ -20,6 +22,7 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
         title
         isDraft
         mergeable
+        mergeStateStatus
         reviewDecision
         baseRefName
         baseRefOid
@@ -69,12 +72,15 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
 
 @dataclass
 class Decision:
+    """Scheduler decision for a single pull request."""
+
     pr: int
     action: str
     reason: str
 
 
 def run(args: list[str], *, stdin: str | None = None) -> str:
+    """Run a command and return stdout, raising with stderr on failure."""
     process = subprocess.run(args, input=stdin, capture_output=True, text=True)
     if process.returncode != 0:
         raise RuntimeError(
@@ -84,6 +90,7 @@ def run(args: list[str], *, stdin: str | None = None) -> str:
 
 
 def split_repo(repo: str) -> tuple[str, str]:
+    """Split an owner/name repository string into owner and repository name."""
     try:
         owner, name = repo.split("/", 1)
     except ValueError as exc:
@@ -94,6 +101,7 @@ def split_repo(repo: str) -> tuple[str, str]:
 
 
 def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
+    """Run a GitHub GraphQL query through gh and decode the JSON response."""
     cmd = ["gh", "api", "graphql", "-F", "query=@-"]
     for key, value in fields.items():
         flag = "-F" if isinstance(value, int) else "-f"
@@ -102,6 +110,7 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
 
 
 def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
+    """Fetch open pull requests from GitHub, paginating up to max_prs."""
     owner, name = split_repo(repo)
     prs: list[dict[str, Any]] = []
     cursor: str | None = None
@@ -126,12 +135,14 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
 
 
 def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return status rollup context nodes for a pull request payload."""
     rollup = pr.get("statusCheckRollup") or {}
     contexts = rollup.get("contexts") or {}
     return contexts.get("nodes") or []
 
 
 def is_opencode_context(node: dict[str, Any]) -> bool:
+    """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
         workflow = (
             ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
@@ -141,7 +152,22 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
     return node.get("context") == "opencode-review"
 
 
+def is_strix_context(node: dict[str, Any]) -> bool:
+    """Return whether a check or status context belongs to Strix evidence."""
+    if node.get("__typename") == "CheckRun":
+        workflow = (
+            ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+            or {}
+        )
+        workflow_name = workflow.get("name")
+        return workflow_name in {"Strix Security Scan", "Strix"} or (
+            node.get("name") == "strix" and workflow_name is None
+        )
+    return (node.get("context") or "") in {"strix", "Strix Security Scan"}
+
+
 def opencode_in_progress(pr: dict[str, Any]) -> bool:
+    """Return whether any OpenCode review status for the PR is still running."""
     for node in context_nodes(pr):
         if not is_opencode_context(node):
             continue
@@ -151,41 +177,99 @@ def opencode_in_progress(pr: dict[str, Any]) -> bool:
     return False
 
 
+def strix_evidence_state(pr: dict[str, Any]) -> str:
+    """Return missing, running, or complete for current-head Strix evidence."""
+    found = False
+    for node in context_nodes(pr):
+        if not is_strix_context(node):
+            continue
+        found = True
+        status = (node.get("status") or node.get("state") or "").upper()
+        if status in {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}:
+            return "running"
+        if node.get("__typename") == "CheckRun" and status != "COMPLETED":
+            return "running"
+    return "complete" if found else "missing"
+
+
 def unresolved_thread_count(pr: dict[str, Any]) -> int:
+    """Count active, non-outdated unresolved review threads on a PR."""
     threads = ((pr.get("reviewThreads") or {}).get("nodes") or [])
     return sum(1 for thread in threads if not thread.get("isResolved") and not thread.get("isOutdated"))
 
 
 def review_author_login(review: dict[str, Any]) -> str:
+    """Return a normalized review author login."""
     return ((review.get("author") or {}).get("login") or "").lower()
 
 
 def is_opencode_review(review: dict[str, Any]) -> bool:
+    """Return whether a review was authored by the OpenCode agent."""
     return review_author_login(review) == "opencode-agent"
 
 
 def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
+    """Return whether OpenCode's latest current-head review has the target state."""
     head = pr.get("headRefOid")
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
         if not is_opencode_review(review):
             continue
-        if (review.get("state") or "").upper() != state:
-            continue
         commit = (review.get("commit") or {}).get("oid")
-        if commit == head:
-            return True
+        if commit != head:
+            continue
+        return (review.get("state") or "").upper() == state
     return False
 
 
+def latest_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the newest OpenCode review from the PR review list."""
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if is_opencode_review(review):
+            return review
+    return None
+
+
+def latest_opencode_approved(pr: dict[str, Any]) -> bool:
+    """Return whether the newest OpenCode review is an approval."""
+    review = latest_opencode_review(pr)
+    return bool(review and (review.get("state") or "").upper() == "APPROVED")
+
+
 def has_current_head_approval(pr: dict[str, Any]) -> bool:
+    """Return whether OpenCode approved the exact current head commit."""
     return current_head_review_state(pr, "APPROVED")
 
 
 def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
+    """Return whether OpenCode requested changes on the exact current head."""
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def failed_status_checks(pr: dict[str, Any]) -> list[str]:
+    """Return failing check or status context names from the PR rollup."""
+    failed: list[str] = []
+    successful_status_contexts = {
+        node.get("context")
+        for node in context_nodes(pr)
+        if node.get("__typename") != "CheckRun"
+        and (node.get("state") or "").upper() == "SUCCESS"
+    }
+    for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun":
+            conclusion = (node.get("conclusion") or "").upper()
+            if conclusion in {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}:
+                if is_strix_context(node) and "strix" in successful_status_contexts:
+                    continue
+                failed.append(node.get("name") or "check-run")
+        else:
+            state = (node.get("state") or "").upper()
+            if state in {"FAILURE", "ERROR"}:
+                failed.append(node.get("context") or "status-context")
+    return failed
+
+
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    """Enable merge-commit auto-merge for a PR at its current head."""
     number = str(pr["number"])
     head = pr["headRefOid"]
     if dry_run:
@@ -193,7 +277,27 @@ def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     run(["gh", "pr", "merge", number, "--repo", repo, "--auto", "--merge", "--match-head-commit", head])
 
 
+def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    """Ask GitHub to update a PR branch, guarded by the observed head SHA."""
+    number = str(pr["number"])
+    head = pr["headRefOid"]
+    if dry_run:
+        return
+    run(
+        [
+            "gh",
+            "api",
+            "-X",
+            "PUT",
+            f"repos/{repo}/pulls/{number}/update-branch",
+            "-f",
+            f"expected_head_sha={head}",
+        ]
+    )
+
+
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    """Dispatch the OpenCode Review workflow for the PR head."""
     if dry_run:
         return
     run(
@@ -220,6 +324,30 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     )
 
 
+def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
+    if dry_run:
+        return
+    run(
+        [
+            "gh",
+            "workflow",
+            "run",
+            workflow,
+            "--repo",
+            repo,
+            "--ref",
+            pr["baseRefName"],
+            "-f",
+            f"pr_number={pr['number']}",
+            "-f",
+            f"pr_base_sha={pr['baseRefOid']}",
+            "-f",
+            f"pr_head_sha={pr['headRefOid']}",
+        ]
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -227,9 +355,12 @@ def inspect_pr(
     dry_run: bool,
     trigger_reviews: bool,
     enable_auto_merge_flag: bool,
+    update_branches: bool,
     workflow: str,
+    security_workflow: str,
     base_branch: str,
 ) -> Decision:
+    """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
     head_repo = (pr.get("headRepository") or {}).get("nameWithOwner")
     base_ref = pr.get("baseRefName")
@@ -241,6 +372,10 @@ def inspect_pr(
     if head_repo != repo:
         return Decision(number, "skip", f"fork or external head repo: {head_repo}")
 
+    merge_state = (pr.get("mergeStateStatus") or "").upper()
+    if merge_state in {"DIRTY", "CONFLICTING"}:
+        return Decision(number, "block", f"merge conflict: {merge_state}")
+
     unresolved = unresolved_thread_count(pr)
     if unresolved:
         return Decision(number, "block", f"{unresolved} unresolved review thread(s)")
@@ -248,7 +383,16 @@ def inspect_pr(
     if has_current_head_changes_requested(pr):
         return Decision(number, "block", "current-head OpenCode review requested changes")
 
+    if merge_state == "BEHIND" and has_current_head_approval(pr):
+        if not update_branches:
+            return Decision(number, "wait", "current-head OpenCode review approved; branch update disabled")
+        update_branch(repo, pr, dry_run=dry_run)
+        return Decision(number, "update_branch", "current-head OpenCode review approved; branch update requested")
+
     if has_current_head_approval(pr):
+        failed_checks = failed_status_checks(pr)
+        if failed_checks:
+            return Decision(number, "block", f"failed check(s): {', '.join(failed_checks[:5])}")
         if pr.get("autoMergeRequest"):
             return Decision(number, "wait", "current head is approved; auto-merge already enabled")
         if not enable_auto_merge_flag:
@@ -260,8 +404,22 @@ def inspect_pr(
         return Decision(number, "wait", "OpenCode review is already in progress")
 
     if trigger_reviews:
+        strix_state = strix_evidence_state(pr)
+        if strix_state == "missing":
+            dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+            return Decision(
+                number,
+                "security_dispatch",
+                "current head has no completed Strix evidence; same-head Strix dispatched",
+            )
+        if strix_state == "running":
+            return Decision(number, "wait", "same-head Strix evidence is still running")
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
-        return Decision(number, "review_dispatch", "current head has no OpenCode approval")
+        return Decision(
+            number,
+            "review_dispatch",
+            "current head has completed Strix evidence; same-head Strix and OpenCode dispatched",
+        )
 
     return Decision(number, "block", "current head has no OpenCode approval")
 
@@ -273,6 +431,7 @@ def print_summary(
     base_branch: str,
     project_flow: str,
 ) -> None:
+    """Print human-readable and machine-readable scheduler decisions."""
     counts: dict[str, int] = {}
     for decision in decisions:
         counts[decision.action] = counts.get(decision.action, 0) + 1
@@ -340,11 +499,16 @@ def test_fetch_open_prs_pagination() -> None:
 
 
 def self_test() -> None:
+    """Exercise scheduler invariants without GitHub network access."""
     test_fetch_open_prs_pagination()
 
     sample: dict[str, Any] = {
         "number": 1,
         "headRefOid": "abc",
+        "baseRefName": "main",
+        "baseRefOid": "base",
+        "headRefName": "feature",
+        "mergeStateStatus": "CLEAN",
         "isDraft": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
         "reviewDecision": "REVIEW_REQUIRED",
@@ -363,6 +527,35 @@ def self_test() -> None:
     }
     assert has_current_head_approval(sample)
     assert not has_current_head_changes_requested(sample)
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "auto_merge"
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"}
+    ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "block"
+    assert "strix" in decision.reason
+    sample["statusCheckRollup"]["contexts"]["nodes"] = []
     sample["reviews"]["nodes"].append(
         {
             "state": "APPROVED",
@@ -386,10 +579,66 @@ def self_test() -> None:
         {"__typename": "CheckRun", "name": "opencode-review", "status": "IN_PROGRESS"}
     )
     assert opencode_in_progress(sample)
+    sample["statusCheckRollup"]["contexts"]["nodes"] = []
+    sample["mergeStateStatus"] = "BEHIND"
+    sample["reviews"]["nodes"] = [
+        {
+            "state": "APPROVED",
+            "author": {"login": "opencode-agent"},
+            "commit": {"oid": "old"},
+        }
+    ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "security_dispatch"
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {
+            "__typename": "CheckRun",
+            "name": "strix",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "checkSuite": {"workflowRun": {"workflow": {"name": "Strix Security Scan"}}},
+        }
+    ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "review_dispatch"
+    sample["reviews"]["nodes"][0]["commit"]["oid"] = "abc"
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "update_branch"
     print("self-test passed")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse scheduler CLI arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--base-branch", default=os.environ.get("DEFAULT_BRANCH", ""))
@@ -398,12 +647,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--update-branches", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--review-workflow", default="OpenCode Review")
+    parser.add_argument("--security-workflow", default="Strix Security Scan")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
+    """Run the scheduler CLI."""
     args = parse_args(argv)
     if args.self_test:
         self_test()
@@ -422,7 +674,9 @@ def main(argv: list[str]) -> int:
             dry_run=args.dry_run,
             trigger_reviews=args.trigger_reviews,
             enable_auto_merge_flag=args.enable_auto_merge,
+            update_branches=args.update_branches,
             workflow=args.review_workflow,
+            security_workflow=args.security_workflow,
             base_branch=args.base_branch,
         )
         for pr in prs
@@ -436,7 +690,7 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     try:
         raise SystemExit(main(sys.argv[1:]))
     except RuntimeError as exc:
