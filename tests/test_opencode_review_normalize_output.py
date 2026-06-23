@@ -2,7 +2,6 @@ import json
 
 from scripts.ci import opencode_review_normalize_output as norm
 
-
 FULL_SUMMARY = """\
 Verification posture: CodeGraph inspected scripts/ci/example.py on the current head.
 Linter/static: actionlint and bash -n passed.
@@ -56,9 +55,13 @@ def finding(**overrides):
 
 def test_structural_review_detection_accepts_phrases_patterns_and_clean_text():
     assert norm.admits_missing_structural_review("No changed files", "")
-    assert norm.admits_missing_structural_review("Could not inspect the changed files", "")
+    assert norm.admits_missing_structural_review(
+        "Could not inspect the changed files", ""
+    )
     assert norm.admits_missing_structural_review("", "Source files were not inspected")
-    assert not norm.admits_missing_structural_review("scripts/ci/example.py checked", "")
+    assert not norm.admits_missing_structural_review(
+        "scripts/ci/example.py checked", ""
+    )
 
 
 def test_changed_file_and_verification_posture_detection():
@@ -67,10 +70,14 @@ def test_changed_file_and_verification_posture_detection():
     assert not norm.mentions_changed_file_evidence("No path here", "")
     assert not norm.mentions_changed_file_evidence("Security/privacy: checked", "")
     assert norm.mentions_verification_posture("", FULL_SUMMARY)
-    assert not norm.mentions_verification_posture("", FULL_SUMMARY.replace("CodeGraph", "graph"))
+    assert not norm.mentions_verification_posture(
+        "", FULL_SUMMARY.replace("CodeGraph", "graph")
+    )
 
 
-def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, monkeypatch):
+def test_actual_changed_file_detection_prefers_current_head_file_list(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
     assert norm.current_changed_files() == set()
     assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
@@ -121,7 +128,9 @@ def test_label_and_full_coverage_detection():
         "",
         FULL_SUMMARY.replace("coverage execution evidence", "measured evidence", 1),
     )
-    assert not norm.mentions_full_coverage("", FULL_SUMMARY.replace("proves 100%", "not proven"))
+    assert not norm.mentions_full_coverage(
+        "", FULL_SUMMARY.replace("proves 100%", "not proven")
+    )
 
 
 def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path):
@@ -135,8 +144,13 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path)
 
     cases = [
         control(reason="No changed files"),
-        control(reason="No source path", summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file")),
-        control(summary="scripts/ci/example.py\nCoverage: coverage execution evidence proves 100%."),
+        control(
+            reason="No source path",
+            summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file"),
+        ),
+        control(
+            summary="scripts/ci/example.py\nCoverage: coverage execution evidence proves 100%."
+        ),
         control(summary=FULL_SUMMARY.replace("100%", "99%", 1)),
     ]
     for index, value in enumerate(cases):
@@ -145,7 +159,9 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path)
         assert norm.check_structural_approval(path) == 4
 
     request_changes = tmp_path / "request.json"
-    request_changes.write_text(json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8")
+    request_changes.write_text(
+        json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8"
+    )
     assert norm.check_structural_approval(request_changes) == 0
 
 
@@ -164,20 +180,44 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(control(summary=""), **kwargs) is None
     assert norm.valid_control(control(findings="bad"), **kwargs) is None
     assert norm.valid_control(control(findings=[finding()]), **kwargs) is None
-    assert norm.valid_control(control(result="REQUEST_CHANGES", findings=[]), **kwargs) is None
+    assert (
+        norm.valid_control(control(result="REQUEST_CHANGES", findings=[]), **kwargs)
+        is None
+    )
     assert norm.valid_control(control(reason="No changed files"), **kwargs) is None
-    assert norm.valid_control(
-        control(reason="No source path", summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file")),
-        **kwargs,
-    ) is None
-    assert norm.valid_control(control(summary="scripts/ci/example.py"), **kwargs) is None
-    assert norm.valid_control(control(summary=FULL_SUMMARY.replace("100%", "99%", 1)), **kwargs) is None
+    assert (
+        norm.valid_control(
+            control(
+                reason="No source path",
+                summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file"),
+            ),
+            **kwargs,
+        )
+        is None
+    )
+    assert (
+        norm.valid_control(control(summary="scripts/ci/example.py"), **kwargs) is None
+    )
+    assert (
+        norm.valid_control(
+            control(summary=FULL_SUMMARY.replace("100%", "99%", 1)), **kwargs
+        )
+        is None
+    )
 
     request = control(result="REQUEST_CHANGES", findings=[finding()])
     assert norm.valid_control(dict(request, findings=["bad"]), **kwargs) is None
-    assert norm.valid_control(dict(request, findings=[finding(line=True)]), **kwargs) is None
-    assert norm.valid_control(dict(request, findings=[finding(line=0)]), **kwargs) is None
-    assert norm.valid_control(dict(request, findings=[finding(title="")]), **kwargs) is None
+    assert (
+        norm.valid_control(dict(request, findings=[finding(line=True)]), **kwargs)
+        is None
+    )
+    assert (
+        norm.valid_control(dict(request, findings=[finding(line=0)]), **kwargs) is None
+    )
+    assert (
+        norm.valid_control(dict(request, findings=[finding(title="")]), **kwargs)
+        is None
+    )
     assert norm.valid_control(request, **kwargs)["result"] == "REQUEST_CHANGES"
 
     approve_without_findings_key = control()
@@ -185,7 +225,9 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(approve_without_findings_key, **kwargs)["findings"] == []
 
 
-def test_valid_control_repairs_approval_summary_from_bounded_evidence(tmp_path, monkeypatch):
+def test_valid_control_repairs_approval_summary_from_bounded_evidence(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
@@ -217,7 +259,9 @@ A\t.github/workflows/opencode-review.yml
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     repaired = norm.valid_control(
-        control(reason="Current-head review completed.", summary="No blockers were found."),
+        control(
+            reason="Current-head review completed.", summary="No blockers were found."
+        ),
         expected_head_sha="head",
         expected_run_id="run",
         expected_run_attempt="attempt",
@@ -230,7 +274,9 @@ A\t.github/workflows/opencode-review.yml
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_repair_overrides_earlier_invalid_coverage_labels(tmp_path, monkeypatch):
+def test_valid_control_repair_overrides_earlier_invalid_coverage_labels(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
@@ -289,7 +335,9 @@ Security/privacy: Not applicable.
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_does_not_repair_unsafe_or_unproven_approval(tmp_path, monkeypatch):
+def test_valid_control_does_not_repair_unsafe_or_unproven_approval(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
@@ -317,13 +365,15 @@ M\tscripts/ci/example.py
     }
 
     assert norm.valid_control(control(reason="No changed files"), **kwargs) is None
-    assert norm.valid_control(control(summary="No blockers were found."), **kwargs) is None
+    assert (
+        norm.valid_control(control(summary="No blockers were found."), **kwargs) is None
+    )
 
 
 def test_approval_repair_evidence_helpers_cover_edge_cases(tmp_path, monkeypatch):
     assert norm.section_between_markers("## Other\nbody", "Changed files") == ""
-    assert norm.changed_files_from_evidence(
-        """\
+    assert (
+        norm.changed_files_from_evidence("""\
 ## Changed files
 
 
@@ -338,15 +388,16 @@ M\tscripts/ci/pr_review_merge_scheduler.py
 M\topencode.jsonc
 M\tREADME.md
 ## Next
-"""
-    ) == [
-        "scripts/ci/example.py",
-        ".github/workflows/opencode-review.yml",
-        "tests/test_opencode_review_normalize_output.py",
-        "scripts/ci/pr_review_merge_scheduler.py",
-        "opencode.jsonc",
-        "README.md",
-    ]
+""")
+        == [
+            "scripts/ci/example.py",
+            ".github/workflows/opencode-review.yml",
+            "tests/test_opencode_review_normalize_output.py",
+            "scripts/ci/pr_review_merge_scheduler.py",
+            "opencode.jsonc",
+            "README.md",
+        ]
+    )
 
     summary = norm.build_approval_repair_summary(
         "No blockers were found.",
