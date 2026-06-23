@@ -72,13 +72,13 @@ STRUCTURAL_FAILURE_PATTERNS = (
 )
 
 CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+(?:[A-Za-z0-9_.@+-]+\."
-    r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
-    r"|Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
-    r"|(?<![A-Za-z0-9_])[A-Za-z0-9_.-]+\."
-    r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
+    r"(?<![A-Za-z0-9_])"
+    r"(?:[A-Za-z0-9_.-]+/)*"
+    r"(?:"
+    r"[A-Za-z0-9_.@+-]+\.(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
+    r"|Dockerfile|Makefile|README|LICENSE|AGENTS\.md"
+    r")"
     r"(?![A-Za-z0-9_])"
-    r"|(?<![A-Za-z0-9_])(?:Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
 )
 
 APPROVAL_VERIFICATION_LABELS = (
@@ -419,6 +419,10 @@ def valid_control(
 
 def iter_json_objects(text: str) -> list[Any]:
     """Extract JSON objects from raw OpenCode output that may include prose."""
+    # Mitigate potential DoS by limiting extreme sizes.
+    if len(text) > 10 * 1024 * 1024:
+        return []
+
     decoder = json.JSONDecoder()
     values: list[Any] = []
 
