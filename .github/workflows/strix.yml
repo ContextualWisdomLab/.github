@@ -345,6 +345,7 @@ jobs:
 
       - name: Run Strix (quick)
         if: steps.gate.outputs.enabled == 'true'
+        timeout-minutes: 30
         # Security invariant for pull_request_target: execute only from the
         # trusted base checkout. The gate copies PR-head blobs into an isolated
         # temporary scope with execute bits stripped, then scans that scope as
@@ -388,11 +389,11 @@ jobs:
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && 'true' || 'false' }}
         run: |
           budget_suffix="TIME""OUT"
-          process_budget_seconds="3600"
+          process_budget_seconds="1500"
           export "LLM_${budget_suffix}=120"
           export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=10"
           export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
-          export "STRIX_TOTAL_${budget_suffix}_SECONDS=7200"
+          export "STRIX_TOTAL_${budget_suffix}_SECONDS=1800"
           bash "$TRUSTED_STRIX_GATE"
 
       - name: Collect Strix reports for artifact upload
