@@ -1855,6 +1855,7 @@ jobs:
 
       - name: Approve PR if OpenCode review passed
         if: always()
+        timeout-minutes: 45
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || secrets.GITHUB_TOKEN }}
           GH_REPOSITORY: ${{ github.repository }}
@@ -1885,7 +1886,7 @@ jobs:
           OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "241"
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "81"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"

@@ -13,6 +13,7 @@ OpenCode decides; GitHub Actions mutates.
 - Prefer `gh pr merge --auto --merge --match-head-commit <head>` when native auto-merge is enabled.
 - Use direct `gh pr merge --merge --match-head-commit <head>` only when the repo policy already allows immediate merge.
 - OpenCode app-token merges are deprecated; keep app tokens for review publication, not mechanical branch mutation.
+- OpenCode approval publication must be bounded. Peer GitHub Checks can be awaited, but the approval step itself must time out instead of running for hours; the current central limit is a 45 minute approval step with 81 peer-check probes at 30 seconds.
 - Tool failures are not source findings. Model failure, API transient, update-branch `422/403`, fork/write-permission failure, conflict, failed checks, and stale review state must be reported as distinct scheduler outcomes.
 
 ## Live Repository Inventory
@@ -113,3 +114,4 @@ PR #36: block: merge conflict: DIRTY
 - `update-branch` `422/403` behavior still needs a safe fixture or a real blocked case before claiming standardized handling.
 - Required-check interpretation should stay delegated to GitHub native auto-merge until a repo needs immediate merge.
 - PR #28 proves the self-modifying trusted workflow bootstrap path after newer same-head evidence exists, but it does not prove update-branch behavior, stale approval dismissal after a head change, or cross-repository rollout.
+- PR #37 adds a bounded OpenCode approval publication timeout after a manual current-head OpenCode run reached the approval step and was observed waiting on peer checks instead of finishing promptly.
