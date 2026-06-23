@@ -439,6 +439,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review fallback (OpenAI o-series)" "opencode review includes extra reasoning-model fallback"
 	assert_file_contains "$workflow_file" "continue-on-error: true" "opencode model step timeouts do not prevent fallback review publication"
 	assert_file_contains "$workflow_file" "github-models/openai/o3 github-models/openai/o4-mini" "opencode review tries o-series reasoning models after GPT-5 and DeepSeek fallbacks"
+	assert_file_contains "$workflow_file" "The publish gate re-runs source-backed validation against PR-head data" "opencode review publish gate validates model output against the PR-head worktree"
 	assert_file_contains "$workflow_file" '"openai/o3"' "opencode config declares OpenAI o3 fallback"
 	assert_file_contains "$workflow_file" '"openai/o4-mini"' "opencode config declares OpenAI o4-mini fallback"
 	assert_file_contains "$workflow_file" 'OpenCode %s attempt %s/%s failed with exit %s.' "opencode review logs per-model retry attempts"

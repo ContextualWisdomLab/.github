@@ -1603,6 +1603,8 @@ jobs:
           OPENCODE_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_SECOND_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
           OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
+          # The publish gate re-runs source-backed validation against PR-head data.
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
         run: |
