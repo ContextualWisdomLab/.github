@@ -396,6 +396,11 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
     assert norm.main(["prog", "head", "run", "attempt", str(output)]) == 0
     assert "opencode-review-control-v1" in output.read_text(encoding="utf-8")
 
+    invalid_utf8 = tmp_path / "invalid-utf8.txt"
+    invalid_utf8.write_bytes(b"\xea invalid prefix\n" + json.dumps(control()).encode("utf-8"))
+    assert norm.main(["prog", "head", "run", "attempt", str(invalid_utf8)]) == 0
+    assert "opencode-review-control-v1" in invalid_utf8.read_text(encoding="utf-8")
+
     assert norm.main(["prog"]) == 64
     assert "usage:" in capsys.readouterr().err
 

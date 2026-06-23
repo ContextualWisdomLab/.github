@@ -490,7 +490,7 @@ def main(argv: list[str]) -> int:
     expected_head_sha, expected_run_id, expected_run_attempt, output_file_arg = argv[1:]
     output_file = Path(output_file_arg)
     try:
-        output_text = output_file.read_text(encoding="utf-8")
+        output_text = output_file.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         print(f"cannot read OpenCode output file: {exc}", file=sys.stderr)
         return 65
