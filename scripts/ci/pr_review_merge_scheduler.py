@@ -248,10 +248,18 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return failing check or status context names from the PR rollup."""
     failed: list[str] = []
+    successful_status_contexts = {
+        node.get("context")
+        for node in context_nodes(pr)
+        if node.get("__typename") != "CheckRun"
+        and (node.get("state") or "").upper() == "SUCCESS"
+    }
     for node in context_nodes(pr):
         if node.get("__typename") == "CheckRun":
             conclusion = (node.get("conclusion") or "").upper()
             if conclusion in {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}:
+                if is_strix_context(node) and "strix" in successful_status_contexts:
+                    continue
                 failed.append(node.get("name") or "check-run")
         else:
             state = (node.get("state") or "").upper()
