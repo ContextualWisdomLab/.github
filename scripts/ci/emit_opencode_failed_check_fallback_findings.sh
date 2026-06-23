@@ -55,6 +55,12 @@ first_existing_line() {
 	printf '1'
 }
 
+strip_ansi_file() {
+	local source_file="$1"
+
+	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$source_file"
+}
+
 get_validated_pr_diff_range() {
 	local repo_root="${REPO_ROOT%/}"
 	local base_sha="${PR_BASE_SHA:-}"
@@ -84,6 +90,7 @@ pr_changes_trusted_strix_inputs() {
 	set +e
 	git -C "${REPO_ROOT%/}" diff --quiet "$diff_range" -- \
 		.github/workflows/strix.yml \
+		opencode.jsonc \
 		scripts/ci/strix_quick_gate.sh \
 		scripts/ci/test_strix_quick_gate.sh \
 		requirements-strix-ci.txt
@@ -419,6 +426,165 @@ emit_github_billing_lock_finding() {
 	printf -- '- Suggested edit: no repository source edit is appropriate until the billing lock is cleared and a real failed job log or annotation identifies an actionable source line.\n\n'
 }
 
+emit_pytest_failure_findings() {
+	local evidence_file="$1"
+	local clean_file
+	local failures_file
+	local failure_line
+	local failure_spec
+	local path
+	local test_name
+	local test_leaf
+	local line
+	local term
+	local term_match
+	local location_line
+	local check_label
+	local step_label
+	local seen_key
+	local seen_file
+
+	clean_file="$(mktemp)"
+	failures_file="$(mktemp)"
+	seen_file="$(mktemp)"
+	tmp_files+=("$clean_file" "$failures_file" "$seen_file")
+	strip_ansi_file "$evidence_file" >"$clean_file"
+
+	grep -E "FAILED [^[:space:]]+\.py::" "$clean_file" >"$failures_file" || true
+	if [ ! -s "$failures_file" ]; then
+		return 0
+	fi
+
+	check_label="$(
+		awk '
+			/^## Failed check: / {
+				sub(/^## Failed check: /, "")
+				print
+				exit
+			}
+		' "$clean_file"
+	)"
+	if [ -z "$check_label" ]; then
+		check_label="GitHub Check"
+	fi
+	step_label="$(
+		awk '
+			/^- step [0-9]+: / {
+				sub(/^- step [0-9]+: /, "")
+				sub(/ \(failure\)$/, "")
+				print
+				exit
+			}
+		' "$clean_file"
+	)"
+	if [ -z "$step_label" ]; then
+		step_label="test step"
+	fi
+	term="$(
+		perl -ne 'if (/assert [\x27"]([^\x27"]+)[\x27"] not in/) { print "$1\n"; exit }' "$clean_file"
+	)"
+
+	while IFS= read -r failure_line; do
+		failure_spec="$(
+			printf '%s\n' "$failure_line" |
+				sed -E 's/^.*FAILED ([^[:space:]]+\.py::[^[:space:]]+).*/\1/'
+		)"
+		if [ -z "$failure_spec" ] || [ "$failure_spec" = "$failure_line" ]; then
+			continue
+		fi
+		path="${failure_spec%%::*}"
+		test_name="${failure_spec#*::}"
+		test_leaf="${test_name##*::}"
+		test_leaf="${test_leaf%%[*}"
+		seen_key="${path}::${test_name}"
+		if grep -Fxq -- "$seen_key" "$seen_file"; then
+			continue
+		fi
+		printf '%s\n' "$seen_key" >>"$seen_file"
+
+		line="$(
+			perl -Mstrict -Mwarnings -e '
+				my ($path, $file) = @ARGV;
+				open my $fh, "<", $file or exit 0;
+				while (my $row = <$fh>) {
+					if ($row =~ /\Q$path\E:(\d+):/) {
+						print "$1\n";
+						exit 0;
+					}
+				}
+			' "$path" "$clean_file"
+		)"
+		if [ -n "$term" ] && [ -f "${REPO_ROOT%/}/$path" ]; then
+			term_match="$(grep -nF -- "$term" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
+			if [ -n "$term_match" ]; then
+				line="${term_match%%:*}"
+			fi
+		fi
+		if [ -z "$line" ] && [ -f "${REPO_ROOT%/}/$path" ]; then
+			location_line="$(grep -nE -- "def[[:space:]]+${test_leaf//./\\.}[[:space:]]*\\(" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
+			if [ -n "$location_line" ]; then
+				line="${location_line%%:*}"
+			fi
+		fi
+		if [ -z "$line" ] || ! [[ "$line" =~ ^[0-9]+$ ]]; then
+			line="1"
+		fi
+
+		finding_index=$((finding_index + 1))
+		printf '### %s. HIGH %s:%s - Failed GitHub Check needs a source-backed pytest fix for %s\n' "$finding_index" "$path" "$line" "$test_name"
+		printf -- '- Problem: `%s` failed in `%s`; pytest reported `%s`, so the review must explain the failing assertion instead of linking only to the Actions URL.\n' "$check_label" "$step_label" "$failure_spec"
+		if [ -n "$term" ]; then
+			printf -- '- Root cause: The failed log says the forbidden literal `%s` is still present in the tested source. The current source line `%s:%s` is the first matching location found for that literal or the failing assertion path.\n' "$term" "$path" "$line"
+			printf -- '- Fix: Change `%s:%s` so the test no longer embeds or permits `%s` in the inspected source. For self-inspection harnesses, build sentinel strings without the exact forbidden literal or inspect the target module instead of `Path(__file__)`.\n' "$path" "$line" "$term"
+		else
+			printf -- '- Root cause: The failed log maps the pytest failure to `%s:%s`; OpenCode must inspect that source line and explain the assertion-level cause before approval.\n' "$path" "$line"
+			printf -- '- Fix: Patch `%s:%s` to satisfy `%s`, then rerun the focused pytest target.\n' "$path" "$line" "$test_name"
+		fi
+		printf -- '- Regression test: Run `cd backend && python -m pytest %s::%s -q` when the repository has a backend test layout, then rerun the failed check.\n' "$path" "$test_name"
+		printf -- '- Suggested edit: update `%s:%s` for `%s`; do not approve or post a URL-only review until the exact failing assertion is explained with this file, line, command, and fix direction.\n\n' "$path" "$line" "$test_name"
+	done <"$failures_file"
+}
+
+emit_cancelled_check_findings() {
+	local evidence_file="$1"
+	local clean_file
+	local cancelled_file
+	local check_label
+	local annotation
+
+	clean_file="$(mktemp)"
+	cancelled_file="$(mktemp)"
+	tmp_files+=("$clean_file" "$cancelled_file")
+	strip_ansi_file "$evidence_file" >"$clean_file"
+
+	awk '
+		/^## Failed check: / {
+			check = $0
+			sub(/^## Failed check: /, "", check)
+			in_cancelled = 0
+		}
+		/^- Conclusion: .*CANCELLED/ || /^- Conclusion: .*cancelled/ {
+			in_cancelled = 1
+		}
+		in_cancelled && /Canceling since a higher priority waiting request/ {
+			print check "\t" $0
+		}
+	' "$clean_file" >"$cancelled_file"
+
+	while IFS=$'\t' read -r check_label annotation; do
+		if [ -z "$check_label" ]; then
+			continue
+		fi
+		finding_index=$((finding_index + 1))
+		printf '### %s. MEDIUM GitHub Checks queue - %s was cancelled by a newer queued request\n' "$finding_index" "$check_label"
+		printf -- '- Problem: `%s` did not produce reviewable source evidence; GitHub reported `%s`.\n' "$check_label" "$annotation"
+		printf -- '- Root cause: GitHub Actions cancelled an older queued or running check because a higher-priority request for the same PR was waiting. This is a check orchestration state, not a source-code defect.\n'
+		printf -- '- Fix: Do not approve from this cancelled context and do not paste only the workflow URL. Wait for the newest same-head check run, or rerun the check after the queue settles, then review its actual logs.\n'
+		printf -- '- Regression test: Keep failed-check fallback reviews explaining cancelled check contexts separately from source-code findings so cancelled jobs cannot hide an actionable pytest or Strix failure.\n'
+		printf -- '- Suggested edit: no repository source edit is justified by this cancelled check alone; the actionable next step is to rerun or wait for the current-head check that superseded it.\n\n'
+	done <"$cancelled_file"
+}
+
 emit_strix_report_findings() {
 	local strix_evidence_file="$1"
 	local reports_file
@@ -572,10 +738,12 @@ emit_known_missing_string_finding \
 	"scripts/ci/test_strix_quick_gate.sh"
 
 emit_github_billing_lock_finding
+emit_pytest_failure_findings "$EVIDENCE_FILE"
+emit_cancelled_check_findings "$EVIDENCE_FILE"
 emit_strix_report_findings "$strix_evidence_file"
 emit_strix_provider_failure_finding "$strix_evidence_file"
 emit_strix_cancelled_without_log_finding "$strix_evidence_file"
 
 if [ "$finding_index" -eq 0 ]; then
-	printf 'No deterministic missing-string markers or Strix report locations were recognized. Use the failed-check evidence below to map each failed check to exact local source lines before approving.\n\n'
+	printf 'No automated line-specific fallback pattern matched this failed check. Do not approve or post a URL-only review; inspect the failed-check evidence below, identify the exact failing source line, explain the root cause, and provide the focused rerun command before approval.\n\n'
 fi
