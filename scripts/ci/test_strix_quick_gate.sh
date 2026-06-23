@@ -524,6 +524,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "PoC/execution:" "opencode approval requires concrete PoC or execution evidence"
 	assert_file_contains "$workflow_file" "create temporary proof or repro code only under the runner temporary directory" "opencode review may create scratch PoC code without committing it"
 	assert_file_contains "$workflow_file" 'current_peer_checks_still_running()' "opencode evidence waits for PR statusCheckRollup peer checks before reviewing"
+	assert_file_contains "$workflow_file" '--workflow strix.yml' "opencode evidence also waits for current-head manual Strix workflow runs before reviewing"
+	assert_file_contains "$workflow_file" 'select((.status // "") != "completed")' "opencode evidence treats in-progress current-head Strix workflow runs as peer checks"
 	assert_file_contains "$workflow_file" 'collect_pending_github_checks()' "opencode approval collects pending peer GitHub Checks"
 	assert_file_contains "$workflow_file" 'collect_current_head_strix_workflow_runs()' "opencode approval separately accounts for jobless current-head Strix workflow runs"
 	assert_file_contains "$workflow_file" 'actions/workflows/strix.yml' "opencode approval probes whether Strix is installed before listing Strix runs"

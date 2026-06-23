@@ -354,11 +354,13 @@ jobs:
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
+            local rollup_running
+            local strix_running
 
             # Exclude this OpenCode check run; otherwise the evidence step would
             # wait on itself until the bounded retry budget is exhausted.
             # shellcheck disable=SC2016
-            gh api graphql \
+            if ! rollup_running="$(gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -408,7 +410,33 @@ jobs:
                     end
                 ]
                 | length > 0
-              '
+              ')"; then
+              return 1
+            fi
+            if [ "$rollup_running" = "true" ]; then
+              printf 'true\n'
+              return 0
+            fi
+
+            strix_running="$(
+              env HEAD_SHA="$HEAD_SHA" gh run list \
+                --repo "$GH_REPOSITORY" \
+                --workflow strix.yml \
+                --commit "$HEAD_SHA" \
+                --limit 200 \
+                --json status,event,headSha,workflowName \
+                --jq '
+                  [
+                    .[]
+                    | select((.headSha // "") == env.HEAD_SHA)
+                    | select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
+                    | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+                    | select((.status // "") != "completed")
+                  ]
+                  | length > 0
+                ' 2>/dev/null || printf 'false'
+            )"
+            printf '%s\n' "$strix_running"
           }
 
           collect_failed_check_evidence_with_wait() {
