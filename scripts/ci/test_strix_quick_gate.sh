@@ -125,6 +125,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" 'fetch --no-tags --depth=1 origin "$PR_BASE_SHA"' "strix workflow fetches manual PR-scope base commit for diffing"
 	assert_file_contains "$workflow_file" 'cat-file -e "$PR_HEAD_SHA:opencode.jsonc"' "strix workflow checks for PR-head OpenCode config without executing it"
 	assert_file_contains "$workflow_file" 'show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"' "strix workflow materializes PR-head OpenCode config as data for self-test assertions"
+	assert_file_contains "$workflow_file" 'cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py"' "strix workflow checks for PR-head scheduler policy without executing it"
+	assert_file_contains "$workflow_file" 'show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"' "strix workflow materializes PR-head scheduler policy as data for self-test assertions"
 	assert_file_contains "$workflow_file" "refs/remotes/pull" "strix workflow verifies fetched PR head ref"
 	local pr_head_fetch_block
 	pr_head_fetch_block="$(
@@ -141,8 +143,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 		record_failure "strix workflow configures git credentials in PR head fetch step"
 	fi
 	case "$pr_head_fetch_block" in
-		*'fetch --no-tags --depth=1 origin "$PR_HEAD_SHA"'*'show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"'*) ;;
-		*) record_failure "strix workflow materializes PR-head OpenCode config only after fetching the PR head commit" ;;
+		*'fetch --no-tags --depth=1 origin "$PR_HEAD_SHA"'*'show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"'*'show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"'*) ;;
+		*) record_failure "strix workflow materializes PR-head review policy files only after fetching the PR head commit" ;;
 	esac
 	assert_file_contains "$workflow_file" "for pr_head_fetch_attempt in 1 2 3 4 5 6" "strix workflow retries stale PR head ref propagation"
 	assert_file_contains "$workflow_file" "PR head ref did not resolve to expected commit" "strix workflow fails closed when PR head ref remains stale"

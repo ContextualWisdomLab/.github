@@ -200,6 +200,18 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(failed) == ["strix", "lint"]
+    manual_strix_supersedes_pr_target_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"},
+                    {"context": "strix", "state": "SUCCESS"},
+                    {"context": "lint", "state": "ERROR"},
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
 
 
 def test_actions_call_gh_with_expected_arguments(monkeypatch):
