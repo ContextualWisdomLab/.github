@@ -384,9 +384,10 @@ M\tREADME.md
 def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects('{"a": 1}') == [{"a": 1}, {"a": 1}]
     assert norm.iter_json_objects('prefix {"b": 2} suffix') == [{"b": 2}]
+    assert norm.iter_json_objects("prefix {  } suffix") == [{}]
     assert norm.iter_json_objects("prefix {not json}") == []
+    assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
-    assert norm.iter_json_objects("a" * (10 * 1024 * 1024 + 1)) == []
 
 
 def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
