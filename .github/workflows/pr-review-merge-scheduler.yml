@@ -24,6 +24,11 @@ on:
         required: false
         default: true
         type: boolean
+      update_branches:
+        description: Update outdated PR branches after OpenCode approval
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: pr-review-merge-scheduler
@@ -46,6 +51,7 @@ jobs:
       PROJECT_FLOW: ${{ vars.PROJECT_FLOW || 'git-flow' }}
       TRIGGER_REVIEWS: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_reviews == true }}
       ENABLE_AUTO_MERGE: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_auto_merge == true }}
+      UPDATE_BRANCHES: ${{ github.event_name != 'workflow_dispatch' || inputs.update_branches == true }}
     steps:
       - name: Checkout trusted scheduler
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -77,5 +83,10 @@ jobs:
             args+=(--enable-auto-merge)
           else
             args+=(--no-enable-auto-merge)
+          fi
+          if [ "$UPDATE_BRANCHES" = "true" ]; then
+            args+=(--update-branches)
+          else
+            args+=(--no-update-branches)
           fi
           python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"

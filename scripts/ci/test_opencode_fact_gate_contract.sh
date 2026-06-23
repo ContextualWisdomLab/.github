@@ -23,5 +23,7 @@ check_contains 'collect_unresolved_human_review_threads()'
 check_contains 'reviewThreads(first: 100)'
 check_contains 'Latest unresolved human review thread evidence'
 check_contains 'OpenCode reviewed the current-head evidence but found unresolved human review threads before approval.'
+check_contains 'bounded-review-evidence-excerpt.md'
+check_contains 'This excerpt is inlined into every OpenCode model prompt so fallback models do not approve from a false "no changed files"'
 
 printf 'OpenCode fact-gate contract OK\n'
