@@ -136,11 +136,12 @@ if ! python3 "$NORMALIZER" --check-structural-approval "$TMP_JSON" >/dev/null; t
 fi
 
 SOURCE_ROOT="${OPENCODE_SOURCE_WORKDIR:-${GITHUB_WORKSPACE:-$PWD}}"
-if ! python3 - "$SOURCE_ROOT" "$TMP_JSON" <<'PY'
+PR_BASE_SHA_VAR="${PR_BASE_SHA:-}"
+PR_HEAD_SHA_VAR="${PR_HEAD_SHA:-${HEAD_SHA:-}}"
+if ! python3 - "$SOURCE_ROOT" "$TMP_JSON" "$PR_BASE_SHA_VAR" "$PR_HEAD_SHA_VAR" <<'PY'
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -150,11 +151,8 @@ from pathlib import Path
 source_root = Path(sys.argv[1]).resolve()
 control_file = Path(sys.argv[2])
 control = json.loads(control_file.read_text(encoding="utf-8"))
-pr_base_sha = os.environ.get("PR_BASE_SHA", "").strip()
-pr_head_sha = (
-    os.environ.get("PR_HEAD_SHA", "").strip()
-    or os.environ.get("HEAD_SHA", "").strip()
-)
+pr_base_sha = sys.argv[3].strip() if len(sys.argv) > 3 else ""
+pr_head_sha = sys.argv[4].strip() if len(sys.argv) > 4 else ""
 
 if control.get("result") != "REQUEST_CHANGES":
     raise SystemExit(0)
