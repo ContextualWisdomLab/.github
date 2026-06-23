@@ -70,6 +70,46 @@ def test_changed_file_and_verification_posture_detection():
     assert not norm.mentions_verification_posture("", FULL_SUMMARY.replace("CodeGraph", "graph"))
 
 
+def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
+    assert norm.current_changed_files() == set()
+    assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
+
+    changed_files = tmp_path / "changed-files.txt"
+    changed_files.write_text(
+        "\n".join(
+            [
+                ".github/workflows/opencode-review.yml",
+                "scripts/ci/opencode_review_normalize_output.py",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+
+    assert norm.current_changed_files() == {
+        ".github/workflows/opencode-review.yml",
+        "scripts/ci/opencode_review_normalize_output.py",
+    }
+    assert norm.mentions_actual_changed_file(
+        "Reviewed .github/workflows/opencode-review.yml.",
+        "",
+    )
+    assert norm.mentions_actual_changed_file(
+        "",
+        "Reviewed scripts/ci/opencode_review_normalize_output.py.",
+    )
+    assert not norm.mentions_actual_changed_file(
+        "Reviewed README.md.",
+        "Ran scripts/ci/test_strix_quick_gate.sh.",
+    )
+
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(tmp_path / "missing.txt"))
+    assert norm.current_changed_files() == set()
+    assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
+
+
 def test_label_and_full_coverage_detection():
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
