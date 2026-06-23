@@ -844,6 +844,7 @@ jobs:
             "model": "github-models/openai/gpt-5",
             "small_model": "github-models/deepseek/deepseek-v3-0324",
             "enabled_providers": ["github-models"],
+            "lsp": true,
             "mcp": {
               "codegraph": {
                 "type": "local",
