@@ -72,13 +72,13 @@ STRUCTURAL_FAILURE_PATTERNS = (
 )
 
 CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])"
-    r"(?:[A-Za-z0-9_.-]+/)*"
-    r"(?:"
-    r"[A-Za-z0-9_.@+-]+\.(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
-    r"|Dockerfile|Makefile|README|LICENSE|AGENTS\.md"
-    r")"
+    r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+(?:[A-Za-z0-9_.@+-]+\."
+    r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
+    r"|Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
+    r"|(?<![A-Za-z0-9_])[A-Za-z0-9_.-]+\."
+    r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
     r"(?![A-Za-z0-9_])"
+    r"|(?<![A-Za-z0-9_])(?:Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
 )
 
 APPROVAL_VERIFICATION_LABELS = (
@@ -135,6 +135,30 @@ def admits_missing_structural_review(reason: str, summary: str) -> bool:
 def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
     """Return whether an approval names at least one concrete changed file/path."""
     return bool(CHANGED_FILE_EVIDENCE_PATTERN.search(f"{reason}\n{summary}"))
+
+
+def current_changed_files() -> set[str]:
+    """Return the exact current-head changed files when the workflow provides them."""
+    changed_files_path = os.environ.get("OPENCODE_CHANGED_FILES_FILE")
+    if not changed_files_path:
+        return set()
+    try:
+        return {
+            line.strip()
+            for line in Path(changed_files_path).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+    except OSError:
+        return set()
+
+
+def mentions_actual_changed_file(reason: str, summary: str) -> bool:
+    """Return whether an approval names an exact current-head changed file."""
+    changed_files = current_changed_files()
+    if not changed_files:
+        return mentions_changed_file_evidence(reason, summary)
+    combined = f"{reason}\n{summary}"
+    return any(changed_file in combined for changed_file in changed_files)
 
 
 def mentions_verification_posture(reason: str, summary: str) -> bool:
@@ -379,7 +403,7 @@ def valid_control(
         if admits_missing_structural_review(reason, summary):
             return None
         summary = repair_approval_summary(reason, summary)
-        if not mentions_changed_file_evidence(reason, summary):
+        if not mentions_actual_changed_file(reason, summary):
             return None
         if not mentions_verification_posture(reason, summary):
             return None
@@ -419,10 +443,6 @@ def valid_control(
 
 def iter_json_objects(text: str) -> list[Any]:
     """Extract JSON objects from raw OpenCode output that may include prose."""
-    # Mitigate potential DoS by limiting extreme sizes.
-    if len(text) > 10 * 1024 * 1024:
-        return []
-
     decoder = json.JSONDecoder()
     values: list[Any] = []
 
@@ -437,6 +457,12 @@ def iter_json_objects(text: str) -> list[Any]:
         index = text.find("{", index)
         if index == -1:
             break
+        next_index = index + 1
+        while next_index < len(text) and text[next_index] in " \t\r\n":
+            next_index += 1
+        if next_index < len(text) and text[next_index] not in {'"', "}"}:
+            index += 1
+            continue
         try:
             value, _ = decoder.raw_decode(text, index)
             values.append(value)
