@@ -49,7 +49,23 @@ contains_review_text() {
   if [ -z "$needle" ]; then
     return 0
   fi
-  grep -Fqi -- "$needle" <<<"$review_text"
+
+  local was_nocasematch=0
+  if shopt -q nocasematch; then
+    was_nocasematch=1
+  fi
+  shopt -s nocasematch
+
+  local result=1
+  if [[ "$review_text" == *"$needle"* ]]; then
+    result=0
+  fi
+
+  if [ "$was_nocasematch" -eq 0 ]; then
+    shopt -u nocasematch
+  fi
+
+  return "$result"
 }
 
 extract_strix_required_markers() {
