@@ -135,8 +135,12 @@ jobs:
           exit 1
 
       - name: Self-test Strix gate script
+        timeout-minutes: 10
         working-directory: ${{ runner.temp }}/trusted-workspace
-        run: bash "$TRUSTED_STRIX_GATE_TEST"
+        run: |
+          set -euo pipefail
+          printf 'Running Strix gate self-test with a 10-minute step timeout.\n'
+          bash "$TRUSTED_STRIX_GATE_TEST"
 
       - name: Gate Strix secrets
         id: gate

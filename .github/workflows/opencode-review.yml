@@ -328,6 +328,7 @@ jobs:
           npx -y "$CODEGRAPH_PACKAGE" status
 
       - name: Prepare bounded OpenCode review evidence
+        timeout-minutes: 8
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPOSITORY: ${{ github.repository }}
@@ -430,6 +431,7 @@ jobs:
               fi
 
               if [ "$attempt" -lt "$attempts" ]; then
+                printf 'Failed-check evidence attempt %s/%s found no completed peer-check failure while peer checks are still running; retrying in %ss.\n' "$attempt" "$attempts" "$sleep_seconds" >&2
                 sleep "$sleep_seconds"
               fi
               attempt=$((attempt + 1))
