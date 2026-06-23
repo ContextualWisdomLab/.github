@@ -202,6 +202,33 @@ def test_review_state_and_failed_checks():
     assert sched.failed_status_checks(failed) == ["strix", "lint"]
 
 
+def test_run_command_failure_scrubs_secrets(monkeypatch):
+    import subprocess
+    class MockProcess:
+        def __init__(self, returncode, stdout, stderr):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def mock_run(args, **kwargs):
+        stderr_msg = "Error using Token secret_token_123 and bearer super_secret"
+        if "fail" in args:
+            return MockProcess(1, "", stderr_msg)
+        return MockProcess(0, "success", "")
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
+    assert sched.run(["success"]) == "success"
+
+    with pytest.raises(RuntimeError) as exc_info:
+        sched.run(["gh", "api", "fail", "-H", "Authorization: token ghp_123456789012345678901234567890123456"])
+
+    error_msg = str(exc_info.value)
+    assert "ghp_123456789012345678901234567890123456" not in error_msg
+    assert "secret_token_123" not in error_msg
+    assert "super_secret" not in error_msg
+    assert "***" in error_msg
+
 def test_actions_call_gh_with_expected_arguments(monkeypatch):
     calls = []
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
