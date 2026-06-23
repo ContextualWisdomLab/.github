@@ -320,11 +320,13 @@ jobs:
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           FAILED_CHECK_EVIDENCE_ATTEMPTS: "75"
           FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "30"
         run: |
           set -euo pipefail
+          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
@@ -650,6 +652,7 @@ jobs:
             printf -- "- Head SHA: \`%s\`\n\n" "$PR_HEAD_SHA"
             PR_MERGE_BASE="$(git -C "$OPENCODE_SOURCE_WORKDIR" merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"
             printf -- "- Merge base SHA: \`%s\`\n\n" "$PR_MERGE_BASE"
+            git -C "$OPENCODE_SOURCE_WORKDIR" diff --name-only --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA" >"$OPENCODE_CHANGED_FILES_FILE"
 
             printf '## CodeGraph evidence\n\n'
             printf 'The workflow initialized CodeGraph before this evidence file was built.\n'
@@ -720,6 +723,7 @@ jobs:
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
         run: |
           set -euo pipefail
@@ -735,6 +739,9 @@ jobs:
           fi
           if [ -s "$OPENCODE_FAILED_CHECK_EVIDENCE_FILE" ]; then
             cp "$OPENCODE_FAILED_CHECK_EVIDENCE_FILE" "$OPENCODE_REVIEW_WORKDIR/failed-check-evidence.md"
+          fi
+          if [ -s "$OPENCODE_CHANGED_FILES_FILE" ]; then
+            cp "$OPENCODE_CHANGED_FILES_FILE" "$OPENCODE_REVIEW_WORKDIR/changed-files.txt"
           fi
 
           cat >"${OPENCODE_REVIEW_WORKDIR}/AGENTS.md" <<'EOF'
