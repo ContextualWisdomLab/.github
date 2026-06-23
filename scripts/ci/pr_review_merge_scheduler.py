@@ -209,16 +209,15 @@ def is_opencode_review(review: dict[str, Any]) -> bool:
 
 
 def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
-    """Return whether OpenCode left a target review state on the current head."""
+    """Return whether OpenCode's latest current-head review has the target state."""
     head = pr.get("headRefOid")
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
         if not is_opencode_review(review):
             continue
-        if (review.get("state") or "").upper() != state:
-            continue
         commit = (review.get("commit") or {}).get("oid")
-        if commit == head:
-            return True
+        if commit != head:
+            continue
+        return (review.get("state") or "").upper() == state
     return False
 
 

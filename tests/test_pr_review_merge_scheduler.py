@@ -177,6 +177,16 @@ def test_review_state_and_failed_checks():
     assert not sched.has_current_head_changes_requested(pr)
     assert sched.latest_opencode_review(make_pr()) is None
     assert not sched.latest_opencode_approved(make_pr())
+    superseded = make_pr(
+        reviews={
+            "nodes": [
+                opencode_review("CHANGES_REQUESTED", "head"),
+                opencode_review("APPROVED", "head"),
+            ]
+        }
+    )
+    assert sched.has_current_head_approval(superseded)
+    assert not sched.has_current_head_changes_requested(superseded)
 
     failed = make_pr(
         statusCheckRollup={
