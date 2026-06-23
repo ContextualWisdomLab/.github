@@ -188,8 +188,14 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         "current-head OpenCode review requested changes"
     )
 
-    behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
-    assert inspect(behind, update_branches=False).reason == "latest OpenCode review approved; branch update disabled"
+    stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
+    dispatched = []
+    monkeypatch.setattr(sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
+    assert inspect(stale_behind).action == "review_dispatch"
+    assert dispatched == ["OpenCode Review"]
+
+    behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    assert inspect(behind, update_branches=False).reason == "current-head OpenCode review approved; branch update disabled"
     called = []
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: called.append((repo, pr["number"], dry_run)))
     assert inspect(behind).action == "update_branch"

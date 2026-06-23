@@ -322,11 +322,11 @@ def inspect_pr(
     if has_current_head_changes_requested(pr):
         return Decision(number, "block", "current-head OpenCode review requested changes")
 
-    if merge_state == "BEHIND" and latest_opencode_approved(pr):
+    if merge_state == "BEHIND" and has_current_head_approval(pr):
         if not update_branches:
-            return Decision(number, "wait", "latest OpenCode review approved; branch update disabled")
+            return Decision(number, "wait", "current-head OpenCode review approved; branch update disabled")
         update_branch(repo, pr, dry_run=dry_run)
-        return Decision(number, "update_branch", "latest OpenCode review approved; branch update requested")
+        return Decision(number, "update_branch", "current-head OpenCode review approved; branch update requested")
 
     if has_current_head_approval(pr):
         failed_checks = failed_status_checks(pr)
@@ -461,6 +461,18 @@ def self_test() -> None:
             "commit": {"oid": "old"},
         }
     ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        base_branch="main",
+    )
+    assert decision.action == "review_dispatch"
+    sample["reviews"]["nodes"][0]["commit"]["oid"] = "abc"
     decision = inspect_pr(
         "owner/repo",
         sample,

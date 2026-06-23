@@ -67,7 +67,7 @@ The checked-in scheduler already does the minimal central path:
 - blocks unresolved review threads;
 - blocks current-head OpenCode `CHANGES_REQUESTED`;
 - blocks current-head failed check runs or status contexts before enabling auto-merge;
-- updates `BEHIND` only when the latest OpenCode review is approved, using `expected_head_sha`;
+- updates `BEHIND` only when OpenCode approved the exact current head, using `expected_head_sha`;
 - enables native auto-merge only for current-head OpenCode approval;
 - dispatches OpenCode when the current head has no OpenCode decision.
 
