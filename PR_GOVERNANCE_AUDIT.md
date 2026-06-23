@@ -37,7 +37,7 @@ Live generated: 2026-06-23 04:18 KST.
 
 | Repo | Gap |
 |---|---|
-| `.github` | PR #28 is blocked by the required PR-target Strix check while same-head manual Strix evidence is still running. |
+| `.github` | PR #28 latest head is waiting on same-head manual Strix/OpenCode evidence; stale prior-head OpenCode `CHANGES_REQUESTED` is no longer treated as the current-head scheduler blocker. |
 | `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. |
 | `clearfolio` | Auto-merge is off and the PR Review Merge Scheduler is missing. |
 | `codec-carver` | Latest merged sample #94 still used `opencode-agent`; replace the legacy scheduler with the central GitHub Actions path. |
@@ -77,7 +77,7 @@ Small proof run:
 $ python3 scripts/ci/pr_review_merge_scheduler.py --self-test
 self-test passed
 
-$ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/.github --base-branch main --project-flow github-flow --dry-run --max-prs 10
+$ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/.github --base-branch main --project-flow github-flow --dry-run --max-prs 40 --no-trigger-reviews
 PR #19: block: current-head OpenCode review requested changes
 PR #20: block: current-head OpenCode review requested changes
 PR #21: block: current-head OpenCode review requested changes
@@ -87,8 +87,16 @@ PR #24: block: current-head OpenCode review requested changes
 PR #25: block: current-head OpenCode review requested changes
 PR #26: block: current-head OpenCode review requested changes
 PR #27: block: current-head OpenCode review requested changes
-PR #28: block: current-head OpenCode review requested changes
-{"base_branch": "main", "counts": {"block": 10}, "dry_run": true, "inspected": 10, "project_flow": "github-flow"}
+PR #28: wait: OpenCode review is already in progress
+PR #29: block: current-head OpenCode review requested changes
+PR #30: block: current-head OpenCode review requested changes
+PR #31: block: current-head OpenCode review requested changes
+PR #32: block: current-head OpenCode review requested changes
+PR #33: block: current-head OpenCode review requested changes
+PR #34: block: current-head OpenCode review requested changes
+PR #35: block: current-head OpenCode review requested changes
+PR #36: block: current-head OpenCode review requested changes
+{"base_branch": "main", "counts": {"block": 17, "wait": 1}, "dry_run": true, "inspected": 18, "project_flow": "github-flow"}
 ```
 
 ## Rollout List
