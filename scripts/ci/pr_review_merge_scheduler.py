@@ -80,11 +80,15 @@ class Decision:
 
 
 def run(args: list[str], *, stdin: str | None = None) -> str:
-    """Run a command and return stdout, raising with stderr on failure."""
-    process = subprocess.run(args, input=stdin, capture_output=True, text=True)
+    """Run a command and return stdout, raising with scrubbed args and stderr on failure."""
+    import re
+    process = subprocess.run(args, input=stdin, capture_output=True, text=True, shell=False)
     if process.returncode != 0:
+        pattern = r'(?i)(gh[psuo]_[a-zA-Z0-9]{36}|bearer\s+[a-zA-Z0-9_\-]+|token\s+[a-zA-Z0-9_\-]+)'
+        args_scrubbed = re.sub(pattern, '***', ' '.join(args))
+        stderr_scrubbed = re.sub(pattern, '***', process.stderr or "")
         raise RuntimeError(
-            f"Command failed ({process.returncode}): {' '.join(args)}\n{process.stderr}"
+            f"Command failed ({process.returncode}): {args_scrubbed}\n{stderr_scrubbed}"
         )
     return process.stdout
 
