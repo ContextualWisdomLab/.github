@@ -2115,6 +2115,25 @@ jobs:
             update_review_overview "$event" "$body"
           }
 
+          stop_approval_without_review() {
+            local result="$1"
+            local body="$2"
+
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                printf '## OpenCode review state unchanged\n\n'
+                printf -- "- Result: \`%s\`\n" "$result"
+                printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
+                printf -- '- Workflow run: %s\n' "$RUN_ID"
+                printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
+                printf '%s\n' "$body"
+              } >>"$GITHUB_STEP_SUMMARY"
+            fi
+            printf '::error::%s: OpenCode did not change the pull request review state. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
+            echo "::endgroup::"
+            exit 1
+          }
+
           collect_unresolved_human_review_threads() {
             local output_file="$1"
             local owner="${GH_REPOSITORY%%/*}"
@@ -2447,7 +2466,7 @@ jobs:
               local helper_findings_file
               helper_findings_file="$(mktemp)"
               if "${repo_root%/}/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "$evidence_file" "$repo_root" >"$helper_findings_file"; then
-                if grep -Fq "No deterministic missing-string markers" "$helper_findings_file" ||
+                if grep -Eiq 'deterministic[ -]?missing[- ]string markers|strix report locations|map each failed check' "$helper_findings_file" ||
                   ! grep -Eq '^### [0-9]+\. ' "$helper_findings_file"; then
                   printf 'OpenCode failed-check fallback helper returned non-source-backed output. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
                   rm -f "$helper_findings_file"
@@ -2668,6 +2687,23 @@ jobs:
             rm -f "$findings_file"
           }
 
+          stop_failed_check_fallback_unavailable() {
+            local body
+
+            body="$(printf '%s\n' \
+              "OpenCode could not derive source-backed failed-check findings after retries." \
+              "" \
+              "- Result: FAILED_CHECK_DIAGNOSIS_UNAVAILABLE" \
+              "- Reason: current-head failed checks were present, but neither model diagnosis nor deterministic fallback mapped them to concrete source-backed findings." \
+              "- Required next evidence: failed-check logs or annotations that identify an exact local file line and a concrete fix." \
+              "- Head SHA: \`${HEAD_SHA}\`" \
+              "- Workflow run: ${RUN_ID}" \
+              "- Workflow attempt: ${RUN_ATTEMPT}" \
+              "" \
+              "No PR review was posted because an evidence-mapping failure is a review-tool state, not a source finding.")"
+            stop_approval_without_review "FAILED_CHECK_DIAGNOSIS_UNAVAILABLE" "$body"
+          }
+
           is_github_billing_lock_evidence() {
             local evidence_file="$1"
 
@@ -2825,13 +2861,13 @@ jobs:
             {
               printf '## Pull request overview\n\n'
               printf 'OpenCode reviewed the current-head bounded evidence but could not approve while peer GitHub Checks were still pending.\n\n'
-              printf '## Findings\n\n'
-              printf '### 1. HIGH .github/workflows/opencode-review.yml:1 - Peer GitHub Checks were still pending before approval\n'
+              printf '## Approval hold\n\n'
+              printf '### Peer GitHub Checks were still pending before approval\n'
               printf -- '- Problem: Current-head GitHub Checks did not all complete before the bounded approval wait ended.\n'
               printf -- '- Root cause: OpenCode cannot safely approve until security and build checks have finished for the same head SHA.\n'
               printf -- '- Fix: Re-run OpenCode after the pending checks finish, or wait for this approval step to observe completed peer checks.\n'
-              printf -- '- Regression test: Keep the approval gate waiting for peer checks and emitting REQUEST_CHANGES instead of approving stale evidence.\n\n'
-              printf -- '- Result: REQUEST_CHANGES\n'
+              printf -- '- Regression test: Keep the approval gate waiting for peer checks and stopping without approval instead of approving stale evidence.\n\n'
+              printf -- '- Result: WAITING_FOR_CHECKS\n'
               printf -- "- Reason: current-head GitHub Checks did not all complete before the bounded approval wait ended for \`%s\`.\n" "$HEAD_SHA"
               printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
               printf -- '- Workflow run: %s\n' "$RUN_ID"
@@ -3424,9 +3460,7 @@ jobs:
               elif build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
                 create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
               else
-                echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                echo "::endgroup::"
-                exit 1
+                stop_failed_check_fallback_unavailable
               fi
               echo "::endgroup::"
               exit 0
@@ -3435,9 +3469,18 @@ jobs:
             if request_changes_for_merge_conflict_if_present; then
               :
             else
-              echo "::error::OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}; all configured OpenCode model attempts failed to produce a usable current-head control block for head ${HEAD_SHA}. no valid source-backed review output was available after retries; it will not approve without source-backed current-head review evidence. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
-              echo "::endgroup::"
-              exit 1
+              body="$(printf '%s\n' \
+                "OpenCode could not produce a usable current-head control block after all configured model attempts." \
+                "" \
+                "- Result: OPENCODE_REVIEW_UNAVAILABLE" \
+                "- Reason: primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}." \
+                "- Required next evidence: rerun OpenCode with a model/tooling attempt that emits a valid source-backed control block for this head." \
+                "- Head SHA: \`${HEAD_SHA}\`" \
+                "- Workflow run: ${RUN_ID}" \
+                "- Workflow attempt: ${RUN_ATTEMPT}" \
+                "" \
+                "No PR review was posted because this is review tooling instability, not a source-code finding.")"
+              stop_approval_without_review "OPENCODE_REVIEW_UNAVAILABLE" "$body"
             fi
             echo "::endgroup::"
             exit 0
@@ -3543,29 +3586,25 @@ jobs:
                   "" \
                   "OpenCode reviewed the current-head evidence but could not verify peer GitHub Checks before approval." \
                   "" \
-                  "## Findings" \
+                  "## Approval hold" \
                   "" \
-                  "### 1. HIGH .github/workflows/opencode-review.yml:1 - GitHub Checks statusCheckRollup could not be read before approval" \
+                  "### GitHub Checks statusCheckRollup could not be read before approval" \
                   "- Problem: GitHub Checks statusCheckRollup could not be read for the current head." \
                   "- Root cause: OpenCode cannot safely approve without verifying the same-head check rollup." \
                   "- Fix: Re-run OpenCode after GitHub statusCheckRollup is readable." \
                   "- Regression test: Keep the approval gate failing closed when check rollup lookup fails." \
                   "" \
-                  "- Result: REQUEST_CHANGES" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
                   "- Reason: GitHub Checks statusCheckRollup could not be read for current head \`${HEAD_SHA}\`." \
                   "- Head SHA: \`${HEAD_SHA}\`" \
                   "- Workflow run: ${RUN_ID}" \
                   "- Workflow attempt: ${RUN_ATTEMPT}")"
-                create_pull_review "REQUEST_CHANGES" "$body"
-                echo "::endgroup::"
-                exit 0
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
               if [ "$pending_wait_status" -ne 0 ]; then
                 failed_check_review_body_file="$(mktemp)"
                 build_pending_check_body "$pending_checks_file" "$failed_check_review_body_file"
-                create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
-                echo "::endgroup::"
-                exit 0
+                stop_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"
               fi
               failed_checks_file="$(mktemp)"
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
@@ -3574,22 +3613,20 @@ jobs:
                   "" \
                   "OpenCode reviewed the current-head evidence but could not verify peer GitHub Checks before approval." \
                   "" \
-                  "## Findings" \
+                  "## Approval hold" \
                   "" \
-                  "### 1. HIGH .github/workflows/opencode-review.yml:1 - GitHub Checks statusCheckRollup could not be read before approval" \
+                  "### GitHub Checks statusCheckRollup could not be read before approval" \
                   "- Problem: GitHub Checks statusCheckRollup could not be read for the current head." \
                   "- Root cause: OpenCode cannot safely approve without verifying the same-head check rollup." \
                   "- Fix: Re-run OpenCode after GitHub statusCheckRollup is readable." \
                   "- Regression test: Keep the approval gate failing closed when check rollup lookup fails." \
                   "" \
-                  "- Result: REQUEST_CHANGES" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
                   "- Reason: GitHub Checks statusCheckRollup could not be read for current head \`${HEAD_SHA}\`." \
                   "- Head SHA: \`${HEAD_SHA}\`" \
                   "- Workflow run: ${RUN_ID}" \
                   "- Workflow attempt: ${RUN_ATTEMPT}")"
-                create_pull_review "REQUEST_CHANGES" "$body"
-                echo "::endgroup::"
-                exit 0
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
               if [ -s "$failed_checks_file" ]; then
                 failed_check_evidence_file="$(mktemp)"
@@ -3616,9 +3653,7 @@ jobs:
                   echo "::endgroup::"
                   exit 0
                 else
-                  echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                  echo "::endgroup::"
-                  exit 1
+                  stop_failed_check_fallback_unavailable
                 fi
               fi
               unresolved_human_threads_file="$(mktemp)"
@@ -3663,9 +3698,18 @@ jobs:
               failed_check_inline_failure_body_file="$(mktemp)"
               failed_checks_file="$(mktemp)"
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
-                request_changes_for_gate_failure "GitHub Checks statusCheckRollup could not be read before validating OpenCode REQUEST_CHANGES against current-head failed checks."
-                echo "::endgroup::"
-                exit 0
+                body="$(printf '%s\n' \
+                  "OpenCode could not validate REQUEST_CHANGES against current-head failed checks." \
+                  "" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
+                  "- Reason: GitHub Checks statusCheckRollup could not be read before validating OpenCode REQUEST_CHANGES." \
+                  "- Required next evidence: readable current-head statusCheckRollup plus failed-check logs or annotations." \
+                  "- Head SHA: \`${HEAD_SHA}\`" \
+                  "- Workflow run: ${RUN_ID}" \
+                  "- Workflow attempt: ${RUN_ATTEMPT}" \
+                  "" \
+                  "No PR review was posted because check lookup failure is a review-tool state, not a source finding.")"
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
 
               if [ -s "$failed_checks_file" ]; then
@@ -3688,9 +3732,7 @@ jobs:
                 elif build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
                   create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
                 else
-                  echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                  echo "::endgroup::"
-                  exit 1
+                  stop_failed_check_fallback_unavailable
                 fi
               else
                 publish_request_changes_from_control "$control_json"
@@ -3702,9 +3744,18 @@ jobs:
               failed_check_inline_failure_body_file="$(mktemp)"
               failed_checks_file="$(mktemp)"
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
-                echo "::error::GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}. Leaving the PR review unchanged."
-                echo "::endgroup::"
-                exit 1
+                body="$(printf '%s\n' \
+                  "OpenCode could not interpret the model gate result because current-head checks were unavailable." \
+                  "" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
+                  "- Reason: GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}." \
+                  "- Required next evidence: readable current-head statusCheckRollup." \
+                  "- Head SHA: \`${HEAD_SHA}\`" \
+                  "- Workflow run: ${RUN_ID}" \
+                  "- Workflow attempt: ${RUN_ATTEMPT}" \
+                  "" \
+                  "No PR review was posted because check lookup failure is a review-tool state, not a source finding.")"
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
 
               if [ -s "$failed_checks_file" ]; then
@@ -3725,17 +3776,24 @@ jobs:
                 elif build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
                   create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
                 else
-                  echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                  echo "::endgroup::"
-                  exit 1
+                  stop_failed_check_fallback_unavailable
                 fi
               else
                 if request_changes_for_merge_conflict_if_present; then
                   :
                 else
-                  echo "::error::OpenCode gate result ${gate_result:-empty} was not publishable for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
-                  echo "::endgroup::"
-                  exit 1
+                  body="$(printf '%s\n' \
+                    "OpenCode gate result was not publishable for the current head." \
+                    "" \
+                    "- Result: OPENCODE_REVIEW_UNAVAILABLE" \
+                    "- Reason: OpenCode gate result ${gate_result:-empty} was not publishable for head ${HEAD_SHA}." \
+                    "- Required next evidence: rerun OpenCode with a valid source-backed control block, or obtain a source-backed failed-check diagnosis." \
+                    "- Head SHA: \`${HEAD_SHA}\`" \
+                    "- Workflow run: ${RUN_ID}" \
+                    "- Workflow attempt: ${RUN_ATTEMPT}" \
+                    "" \
+                    "No PR review was posted because this is review tooling instability, not a source-code finding.")"
+                  stop_approval_without_review "OPENCODE_REVIEW_UNAVAILABLE" "$body"
                 fi
               fi
               ;;
