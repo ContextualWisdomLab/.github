@@ -7,6 +7,9 @@ The public GitHub organization profile lives in [profile/README.md](profile/READ
 Homepage: https://contextualwisdomlab.github.io/
 
 PR governance live audit: [PR_GOVERNANCE_AUDIT.md](PR_GOVERNANCE_AUDIT.md).
+The audit includes repository-by-repository DX/UX transfer decisions: what the
+central workflow borrows because it reduces friction, and what it rejects
+because it adds noise or misleading review experience.
 
 ## PR review and merge policy
 
@@ -27,9 +30,12 @@ privileged `pull_request_target` OpenCode workflow.
 OpenCode approval is evidence-gated. Before approval, the review summary must
 name changed files, CodeGraph or structural MCP evidence, a Change Flow DAG,
 100% test coverage evidence, 100% docstring coverage evidence, and a concrete
-PoC/execution result. The PoC can be a temporary scratch repro, focused test,
-lint, security check, performance probe, or UI verification command, but it must
-be actually run and cited. Scratch PoC files are not committed.
+PoC/execution result. It must also split `Developer experience:` from
+`User experience:` so maintainability/review/CI friction is not confused with
+product, documentation, review-comment, or status-check reader outcomes. The PoC
+can be a temporary scratch repro, focused test, lint, security check,
+performance probe, or UI verification command, but it must be actually run and
+cited. Scratch PoC files are not committed.
 
 Failed GitHub Checks are not reviewed as URL lists. OpenCode must explain the
 failed check name, failing step, source-backed file and line when available,
@@ -51,3 +57,7 @@ Operational cases folded into the central policy:
 - `naruon#745`: new OpenCode review-flow work improves Mermaid output by
   replacing generic risk sketches with changed-file flow DAGs. The central
   workflow carries that review contract while keeping the self-test drift fix.
+- Cross-repo DX/UX: helpful sibling-repo patterns should be adopted when they
+  reduce maintainer, reviewer, CI-operator, contributor, user, or reader
+  friction. Noisy automation, repeated waiting, false failures, misleading
+  statuses, and URL-only diagnostics are treated as review-experience defects.
