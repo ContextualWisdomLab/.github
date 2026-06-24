@@ -482,3 +482,15 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
     approval = tmp_path / "approval.json"
     approval.write_text(json.dumps(control()), encoding="utf-8")
     assert norm.main(["prog", "--check-structural-approval", str(approval)]) == 0
+
+def test_main_normalizes_and_escapes_html_markers(tmp_path):
+    output = tmp_path / "opencode.txt"
+    control_data = control(reason="Malicious --> comment", summary=FULL_SUMMARY + "\nBreakout <script>alert(1)</script>")
+    output.write_text(json.dumps(control_data), encoding="utf-8")
+    assert norm.main(["prog", "head", "run", "attempt", str(output)]) == 0
+
+    saved_text = output.read_text(encoding="utf-8")
+    assert "opencode-review-control-v1" in saved_text
+    assert "<script>" not in saved_text
+    assert "\\u003cscript\\u003e" in saved_text
+    assert "-->" not in saved_text.split("<!-- opencode-review-control-v1")[1].split("-->")[0].strip()
