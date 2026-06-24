@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -79,12 +80,15 @@ class Decision:
     reason: str
 
 
-def run(args: list[str], *, stdin: str | None = None) -> str:
+def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     """Run a command and return stdout, raising with stderr on failure."""
-    process = subprocess.run(args, input=stdin, capture_output=True, text=True)
+    if isinstance(args, str) or not all(isinstance(arg, str) for arg in args):
+        raise TypeError("run() requires a sequence of argv strings; shell command strings are not allowed")
+    argv = list(args)
+    process = subprocess.run(argv, input=stdin, capture_output=True, text=True, shell=False)
     if process.returncode != 0:
         raise RuntimeError(
-            f"Command failed ({process.returncode}): {' '.join(args)}\n{process.stderr}"
+            f"Command failed ({process.returncode}): {' '.join(argv)}\n{process.stderr}"
         )
     return process.stdout
 

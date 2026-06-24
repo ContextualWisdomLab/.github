@@ -60,6 +60,10 @@ def test_run_split_repo_and_graphql(monkeypatch):
     assert sched.run([sys.executable, "-c", "print('ok')"]).strip() == "ok"
     with pytest.raises(RuntimeError):
         sched.run([sys.executable, "-c", "import sys; sys.exit(7)"])
+    with pytest.raises(TypeError):
+        sched.run("echo unsafe")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        sched.run(["echo", 1])  # type: ignore[list-item]
 
     assert sched.split_repo("owner/repo") == ("owner", "repo")
     with pytest.raises(ValueError):
@@ -78,6 +82,23 @@ def test_run_split_repo_and_graphql(monkeypatch):
     assert "-F" in calls[0][0]
     assert "-f" in calls[0][0]
     assert calls[0][1] == "query"
+
+
+def test_run_passes_shell_metacharacters_as_plain_arguments(tmp_path):
+    sentinel = tmp_path / "pwned"
+    payload = f"feature; touch {sentinel}; #"
+
+    output = sched.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print(sys.argv[1])",
+            payload,
+        ]
+    )
+
+    assert payload in output
+    assert not sentinel.exists()
 
 
 def test_fetch_open_prs_paginates(monkeypatch):
