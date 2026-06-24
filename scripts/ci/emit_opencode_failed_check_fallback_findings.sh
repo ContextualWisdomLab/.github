@@ -745,6 +745,6 @@ emit_strix_provider_failure_finding "$strix_evidence_file"
 emit_strix_cancelled_without_log_finding "$strix_evidence_file"
 
 if [ "$finding_index" -eq 0 ]; then
-	printf 'No source-backed failed-check fallback finding matched the available evidence; leaving the PR review unchanged so the current-head review can be rerun with better evidence.\n' >&2
+	printf 'No source-backed failed-check fallback finding matched the available evidence. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
 	exit 1
 fi

@@ -275,6 +275,14 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: called.append((repo, pr["number"], dry_run)))
     assert inspect(behind).action == "update_branch"
     assert called == [("owner/repo", 1, True)]
+    called.clear()
+    behind_auto_merge_enabled = make_pr(
+        mergeStateStatus="BEHIND",
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        autoMergeRequest={"enabledAt": "now"},
+    )
+    assert inspect(behind_auto_merge_enabled).action == "update_branch"
+    assert called == [("owner/repo", 1, True)]
 
 
 def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):

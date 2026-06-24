@@ -2449,7 +2449,7 @@ jobs:
               if "${repo_root%/}/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "$evidence_file" "$repo_root" >"$helper_findings_file"; then
                 if grep -Fq "No deterministic missing-string markers" "$helper_findings_file" ||
                   ! grep -Eq '^### [0-9]+\. ' "$helper_findings_file"; then
-                  printf 'OpenCode failed-check fallback helper returned non-source-backed generic output; leaving the PR review unchanged for rerun.\n' >&2
+                  printf 'OpenCode failed-check fallback helper returned non-source-backed output. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
                   rm -f "$helper_findings_file"
                   return 1
                 fi
@@ -2458,7 +2458,7 @@ jobs:
                 return 0
               fi
               rm -f "$helper_findings_file"
-              printf 'OpenCode failed-check fallback helper did not produce source-backed findings; leaving the PR review unchanged for rerun.\n' >&2
+              printf 'OpenCode failed-check fallback helper did not produce source-backed findings. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
               return 1
             fi
 
@@ -2627,7 +2627,7 @@ jobs:
             rm -f "$strix_evidence_file"
 
             if [ "$finding_index" -eq 0 ]; then
-              printf 'No automated source-backed fallback pattern matched this failed check; leaving the PR review unchanged for rerun.\n' >&2
+              printf 'No automated source-backed fallback pattern matched this failed check. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
               return 1
             fi
           }

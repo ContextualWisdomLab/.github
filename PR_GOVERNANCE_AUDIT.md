@@ -20,14 +20,8 @@ OpenCode decides; GitHub Actions mutates.
 ## Non-Actionable Findings Ban
 
 The review surface must not publish a `Findings` block that merely says the
-reviewer failed to map evidence. In particular, this text is banned from PR
-reviews:
-
-```text
-No deterministic missing-string markers or Strix report locations were recognized. Use the failed-check evidence below to map each failed check to exact local source lines before approving.
-```
-
-That sentence is an internal diagnosis failure, not a code-review finding. If
+reviewer failed to map evidence. Generic "I could not map the failed check"
+phrasing is an internal diagnosis failure, not a code-review finding. If
 OpenCode or the deterministic fallback helper cannot map an active failed check
 to a concrete local file, positive line number, failed log phrase, observable
 impact, fix direction, regression command, and source-backed suggested diff,
@@ -46,28 +40,28 @@ them to a local defect.
 
 ## Live Repository Inventory
 
-Live generated: 2026-06-23 04:18 KST. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST.
+Live generated: 2026-06-25 KST via GitHub API. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST.
 
-| Repo | Flow | Default | Auto | Rulesets | Required checks | Stale dismissal | Merge queue | Workflows | Recent merged actor |
+| Repo | Flow | Default | Auto | Rulesets | Required checks | Stale dismissal | Open PRs | Workflows | Recent merged actor |
 |---|---:|---:|---:|---|---|---:|---:|---|---|
-| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #49 `seonghobae`; #41 `seonghobae`; #38 `seonghobae` |
-| `ContextualWisdomLab/bandscope` | Git Flow | `develop` | on | `Lock default branch` | `ci / build-and-test`, `dependency-review`, `security-audit`, `CodeQL`, `sbom`, `release-preflight`, `gate / build / windows`, `gate / build / macos`, `trivy-fs-scan` | false | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #427 `github-actions`; #408 `seonghobae`; #405 `seonghobae` |
-| `ContextualWisdomLab/clearfolio` | GitHub Flow | `main` | off | `PR` | none | false | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #13 `seonghobae` merge `4bc17c6`; #9 `seonghobae`; #8 `seonghobae` |
-| `ContextualWisdomLab/codec-carver` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #98 `seonghobae`; #94 `opencode-agent`; #93 `seonghobae` |
-| `ContextualWisdomLab/contextual-orchestrator` | GitHub Flow | `main` | off | none | none | unknown | unknown | none matched | none |
-| `ContextualWisdomLab/ContextualWisdomLab.github.io` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #15 `seonghobae`; #14 `seonghobae`; #13 `github-actions` auto by `github-actions` |
-| `ContextualWisdomLab/naruon` | Git Flow | `develop` | on | `Lock default branch`, `PR` | `opencode-review`, `strix` | true | no | OpenCode Review; PR Governance; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #756 `seonghobae`; #747 `seonghobae`; #715 `seonghobae` |
-| `ContextualWisdomLab/newsdom-api` | Git Flow | `develop` | on | `Lock default branch`, `mirror-classic-protection-main-develop` | `codeql (python, actions)`, `dependency-review`, `pytest`, `quality-gate`, `scorecard` | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #197 `seonghobae`; #163 `seonghobae`; #105 `seonghobae` |
-| `ContextualWisdomLab/pg-erd-cloud` | GitHub Flow | `main` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Autofix; PR Review Fix Scheduler; PR Review Merge Scheduler; Strix Security Scan | #247 `github-actions`; #239 `github-actions`; #238 `seonghobae` |
-| `ContextualWisdomLab/scopeweave` | Git Flow | `develop` | on | `Lock default branch` | none | true | no | OpenCode Review; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #117 `seonghobae`; #106 `seonghobae`; #102 `seonghobae` |
-| `ContextualWisdomLab/VibeSec` | Git Flow | `develop` | on | `Lock default branch`, `PR` | none | false/true | no | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #122 `seonghobae`; #109 `seonghobae`; #67 `github-actions` |
+| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 25 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #53 `github-actions`; #51 `seonghobae`; #50 `seonghobae` |
+| `ContextualWisdomLab/bandscope` | Git Flow | `develop` | on | `Lock default branch` | `ci / build-and-test`, `dependency-review`, `security-audit`, `CodeQL`, `sbom`, `release-preflight`, `gate / build / windows`, `gate / build / macos`, `trivy-fs-scan` | ruleset true; classic false | 81 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #427 `github-actions`; #408 `seonghobae`; #405 `seonghobae` |
+| `ContextualWisdomLab/clearfolio` | GitHub Flow | `main` | off | `PR` | none | false | 12 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #13 `seonghobae`; #9 `seonghobae`; #8 `seonghobae` |
+| `ContextualWisdomLab/codec-carver` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 8 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #103 `github-actions`; #98 `seonghobae`; #97 `opencode-agent` |
+| `ContextualWisdomLab/contextual-orchestrator` | GitHub Flow | `main` | off | none | none | none | 0 | none matched | none |
+| `ContextualWisdomLab/ContextualWisdomLab.github.io` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 6 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #15 `seonghobae`; #14 `seonghobae`; #13 `github-actions` |
+| `ContextualWisdomLab/naruon` | Git Flow | `develop` | on | `Lock default branch`, `PR` | `strix`, `opencode-review` | true | 1 | OpenCode Review; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #758 `seonghobae`; #757 `seonghobae`; #756 `seonghobae` |
+| `ContextualWisdomLab/newsdom-api` | Git Flow | `develop` | on | `Lock default branch`, `mirror-classic-protection-main-develop` | `pytest`, `scorecard`, `codeql (python, actions)`, `dependency-review`, `quality-gate` | true | 11 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #199 `seonghobae`; #198 `seonghobae`; #197 `seonghobae` |
+| `ContextualWisdomLab/pg-erd-cloud` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 8 | OpenCode Review; PR Review Autofix; PR Review Fix Scheduler; PR Review Merge Scheduler; Strix Security Scan | #247 `github-actions`; #246 `github-actions`; #239 `github-actions` |
+| `ContextualWisdomLab/scopeweave` | Git Flow | `develop` | on | `Lock default branch` | none | ruleset true | 8 | OpenCode Review; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #123 `seonghobae`; #117 `seonghobae`; #115 `seonghobae` |
+| `ContextualWisdomLab/VibeSec` | Git Flow | `develop` | on | `Lock default branch`, `PR` | none | mixed true/false | 4 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #126 `github-actions`; #122 `seonghobae`; #121 `seonghobae` |
 
 ## Current Gaps By Repo
 
 | Repo | Gap |
 |---|---|
-| `.github` | PR #37, #38, #41, #42, and #49 are merged. PR #49 is the current central proof that generic failed-check deflections such as `No deterministic missing-string markers...` are rejected before publication. Remaining open PRs still need current-head review/check evaluation rather than stale review reuse. |
-| `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. |
+| `.github` | PR #37, #38, #41, #42, and #49 are merged. PR #49 is the current central proof that generic failed-check deflections are rejected before publication. Remaining open PRs still need current-head review/check evaluation rather than stale review reuse. |
+| `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. Live dry-run `28134181171` proved the repo-local scheduler still waited on an already enabled auto-merge request instead of updating a `BEHIND` approved PR, so PR #450 syncs the scheduler script, adds explicit update-branch workflow control, and prevents failed-check mapping failures from being published as Findings. |
 | `clearfolio` | PR #13 is merged at `4bc17c6` after same-head manual Strix run `28051319530`, same-head manual OpenCode run `28051665082`, unresolved review threads `0`, and guarded merge against head `5fe1791`. Auto-merge remains off, so direct guarded merge is the repo path. |
 | `codec-carver` | PR #98 replaced the legacy scheduler with the central GitHub Actions path. Keep #94 as the historical negative sample because it used `opencode-agent` as a merge actor. |
 | `contextual-orchestrator` | No matching rulesets or review workflows; either opt in deliberately or mark unmanaged. |
@@ -82,7 +76,8 @@ Live generated: 2026-06-23 04:18 KST. PR #28 post-merge refresh: 2026-06-23 16:0
 | Repo | Live evidence | Adopt | Reject |
 |---|---|---|---|
 | `naruon` | `develop`, strict required checks `opencode-review` and `strix`, stale review dismissal enabled. Open PRs show `BEHIND`, `DIRTY`, and `CHANGES_REQUESTED` cases. | Strict current-head evidence and stale-dismissal awareness. | Treating `BEHIND` as merge-ready. |
-| `.github` | PR #28 head `811446d` reached current-head approval after manual Strix run `28007326148` published a successful `strix` status and manual OpenCode run `28008174977` approved the same head; it was merged by `seonghobae` with merge commit `a025be1`. PR #49 then merged the explicit ban on generic failed-check deflections such as `No deterministic missing-string markers...`. | Same-head manual evidence for self-modifying trusted workflow changes, current-head OpenCode approval, unresolved thread check, `--match-head-commit` guarded merge, and non-actionable Findings rejection. | Treating stale PR-target failure logs as merge blockers after newer same-head evidence exists, or posting an evidence-mapping failure as a user-facing Finding. |
+| `bandscope` | Workflow dry-run `28134181171` used the repo-local scheduler and reported `PR #367: wait: current head is approved; auto-merge already enabled`, while the central scheduler dry-run selected `update_branch` for the same `BEHIND` + current-head-approved class. PR #450 is the corrective rollout. Its first head also reproduced the bad generic failed-check Findings text; the second head patches that path and the stale review was dismissed. | Keep broad repo-specific required checks delegated to GitHub, but update outdated same-repo PR heads before relying on native auto-merge. Treat failed-check mapping failure as a review-tool state unless a source-backed finding exists. | Assuming an enabled auto-merge request means the PR branch is current enough to merge, or converting missing evidence into a PR Finding. |
+| `.github` | PR #28 head `811446d` reached current-head approval after manual Strix run `28007326148` published a successful `strix` status and manual OpenCode run `28008174977` approved the same head; it was merged by `seonghobae` with merge commit `a025be1`. PR #49 then merged the explicit ban on generic failed-check deflections. | Same-head manual evidence for self-modifying trusted workflow changes, current-head OpenCode approval, unresolved thread check, `--match-head-commit` guarded merge, and non-actionable Findings rejection. | Treating stale PR-target failure logs as merge blockers after newer same-head evidence exists, or posting an evidence-mapping failure as a user-facing Finding. |
 | `pg-erd-cloud` | Recent PRs #236, #237, #239 were merged by `app/github-actions`. | GitHub Actions as mechanical merge actor with head guard. | Human-only queue draining. |
 | `codec-carver` | Recent PR #94 was merged by `app/opencode-agent`, and the repo still has legacy `Scheduled PR Review Merge`. | Native auto-merge path for current-head approved PRs. | OpenCode app as merge actor. |
 | `VibeSec` | PR #108 had native auto-merge enabled; #106 merged by `app/github-actions`; #109 merged by human. | Keep native auto-merge as preferred waiting path. | Repo-by-repo actor inconsistency. |
@@ -149,6 +144,17 @@ PR #34: block: current-head OpenCode review requested changes
 PR #35: block: current-head OpenCode review requested changes
 PR #36: block: merge conflict: DIRTY
 {"base_branch": "main", "counts": {"block": 17}, "dry_run": true, "inspected": 17, "project_flow": "github-flow"}
+
+$ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/bandscope --base-branch develop --project-flow git-flow --dry-run --max-prs 20 --no-trigger-reviews --no-enable-auto-merge
+PR #367: update_branch: current-head OpenCode review approved; branch update requested
+PR #368: update_branch: current-head OpenCode review approved; branch update requested
+...
+{"base_branch": "develop", "counts": {"block": 7, "update_branch": 13}, "dry_run": true, "inspected": 20, "project_flow": "git-flow"}
+
+$ gh run view 28134181171 --repo ContextualWisdomLab/bandscope --log
+scheduler token source=github-token
+PR #364: block: 2 unresolved review thread(s)
+PR #367: wait: current head is approved; auto-merge already enabled
 ```
 
 ## Rollout List
@@ -162,11 +168,12 @@ PR #36: block: merge conflict: DIRTY
 ## Remaining Proof Gaps
 
 - A live current-head review -> same-head manual Strix status bridge -> OpenCode approval -> guarded merge trace has been completed on `.github` PR #28.
-- No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet.
+- No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet. `bandscope` PR #450 is the first corrective rollout after live evidence showed the stale scheduler was waiting instead of updating.
 - PR #721 in `naruon` remains the historical fixture for this proof: head `b683deaf8b4761399321799279f58d884db57141`, current-head OpenCode approval `4558310923`, unresolved review threads `0`, and `mergeStateStatus=BEHIND`. Central `.github` dry-run selected `update_branch`, but `naruon` workflow run `28073586594` used the then-stale repo-local scheduler and did not update it. PR #756 has since rolled the central scheduler into `naruon`, so the next proof must use a fresh current-head outdated PR instead of reusing stale evidence from #721.
 - `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.
 - `naruon` PR #756 completed the repo-local rollout for the scheduler contract. Its initial head failed backend governance and Scorecard because `actions: write`/`contents: write` were broader than the repo policy allows; the amended and merged head restores minimal `GITHUB_TOKEN` permissions, keeps `trigger_reviews` and `enable_auto_merge` defaulted off, keeps `update_branches` defaulted on, and still dry-runs PR #694/#721 as `update_branch`.
 - `update-branch` `422/403` behavior still needs a safe fixture or a real blocked case before claiming standardized handling.
+- Public repo drift is real, not hypothetical: only `.github` matched the central scheduler/workflow byte-for-byte in the 2026-06-25 scan. Some drift is policy-specific and should not be overwritten blindly, but `bandscope` had behaviorally unsafe drift and now has PR #450.
 - Required-check interpretation should stay delegated to GitHub native auto-merge until a repo needs immediate merge.
 - PR #28 proves the self-modifying trusted workflow bootstrap path after newer same-head evidence exists, but it does not prove update-branch behavior, stale approval dismissal after a head change, or cross-repository rollout.
 - PR #37 adds a bounded OpenCode approval publication timeout after manual current-head OpenCode run `28011338113` reached the approval step and was observed waiting on peer checks instead of finishing promptly.
