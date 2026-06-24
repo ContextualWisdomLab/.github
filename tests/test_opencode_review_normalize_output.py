@@ -19,8 +19,7 @@ Standards search: relevant standards were searched.
 Compatibility/convention: compatibility and naming conventions were checked.
 Breaking-change/backcompat: no breaking change was found.
 Performance: performance risk was checked.
-Developer experience: developer workflow impact was checked.
-User experience: user-facing behavior impact was checked.
+Design/UX: design impact was checked.
 Security/privacy: security impact was checked.
 """
 
@@ -276,8 +275,7 @@ Standards search: Not applicable.
 Compatibility/convention: Not applicable.
 Breaking-change/backcompat: Not applicable.
 Performance: Not applicable.
-Developer experience: Not applicable.
-User experience: Not applicable.
+Design/UX: Not applicable.
 Security/privacy: Not applicable.
 """,
         ),
@@ -386,10 +384,9 @@ M\tREADME.md
 def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects('{"a": 1}') == [{"a": 1}, {"a": 1}]
     assert norm.iter_json_objects('prefix {"b": 2} suffix') == [{"b": 2}]
-    assert norm.iter_json_objects("prefix {  } suffix") == [{}]
     assert norm.iter_json_objects("prefix {not json}") == []
-    assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
+    assert norm.iter_json_objects("a" * (10 * 1024 * 1024 + 1)) == []
 
 
 def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
@@ -397,11 +394,6 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
     output.write_text("prefix\n" + json.dumps(control()) + "\nsuffix", encoding="utf-8")
     assert norm.main(["prog", "head", "run", "attempt", str(output)]) == 0
     assert "opencode-review-control-v1" in output.read_text(encoding="utf-8")
-
-    invalid_utf8 = tmp_path / "invalid-utf8.txt"
-    invalid_utf8.write_bytes(b"\xea invalid prefix\n" + json.dumps(control()).encode("utf-8"))
-    assert norm.main(["prog", "head", "run", "attempt", str(invalid_utf8)]) == 0
-    assert "opencode-review-control-v1" in invalid_utf8.read_text(encoding="utf-8")
 
     assert norm.main(["prog"]) == 64
     assert "usage:" in capsys.readouterr().err

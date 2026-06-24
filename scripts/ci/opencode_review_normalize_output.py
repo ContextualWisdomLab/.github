@@ -72,13 +72,13 @@ STRUCTURAL_FAILURE_PATTERNS = (
 )
 
 CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+(?:[A-Za-z0-9_.@+-]+\."
-    r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
-    r"|Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
-    r"|(?<![A-Za-z0-9_])[A-Za-z0-9_.-]+\."
-    r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
+    r"(?<![A-Za-z0-9_])"
+    r"(?:[A-Za-z0-9_.-]+/)*"
+    r"(?:"
+    r"[A-Za-z0-9_.@+-]+\.(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
+    r"|Dockerfile|Makefile|README|LICENSE|AGENTS\.md"
+    r")"
     r"(?![A-Za-z0-9_])"
-    r"|(?<![A-Za-z0-9_])(?:Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
 )
 
 APPROVAL_VERIFICATION_LABELS = (
@@ -97,8 +97,7 @@ APPROVAL_VERIFICATION_LABELS = (
     "compatibility/convention:",
     "breaking-change/backcompat:",
     "performance:",
-    "developer experience:",
-    "user experience:",
+    "design/ux:",
     "security/privacy:",
 )
 
@@ -297,8 +296,7 @@ Standards search: standards and external-source checks are delegated to configur
 Compatibility/convention: changed workflow/script conventions and compatibility surfaces were checked in bounded evidence.
 Breaking-change/backcompat: deployment evidence and changed-file history were checked for backward-compatibility risk.
 Performance: changed surfaces were checked for performance risk in bounded evidence.
-Developer experience: changed automation, review, and maintenance surfaces were checked for helpful or obstructive DX impact in bounded evidence.
-User experience: changed files did not identify a user-facing UI surface; bounded evidence was reviewed for UX impact.
+Design/UX: changed files did not identify a UI-facing design surface; bounded evidence was reviewed.
 Security/privacy: workflow-token, review-gate, and repository-automation security/privacy boundaries were checked in bounded evidence.
 """
     return f"{summary.rstrip()}\n{repair}"
@@ -306,7 +304,7 @@ Security/privacy: workflow-token, review-gate, and repository-automation securit
 
 def repair_approval_summary(reason: str, summary: str) -> str:
     """Repair an APPROVE summary only from objective bounded evidence."""
-    if mentions_changed_file_evidence(reason, summary) and mentions_verification_posture(
+    if mentions_actual_changed_file(reason, summary) and mentions_verification_posture(
         reason, summary
     ) and mentions_full_coverage(reason, summary):
         return summary
@@ -341,7 +339,7 @@ def check_structural_approval(control_file: Path) -> int:
     ):
         print("NO_CONCLUSION", file=sys.stderr)
         return 4
-    if value.get("result") == "APPROVE" and not mentions_changed_file_evidence(
+    if value.get("result") == "APPROVE" and not mentions_actual_changed_file(
         str(value.get("reason", "")),
         str(value.get("summary", "")),
     ):
@@ -445,6 +443,10 @@ def valid_control(
 
 def iter_json_objects(text: str) -> list[Any]:
     """Extract JSON objects from raw OpenCode output that may include prose."""
+    # Mitigate potential DoS by limiting extreme sizes.
+    if len(text) > 10 * 1024 * 1024:
+        return []
+
     decoder = json.JSONDecoder()
     values: list[Any] = []
 
@@ -459,12 +461,6 @@ def iter_json_objects(text: str) -> list[Any]:
         index = text.find("{", index)
         if index == -1:
             break
-        next_index = index + 1
-        while next_index < len(text) and text[next_index] in " \t\r\n":
-            next_index += 1
-        if next_index < len(text) and text[next_index] not in {'"', "}"}:
-            index += 1
-            continue
         try:
             value, _ = decoder.raw_decode(text, index)
             values.append(value)
@@ -492,7 +488,7 @@ def main(argv: list[str]) -> int:
     expected_head_sha, expected_run_id, expected_run_attempt, output_file_arg = argv[1:]
     output_file = Path(output_file_arg)
     try:
-        output_text = output_file.read_text(encoding="utf-8", errors="replace")
+        output_text = output_file.read_text(encoding="utf-8")
     except OSError as exc:
         print(f"cannot read OpenCode output file: {exc}", file=sys.stderr)
         return 65
