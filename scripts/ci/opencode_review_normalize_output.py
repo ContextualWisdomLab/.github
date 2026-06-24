@@ -555,6 +555,11 @@ def main(argv: list[str]) -> int:
             continue
 
         normalized_json = json.dumps(control, separators=(",", ":"), ensure_ascii=False)
+        normalized_json = (
+            normalized_json.replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
         output_file.write_text(
             "\n".join(
                 [
