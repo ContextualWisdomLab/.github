@@ -732,7 +732,7 @@ jobs:
             cp "$OPENCODE_EVIDENCE_FILE" "$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
             {
               printf '# Current-head bounded evidence excerpt\n\n'
-              printf 'This excerpt is inlined into every OpenCode model prompt so fallback models do not approve from a false "no changed files" or "no coverage evidence" assumption when file reads or tool calls are skipped.\n\n'
+              printf 'Current-head bounded evidence excerpt, inlined to prevent false no-change or no-coverage approvals when tool/file reads are skipped:\n\n'
               head -c 9000 "$OPENCODE_EVIDENCE_FILE"
               printf '\n\n[Full evidence is available in ./bounded-review-evidence.md inside the isolated review workspace.]\n'
             } >"$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
