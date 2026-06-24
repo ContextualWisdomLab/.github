@@ -745,5 +745,6 @@ emit_strix_provider_failure_finding "$strix_evidence_file"
 emit_strix_cancelled_without_log_finding "$strix_evidence_file"
 
 if [ "$finding_index" -eq 0 ]; then
-	printf 'No automated line-specific fallback pattern matched this failed check. Do not approve or post a URL-only review; inspect the failed-check evidence below, identify the exact failing source line, explain the root cause, and provide the focused rerun command before approval.\n\n'
+	printf 'No source-backed failed-check fallback finding matched the available evidence; leaving the PR review unchanged so the current-head review can be rerun with better evidence.\n' >&2
+	exit 1
 fi
