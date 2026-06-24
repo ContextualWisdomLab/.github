@@ -7,6 +7,9 @@ The public GitHub organization profile lives in [profile/README.md](profile/READ
 Homepage: https://contextualwisdomlab.github.io/
 
 PR governance live audit: [PR_GOVERNANCE_AUDIT.md](PR_GOVERNANCE_AUDIT.md).
+The audit includes repository-by-repository DX/UX transfer decisions: what the
+central workflow borrows because it reduces friction, and what it rejects
+because it adds noise or misleading review experience.
 
 ## PR review and merge policy
 

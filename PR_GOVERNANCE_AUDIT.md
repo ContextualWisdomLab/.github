@@ -60,6 +60,27 @@ Live generated: 2026-06-23 04:18 KST. PR #28 post-merge refresh: 2026-06-23 16:0
 | `codec-carver` | Recent PR #94 was merged by `app/opencode-agent`, and the repo still has legacy `Scheduled PR Review Merge`. | Native auto-merge path for current-head approved PRs. | OpenCode app as merge actor. |
 | `VibeSec` | PR #108 had native auto-merge enabled; #106 merged by `app/github-actions`; #109 merged by human. | Keep native auto-merge as preferred waiting path. | Repo-by-repo actor inconsistency. |
 
+## DX/UX Transfer Decisions
+
+Developer experience means the maintainer, reviewer, CI operator, and future
+contributor experience. User experience means the product user, documentation
+reader, PR reader, and status-check reader experience. PR review must evaluate
+both separately; a change can improve one while harming the other.
+
+| Repo | Borrow because it helps DX/UX | Improve because it creates friction | Central action |
+|---|---|---|---|
+| `.github` | Same-head manual evidence and `--match-head-commit` make self-modifying workflow changes reviewable without pretending stale base-branch checks are current. | Stale `pull_request_target` failures, long polling review runs, and cancelled helper checks can become misleading review noise. | Serialize Strix before OpenCode, bound approval runtime, and require failed-check explanations instead of URL-only comments. |
+| `naruon` | Strict required checks, stale review dismissal, and changed-file Mermaid flow DAGs make review evidence easier to audit. | `BEHIND` or outdated approvals can look merge-ready unless the head SHA is treated as the review boundary. | Re-review every updated head and require an exact changed-file evidence path plus a Change Flow DAG before approval. |
+| `pg-erd-cloud` | GitHub Actions bot merges with head guards give a clear mechanical actor for merges. | Repo-local autofix workflows are useful there, but centralizing autofix would widen mutation scope too far. | Keep GitHub Actions as the merge actor and leave autofix workflows repo-local. |
+| `VibeSec` | Native auto-merge examples show a lower-friction waiting path after current-head approval. | Mixed human, OpenCode, and GitHub Actions merge actors make audit trails harder to interpret. | Prefer native auto-merge or GitHub Actions mutation; do not let OpenCode merge directly. |
+| `bandscope` | Broad required checks encode repo-specific release, build, SBOM, and security expectations. | A central script would be noisy if it tried to reinterpret every required check itself. | Let GitHub native auto-merge and rulesets interpret required checks. |
+| `newsdom-api` | Required quality gates and security checks give API changes stronger release evidence. | Central review comments that only point at failing check URLs do not help an API maintainer fix the failure. | Require failed-check root cause, source location when available, fix direction, and rerun command. |
+| `scopeweave` | Strix self-test and the central scheduler are useful rollout fixtures. | Claiming the rollout complete without a representative current-head trace would be premature. | Keep it on the central path and require a live trace before declaring update/merge behavior proven. |
+| `clearfolio` | Direct guarded merge works while auto-merge is intentionally off. | Treating it like an auto-merge repo would create confusing expectations. | Use immediate guarded merge only after same-head evidence, unresolved-thread check, and head guard pass. |
+| `codec-carver` | Existing native merge behavior can be retained once current-head evidence is clean. | Legacy OpenCode app-token merge creates a second mechanical actor and weakens audit consistency. | Replace legacy scheduled merge with the central GitHub Actions scheduler. |
+| `ContextualWisdomLab.github.io` | Site and documentation changes make reader-facing UX review concrete. | Review comments that say only that a check failed do not help the site reader or maintainer understand the issue. | Treat documentation clarity, homepage behavior, and status-check explanations as UX surfaces. |
+| `contextual-orchestrator` | No central pattern is present yet, so it can be onboarded deliberately instead of accidentally. | Silent unmanaged status is easy to miss in organization-level governance. | Either opt it into the central workflows or explicitly mark it unmanaged. |
+
 ## Current Scheduler Contract
 
 The checked-in scheduler already does the minimal central path:
