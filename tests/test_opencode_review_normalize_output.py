@@ -149,6 +149,28 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path)
     request_changes.write_text(json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8")
     assert norm.check_structural_approval(request_changes) == 0
 
+    generic_deflection = tmp_path / "generic-deflection.json"
+    generic_deflection.write_text(
+        json.dumps(
+            control(
+                result="REQUEST_CHANGES",
+                summary=(
+                    "No deterministic missing-string markers or Strix report locations were "
+                    "recognized. Use the failed-check evidence below to map each failed check "
+                    "to exact local source lines before approving."
+                ),
+                findings=[
+                    finding(
+                        title="Generic failed-check deflection",
+                        problem="No deterministic missing-string markers were recognized.",
+                    )
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert norm.check_structural_approval(generic_deflection) == 4
+
 
 def test_valid_control_filters_shape_head_and_review_contract():
     kwargs = {
@@ -179,6 +201,20 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(dict(request, findings=[finding(line=True)]), **kwargs) is None
     assert norm.valid_control(dict(request, findings=[finding(line=0)]), **kwargs) is None
     assert norm.valid_control(dict(request, findings=[finding(title="")]), **kwargs) is None
+    assert (
+        norm.valid_control(
+            dict(
+                request,
+                summary=(
+                    "No deterministic missing-string markers or Strix report locations were "
+                    "recognized. Use the failed-check evidence below to map each failed check "
+                    "to exact local source lines before approving."
+                ),
+            ),
+            **kwargs,
+        )
+        is None
+    )
     assert norm.valid_control(request, **kwargs)["result"] == "REQUEST_CHANGES"
 
     approve_without_findings_key = control()

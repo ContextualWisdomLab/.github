@@ -71,6 +71,14 @@ STRUCTURAL_FAILURE_PATTERNS = (
     re.compile(r"\b(?:no|zero)\s+changed\s+files?\b"),
 )
 
+NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES = (
+    "no deterministic missing-string markers",
+    "no deterministic missing string markers",
+    "strix report locations were recognized",
+    "use the failed-check evidence below to map",
+    "map each failed check to exact local source lines before approving",
+)
+
 CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+(?:[A-Za-z0-9_.@+-]+\."
     r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
@@ -131,6 +139,32 @@ def admits_missing_structural_review(reason: str, summary: str) -> bool:
     return any(phrase in combined for phrase in STRUCTURAL_FAILURE_PHRASES) or any(
         pattern.search(combined) for pattern in STRUCTURAL_FAILURE_PATTERNS
     )
+
+
+def control_review_text(value: dict[str, Any]) -> str:
+    """Return human review text from a control block for policy validation."""
+    chunks = [str(value.get("reason", "")), str(value.get("summary", ""))]
+    for finding in value.get("findings", []) or []:
+        if not isinstance(finding, dict):
+            continue
+        chunks.extend(str(finding.get(field, "")) for field in (
+            "path",
+            "line",
+            "severity",
+            "title",
+            "problem",
+            "root_cause",
+            "fix_direction",
+            "regression_test_direction",
+            "suggested_diff",
+        ))
+    return "\n".join(chunks)
+
+
+def contains_non_actionable_failed_check_review(value: dict[str, Any]) -> bool:
+    """Return whether a review punts failed-check diagnosis back to the reader."""
+    combined = control_review_text(value).casefold()
+    return any(phrase in combined for phrase in NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES)
 
 
 def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
@@ -366,6 +400,10 @@ def check_structural_approval(control_file: Path) -> int:
     ):
         print("NO_CONCLUSION", file=sys.stderr)
         return 4
+    # Generic failed-check deflections are invalid for both approvals and request-changes.
+    if contains_non_actionable_failed_check_review(value):
+        print("NO_CONCLUSION", file=sys.stderr)
+        return 4
 
     return 0
 
@@ -407,6 +445,8 @@ def valid_control(
     if result == "APPROVE" and findings:
         return None
     if result == "REQUEST_CHANGES" and not findings:
+        return None
+    if contains_non_actionable_failed_check_review(value):
         return None
     if result == "APPROVE":
         if admits_missing_structural_review(reason, summary):
