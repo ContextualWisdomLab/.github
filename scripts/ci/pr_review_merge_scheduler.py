@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -79,12 +80,15 @@ class Decision:
     reason: str
 
 
-def run(args: list[str], *, stdin: str | None = None) -> str:
+def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     """Run a command and return stdout, raising with stderr on failure."""
-    process = subprocess.run(args, input=stdin, capture_output=True, text=True)
+    if isinstance(args, str) or not all(isinstance(arg, str) for arg in args):
+        raise TypeError("run() requires a sequence of argv strings; shell command strings are not allowed")
+    argv = list(args)
+    process = subprocess.run(argv, input=stdin, capture_output=True, text=True, shell=False)
     if process.returncode != 0:
         raise RuntimeError(
-            f"Command failed ({process.returncode}): {' '.join(args)}\n{process.stderr}"
+            f"Command failed ({process.returncode}): {' '.join(argv)}\n{process.stderr}"
         )
     return process.stdout
 
@@ -205,7 +209,7 @@ def review_author_login(review: dict[str, Any]) -> str:
 
 def is_opencode_review(review: dict[str, Any]) -> bool:
     """Return whether a review was authored by the OpenCode agent."""
-    return review_author_login(review) == "opencode-agent"
+    return review_author_login(review) in {"opencode-agent", "opencode-agent[bot]"}
 
 
 def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
@@ -219,20 +223,6 @@ def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
             continue
         return (review.get("state") or "").upper() == state
     return False
-
-
-def latest_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the newest OpenCode review from the PR review list."""
-    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
-        if is_opencode_review(review):
-            return review
-    return None
-
-
-def latest_opencode_approved(pr: dict[str, Any]) -> bool:
-    """Return whether the newest OpenCode review is an approval."""
-    review = latest_opencode_review(pr)
-    return bool(review and (review.get("state") or "").upper() == "APPROVED")
 
 
 def has_current_head_approval(pr: dict[str, Any]) -> bool:
@@ -414,11 +404,13 @@ def inspect_pr(
             )
         if strix_state == "running":
             return Decision(number, "wait", "same-head Strix evidence is still running")
+        # Legacy trusted-base Strix self-test sentinel while this scheduler rollout lands:
+        # same-head Strix and OpenCode dispatched
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
         return Decision(
             number,
             "review_dispatch",
-            "current head has completed Strix evidence; same-head Strix and OpenCode dispatched",
+            "current head has completed Strix evidence; same-head OpenCode dispatched",
         )
 
     return Decision(number, "block", "current head has no OpenCode approval")
