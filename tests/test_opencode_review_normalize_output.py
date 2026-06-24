@@ -19,7 +19,8 @@ Standards search: relevant standards were searched.
 Compatibility/convention: compatibility and naming conventions were checked.
 Breaking-change/backcompat: no breaking change was found.
 Performance: performance risk was checked.
-Design/UX: design impact was checked.
+Developer experience: developer workflow impact was checked.
+User experience: user-facing behavior impact was checked.
 Security/privacy: security impact was checked.
 """
 
@@ -275,7 +276,8 @@ Standards search: Not applicable.
 Compatibility/convention: Not applicable.
 Breaking-change/backcompat: Not applicable.
 Performance: Not applicable.
-Design/UX: Not applicable.
+Developer experience: Not applicable.
+User experience: Not applicable.
 Security/privacy: Not applicable.
 """,
         ),

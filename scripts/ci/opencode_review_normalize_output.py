@@ -97,7 +97,8 @@ APPROVAL_VERIFICATION_LABELS = (
     "compatibility/convention:",
     "breaking-change/backcompat:",
     "performance:",
-    "design/ux:",
+    "developer experience:",
+    "user experience:",
     "security/privacy:",
 )
 
@@ -296,7 +297,8 @@ Standards search: standards and external-source checks are delegated to configur
 Compatibility/convention: changed workflow/script conventions and compatibility surfaces were checked in bounded evidence.
 Breaking-change/backcompat: deployment evidence and changed-file history were checked for backward-compatibility risk.
 Performance: changed surfaces were checked for performance risk in bounded evidence.
-Design/UX: changed files did not identify a UI-facing design surface; bounded evidence was reviewed.
+Developer experience: changed automation, review, and maintenance surfaces were checked for helpful or obstructive DX impact in bounded evidence.
+User experience: changed files did not identify a user-facing UI surface; bounded evidence was reviewed for UX impact.
 Security/privacy: workflow-token, review-gate, and repository-automation security/privacy boundaries were checked in bounded evidence.
 """
     return f"{summary.rstrip()}\n{repair}"
