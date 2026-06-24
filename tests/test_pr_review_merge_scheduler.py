@@ -330,3 +330,29 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [make_pr(number=3)])
     monkeypatch.setattr(sched, "inspect_pr", lambda *args, **kwargs: sched.Decision(3, "skip", "done"))
     assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
+
+
+def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
+    assert sched.summarize_action_error(RuntimeError("")) == "scheduler action failed without stderr"
+
+    prs = [make_pr(number=1), make_pr(number=2)]
+    seen = []
+
+    def fake_inspect(repo, pr, **kwargs):
+        seen.append(pr["number"])
+        if pr["number"] == 1:
+            raise RuntimeError(
+                "Command failed (1): gh pr merge 1\n"
+                "GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)"
+            )
+        return sched.Decision(pr["number"], "wait", "next PR still inspected")
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
+
+    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
+    assert seen == [1, 2]
+    output = capsys.readouterr().out
+    assert "PR #1: action_error: Command failed (1): gh pr merge 1; GraphQL: Resource not accessible by integration" in output
+    assert "PR #2: wait: next PR still inspected" in output
+    assert json.loads(output.strip().splitlines()[-1])["counts"] == {"action_error": 1, "wait": 1}

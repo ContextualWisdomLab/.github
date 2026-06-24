@@ -450,6 +450,14 @@ def print_summary(
     )
 
 
+def summarize_action_error(exc: RuntimeError) -> str:
+    """Return a compact, log-safe scheduler action error summary."""
+    lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
+    if not lines:
+        return "scheduler action failed without stderr"
+    return "; ".join(lines[:2])[:500]
+
+
 def self_test() -> None:
     """Exercise scheduler invariants without GitHub network access."""
     sample = {
@@ -617,20 +625,27 @@ def main(argv: list[str]) -> int:
     if not args.project_flow:
         raise SystemExit("--project-flow is required")
     prs = fetch_open_prs(args.repo, args.max_prs)
-    decisions = [
-        inspect_pr(
-            args.repo,
-            pr,
-            dry_run=args.dry_run,
-            trigger_reviews=args.trigger_reviews,
-            enable_auto_merge_flag=args.enable_auto_merge,
-            update_branches=args.update_branches,
-            workflow=args.review_workflow,
-            security_workflow=args.security_workflow,
-            base_branch=args.base_branch,
-        )
-        for pr in prs
-    ]
+    decisions = []
+    for pr in prs:
+        try:
+            decision = inspect_pr(
+                args.repo,
+                pr,
+                dry_run=args.dry_run,
+                trigger_reviews=args.trigger_reviews,
+                enable_auto_merge_flag=args.enable_auto_merge,
+                update_branches=args.update_branches,
+                workflow=args.review_workflow,
+                security_workflow=args.security_workflow,
+                base_branch=args.base_branch,
+            )
+        except RuntimeError as exc:
+            decision = Decision(
+                pr.get("number", 0),
+                "action_error",
+                summarize_action_error(exc),
+            )
+        decisions.append(decision)
     print_summary(
         decisions,
         dry_run=args.dry_run,

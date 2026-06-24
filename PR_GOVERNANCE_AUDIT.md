@@ -39,12 +39,12 @@ Live generated: 2026-06-23 04:18 KST. PR #28 post-merge refresh: 2026-06-23 16:0
 
 | Repo | Gap |
 |---|---|
-| `.github` | PR #37, #38, and #41 are merged. Remaining open PRs #19-#27, #29-#36, #39, #40, and #42 still need current-head review/check evaluation; #42 has PR-target Strix run `28052498149` in progress for head `36cc8ca`. |
+| `.github` | PR #37, #38, #41, and #42 are merged. Remaining open PRs #19-#27, #29-#36, #39, #40, and #44 still need current-head review/check evaluation; #44 is approved on head `d98a7a153bbe03f4ee9dd13306ff3d273c104f40` but currently `DIRTY/CONFLICTING`, so it is not an update-branch fixture. |
 | `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. |
 | `clearfolio` | PR #13 is merged at `4bc17c6` after same-head manual Strix run `28051319530`, same-head manual OpenCode run `28051665082`, unresolved review threads `0`, and guarded merge against head `5fe1791`. Auto-merge remains off, so direct guarded merge is the repo path. |
 | `codec-carver` | Latest merged sample #94 still used `opencode-agent`; PR #98 replaces the legacy scheduler with the central GitHub Actions path and is waiting on existing OpenCode/Strix checks. |
 | `contextual-orchestrator` | No matching rulesets or review workflows; either opt in deliberately or mark unmanaged. |
-| `naruon` | Canonical strict check source, but open PRs still need the updated contract observed through one full outdated -> update -> new-head review trace. |
+| `naruon` | Canonical strict check source, but the repo-local scheduler on `develop` is behind this central scheduler. PR #721 has current-head OpenCode approval on `b683deaf8b4761399321799279f58d884db57141` and is `BEHIND`; central dry-run selects `update_branch`, while the repo-local workflow run `28073586594` treated it as `wait` because that older script has no update-branch branch. PR #756 is the rollout PR that syncs the central scheduler into `naruon`; its first head proved that widening `GITHUB_TOKEN` permissions to solve DX creates Scorecard and governance failures, so the rollout keeps minimal token permissions and defaults risky review-dispatch/auto-merge paths off. |
 | `newsdom-api` | Ruleset-required checks must stay GitHub-interpreted; open queue is mostly review/check blocked. |
 | `pg-erd-cloud` | Good GitHub Actions merge samples; keep autofix workflows repo-local. |
 | `scopeweave` | Has central scheduler and Strix self-test, but no current representative update/merge trace captured. |
@@ -70,7 +70,7 @@ both separately; a change can improve one while harming the other.
 | Repo | Borrow because it helps DX/UX | Improve because it creates friction | Central action |
 |---|---|---|---|
 | `.github` | Same-head manual evidence and `--match-head-commit` make self-modifying workflow changes reviewable without pretending stale base-branch checks are current. | Stale `pull_request_target` failures, long polling review runs, and cancelled helper checks can become misleading review noise. | Serialize Strix before OpenCode, bound approval runtime, and require failed-check explanations instead of URL-only comments. |
-| `naruon` | Strict required checks, stale review dismissal, and changed-file Mermaid flow DAGs make review evidence easier to audit. | `BEHIND` or outdated approvals can look merge-ready unless the head SHA is treated as the review boundary. | Re-review every updated head and require an exact changed-file evidence path plus a Change Flow DAG before approval. |
+| `naruon` | Strict required checks, stale review dismissal, changed-file Mermaid flow DAGs, and current-head evidence make review evidence easier to audit. | The repo-local scheduler is stale: it has no update-branch path, no Strix-before-OpenCode sequencing, and no failed-check interpretation from the central script. Run `28073490721` also showed that an auto-merge permission failure can stop the whole queue before later PRs are inspected. PR #756 additionally showed that broadening workflow permissions is a tempting DX shortcut, but it degrades review trust and triggers Scorecard/governance failures. | Sync the central scheduler into the repo, re-review every updated head, require an exact changed-file evidence path plus a Change Flow DAG before approval, keep `actions: read`/`contents: read` unless a separate privileged workflow is deliberately introduced, and record action failures per PR instead of aborting the scan. |
 | `pg-erd-cloud` | GitHub Actions bot merges with head guards give a clear mechanical actor for merges. | Repo-local autofix workflows are useful there, but centralizing autofix would widen mutation scope too far. | Keep GitHub Actions as the merge actor and leave autofix workflows repo-local. |
 | `VibeSec` | Native auto-merge examples show a lower-friction waiting path after current-head approval. | Mixed human, OpenCode, and GitHub Actions merge actors make audit trails harder to interpret. | Prefer native auto-merge or GitHub Actions mutation; do not let OpenCode merge directly. |
 | `bandscope` | Broad required checks encode repo-specific release, build, SBOM, and security expectations. | A central script would be noisy if it tried to reinterpret every required check itself. | Let GitHub native auto-merge and rulesets interpret required checks. |
@@ -95,6 +95,7 @@ The checked-in scheduler already does the minimal central path:
 - dispatches same-head Strix evidence first when the current head has no completed Strix evidence;
 - waits while same-head Strix evidence is still running, so OpenCode is not started just to poll a peer check;
 - dispatches OpenCode only after same-head Strix evidence is complete, including failed Strix evidence that OpenCode must explain from logs.
+- records mutation failures as `action_error` for the affected PR and continues scanning later PRs, so a permission failure on one merge/update action does not hide the rest of the queue.
 
 Small proof run:
 
@@ -135,6 +136,9 @@ PR #36: block: merge conflict: DIRTY
 
 - A live current-head review -> same-head manual Strix status bridge -> OpenCode approval -> guarded merge trace has been completed on `.github` PR #28.
 - No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet.
+- PR #721 in `naruon` is the current live fixture for this proof: head `b683deaf8b4761399321799279f58d884db57141`, current-head OpenCode approval `4558310923`, unresolved review threads `0`, and `mergeStateStatus=BEHIND`. Central `.github` dry-run selected `update_branch`, but `naruon` workflow run `28073586594` used a stale repo-local scheduler and did not update it. This confirms the rollout gap before the proof can be completed.
+- `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.
+- `naruon` PR #756 is the active repo-local rollout for the scheduler contract. Its initial head failed backend governance and Scorecard because `actions: write`/`contents: write` were broader than the repo policy allows; the amended head restores minimal `GITHUB_TOKEN` permissions, keeps `trigger_reviews` and `enable_auto_merge` defaulted off, keeps `update_branches` defaulted on, and still dry-runs PR #694/#721 as `update_branch`.
 - `update-branch` `422/403` behavior still needs a safe fixture or a real blocked case before claiming standardized handling.
 - Required-check interpretation should stay delegated to GitHub native auto-merge until a repo needs immediate merge.
 - PR #28 proves the self-modifying trusted workflow bootstrap path after newer same-head evidence exists, but it does not prove update-branch behavior, stale approval dismissal after a head change, or cross-repository rollout.
