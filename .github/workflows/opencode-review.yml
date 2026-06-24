@@ -1043,7 +1043,7 @@ jobs:
         id: opencode_review_primary
         if: needs.coverage-evidence.result == 'success'
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 20
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1052,8 +1052,8 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_ATTEMPTS: "3"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_MODEL_ATTEMPTS: "1"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
