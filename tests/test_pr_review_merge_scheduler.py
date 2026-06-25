@@ -319,6 +319,30 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "github-actions[bot]" in summary
 
 
+def test_write_actions_summary_is_noop_without_summary_path(monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    sched.write_actions_summary(
+        [sched.Decision(1, "block", "merge conflict: DIRTY; base=main, head=feature")],
+        counts={"block": 1},
+        dry_run=True,
+        base_branch="main",
+        project_flow="github-flow",
+    )
+
+
+def test_summary_section_helpers_handle_empty_and_action_error_cases():
+    wait_decisions = [sched.Decision(1, "wait", "nothing to do")]
+    assert sched.conflict_repair_summary(wait_decisions) == []
+    assert sched.update_branch_summary(wait_decisions) == []
+    assert sched.action_error_summary(wait_decisions) == []
+
+    lines = sched.action_error_summary([sched.Decision(2, "action_error", "permission failed")])
+    assert "### Action errors" in lines
+    assert "not source-code review findings" in "\n".join(lines)
+    assert "- PR #2: permission failed" in lines
+
+
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(isDraft=True)).action == "skip"
     assert inspect(make_pr(baseRefName="develop")).reason == "base branch is develop; expected main"
@@ -497,3 +521,21 @@ def test_action_error_guidance_distinguishes_update_branch_from_merge():
     )
     assert "explicit repo policy exception" in merge_error
     assert "contents: write" in merge_error
+
+    unknown_mutation_error = sched.summarize_action_error(
+        RuntimeError(
+            "Command failed (1): gh api graphql -f mutation=unknown\n"
+            "GraphQL: Resource not accessible by integration (unknownMutation)"
+        )
+    )
+    assert "lacks a required repository mutation permission" in unknown_mutation_error
+    assert "instead of posting a code-review finding" in unknown_mutation_error
+
+    stale_head_error = sched.summarize_action_error(
+        RuntimeError(
+            "Command failed (1): gh api -X PUT repos/owner/repo/pulls/7/update-branch\n"
+            "HTTP 422: expected_head_sha does not match current head"
+        )
+    )
+    assert "PR head likely changed after inspection" in stale_head_error
+    assert "reads the new head before mutating" in stale_head_error
