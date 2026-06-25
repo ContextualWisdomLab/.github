@@ -270,6 +270,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
     assert calls[1][:4] == ["gh", "api", "-X", "PUT"]
+    assert calls[1][-1] == "expected_head_sha=head"
     assert calls[2][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
     assert calls[3][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
 
@@ -279,7 +280,11 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
     decisions = [
         sched.Decision(7, "block", "merge conflict: DIRTY; base=main, head=feature|x"),
-        sched.Decision(8, "update_branch", "current-head OpenCode review approved; branch update requested"),
+        sched.Decision(
+            8,
+            "update_branch",
+            "current-head OpenCode review approved; branch update requested with GitHub Actions bot token",
+        ),
     ]
 
     sched.print_summary(decisions, dry_run=True, base_branch="main", project_flow="github-flow")
@@ -296,7 +301,10 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x |" in summary
-    assert "| #8 | update_branch | current-head OpenCode review approved; branch update requested |" in summary
+    assert (
+        "| #8 | update_branch | current-head OpenCode review approved; "
+        "branch update requested with GitHub Actions bot token |"
+    ) in summary
 
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
@@ -308,8 +316,12 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "merge conflict: DIRTY" in conflict.reason
     assert "base=main, head=feature" in conflict.reason
     assert "merge or rebase origin/main into feature" in conflict.reason
-    assert "resolve conflict markers" in conflict.reason
+    assert "resolve conflict markers in the PR branch" in conflict.reason
     assert "rerun focused checks" in conflict.reason
+    assert "push the same feature branch" in conflict.reason
+    conflicting = inspect(make_pr(mergeStateStatus="CONFLICTING"))
+    assert conflicting.action == "block"
+    assert "merge conflict: CONFLICTING" in conflicting.reason
     assert inspect(make_pr(reviewThreads={"nodes": [{"isResolved": False}]})).reason == "1 unresolved review thread(s)"
     assert inspect(make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]})).reason == (
         "current-head OpenCode review requested changes"
@@ -326,7 +338,9 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(behind, update_branches=False).reason == "current-head OpenCode review approved; branch update disabled"
     called = []
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: called.append((repo, pr["number"], dry_run)))
-    assert inspect(behind).action == "update_branch"
+    decision = inspect(behind)
+    assert decision.action == "update_branch"
+    assert "GitHub Actions bot token" in decision.reason
     assert called == [("owner/repo", 1, True)]
     called.clear()
     behind_auto_merge_enabled = make_pr(

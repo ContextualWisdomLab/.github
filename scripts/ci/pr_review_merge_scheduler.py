@@ -346,8 +346,8 @@ def merge_conflict_guidance(pr: dict[str, Any], merge_state: str) -> str:
     head_ref = pr.get("headRefName") or "head"
     return (
         f"merge conflict: {merge_state}; base={base_ref}, head={head_ref}; "
-        f"merge or rebase origin/{base_ref} into {head_ref}, resolve conflict markers, "
-        f"rerun focused checks, and push {head_ref}"
+        f"merge or rebase origin/{base_ref} into {head_ref}, resolve conflict markers in the PR branch, "
+        f"rerun focused checks, and push the same {head_ref} branch"
     )
 
 
@@ -390,7 +390,11 @@ def inspect_pr(
         if not update_branches:
             return Decision(number, "wait", "current-head OpenCode review approved; branch update disabled")
         update_branch(repo, pr, dry_run=dry_run)
-        return Decision(number, "update_branch", "current-head OpenCode review approved; branch update requested")
+        return Decision(
+            number,
+            "update_branch",
+            "current-head OpenCode review approved; branch update requested with GitHub Actions bot token",
+        )
 
     if has_current_head_approval(pr):
         failed_checks = failed_status_checks(pr)

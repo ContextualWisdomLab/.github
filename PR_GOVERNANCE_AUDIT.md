@@ -148,8 +148,8 @@ PR #36: block: merge conflict: DIRTY
 {"base_branch": "main", "counts": {"block": 17}, "dry_run": true, "inspected": 17, "project_flow": "github-flow"}
 
 $ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/bandscope --base-branch develop --project-flow git-flow --dry-run --max-prs 20 --no-trigger-reviews --no-enable-auto-merge
-PR #367: update_branch: current-head OpenCode review approved; branch update requested
-PR #368: update_branch: current-head OpenCode review approved; branch update requested
+PR #367: update_branch: current-head OpenCode review approved; branch update requested with GitHub Actions bot token
+PR #368: update_branch: current-head OpenCode review approved; branch update requested with GitHub Actions bot token
 ...
 {"base_branch": "develop", "counts": {"block": 7, "update_branch": 13}, "dry_run": true, "inspected": 20, "project_flow": "git-flow"}
 
@@ -170,8 +170,8 @@ PR #367: wait: current head is approved; auto-merge already enabled
 ## Remaining Proof Gaps
 
 - A live current-head review -> same-head manual Strix status bridge -> OpenCode approval -> guarded merge trace has been completed on `.github` PR #28.
-- No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet. `bandscope` PR #450 is the first corrective rollout after live evidence showed the stale scheduler was waiting instead of updating.
-- `bandscope` PR #450 update-only scheduler run `28139266598` is queued on the latest head `98076fec26f9c5b913f2d1713759c709790be7e8`; it must still prove GitHub Actions[bot] `update-branch` behavior and Actions Summary output on a live run.
+- No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet. `bandscope` PR #450 is the first corrective rollout after live evidence showed the stale scheduler was waiting instead of updating. The update-branch leg now has a live partial proof: `bandscope` scheduler run `28139266598` selected PR #378 for `update_branch`, and the resulting PR head commit `68d5153ac9d5667c13b8e5e6a231c9fbb2a68f9f` was authored by `github-actions[bot]`.
+- `bandscope` PR #378 still needs the new-head review/check/merge leg before the full outdated -> update-branch -> new-head review -> merge/auto-merge trace can be closed.
 - `bandscope` also proved the large-queue scan risk: `max_prs=120` initially failed with `Resource limits for this query exceeded` while reading 80 open PRs. After reducing the GraphQL page size to 25, the same dry-run scanned all 80 open PRs and returned `{"block": 67, "update_branch": 1, "wait": 12}`, including PR #378 as `update_branch` and PR #404 as a conflict block with repair guidance.
 - `newsdom-api` PR #200 is the smaller current live proof candidate: head `c87140d3aa877106e26bcee705d988efe0384d23` is `BEHIND`, has current-head OpenCode approval, zero unresolved review threads, and green required checks on that head. Update-only scheduler run `28140376261` was dispatched with `update_branches=true`, `trigger_reviews=false`, and `enable_auto_merge=false`, but it remains queued.
 - `.github` PR #58 exposed that a cancelled manual Strix run can keep its manual status publisher queued and delay the next same-PR Strix run; PR #58 now skips that publisher when the workflow is cancelled.

@@ -21,6 +21,10 @@ again before auto-merge or `--match-head-commit` merge can proceed.
 Branch updates and merges run through the workflow `GITHUB_TOKEN`, so GitHub
 records those mechanical mutations as `github-actions[bot]` rather than an
 OpenCode app token or a personal token.
+When GitHub reports `DIRTY` or `CONFLICTING`, the scheduler does not pretend to
+fix the branch. It blocks the PR with repair guidance: merge or rebase the
+latest base branch into the PR branch, resolve conflict markers in that PR
+branch, rerun focused checks, and push the same branch.
 
 OpenCode review execution is `workflow_dispatch`-only. The scheduler dispatches
 same-head Strix evidence first, then dispatches OpenCode for the same PR head.
