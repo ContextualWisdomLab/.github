@@ -283,7 +283,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
         sched.Decision(
             8,
             "update_branch",
-            "current-head OpenCode review approved; branch update requested with GitHub Actions bot token",
+            "current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)",
         ),
     ]
 
@@ -303,7 +303,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x |" in summary
     assert (
         "| #8 | update_branch | current-head OpenCode review approved; "
-        "branch update requested with GitHub Actions bot token |"
+        "branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions) |"
     ) in summary
 
 
@@ -315,7 +315,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert conflict.action == "block"
     assert "merge conflict: DIRTY" in conflict.reason
     assert "base=main, head=feature" in conflict.reason
-    assert "merge or rebase origin/main into feature" in conflict.reason
+    assert "merge origin/main into feature, or rebase feature onto origin/main" in conflict.reason
     assert "resolve conflict markers in the PR branch" in conflict.reason
     assert "rerun focused checks" in conflict.reason
     assert "push the same feature branch" in conflict.reason
@@ -340,7 +340,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: called.append((repo, pr["number"], dry_run)))
     decision = inspect(behind)
     assert decision.action == "update_branch"
-    assert "GitHub Actions bot token" in decision.reason
+    assert "workflow GH_TOKEN" in decision.reason
+    assert "github-actions[bot]" in decision.reason
     assert called == [("owner/repo", 1, True)]
     called.clear()
     behind_auto_merge_enabled = make_pr(

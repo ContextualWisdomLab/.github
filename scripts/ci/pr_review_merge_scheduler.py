@@ -346,7 +346,7 @@ def merge_conflict_guidance(pr: dict[str, Any], merge_state: str) -> str:
     head_ref = pr.get("headRefName") or "head"
     return (
         f"merge conflict: {merge_state}; base={base_ref}, head={head_ref}; "
-        f"merge or rebase origin/{base_ref} into {head_ref}, resolve conflict markers in the PR branch, "
+        f"merge origin/{base_ref} into {head_ref}, or rebase {head_ref} onto origin/{base_ref}; resolve conflict markers in the PR branch, "
         f"rerun focused checks, and push the same {head_ref} branch"
     )
 
@@ -393,7 +393,7 @@ def inspect_pr(
         return Decision(
             number,
             "update_branch",
-            "current-head OpenCode review approved; branch update requested with GitHub Actions bot token",
+            "current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)",
         )
 
     if has_current_head_approval(pr):
@@ -661,7 +661,7 @@ def self_test() -> None:
         base_branch="main",
     )
     assert decision.action == "block"
-    assert "merge or rebase origin/main into feature" in decision.reason
+    assert "merge origin/main into feature, or rebase feature onto origin/main" in decision.reason
     assert "resolve conflict markers" in decision.reason
     print("self-test passed")
 

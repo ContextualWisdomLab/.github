@@ -148,8 +148,8 @@ PR #36: block: merge conflict: DIRTY
 {"base_branch": "main", "counts": {"block": 17}, "dry_run": true, "inspected": 17, "project_flow": "github-flow"}
 
 $ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/bandscope --base-branch develop --project-flow git-flow --dry-run --max-prs 20 --no-trigger-reviews --no-enable-auto-merge
-PR #367: update_branch: current-head OpenCode review approved; branch update requested with GitHub Actions bot token
-PR #368: update_branch: current-head OpenCode review approved; branch update requested with GitHub Actions bot token
+PR #367: update_branch: current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)
+PR #368: update_branch: current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)
 ...
 {"base_branch": "develop", "counts": {"block": 7, "update_branch": 13}, "dry_run": true, "inspected": 20, "project_flow": "git-flow"}
 
