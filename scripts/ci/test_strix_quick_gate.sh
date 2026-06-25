@@ -2040,6 +2040,10 @@ run_gate_case() {
 	local generic_fallback_models="${28-}"
 	local fail_on_provider_signal="${29-1}"
 
+	if [ -n "${STRIX_TEST_CASE_FILTER:-}" ] && [ "$scenario" != "$STRIX_TEST_CASE_FILTER" ]; then
+		return
+	fi
+
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
 	# Separate bin/ (fake strix + helper files) from workspace/ (target path)
@@ -2127,7 +2131,7 @@ case "${FAKE_STRIX_SCENARIO:?}" in
 		echo "scan ok with timeout disabled"
 		exit 0
 		;;
-	vertex-primary-notfound-fallback-success|github-models-fallback-success|github-models-fallback-success-deepseek-v3|github-models-fallback-requires-api-base|github-models-model-prefix-with-api-base-succeeds|github-models-meta-prefix-with-api-base-succeeds|github-models-mistral-prefix-with-api-base-succeeds)
+	vertex-primary-notfound-fallback-success|github-models-fallback-success|github-models-fallback-success-deepseek-v3|github-models-token-limit-fallback-success|github-models-fallback-requires-api-base|github-models-model-prefix-with-api-base-succeeds|github-models-meta-prefix-with-api-base-succeeds|github-models-mistral-prefix-with-api-base-succeeds)
 		case "${STRIX_LLM:-}" in
 		vertex_ai/missing-primary)
 			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
@@ -2139,6 +2143,10 @@ case "${FAKE_STRIX_SCENARIO:?}" in
 			exit 0
 			;;
 		openai/gpt-5|openai/openai/gpt-5.4|openai/meta/test-github-model|openai/mistral-ai/test-github-model)
+			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-token-limit-fallback-success" ]; then
+				echo "openai.APIStatusError: Error code: 413 - {'error': {'code': 'tokens_limit_reached', 'message': 'Request body too large for gpt-5 model. Max size: 4000 tokens.'}}"
+				exit 1
+			fi
 			echo "scan ok with GitHub Models fallback"
 			exit 0
 			;;
@@ -4264,6 +4272,56 @@ run_gate_case_with_provider_signal_mode() {
 run_gate_case_allow_provider_signal() {
 	run_gate_case_with_provider_signal_mode "0" "$@"
 }
+
+run_filtered_gate_case_if_requested() {
+	case "${STRIX_TEST_CASE_FILTER:-}" in
+	"")
+		return 0
+		;;
+	github-models-token-limit-fallback-success)
+		run_gate_case "github-models-token-limit-fallback-success" \
+			"openai/gpt-5" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'github_models/deepseek/deepseek-v3-0324' in [0-9]+s\\." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-v3-0324" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+		;;
+	*)
+		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
+		;;
+	esac
+
+	if [ "$FAILURES" -ne 0 ]; then
+		echo "$FAILURES failure(s)" >&2
+		exit 1
+	fi
+
+	exit 0
+}
+
+run_filtered_gate_case_if_requested
 
 run_pull_request_target_head_scope_case() {
 	local case_name="$1"
@@ -9403,6 +9461,35 @@ run_gate_case "github-models-fallback-success" \
 	"" \
 	"" \
 	0
+
+run_gate_case "github-models-token-limit-fallback-success" \
+	"openai/gpt-5" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'github_models/deepseek/deepseek-v3-0324' in [0-9]+s\\." \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-v3-0324" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
 	"vertex_ai/missing-primary" \
