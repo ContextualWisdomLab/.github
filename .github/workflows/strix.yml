@@ -440,7 +440,7 @@ jobs:
   publish-manual-pr-evidence-status:
     name: publish-manual-pr-evidence-status
     needs: strix
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
     runs-on: ubuntu-latest
     permissions:
       statuses: write
