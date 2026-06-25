@@ -1,6 +1,6 @@
 # PR Governance Audit
 
-Live check: 2026-06-25 10:10 KST, GitHub API via `gh` as `seonghobae`.
+Live check: 2026-06-25 10:49 KST, GitHub API via `gh` as `seonghobae`.
 
 ## Canonical Policy
 
@@ -119,6 +119,7 @@ The checked-in scheduler already does the minimal central path:
 - dispatches OpenCode only after same-head Strix evidence is complete, including failed Strix evidence that OpenCode must explain from logs.
 - records mutation failures as `action_error` for the affected PR and continues scanning later PRs, so a permission failure on one merge/update action does not hide the rest of the queue.
 - writes the same per-PR decisions to the GitHub Actions step summary, so conflict repair and update-branch decisions are visible without opening raw logs.
+- caps each GraphQL PR page at 25 nodes, so large queues can be scanned without hitting GitHub's query resource limit.
 
 Small proof run:
 
@@ -171,6 +172,8 @@ PR #367: wait: current head is approved; auto-merge already enabled
 - A live current-head review -> same-head manual Strix status bridge -> OpenCode approval -> guarded merge trace has been completed on `.github` PR #28.
 - No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet. `bandscope` PR #450 is the first corrective rollout after live evidence showed the stale scheduler was waiting instead of updating.
 - `bandscope` PR #450 update-only scheduler run `28139266598` is queued on the latest head `98076fec26f9c5b913f2d1713759c709790be7e8`; it must still prove GitHub Actions[bot] `update-branch` behavior and Actions Summary output on a live run.
+- `bandscope` also proved the large-queue scan risk: `max_prs=120` initially failed with `Resource limits for this query exceeded` while reading 80 open PRs. After reducing the GraphQL page size to 25, the same dry-run scanned all 80 open PRs and returned `{"block": 67, "update_branch": 1, "wait": 12}`, including PR #378 as `update_branch` and PR #404 as a conflict block with repair guidance.
+- `newsdom-api` PR #200 is the smaller current live proof candidate: head `c87140d3aa877106e26bcee705d988efe0384d23` is `BEHIND`, has current-head OpenCode approval, zero unresolved review threads, and green required checks on that head. Update-only scheduler run `28140376261` was dispatched with `update_branches=true`, `trigger_reviews=false`, and `enable_auto_merge=false`, but it remains queued.
 - `.github` PR #58 exposed that a cancelled manual Strix run can keep its manual status publisher queued and delay the next same-PR Strix run; PR #58 now skips that publisher when the workflow is cancelled.
 - PR #721 in `naruon` remains the historical fixture for this proof: head `b683deaf8b4761399321799279f58d884db57141`, current-head OpenCode approval `4558310923`, unresolved review threads `0`, and `mergeStateStatus=BEHIND`. Central `.github` dry-run selected `update_branch`, but `naruon` workflow run `28073586594` used the then-stale repo-local scheduler and did not update it. PR #756 has since rolled the central scheduler into `naruon`, so the next proof must use a fresh current-head outdated PR instead of reusing stale evidence from #721.
 - `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.

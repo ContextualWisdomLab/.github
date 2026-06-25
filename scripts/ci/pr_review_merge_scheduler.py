@@ -70,6 +70,8 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
 }
 """
 
+OPEN_PRS_PAGE_SIZE = 25
+
 
 @dataclass
 class Decision:
@@ -120,7 +122,7 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
     cursor: str | None = None
 
     while len(prs) < max_prs:
-        page_size = min(100, max_prs - len(prs))
+        page_size = min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
         fields: dict[str, str | int] = {
             "owner": owner,
             "name": name,

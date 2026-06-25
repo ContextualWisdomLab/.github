@@ -136,6 +136,28 @@ def test_fetch_open_prs_paginates(monkeypatch):
     assert seen[1]["cursor"] == "cursor"
 
 
+def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypatch):
+    seen = []
+
+    def fake_graphql(query, **fields):
+        seen.append(fields)
+        return {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "nodes": [{"number": fields["pageSize"]}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+
+    assert sched.fetch_open_prs("owner/repo", 120) == [{"number": sched.OPEN_PRS_PAGE_SIZE}]
+    assert seen[0]["pageSize"] == sched.OPEN_PRS_PAGE_SIZE
+
+
 def test_context_review_and_check_helpers():
     assert sched.context_nodes({}) == []
     assert sched.context_nodes(make_pr()) == []
