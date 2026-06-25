@@ -213,8 +213,6 @@ def test_context_review_and_check_helpers():
     assert sched.parse_github_datetime("not-a-date") is None
     assert sched.parse_github_datetime("2026-06-25T07:00:00Z") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
     assert sched.parse_github_datetime("2026-06-25T07:00:00") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
-    assert sched.head_commit_datetime(make_pr()) == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
-    assert sched.review_submitted_datetime(opencode_review()) == datetime(2026, 6, 25, 7, 1, tzinfo=timezone.utc)
     assert sched.running_check_state({}) == "absent"
     assert sched.running_check_state({"status": "IN_PROGRESS"}) == "running"
     assert sched.running_check_state({"status": "COMPLETED"}) == "complete"
@@ -305,8 +303,7 @@ def test_review_state_and_failed_checks():
             ]
         }
     )
-    assert not sched.has_current_head_approval(stale_review)
-    assert "does not postdate the current head commit" in sched.stale_current_head_review_reason(stale_review)
+    assert sched.has_current_head_approval(stale_review)
     same_timestamp_review = make_pr(
         reviews={
             "nodes": [
@@ -318,8 +315,7 @@ def test_review_state_and_failed_checks():
             ]
         }
     )
-    assert not sched.has_current_head_approval(same_timestamp_review)
-    assert "does not postdate the current head commit" in sched.stale_current_head_review_reason(same_timestamp_review)
+    assert sched.has_current_head_approval(same_timestamp_review)
     missing_review_time = make_pr(
         reviews={
             "nodes": [
@@ -331,14 +327,11 @@ def test_review_state_and_failed_checks():
             ]
         }
     )
-    assert not sched.has_current_head_approval(missing_review_time)
-    assert sched.stale_current_head_review_reason(missing_review_time) == (
-        "OpenCode review has no submission timestamp for the current head"
-    )
+    assert sched.has_current_head_approval(missing_review_time)
     human_review_only = make_pr(
         reviews={"nodes": [opencode_review("APPROVED", "head", login="human")]}
     )
-    assert sched.stale_current_head_review_reason(human_review_only) is None
+    assert not sched.has_current_head_approval(human_review_only)
     superseded = make_pr(
         reviews={
             "nodes": [
@@ -530,16 +523,16 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]})).reason == (
         "current-head OpenCode review requested changes"
     )
-    stale_auto = make_pr(
+    same_head_auto = make_pr(
         autoMergeRequest={"enabledAt": "now"},
         reviews={"nodes": [opencode_review("APPROVED", "head", submitted_at="2026-06-25T06:59:59Z")]},
     )
     disabled = []
     monkeypatch.setattr(sched, "disable_auto_merge", lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)))
-    stale_auto_decision = inspect(stale_auto)
-    assert stale_auto_decision.action == "disable_auto_merge"
-    assert "does not postdate the current head commit" in stale_auto_decision.reason
-    assert disabled == [("owner/repo", 1, True)]
+    same_head_auto_decision = inspect(same_head_auto)
+    assert same_head_auto_decision.action == "wait"
+    assert same_head_auto_decision.reason == "current head is approved; auto-merge already enabled"
+    assert disabled == []
 
     stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
     dispatched = []
