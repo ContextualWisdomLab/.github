@@ -291,13 +291,26 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
 
     output = capsys.readouterr().out
     assert "PR #7: block: merge conflict: DIRTY" in output
-    assert json.loads(output.splitlines()[-1]) == {
-        "base_branch": "main",
-        "counts": {"block": 1, "update_branch": 1},
-        "dry_run": True,
-        "inspected": 2,
-        "project_flow": "github-flow",
-    }
+    payload = json.loads(output.splitlines()[-1])
+    assert payload["schema_version"] == "pr-review-merge-scheduler/v1"
+    assert payload["base_branch"] == "main"
+    assert payload["counts"] == {"block": 1, "update_branch": 1}
+    assert payload["dry_run"] is True
+    assert payload["inspected"] == 2
+    assert payload["project_flow"] == "github-flow"
+    assert payload["decisions"][0]["contract_decision"] == "WAIT"
+    assert payload["decisions"][1]["contract_decision"] == "UPDATE_BRANCH"
+    assert payload["decisions"][0]["guidance"]["type"] == "merge_conflict_repair"
+    assert payload["decisions"][0]["guidance"]["merge_state"] == "DIRTY"
+    assert payload["decisions"][0]["guidance"]["base_ref"] == "main"
+    assert payload["decisions"][0]["guidance"]["head_ref"] == "feature|x"
+    assert "gh pr checkout 7" in payload["decisions"][0]["guidance"]["commands"]
+    assert "git merge --no-ff origin/main" in payload["decisions"][0]["guidance"]["commands"]
+    assert payload["decisions"][1]["guidance"]["type"] == "github_actions_update_branch"
+    assert payload["decisions"][1]["guidance"]["actor"] == "github-actions[bot]"
+    assert payload["decisions"][1]["guidance"]["token"] == "workflow GITHUB_TOKEN"
+    assert payload["decisions"][1]["guidance"]["required_permission"] == "pull-requests: write"
+    assert payload["decisions"][1]["guidance"]["head_guard"] == "expected_head_sha"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x |" in summary
@@ -450,7 +463,10 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     )
     output = capsys.readouterr().out
     assert "PR #1: wait: ready" in output
-    assert json.loads(output.strip().splitlines()[-1])["counts"] == {"wait": 2}
+    payload = json.loads(output.strip().splitlines()[-1])
+    assert payload["schema_version"] == "pr-review-merge-scheduler/v1"
+    assert payload["counts"] == {"wait": 2}
+    assert [decision["contract_decision"] for decision in payload["decisions"]] == ["WAIT", "WAIT"]
 
     sched.self_test()
     assert "self-test passed" in capsys.readouterr().out
@@ -500,7 +516,45 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
     assert "PR #1: action_error: Command failed (1): gh pr merge 1; GraphQL: Resource not accessible by integration" in output
     assert "scheduler GitHub token could not perform merge or auto-merge" in output
     assert "PR #2: wait: next PR still inspected" in output
-    assert json.loads(output.strip().splitlines()[-1])["counts"] == {"action_error": 1, "wait": 1}
+    payload = json.loads(output.strip().splitlines()[-1])
+    assert payload["counts"] == {"action_error": 1, "wait": 1}
+    assert payload["decisions"][0]["contract_decision"] == "WAIT"
+    assert payload["decisions"][1]["contract_decision"] == "WAIT"
+
+
+def test_main_keeps_scanning_after_update_branch_403_and_422(monkeypatch, capsys):
+    prs = [make_pr(number=1), make_pr(number=2), make_pr(number=3)]
+    seen = []
+
+    def fake_inspect(repo, pr, **kwargs):
+        seen.append(pr["number"])
+        if pr["number"] == 1:
+            raise RuntimeError(
+                "Command failed (1): gh api -X PUT repos/owner/repo/pulls/1/update-branch\n"
+                "HTTP 403: Resource not accessible by integration"
+            )
+        if pr["number"] == 2:
+            raise RuntimeError(
+                "Command failed (1): gh api -X PUT repos/owner/repo/pulls/2/update-branch\n"
+                "HTTP 422: expected_head_sha does not match current head"
+            )
+        return sched.Decision(pr["number"], "wait", "next PR still inspected")
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
+
+    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
+    assert seen == [1, 2, 3]
+    output = capsys.readouterr().out
+    assert "PR #1: action_error:" in output
+    assert "pull-requests: write" in output
+    assert "do not widen `contents` just for update-branch" in output
+    assert "PR #2: action_error:" in output
+    assert "PR head likely changed after inspection" in output
+    assert "PR #3: wait: next PR still inspected" in output
+    payload = json.loads(output.strip().splitlines()[-1])
+    assert payload["counts"] == {"action_error": 2, "wait": 1}
+    assert [decision["contract_decision"] for decision in payload["decisions"]] == ["WAIT", "WAIT", "WAIT"]
 
 
 def test_action_error_guidance_distinguishes_update_branch_from_merge():
