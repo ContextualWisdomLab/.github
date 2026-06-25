@@ -96,10 +96,12 @@ assert_strix_workflow_pr_trigger_hardened() {
 
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "strix workflow scopes concurrency to the active pull request"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.inputs.pr_number)" "strix workflow scopes manual PR evidence concurrency to the requested pull request"
+	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" "strix workflow scopes pull_request_target concurrency to the active pull request head"
+	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha)" "strix workflow scopes manual PR evidence concurrency to the requested pull request head"
+	assert_file_contains "$workflow_file" "github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number)" "strix workflow retains a manual PR fallback group when no head SHA is provided"
 	assert_file_contains "$workflow_file" "|| github.ref" "strix workflow scopes non-PR concurrency to the current ref"
 	assert_file_contains "$workflow_file" "cancel-in-progress: false" "strix workflow never cancels in-progress security evidence"
+	assert_file_contains "$workflow_file" "head SHA in PR groups prevents stale scans from serializing newer evidence" "strix workflow documents stale scan queue avoidance"
 	assert_file_contains "$workflow_file" "models: read" "strix workflow grants only the GitHub Models read permission needed for Strix"
 	assert_file_contains "$workflow_file" "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6" "strix workflow pins actions/setup-python"
 	assert_file_contains "$workflow_file" 'python-version: "3.13"' "strix workflow runs Python steps on Python 3.13"
@@ -213,7 +215,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://models.github.ai/inference" "strix workflow routes GitHub Models scans to the inference endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324" "strix workflow configures reachable stronger-than-GPT-4.1 GitHub Models fallback models"
+	assert_file_contains "$workflow_file" "github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528" "strix workflow configures reachable stronger-than-GPT-4.1 GitHub Models fallback models"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
 	assert_file_contains "$workflow_file" '${strix_model#github_models/}' "strix workflow strips manual github_models routing prefix for OpenAI GPT model names before passing model names to LiteLLM"
 	assert_file_contains "$workflow_file" "openai_direct/%s" "strix workflow keeps manual direct OpenAI scans distinct from GitHub Models openai/gpt-* routing"
@@ -412,6 +414,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "nearby implementation, matching existing example, cross-file counterpart, current official docs, or failed check/log evidence" "opencode review prompt requires explicit evidence type"
 	assert_file_contains "$workflow_file" "flag unrelated PR scope drift" "opencode review prompt catches unrelated scope drift"
 	assert_file_contains "$workflow_file" "GitHub suggestion-ready minimal diffs" "opencode review prompt requires directly applicable suggested diffs"
+	assert_file_contains "$workflow_file" "Compare repository-local patterns before judging DX or UX" "opencode review prompt borrows helpful sibling-repo DX/UX patterns before judging changes"
+	assert_file_contains "$workflow_file" "URL-only diagnostics" "opencode review prompt flags status and review noise that harms DX/UX"
+	assert_file_contains "$workflow_file" "Developer experience:" "opencode review summary requires a developer-experience posture"
+	assert_file_contains "$workflow_file" "User experience:" "opencode review summary requires a user-experience posture"
 	assert_file_contains "$workflow_file" "compact Mermaid DAG" "opencode review prompt requires a concrete Mermaid DAG"
 	assert_file_contains "$workflow_file" "do not use generic placeholder nodes like Changed surface or Main risk" "opencode review prompt forbids generic Mermaid placeholder nodes"
 	assert_file_contains "$workflow_file" "PR mergeability evidence" "opencode review evidence includes PR mergeability state"
@@ -419,6 +425,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'git -C "$OPENCODE_SOURCE_WORKDIR" ls-tree -r --name-only "$PR_HEAD_SHA" -- "$docs_dir"' "opencode review evidence lists current-head docs assets from the PR head worktree before judging docs claims"
 	assert_file_contains "$workflow_file" "Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it." "opencode review prompt forbids unsupported docs asset absence claims"
 	assert_file_contains "$workflow_file" "Merge Conflict Guidance" "opencode review overview includes conflict repair guidance"
+	assert_file_contains "$workflow_file" "gh pr checkout" "opencode merge-conflict guidance starts from checking out the PR branch"
+	assert_file_contains "$workflow_file" "git fetch origin" "opencode merge-conflict guidance fetches the latest base branch"
+	assert_file_contains "$workflow_file" "git status --short" "opencode merge-conflict guidance tells the author how to find unresolved conflict files"
+	assert_file_contains "$workflow_file" "git push --force-with-lease" "opencode merge-conflict guidance limits force pushes to the rebase path"
 	assert_file_contains "$workflow_file" "mergeStateStatus DIRTY or CONFLICTING" "opencode review prompt handles merge conflicts"
 	assert_file_contains "$workflow_file" "mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance" "opencode review prompt does not misclassify branch-policy blockers as merge conflicts"
 	if [ -e "$REPO_ROOT/.github/workflows/opencode-merge-conflict-guidance.yml" ]; then
@@ -437,11 +447,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Do not spend the session listing every changed path before reviewing" "opencode review prompt prevents fallback sessions from exhausting steps on file listing"
 	assert_file_contains "$workflow_file" "Always return a final control block instead of a progress summary" "opencode review prompt requires a gate conclusion instead of a progress summary"
 	assert_file_contains "$workflow_file" 'timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-180}s" opencode run' "opencode review primary model has a kill-after bounded timeout so fallback review can publish promptly"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' "opencode review model runs declare a bounded per-attempt timeout"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' "opencode primary review has enough bounded time for tool-backed current-head review"
 	assert_file_contains "$workflow_file" "&& needs.coverage-evidence.result == 'success'" "opencode model fallbacks only run after coverage evidence passed"
 	assert_file_contains "$workflow_file" "&& steps.opencode_review_primary.outputs.review_status != 'success'" "opencode DeepSeek R1 fallback still runs after a primary model timeout or step failure when coverage evidence passed"
 	assert_file_contains "$workflow_file" "always()" "opencode fallback chain uses always() so failed model steps cannot skip every fallback"
-	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "3"' "opencode review retries transient model execution failures before exhausting a model"
+	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary review uses one longer attempt before exhausting the primary model"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review fallback (OpenAI o-series)" "opencode review includes extra reasoning-model fallback"
 	assert_file_contains "$workflow_file" "continue-on-error: true" "opencode model step timeouts do not prevent fallback review publication"
 	assert_file_contains "$workflow_file" "github-models/openai/o3 github-models/openai/o4-mini" "opencode review tries o-series reasoning models after GPT-5 and DeepSeek fallbacks"
@@ -568,6 +578,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")' "failed-check evidence only appends Strix workflow runs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'group_by(.__context_key)' "failed-check evidence groups manual Strix statuses by context before accepting superseding success"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'map(last)' "failed-check evidence accepts only the latest status per context"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'metadata-only gate evaluation' "failed-check evidence ignores cancelled metadata-only PR Governance helper gates"
+	assert_file_contains "$workflow_file" 'metadata-only gate evaluation' "opencode approval gate ignores cancelled metadata-only PR Governance helper gates"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '"strix security scan/"*' "failed-check evidence maps stale Strix workflow helper checks to the manual strix evidence status"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '[ "$failed_run_id" -ge "$success_run_id" ]' "failed-check evidence only supersedes Strix helper checks older than the manual success run"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'redact_sensitive_log()' "failed-check evidence redacts sensitive values before emitting logs"
@@ -622,8 +634,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "collect_failed_check_evidence_or_note()" "opencode approval handles repos without the failed-check helper before publishing fallback reviews"
 	assert_file_contains "$workflow_file" "current_peer_checks_still_running" "opencode review workflow distinguishes pending peer checks from completed check state"
 	assert_file_contains "$workflow_file" 'select((.name // "") != "opencode-review")' "opencode review evidence wait excludes its own check run"
+	assert_file_contains "$workflow_file" 'select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")' "opencode review evidence wait excludes its own actual workflow name"
 	assert_file_contains "$workflow_file" 'select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")' "opencode review evidence wait excludes its own workflow"
 	assert_file_contains "$workflow_file" "No completed failed GitHub Checks were present" "opencode review evidence wait retries while no failed checks are available yet"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.name // "") != "opencode-review")' "failed-check evidence excludes OpenCode's own required check"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")' "failed-check evidence excludes OpenCode's own workflow by actual name"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")' "failed-check evidence excludes OpenCode's own workflow by legacy name"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'gh run view "$run_id"' "failed-check evidence collector reads failed GitHub Actions job logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'check-runs/${check_run_id}/annotations' "failed-check evidence collector reads GitHub Check annotations"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Line-specific repair contract" "failed-check evidence requires line-specific repairs"
@@ -663,6 +679,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$REPO_ROOT/scripts/ci/opencode_review_approve_gate.sh" "structural exploration was not possible" "opencode approval gate does not duplicate structural failure phrases"
 	assert_file_contains "$workflow_file" "validate_opencode_failed_check_review.sh" "opencode approval gate validates request-changes reviews against failed-check evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" "FAILED_CHECK_EVIDENCE_NOT_REFERENCED" "failed-check review validator rejects unrelated speculative findings"
+	assert_file_contains "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" "reject_non_actionable_failed_check_review" "failed-check review validator rejects generic no-evidence deflections"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" "NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES" "opencode normalizer rejects generic failed-check deflections before publishing"
 	assert_file_contains "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" "extract_strix_report_model_markers" "failed-check review validator extracts model markers from Strix vulnerability report windows"
 	assert_file_contains "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" "(?:model|for model)[[:space:]]+" "failed-check review validator reads both Model and for model lines inside Strix reports"
 	assert_file_contains "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" "Self-test Strix gate script" "failed-check review validator requires Strix failed step evidence"
@@ -718,7 +736,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" '"lsp": "allow"' "opencode generated config enables LSP"
 	assert_file_contains "$workflow_file" '"lsp": true' "opencode generated config starts built-in LSP servers when available"
 	assert_file_contains "$workflow_file" "OpenCode runtime tools are enabled: bash, task, webfetch, websearch, and lsp." "opencode review prompt names the enabled runtime tools"
-	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper exited non-zero; using inline fallback." "opencode failed-check fallback handles helper failures without aborting under set -e"
+	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper did not produce source-backed findings. No PR review was posted; retry after current-head failed-check logs or annotations are available" "opencode failed-check fallback avoids generic review comments when helper output is not source-backed"
+	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper returned non-source-backed output. No PR review was posted; retry after current-head failed-check logs or annotations are available" "opencode failed-check fallback rejects stale helper scripts that exit zero with generic no-evidence text"
+	assert_file_contains "$workflow_file" "could not derive source-backed line-specific findings after retries" "opencode failed-check fallback fails the check instead of posting URL-only request-changes reviews"
+	assert_file_not_contains "$workflow_file" "OpenCode failed-check fallback helper exited non-zero; using inline fallback." "opencode failed-check fallback must not silently downgrade helper failures to generic inline fallback reviews"
 	assert_file_contains "$workflow_file" "Do not depend on Copilot Review, CodeRabbitAI, or any human reviewer" "opencode review format is independent of other review agents"
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "emit_strix_report_findings" "failed-check fallback emits every Strix vulnerability report as a separate finding"
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "Strix provider signal left current-head security evidence incomplete" "failed-check fallback does not claim reports are absent after Strix emitted vulnerabilities"
@@ -742,7 +763,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "- Root cause:" "opencode review request-changes body includes root cause per finding"
 	assert_file_contains "$workflow_file" "- Regression test:" "opencode review request-changes body includes regression test direction per finding"
 	assert_file_contains "$workflow_file" "- Suggested diff:" "opencode review request-changes body includes suggested diff per finding"
-	assert_file_contains "$workflow_file" "OpenCode reviewed the current-head bounded evidence and found failing GitHub Checks that need source-backed diagnosis before merge." "opencode review workflow requests changes when current-head GitHub Checks failed"
+	assert_file_contains "$workflow_file" "OpenCode reviewed the current-head bounded evidence and found source-backed failed-check findings that must be addressed before merge." "opencode review workflow requests changes only when current-head failed checks are mapped to source-backed findings"
 	assert_file_contains "$workflow_file" "OpenCode reviewed the current-head evidence but could not verify peer GitHub Checks before approval." "opencode review workflow explains check lookup failures instead of approving"
 	assert_file_contains "$workflow_file" '["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"]' "opencode review workflow treats failed check-run conclusions as request-changes blockers"
 	assert_file_contains "$workflow_file" '["FAILURE","ERROR"]' "opencode review workflow treats failed status contexts as request-changes blockers"
@@ -796,9 +817,11 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "pull-requests: write" "scheduler has pull-request write permission for update-branch and auto-merge"
 	assert_file_contains "$scheduler_file" "update-branch" "scheduler calls the GitHub update-branch API for outdated approved PRs"
 	assert_file_contains "$scheduler_file" "expected_head_sha={head}" "scheduler guards branch updates with the current PR head SHA"
+	assert_file_contains "$scheduler_file" "shell=False" "scheduler subprocess wrapper forbids shell command execution"
+	assert_file_contains "$REPO_ROOT/tests/test_pr_review_merge_scheduler.py" "test_run_passes_shell_metacharacters_as_plain_arguments" "scheduler tests prove branch-like shell metacharacters stay argv data"
 	assert_file_contains "$scheduler_file" "dispatch_strix_evidence" "scheduler dispatches same-head Strix evidence before OpenCode review"
 	assert_file_contains "$scheduler_file" "--security-workflow" "scheduler allows the canonical Strix workflow name to be configured"
-	assert_file_contains "$scheduler_file" "same-head Strix and OpenCode dispatched" "scheduler records review dispatch as a coupled security and review evidence action"
+	assert_file_contains "$scheduler_file" "same-head OpenCode dispatched" "scheduler records review dispatch after completed security evidence"
 	assert_file_contains "$workflow_file" "--review-workflow \"OpenCode Review\"" "scheduler dispatches the canonical OpenCode Review workflow"
 	assert_file_contains "$readme_file" "github-actions[bot]" "README documents that mechanical branch updates and merges are attributed to GitHub Actions bot"
 	assert_file_contains "$readme_file" "Scratch PoC files are not committed." "README documents PoC proof artifacts are scratch evidence, not committed changes"
@@ -816,7 +839,7 @@ assert_opencode_review_normalizer_accepts_transcript_json() {
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
 
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 EOF
 
 	set +e
@@ -861,7 +884,7 @@ assert_opencode_review_publish_body_discards_trailing_model_prose() {
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
 
 <!-- opencode-review-control-v1
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 -->
 
 But that is not meticulous.
@@ -953,7 +976,7 @@ EOF
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
 
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after structural exploration of .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after structural exploration of .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 EOF
 
 	set +e
@@ -978,7 +1001,7 @@ assert_opencode_review_gate_rejects_unmeasured_coverage_approval() {
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
 
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: not measured. Docstring coverage: not measured. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: not measured. Docstring coverage: not measured. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 EOF
 
 	set +e
@@ -993,7 +1016,7 @@ EOF
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
 
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Not applicable. Docstring coverage: Not applicable. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Not applicable. Docstring coverage: Not applicable. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 EOF
 
 	set +e
@@ -1009,7 +1032,7 @@ EOF
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
 
 <!-- opencode-review-control-v1
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence did not run or did not publish coverage evidence. Docstring coverage: Coverage execution evidence did not prove 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml, scripts/ci/opencode_review_normalize_output.py, and scripts/ci/test_strix_quick_gate.sh. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence did not run or did not publish coverage evidence. Docstring coverage: Coverage execution evidence did not prove 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to GitHub Actions review job and verification path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and shell conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 -->
 EOF
 
@@ -1129,7 +1152,7 @@ EOF
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
 
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting README.md.","summary":"Reviewed README.md. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered README.md to docs review path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions docs. Compatibility/convention: conventions match existing code. Breaking-change/backcompat: no public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting README.md.","summary":"Reviewed README.md. Verification posture: Linter/static: actionlint and bash syntax evidence passed. TDD/regression: scripts/ci/test_strix_quick_gate.sh self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered README.md to docs review path. PoC/execution: scratch PoC executed bash scripts/ci/test_strix_quick_gate.sh and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions docs. Compatibility/convention: conventions match existing code. Breaking-change/backcompat: no public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token boundaries preserved.","findings":[]}
 EOF
 
 	set +e
@@ -1145,7 +1168,7 @@ EOF
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
 
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml and scripts/ci/opencode_review_normalize_output.py. Verification posture: Linter/static: actionlint and Python syntax evidence passed. TDD/regression: normalizer self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to scripts/ci/opencode_review_normalize_output.py to review decision path. PoC/execution: scratch PoC executed the normalizer with exact changed-file evidence and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and Python conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Design/UX: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"APPROVE","reason":"No blockers found after inspecting .github/workflows/opencode-review.yml.","summary":"Reviewed .github/workflows/opencode-review.yml and scripts/ci/opencode_review_normalize_output.py. Verification posture: Linter/static: actionlint and Python syntax evidence passed. TDD/regression: normalizer self-test evidence passed. Coverage: Coverage execution evidence reported 100% test coverage. Docstring coverage: Coverage execution evidence reported 100% docstring coverage. DAG: Change Flow DAG rendered .github/workflows/opencode-review.yml to scripts/ci/opencode_review_normalize_output.py to review decision path. PoC/execution: scratch PoC executed the normalizer with exact changed-file evidence and passed. DDD/domain: no product domain boundary changed. CDD/context: CodeGraph structural MCP evidence covered the workflow and script blast radius. Similar issues: checked related OpenCode gate cases. Claim/concept check: no unverified user concept accepted. Standards search: checked current GitHub Actions/OpenCode docs where applicable. Compatibility/convention: workflow naming and Python conventions match existing code. Breaking-change/backcompat: no deployed public contract changed. Performance: no runtime path affected. Developer experience: review automation remains clear to maintainers and contributors. User experience: no user-facing UI affected. Security/privacy: token and pull_request_target boundaries preserved.","findings":[]}
 EOF
 
 	set +e
@@ -1274,6 +1297,45 @@ EOF
 	rm -rf "$tmp_dir"
 }
 
+assert_opencode_review_gate_rejects_generic_failed_check_deflection() {
+	local tmp_dir
+	local output_file
+	local rc
+	local gate_result
+	tmp_dir="$(mktemp -d)"
+	output_file="$tmp_dir/opencode-output.md"
+
+	cat >"$output_file" <<'EOF'
+<!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
+
+<!-- opencode-review-control-v1
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"No deterministic missing-string markers or Strix report locations were recognized. Use the failed-check evidence below to map each failed check to exact local source lines before approving.","findings":[{"path":"scripts/ci/opencode_review_approve_gate.sh","line":1,"severity":"HIGH","title":"Generic failed-check deflection","problem":"No deterministic missing-string markers or Strix report locations were recognized.","root_cause":"The review did not map the failed check to a concrete local source line.","fix_direction":"Inspect the failed log and produce a source-backed finding instead of handing the mapping back to the reader.","regression_test_direction":"Reject generic failed-check deflections before publishing the review.","suggested_diff":"diff --git a/scripts/ci/opencode_review_approve_gate.sh b/scripts/ci/opencode_review_approve_gate.sh\n--- a/scripts/ci/opencode_review_approve_gate.sh\n+++ b/scripts/ci/opencode_review_approve_gate.sh\n@@ -1 +1 @@\n-#!/usr/bin/env bash\n+#!/usr/bin/env bash"}]}
+-->
+EOF
+
+	set +e
+	gate_result="$(
+		bash "$REPO_ROOT/scripts/ci/opencode_review_approve_gate.sh" \
+			"abc123" "42" "1" "$output_file"
+	)"
+	rc=$?
+	set -e
+
+	assert_equals "4" "$rc" "opencode approval gate rejects generic failed-check deflections"
+	assert_equals "NO_CONCLUSION" "$gate_result" "generic failed-check deflection rejection gate result"
+
+	set +e
+	python3 "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" \
+		"abc123" "42" "1" "$output_file" >"$tmp_dir/generic-deflection.out" 2>"$tmp_dir/generic-deflection.err"
+	rc=$?
+	set -e
+
+	assert_equals "4" "$rc" "opencode normalizer rejects generic failed-check deflections"
+	assert_file_contains "$tmp_dir/generic-deflection.err" "NO_CONCLUSION" "opencode normalizer reports no valid conclusion for generic failed-check deflections"
+
+	rm -rf "$tmp_dir"
+}
+
 assert_opencode_failed_check_review_validator_rejects_unrelated_findings() {
 	local tmp_dir
 	local control_json
@@ -1329,6 +1391,17 @@ EOF
 	set -e
 	assert_equals "4" "$rc" "failed-check review validator rejects unrelated findings"
 	assert_file_contains "$tmp_dir/bad.out" "FAILED_CHECK_EVIDENCE_NOT_REFERENCED" "failed-check validator explains unrelated finding rejection"
+
+	cat >"$control_json" <<'EOF'
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"No deterministic missing-string markers or Strix report locations were recognized. Use the failed-check evidence below to map each failed check to exact local source lines before approving.","findings":[{"path":"scripts/ci/collect_failed_check_evidence.sh","line":15,"severity":"HIGH","title":"Generic failed-check deflection","problem":"No deterministic missing-string markers or Strix report locations were recognized.","root_cause":"The review did not map Strix Security Scan/strix to failed log evidence and concrete local source lines.","fix_direction":"Inspect the failed-check evidence and produce source-backed findings instead of handing the mapping back to the reader.","regression_test_direction":"Reject generic failed-check deflections before publishing reviews.","suggested_diff":"diff --git a/scripts/ci/collect_failed_check_evidence.sh b/scripts/ci/collect_failed_check_evidence.sh\n--- a/scripts/ci/collect_failed_check_evidence.sh\n+++ b/scripts/ci/collect_failed_check_evidence.sh\n@@ -1 +1 @@\n-old\n+new"}]}
+EOF
+	set +e
+	bash "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" \
+		"$control_json" "$failed_checks_file" "$evidence_file" >"$tmp_dir/generic.out" 2>"$tmp_dir/generic.err"
+	rc=$?
+	set -e
+	assert_equals "4" "$rc" "failed-check review validator rejects generic failed-check deflections"
+	assert_file_contains "$tmp_dir/generic.out" "FAILED_CHECK_EVIDENCE_NOT_REFERENCED" "failed-check validator blocks generic deflection review text"
 
 	cat >"$evidence_file" <<'EOF'
 ## Failed check: Strix Security Scan/strix
@@ -1666,7 +1739,7 @@ EOF
 	assert_file_contains "$output_file" "Strix provider failure blocked current-head security evidence" "fallback treats no-report summary as provider blocker"
 	assert_file_contains "$output_file" "api.deepseek.com" "fallback preserves direct DeepSeek endpoint failure evidence"
 	assert_file_contains "$output_file" "Authentication Fails" "fallback preserves direct DeepSeek authentication failure evidence"
-	assert_file_contains "$output_file" "github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324" "fallback gives exact GitHub Models fallback list"
+	assert_file_contains "$output_file" "github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528" "fallback gives exact GitHub Models fallback list"
 	assert_file_contains "$output_file" "Suggested edit: \`.github/workflows/strix.yml" "fallback gives a line-specific suggested edit for provider routing"
 	assert_file_not_contains "$output_file" "Strix provider signal left current-head security evidence incomplete" "fallback does not invent vulnerability report windows from a no-report summary"
 	assert_file_not_contains "$output_file" "after vulnerability reports" "fallback does not contradict no-report evidence"
@@ -1862,7 +1935,7 @@ jobs:
     steps:
       - name: Run Strix
         env:
-          STRIX_FALLBACK_MODELS: github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324
+          STRIX_FALLBACK_MODELS: github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528
 EOF
 
 	cat >"$evidence_file" <<'EOF'
@@ -6549,6 +6622,8 @@ assert_opencode_review_gate_rejects_placeholder_findings
 
 assert_opencode_review_gate_rejects_non_source_backed_findings
 
+assert_opencode_review_gate_rejects_generic_failed_check_deflection
+
 assert_opencode_failed_check_review_validator_rejects_unrelated_findings
 
 assert_opencode_failed_check_fallback_emits_each_strix_report
@@ -9297,11 +9372,11 @@ run_gate_case "github-models-fallback-requires-api-base" \
 
 run_gate_case "github-models-fallback-success" \
 	"vertex_ai/missing-primary" \
-	"github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324" \
+	"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528" \
 	"0" \
-	"REGEX:Strix quick scan succeeded with fallback model 'github_models/deepseek/deepseek-r1-0528' in [0-9]+s\\." \
+	"REGEX:Strix quick scan succeeded with fallback model 'github_models/deepseek/deepseek-v3-0324' in [0-9]+s\\." \
 	"2" \
-	"vertex_ai/missing-primary|openai/deepseek/deepseek-r1-0528" \
+	"vertex_ai/missing-primary|openai/deepseek/deepseek-v3-0324" \
 	"<unset>|https://models.github.ai/inference" \
 	"vertex_ai" \
 	"https://models.github.ai/inference" \

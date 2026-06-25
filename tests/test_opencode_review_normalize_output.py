@@ -19,7 +19,8 @@ Standards search: relevant standards were searched.
 Compatibility/convention: compatibility and naming conventions were checked.
 Breaking-change/backcompat: no breaking change was found.
 Performance: performance risk was checked.
-Design/UX: design impact was checked.
+Developer experience: developer workflow impact was checked.
+User experience: user-facing behavior impact was checked.
 Security/privacy: security impact was checked.
 """
 
@@ -148,6 +149,27 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path)
     request_changes.write_text(json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8")
     assert norm.check_structural_approval(request_changes) == 0
 
+    generic_deflection = tmp_path / "generic-deflection.json"
+    generic_deflection.write_text(
+        json.dumps(
+            control(
+                result="REQUEST_CHANGES",
+                summary=(
+                    "The review could not map each failed check to exact local source lines "
+                    "from the available logs, so it needs better failed-check evidence."
+                ),
+                findings=[
+                    finding(
+                        title="Generic failed-check deflection",
+                        problem="The failed-check diagnosis did not produce source-backed findings.",
+                    )
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert norm.check_structural_approval(generic_deflection) == 4
+
 
 def test_valid_control_filters_shape_head_and_review_contract():
     kwargs = {
@@ -178,6 +200,19 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(dict(request, findings=[finding(line=True)]), **kwargs) is None
     assert norm.valid_control(dict(request, findings=[finding(line=0)]), **kwargs) is None
     assert norm.valid_control(dict(request, findings=[finding(title="")]), **kwargs) is None
+    assert (
+        norm.valid_control(
+            dict(
+                request,
+                summary=(
+                    "The review could not map each failed check to exact local source lines "
+                    "from the available logs, so it needs better failed-check evidence."
+                ),
+            ),
+            **kwargs,
+        )
+        is None
+    )
     assert norm.valid_control(request, **kwargs)["result"] == "REQUEST_CHANGES"
 
     approve_without_findings_key = control()
@@ -230,6 +265,35 @@ A\t.github/workflows/opencode-review.yml
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
+def test_valid_control_repairs_summary_from_invalid_utf8_evidence(tmp_path, monkeypatch):
+    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence.write_bytes(
+        b"# OpenCode bounded PR review evidence\n\n"
+        b"\xea invalid byte from model transcript\n\n"
+        b"## Coverage execution evidence\n\n"
+        b"# Coverage Evidence\n\n"
+        b"## Coverage Decision\n\n"
+        b"- Result: PASS\n"
+        b"- Test coverage: 100%\n"
+        b"- Docstring coverage: 100%\n\n"
+        b"## Changed files\n\n"
+        b"M\tscripts/ci/opencode_review_normalize_output.py\n"
+    )
+    monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+
+    repaired = norm.valid_control(
+        control(reason="Current-head review completed.", summary="No blockers were found."),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert repaired is not None
+    assert "scripts/ci/opencode_review_normalize_output.py" in repaired["summary"]
+    assert norm.mentions_verification_posture(repaired["reason"], repaired["summary"])
+    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+
+
 def test_valid_control_repair_overrides_earlier_invalid_coverage_labels(tmp_path, monkeypatch):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
@@ -275,7 +339,8 @@ Standards search: Not applicable.
 Compatibility/convention: Not applicable.
 Breaking-change/backcompat: Not applicable.
 Performance: Not applicable.
-Design/UX: Not applicable.
+Developer experience: Not applicable.
+User experience: Not applicable.
 Security/privacy: Not applicable.
 """,
         ),
@@ -384,7 +449,9 @@ M\tREADME.md
 def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects('{"a": 1}') == [{"a": 1}, {"a": 1}]
     assert norm.iter_json_objects('prefix {"b": 2} suffix') == [{"b": 2}]
+    assert norm.iter_json_objects("prefix {  } suffix") == [{}]
     assert norm.iter_json_objects("prefix {not json}") == []
+    assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
 
 
@@ -393,6 +460,11 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
     output.write_text("prefix\n" + json.dumps(control()) + "\nsuffix", encoding="utf-8")
     assert norm.main(["prog", "head", "run", "attempt", str(output)]) == 0
     assert "opencode-review-control-v1" in output.read_text(encoding="utf-8")
+
+    invalid_utf8 = tmp_path / "invalid-utf8.txt"
+    invalid_utf8.write_bytes(b"\xea invalid prefix\n" + json.dumps(control()).encode("utf-8"))
+    assert norm.main(["prog", "head", "run", "attempt", str(invalid_utf8)]) == 0
+    assert "opencode-review-control-v1" in invalid_utf8.read_text(encoding="utf-8")
 
     assert norm.main(["prog"]) == 64
     assert "usage:" in capsys.readouterr().err

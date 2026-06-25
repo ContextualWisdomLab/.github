@@ -668,8 +668,8 @@ emit_strix_provider_failure_finding() {
 		if grep -Eq "api\\.deepseek\\.com|401 Unauthorized|Authentication Fails|DeepseekException" "$strix_evidence_file"; then
 			printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported `RateLimitError` / `Too many requests` for the primary `openai/gpt-5` attempt, then fallback attempts reached direct DeepSeek (`api.deepseek.com`) and failed with `401 Unauthorized` or `Authentication Fails`, ending with `Configured model and fallback models were unavailable`.\n'
 			printf -- '- Root cause: The fallback model names were not routed through the GitHub Models endpoint for this failed PR check, so a GitHub Models token was used against direct DeepSeek instead of `https://models.github.ai/inference`; no Strix Vulnerability Report window was produced.\n'
-			printf -- '- Fix: Do not approve from this failed scan. Keep %s:%s using the GitHub Models-qualified fallback list (`github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324`) and keep the Strix gate mapping those values to `openai/deepseek/...` for the GitHub Models API base, then rerun the failed PR Strix check.\n' "$path" "$line"
-			printf -- '- Suggested edit: `%s:%s` must use `STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == '\''github_models'\'' && '\''github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324'\'' || '\'''\'' }}` instead of unqualified `deepseek/...` values that route to `api.deepseek.com`.\n' "$path" "$line"
+			printf -- '- Fix: Do not approve from this failed scan. Keep %s:%s using the GitHub Models-qualified fallback list (`github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528`) and keep the Strix gate mapping those values to `openai/deepseek/...` for the GitHub Models API base, then rerun the failed PR Strix check.\n' "$path" "$line"
+			printf -- '- Suggested edit: `%s:%s` must use `STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == '\''github_models'\'' && '\''github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528'\'' || '\'''\'' }}` instead of unqualified `deepseek/...` values that route to `api.deepseek.com`.\n' "$path" "$line"
 		else
 			printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported LLM CONNECTION FAILED, RateLimitError or Too many requests for the primary model, provider/budget output for fallback models, and Configured model and fallback models were unavailable.\n'
 			printf -- '- Root cause: The configured GitHub Models primary/fallback provider capacity or provider route failed for this run; no Strix Vulnerability Report window was produced, so there is no application source line to patch from this evidence.\n'
@@ -745,5 +745,6 @@ emit_strix_provider_failure_finding "$strix_evidence_file"
 emit_strix_cancelled_without_log_finding "$strix_evidence_file"
 
 if [ "$finding_index" -eq 0 ]; then
-	printf 'No automated line-specific fallback pattern matched this failed check. Do not approve or post a URL-only review; inspect the failed-check evidence below, identify the exact failing source line, explain the root cause, and provide the focused rerun command before approval.\n\n'
+	printf 'No source-backed failed-check fallback finding matched the available evidence. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
+	exit 1
 fi
