@@ -2691,7 +2691,7 @@ jobs:
             local body
 
             body="$(printf '%s\n' \
-              "OpenCode could not derive source-backed failed-check findings after retries." \
+              "OpenCode could not derive source-backed line-specific findings after retries." \
               "" \
               "- Result: FAILED_CHECK_DIAGNOSIS_UNAVAILABLE" \
               "- Reason: current-head failed checks were present, but neither model diagnosis nor deterministic fallback mapped them to concrete source-backed findings." \
@@ -3470,16 +3470,16 @@ jobs:
               :
             else
               body="$(printf '%s\n' \
-                "OpenCode could not produce a usable current-head control block after all configured model attempts." \
+                "all configured OpenCode model attempts failed to produce a usable current-head control block." \
                 "" \
                 "- Result: OPENCODE_REVIEW_UNAVAILABLE" \
-                "- Reason: primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}." \
+                "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}." \
                 "- Required next evidence: rerun OpenCode with a model/tooling attempt that emits a valid source-backed control block for this head." \
                 "- Head SHA: \`${HEAD_SHA}\`" \
                 "- Workflow run: ${RUN_ID}" \
                 "- Workflow attempt: ${RUN_ATTEMPT}" \
                 "" \
-                "No PR review was posted because this is review tooling instability, not a source-code finding.")"
+                "Leaving the PR review unchanged because this is review tooling instability, not a source-code finding.")"
               stop_approval_without_review "OPENCODE_REVIEW_UNAVAILABLE" "$body"
             fi
             echo "::endgroup::"
@@ -3792,7 +3792,7 @@ jobs:
                     "- Workflow run: ${RUN_ID}" \
                     "- Workflow attempt: ${RUN_ATTEMPT}" \
                     "" \
-                    "No PR review was posted because this is review tooling instability, not a source-code finding.")"
+                    "Leaving the PR review unchanged because this is review tooling instability, not a source-code finding.")"
                   stop_approval_without_review "OPENCODE_REVIEW_UNAVAILABLE" "$body"
                 fi
               fi
