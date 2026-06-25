@@ -30,10 +30,13 @@ on:
 concurrency:
   group: >-
     strix-${{ github.repository }}-${{ github.event_name == 'pull_request_target' &&
-    format('pr-{0}', github.event.pull_request.number) || github.event.inputs.pr_number != '' &&
-    format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
+    format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
+    github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' &&
+    format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
+    github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
   # cancel-in-progress deliberately disabled: an attacker could force-push
-  # a benign commit to cancel an in-progress scan of a malicious commit.
+  # a benign commit to cancel an in-progress scan of a malicious commit. The
+  # head SHA in PR groups prevents stale scans from serializing newer evidence.
   cancel-in-progress: false
 
 permissions:

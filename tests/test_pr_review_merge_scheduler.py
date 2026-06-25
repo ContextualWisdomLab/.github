@@ -315,10 +315,14 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert conflict.action == "block"
     assert "merge conflict: DIRTY" in conflict.reason
     assert "base=main, head=feature" in conflict.reason
-    assert "merge origin/main into feature, or rebase feature onto origin/main" in conflict.reason
+    assert "gh pr checkout 1" in conflict.reason
+    assert "git fetch origin main" in conflict.reason
+    assert "git merge --no-ff origin/main" in conflict.reason
+    assert "git rebase origin/main" in conflict.reason
+    assert "git status --short" in conflict.reason
     assert "resolve conflict markers in the PR branch" in conflict.reason
     assert "rerun focused checks" in conflict.reason
-    assert "--force-with-lease" in conflict.reason
+    assert "git push --force-with-lease" in conflict.reason
     assert "push the same feature branch" in conflict.reason
     conflicting = inspect(make_pr(mergeStateStatus="CONFLICTING"))
     assert conflicting.action == "block"

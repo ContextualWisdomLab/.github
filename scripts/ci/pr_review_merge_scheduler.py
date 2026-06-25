@@ -346,8 +346,11 @@ def merge_conflict_guidance(pr: dict[str, Any], merge_state: str) -> str:
     head_ref = pr.get("headRefName") or "head"
     return (
         f"merge conflict: {merge_state}; base={base_ref}, head={head_ref}; "
-        f"merge origin/{base_ref} into {head_ref}, or rebase {head_ref} onto origin/{base_ref}; resolve conflict markers in the PR branch, "
-        f"rerun focused checks, and push the same {head_ref} branch (use --force-with-lease only if rebased)"
+        f"run `gh pr checkout {pr.get('number', '<pr>')}`, `git fetch origin {base_ref}`, then "
+        f"`git merge --no-ff origin/{base_ref}` or `git rebase origin/{base_ref}`; "
+        "use `git status --short` to find conflicted files, resolve conflict markers in the PR branch, "
+        f"rerun focused checks, and push the same {head_ref} branch "
+        "(use `git push --force-with-lease` only if rebased)"
     )
 
 
@@ -681,7 +684,11 @@ def self_test() -> None:
         base_branch="main",
     )
     assert decision.action == "block"
-    assert "merge origin/main into feature, or rebase feature onto origin/main" in decision.reason
+    assert "gh pr checkout 1" in decision.reason
+    assert "git fetch origin main" in decision.reason
+    assert "git merge --no-ff origin/main" in decision.reason
+    assert "git rebase origin/main" in decision.reason
+    assert "git status --short" in decision.reason
     assert "resolve conflict markers" in decision.reason
     print("self-test passed")
 

@@ -476,7 +476,7 @@ jobs:
               "- mergeStateStatus: `" + $state + "`",
               "- mergeable: `" + ((.mergeable // "unknown") | tostring) + "`",
               if ($state == "DIRTY" or $state == "CONFLICTING") then
-                "- Review direction: PR has merge conflicts. OpenCode must explain how to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch."
+                "- Review direction: PR has merge conflicts. OpenCode must explain how to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch, including a compact command block with gh pr checkout, git fetch, merge or rebase, git status --short, and the normal or --force-with-lease push path."
               elif $state == "BLOCKED" then
                 "- Review direction: `BLOCKED` is a branch policy, review, or check state, not merge conflict evidence. Do not request conflict repair unless mergeStateStatus is `DIRTY` or `CONFLICTING`."
               else
@@ -787,7 +787,9 @@ jobs:
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
-          and push the same branch.
+          and push the same branch. Include a compact repair command block with gh pr checkout, git fetch,
+          merge or rebase, git status --short, the resolved-file step, the normal push path, and the
+          --force-with-lease path only for rebased branches.
           For Greptile-style specificity, include a P1/P2/P3 priority in each actionable finding,
           cite the evidence type behind the claim (nearby implementation, matching existing example,
           cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR
@@ -850,7 +852,9 @@ jobs:
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
-          and push the same branch.
+          and push the same branch. Include a compact repair command block with gh pr checkout, git fetch,
+          merge or rebase, git status --short, the resolved-file step, the normal push path, and the
+          --force-with-lease path only for rebased branches.
           For Greptile-style specificity, include a P1/P2/P3 priority in each actionable finding,
           cite the evidence type behind the claim (nearby implementation, matching existing example,
           cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR
@@ -1779,7 +1783,7 @@ jobs:
                     }
 
           append_merge_conflict_guidance() {
-            local pr_json merge_state base_ref head_ref
+            local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
             pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
@@ -1790,11 +1794,26 @@ jobs:
             fi
             base_ref="$(printf '%s' "$pr_json" | jq -r '.baseRefName // "base"')"
             head_ref="$(printf '%s' "$pr_json" | jq -r '.headRefName // "head"')"
+            printf -v base_fetch_ref '%q' "$base_ref"
+            printf -v base_origin_ref '%q' "origin/${base_ref}"
+            printf -v head_push_ref '%q' "HEAD:${head_ref}"
             printf '\n## Merge Conflict Guidance\n\n'
             printf '%s\n' "- Current merge state: \`${merge_state}\`"
             printf '%s\n' "- Base branch: \`${base_ref}\`"
             printf '%s\n' "- Head branch: \`${head_ref}\`"
             printf '%s\n' "- Fix direction: merge or rebase \`origin/${base_ref}\` into \`${head_ref}\`, resolve conflict markers in the changed files, rerun the focused checks, then push the same branch."
+            printf '%s\n' "- Repair commands:"
+            printf '%s\n' '```bash'
+            printf 'gh pr checkout %s --repo %s\n' "$PR_NUMBER" "$GH_REPOSITORY"
+            printf 'git fetch origin %s\n' "$base_fetch_ref"
+            printf 'git merge --no-ff %s  # or: git rebase %s\n' "$base_origin_ref" "$base_origin_ref"
+            printf 'git status --short\n'
+            printf '# resolve files, then git add <resolved-files>\n'
+            printf '# merge path: git commit\n'
+            printf '# rebase path: git rebase --continue\n'
+            printf 'git push origin %s\n' "$head_push_ref"
+            printf '# rebase path only: git push --force-with-lease origin %s\n' "$head_push_ref"
+            printf '%s\n' '```'
           }
 
           perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$review_output_file" >"$clean_output"
@@ -2028,7 +2047,7 @@ jobs:
                     }
 
           append_merge_conflict_guidance() {
-            local pr_json merge_state base_ref head_ref
+            local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
             pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
@@ -2039,11 +2058,26 @@ jobs:
             fi
             base_ref="$(printf '%s' "$pr_json" | jq -r '.baseRefName // "base"')"
             head_ref="$(printf '%s' "$pr_json" | jq -r '.headRefName // "head"')"
+            printf -v base_fetch_ref '%q' "$base_ref"
+            printf -v base_origin_ref '%q' "origin/${base_ref}"
+            printf -v head_push_ref '%q' "HEAD:${head_ref}"
             printf '\n## Merge Conflict Guidance\n\n'
             printf '%s\n' "- Current merge state: \`${merge_state}\`"
             printf '%s\n' "- Base branch: \`${base_ref}\`"
             printf '%s\n' "- Head branch: \`${head_ref}\`"
             printf '%s\n' "- Fix direction: merge or rebase \`origin/${base_ref}\` into \`${head_ref}\`, resolve conflict markers in the changed files, rerun the focused checks, then push the same branch."
+            printf '%s\n' "- Repair commands:"
+            printf '%s\n' '```bash'
+            printf 'gh pr checkout %s --repo %s\n' "$PR_NUMBER" "$GH_REPOSITORY"
+            printf 'git fetch origin %s\n' "$base_fetch_ref"
+            printf 'git merge --no-ff %s  # or: git rebase %s\n' "$base_origin_ref" "$base_origin_ref"
+            printf 'git status --short\n'
+            printf '# resolve files, then git add <resolved-files>\n'
+            printf '# merge path: git commit\n'
+            printf '# rebase path: git rebase --continue\n'
+            printf 'git push origin %s\n' "$head_push_ref"
+            printf '# rebase path only: git push --force-with-lease origin %s\n' "$head_push_ref"
+            printf '%s\n' '```'
           }
 
           update_review_overview() {
@@ -2919,7 +2953,7 @@ jobs:
 
             {
               printf 'GitHub Checks failed after the initial OpenCode review. Diagnose the failed checks and return a line-specific REQUEST_CHANGES review for PR #%s in %s.\n' "$PR_NUMBER" "$GITHUB_WORKSPACE"
-              printf 'Use the failed log excerpt and annotations below as evidence, follow the Review language evidence from bounded-review-evidence.md for the final review language, then inspect local source files and focused hunks to identify the exact line to edit. For each actionable Strix or GitHub Check failure, provide one finding with path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. If PR mergeability evidence reports mergeStateStatus DIRTY, include merge-conflict repair direction that names base/head branches, tells the author to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch. Use Greptile-style specificity: preserve a P1/P2/P3 priority, cite the evidence type behind the claim (nearby implementation, matching existing example, cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR scope drift, make suggested diffs GitHub suggestion-ready minimal diffs when possible, and include one compact Mermaid DAG that names the changed file or surface and maps it to the affected execution path, main risk, and verification path; do not use generic placeholder nodes like Changed surface or Main risk. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Include the failed check label and exact failed log phrase in problem or root_cause; unrelated speculative findings are invalid. Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests. The fix_direction must state the concrete from/to change, not only the workflow URL. The suggested_diff must be source-backed and GitHub suggestion-ready when possible: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. If Strix evidence contains multiple model vulnerability reports, include every model-reported vulnerability as a separate evidence-backed finding and preserve each report'\''s model name, title, severity, endpoint, and Code Locations/path:line evidence in problem or root_cause when present. When evidence supports it, name the concrete CWE/KISA-style class such as injection, auth/authz, secrets, crypto, path traversal/file upload, XSS/CSRF/SSRF, error disclosure, or debug/deployment config; do not invent a category without evidence. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. If a failure is external infrastructure with no source fix, the finding must identify the exact external blocker, supporting log line, and why no repository line can fix it.\n\n'
+              printf 'Use the failed log excerpt and annotations below as evidence, follow the Review language evidence from bounded-review-evidence.md for the final review language, then inspect local source files and focused hunks to identify the exact line to edit. For each actionable Strix or GitHub Check failure, provide one finding with path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. If PR mergeability evidence reports mergeStateStatus DIRTY, include merge-conflict repair direction that names base/head branches, tells the author to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch, including a compact command block with gh pr checkout, git fetch, merge or rebase, git status --short, and the normal or --force-with-lease push path. Use Greptile-style specificity: preserve a P1/P2/P3 priority, cite the evidence type behind the claim (nearby implementation, matching existing example, cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR scope drift, make suggested diffs GitHub suggestion-ready minimal diffs when possible, and include one compact Mermaid DAG that names the changed file or surface and maps it to the affected execution path, main risk, and verification path; do not use generic placeholder nodes like Changed surface or Main risk. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Include the failed check label and exact failed log phrase in problem or root_cause; unrelated speculative findings are invalid. Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests. The fix_direction must state the concrete from/to change, not only the workflow URL. The suggested_diff must be source-backed and GitHub suggestion-ready when possible: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. If Strix evidence contains multiple model vulnerability reports, include every model-reported vulnerability as a separate evidence-backed finding and preserve each report'\''s model name, title, severity, endpoint, and Code Locations/path:line evidence in problem or root_cause when present. When evidence supports it, name the concrete CWE/KISA-style class such as injection, auth/authz, secrets, crypto, path traversal/file upload, XSS/CSRF/SSRF, error disclosure, or debug/deployment config; do not invent a category without evidence. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. If a failure is external infrastructure with no source fix, the finding must identify the exact external blocker, supporting log line, and why no repository line can fix it.\n\n'
               printf 'Format the human-readable review with OpenCode-owned sections compatible with Copilot Review and CodeRabbitAI: start with a concise pull request overview, then list severity-ordered actionable findings without raw tool logs. Do not depend on those agents or a human reviewer being present.\n\n'
               printf 'Failed checks:\n'
               cat "$failed_checks_file"
@@ -3374,6 +3408,18 @@ jobs:
                         "- Problem: GitHub reports mergeStateStatus \`${merge_state}\` for this pull request." \
                         "- Root cause: Branch \`${head_ref}\` cannot be merged cleanly into \`${base_ref}\`; the changed-file flow below shows which review/runtime path is blocked by the conflict." \
                         "- Fix: Merge or rebase the latest \`${base_ref}\` into \`${head_ref}\`, resolve conflict markers in the PR branch, rerun the focused checks, and push the same branch." \
+                        "- Repair commands:" \
+                        '```bash' \
+                        "gh pr checkout ${PR_NUMBER} --repo ${GH_REPOSITORY}" \
+                        "git fetch origin ${base_ref}" \
+                        "git merge --no-ff origin/${base_ref}  # or: git rebase origin/${base_ref}" \
+                        "git status --short" \
+                        "# resolve files, then git add <resolved-files>" \
+                        "# merge path: git commit" \
+                        "# rebase path: git rebase --continue" \
+                        "git push origin HEAD:${head_ref}" \
+                        "# rebase path only: git push --force-with-lease origin HEAD:${head_ref}" \
+                        '```' \
                         "- Regression test: Keep OpenCode approval gated on mergeability so model-output failures cannot approve a conflicted PR." \
                         "" \
                         "## Change Flow DAG" \
