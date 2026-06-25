@@ -568,6 +568,7 @@ def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     head = pr["headRefOid"]
     if dry_run:
         return
+    require_github_actions_mutation_actor("update-branch")
     run(
         [
             "gh",
@@ -579,6 +580,20 @@ def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
             f"expected_head_sha={head}",
         ]
     )
+
+
+def require_github_actions_mutation_actor(action: str) -> None:
+    """Refuse mutating PR branches from a maintainer-local gh credential."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise RuntimeError(
+            f"{action} refused outside GitHub Actions; dispatch PR Review Merge Scheduler "
+            "so the workflow GITHUB_TOKEN performs the mutation as github-actions[bot]"
+        )
+    if not os.environ.get("GH_TOKEN"):
+        raise RuntimeError(
+            f"{action} refused without GH_TOKEN; configure the scheduler job to pass "
+            "secrets.GITHUB_TOKEN through GH_TOKEN so the mutation is attributable to github-actions[bot]"
+        )
 
 
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -923,7 +938,7 @@ def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
         "",
         "### Conflict repair",
         "",
-        "GitHub cannot safely update `DIRTY` or `CONFLICTING` PR branches. Repair the PR branch, then push the same branch so OpenCode and required checks can run on the new head.",
+        "When GitHub shows `Conflicting`, or the API reports `DIRTY`/`CONFLICTING`, this is not a code-review finding and it is not an `update-branch` candidate. Repair the PR branch, then push the same branch so OpenCode and required checks can run on the new head.",
         "`update-branch` is not a conflict resolver: the scheduler waits here because GitHub cannot choose which side of a conflicted hunk is correct.",
     ]
     for decision, parsed in conflicted:
@@ -965,6 +980,7 @@ def update_branch_summary(decisions: list[Decision]) -> list[str]:
         "",
         f"Requested `update-branch` for PR {pr_list} with the workflow `GITHUB_TOKEN`, guarded by the observed `expected_head_sha`.",
         "This is intentionally done inside GitHub Actions, not from a maintainer's local `gh` credential, so the mechanical update is attributable to the automation actor.",
+        "The scheduler refuses a non-dry-run `update-branch` outside GitHub Actions; dispatch the workflow instead of running the mutation locally.",
         "This branch-update API path needs `pull-requests: write`; it does not require the scheduler job to widen repository `contents` to write.",
         "When repository permissions allow the mutation, GitHub records the resulting branch update as `github-actions[bot]`.",
         "The updated head is not merge evidence by itself. Wait for the new head to receive OpenCode approval, Strix evidence, required checks, and unresolved-thread checks before merge or auto-merge.",

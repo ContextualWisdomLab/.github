@@ -119,13 +119,13 @@ both separately; a change can improve one while harming the other.
 The checked-in scheduler already does the minimal central path:
 
 - skips draft, wrong-base, and fork/external-head PRs;
-- blocks `DIRTY` or `CONFLICTING` with repair guidance that names the base branch, head branch, merge/rebase direction, conflict-marker cleanup, focused checks, same-branch push, and a compact `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` command path; it explicitly does not retry `update-branch` for conflicted PRs because GitHub cannot choose the correct conflict resolution;
+- blocks UI `Conflicting`, API `DIRTY`, or API `CONFLICTING` with repair guidance that names the base branch, head branch, merge/rebase direction, conflict-marker cleanup, focused checks, same-branch push, and a compact `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` command path; it explicitly does not retry `update-branch` for conflicted PRs because GitHub cannot choose the correct conflict resolution;
 - blocks unresolved review threads;
 - blocks current-head OpenCode `CHANGES_REQUESTED`;
 - blocks current-head failed check runs or status contexts before enabling auto-merge;
 - waits on `ACTION_REQUIRED` check runs as workflow approval or repository-policy states, not as source-code failures; failed checks still take precedence for current-head-approved PRs, so `ACTION_REQUIRED` cannot mask a real failed `strix`, lint, build, or required-check result;
 - rejects OpenCode reviews whose GitHub review commit matches the PR head but whose review-body `Gate evidence` names a different `Head SHA`; this prevents stale review evidence from becoming current-head approval by attachment alone;
-- updates `BEHIND` only when OpenCode approved the exact current head and no current-head failed check is present, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]` inside GitHub Actions instead of an OpenCode or maintainer-local credential; this path needs `pull-requests: write`, not `contents: write`;
+- updates `BEHIND` only when OpenCode approved the exact current head and no current-head failed check is present, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]` inside GitHub Actions instead of an OpenCode or maintainer-local credential; the script now refuses non-dry-run `update-branch` outside GitHub Actions, and this path needs `pull-requests: write`, not `contents: write`;
 - enables native auto-merge only for current-head OpenCode approval;
 - dispatches same-head Strix evidence first when the current head has no completed Strix evidence;
 - waits while same-head Strix evidence is still running, so OpenCode is not started just to poll a peer check;

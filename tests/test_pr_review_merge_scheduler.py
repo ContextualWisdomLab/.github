@@ -451,6 +451,8 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=True)
     assert calls == []
 
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
     sched.enable_auto_merge("owner/repo", pr, dry_run=False)
     sched.disable_auto_merge("owner/repo", pr, dry_run=False)
     sched.update_branch("owner/repo", pr, dry_run=False)
@@ -462,6 +464,23 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[2][-1] == "expected_head_sha=head"
     assert calls[3][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
     assert calls[4][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+
+
+def test_update_branch_refuses_local_credentials(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "local-token")
+
+    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
+        sched.update_branch("owner/repo", make_pr(), dry_run=False)
+    assert calls == []
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="refused without GH_TOKEN"):
+        sched.update_branch("owner/repo", make_pr(), dry_run=False)
+    assert calls == []
 
 
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
@@ -530,6 +549,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     ) in summary
     assert "fresh same-head OpenCode review" in summary
     assert "### Conflict repair" in summary
+    assert "When GitHub shows `Conflicting`" in summary
     assert "`update-branch` is not a conflict resolver" in summary
     assert "PR #7 is `DIRTY` against `main` from `feature\\|x`:" not in summary
     assert "PR #7 is `DIRTY` against `main` from `feature|x`:" in summary
@@ -540,6 +560,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "### Branch update requests" in summary
     assert "Requested `update-branch` for PR #8 with the workflow `GITHUB_TOKEN`" in summary
     assert "not from a maintainer's local `gh` credential" in summary
+    assert "refuses a non-dry-run `update-branch` outside GitHub Actions" in summary
     assert "needs `pull-requests: write`" in summary
     assert "does not require the scheduler job to widen repository `contents` to write" in summary
     assert "github-actions[bot]" in summary
