@@ -1,6 +1,6 @@
 # PR Governance Audit
 
-Live check: 2026-06-23 KST, GitHub API via `gh` as `seonghobae`.
+Live check: 2026-06-25 10:10 KST, GitHub API via `gh` as `seonghobae`.
 
 ## Canonical Policy
 
@@ -40,28 +40,28 @@ them to a local defect.
 
 ## Live Repository Inventory
 
-Live generated: 2026-06-25 KST via GitHub API. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST.
+Live generated: 2026-06-25 10:10 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST.
 
 | Repo | Flow | Default | Auto | Rulesets | Required checks | Stale dismissal | Open PRs | Workflows | Recent merged actor |
 |---|---:|---:|---:|---|---|---:|---:|---|---|
-| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 25 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #53 `github-actions`; #51 `seonghobae`; #50 `seonghobae` |
-| `ContextualWisdomLab/bandscope` | Git Flow | `develop` | on | `Lock default branch` | `ci / build-and-test`, `dependency-review`, `security-audit`, `CodeQL`, `sbom`, `release-preflight`, `gate / build / windows`, `gate / build / macos`, `trivy-fs-scan` | ruleset true; classic false | 81 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #427 `github-actions`; #408 `seonghobae`; #405 `seonghobae` |
-| `ContextualWisdomLab/clearfolio` | GitHub Flow | `main` | off | `PR` | none | false | 12 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #13 `seonghobae`; #9 `seonghobae`; #8 `seonghobae` |
+| `ContextualWisdomLab/.github` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 26 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #50 `seonghobae`; #51 `seonghobae`; #53 `github-actions` |
+| `ContextualWisdomLab/bandscope` | Git Flow | `develop` | on | `Lock default branch` | `ci / build-and-test`, `dependency-review`, `security-audit`, `CodeQL`, `sbom`, `release-preflight`, `gate / build / windows`, `gate / build / macos`, `trivy-fs-scan` | ruleset true; classic false | 80 | OpenCode Review; PR Review Merge Scheduler | #427 `github-actions`; #379 `github-actions`; #388 `github-actions` |
+| `ContextualWisdomLab/clearfolio` | GitHub Flow | `main` | off | `PR` | none | false | 13 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #8 `seonghobae`; #9 `seonghobae`; #13 `seonghobae` |
 | `ContextualWisdomLab/codec-carver` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 8 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #103 `github-actions`; #98 `seonghobae`; #97 `opencode-agent` |
 | `ContextualWisdomLab/contextual-orchestrator` | GitHub Flow | `main` | off | none | none | none | 0 | none matched | none |
 | `ContextualWisdomLab/ContextualWisdomLab.github.io` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 6 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #15 `seonghobae`; #14 `seonghobae`; #13 `github-actions` |
 | `ContextualWisdomLab/naruon` | Git Flow | `develop` | on | `Lock default branch`, `PR` | `strix`, `opencode-review` | true | 1 | OpenCode Review; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #758 `seonghobae`; #757 `seonghobae`; #756 `seonghobae` |
-| `ContextualWisdomLab/newsdom-api` | Git Flow | `develop` | on | `Lock default branch`, `mirror-classic-protection-main-develop` | `pytest`, `scorecard`, `codeql (python, actions)`, `dependency-review`, `quality-gate` | true | 11 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #199 `seonghobae`; #198 `seonghobae`; #197 `seonghobae` |
+| `ContextualWisdomLab/newsdom-api` | Git Flow | `develop` | on | `Lock default branch`, `mirror-classic-protection-main-develop` | `pytest`, `scorecard`, `codeql (python, actions)`, `dependency-review`, `quality-gate` | ruleset true | 9 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #172 `seonghobae`; #170 `seonghobae`; #173 `seonghobae` |
 | `ContextualWisdomLab/pg-erd-cloud` | GitHub Flow | `main` | on | `Lock default branch` | none | ruleset true | 8 | OpenCode Review; PR Review Autofix; PR Review Fix Scheduler; PR Review Merge Scheduler; Strix Security Scan | #247 `github-actions`; #246 `github-actions`; #239 `github-actions` |
-| `ContextualWisdomLab/scopeweave` | Git Flow | `develop` | on | `Lock default branch` | none | ruleset true | 8 | OpenCode Review; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #123 `seonghobae`; #117 `seonghobae`; #115 `seonghobae` |
-| `ContextualWisdomLab/VibeSec` | Git Flow | `develop` | on | `Lock default branch`, `PR` | none | mixed true/false | 4 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #126 `github-actions`; #122 `seonghobae`; #121 `seonghobae` |
+| `ContextualWisdomLab/scopeweave` | Git Flow | `develop` | on | `Lock default branch` | none | ruleset true | 5 | OpenCode Review; PR Review Merge Scheduler; Strix Gate Self-Test; Strix Security Scan | #116 `seonghobae`; #118 `seonghobae`; #124 `seonghobae` |
+| `ContextualWisdomLab/VibeSec` | Git Flow | `develop` | on | `Lock default branch`, `PR` | none | mixed true/false | 4 | OpenCode Review; PR Review Merge Scheduler; Strix Security Scan | #122 `seonghobae`; #121 `seonghobae`; #126 `github-actions` |
 
 ## Current Gaps By Repo
 
 | Repo | Gap |
 |---|---|
-| `.github` | PR #37, #38, #41, #42, and #49 are merged. PR #49 is the current central proof that generic failed-check deflections are rejected before publication. PR #58 extends that contract so pending checks, check-rollup lookup failures, and failed-check diagnosis gaps stop without changing PR review state instead of becoming user-facing Findings. Remaining open PRs still need current-head review/check evaluation rather than stale review reuse. |
-| `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. Live dry-run `28134181171` proved the repo-local scheduler still waited on an already enabled auto-merge request instead of updating a `BEHIND` approved PR, so PR #450 syncs the scheduler script, adds explicit update-branch workflow control, and prevents failed-check mapping failures from being published as Findings. |
+| `.github` | PR #37, #38, #41, #42, and #49 are merged. PR #49 is the central proof that generic failed-check deflections are rejected before publication. PR #58 extends that contract so pending checks, check-rollup lookup failures, failed-check diagnosis gaps, and scheduler decisions stay tool states or Actions Summary output instead of becoming user-facing Findings. Remaining open PRs still need current-head review/check evaluation rather than stale review reuse. |
+| `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. Live dry-run `28134181171` proved the repo-local scheduler still waited on an already enabled auto-merge request instead of updating a `BEHIND` approved PR, so PR #450 syncs the scheduler script, adds explicit update-branch workflow control, writes scheduler decisions to Actions Summary, and prevents failed-check mapping failures from being published as Findings. The default branch currently has OpenCode Review and PR Review Merge Scheduler, but no Strix workflow. |
 | `clearfolio` | PR #13 is merged at `4bc17c6` after same-head manual Strix run `28051319530`, same-head manual OpenCode run `28051665082`, unresolved review threads `0`, and guarded merge against head `5fe1791`. Auto-merge remains off, so direct guarded merge is the repo path. |
 | `codec-carver` | PR #98 replaced the legacy scheduler with the central GitHub Actions path. Keep #94 as the historical negative sample because it used `opencode-agent` as a merge actor. |
 | `contextual-orchestrator` | No matching rulesets or review workflows; either opt in deliberately or mark unmanaged. |
@@ -170,6 +170,8 @@ PR #367: wait: current head is approved; auto-merge already enabled
 
 - A live current-head review -> same-head manual Strix status bridge -> OpenCode approval -> guarded merge trace has been completed on `.github` PR #28.
 - No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet. `bandscope` PR #450 is the first corrective rollout after live evidence showed the stale scheduler was waiting instead of updating.
+- `bandscope` PR #450 update-only scheduler run `28139266598` is queued on the latest head `98076fec26f9c5b913f2d1713759c709790be7e8`; it must still prove GitHub Actions[bot] `update-branch` behavior and Actions Summary output on a live run.
+- `.github` PR #58 exposed that a cancelled manual Strix run can keep its manual status publisher queued and delay the next same-PR Strix run; PR #58 now skips that publisher when the workflow is cancelled.
 - PR #721 in `naruon` remains the historical fixture for this proof: head `b683deaf8b4761399321799279f58d884db57141`, current-head OpenCode approval `4558310923`, unresolved review threads `0`, and `mergeStateStatus=BEHIND`. Central `.github` dry-run selected `update_branch`, but `naruon` workflow run `28073586594` used the then-stale repo-local scheduler and did not update it. PR #756 has since rolled the central scheduler into `naruon`, so the next proof must use a fresh current-head outdated PR instead of reusing stale evidence from #721.
 - `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.
 - `naruon` PR #756 completed the repo-local rollout for the scheduler contract. Its initial head failed backend governance and Scorecard because `actions: write`/`contents: write` were broader than the repo policy allows; the amended and merged head restores minimal `GITHUB_TOKEN` permissions, keeps `trigger_reviews` and `enable_auto_merge` defaulted off, keeps `update_branches` defaulted on, and still dry-runs PR #694/#721 as `update_branch`.
