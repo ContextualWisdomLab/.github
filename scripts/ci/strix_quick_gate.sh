@@ -2290,6 +2290,7 @@ try:
         text=True,
         env=child_env,
         start_new_session=True,
+        shell=False,
     )
     output, _ = process.communicate(timeout=process_timeout)
     if output:

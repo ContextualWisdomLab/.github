@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -105,6 +106,16 @@ class Decision:
     pr: int
     action: str
     reason: str
+
+
+def scrub_sensitive_data(text: str | None) -> str | None:
+    """Mask sensitive tokens in text to prevent secret leakage."""
+    if not text:
+        return text
+    text = re.sub(r'(?i)(bearer\s+)[^\s"\'\\]+', r'\1***', text)
+    text = re.sub(r'(?i)(token\s+)[^\s"\'\\]+', r'\1***', text)
+    text = re.sub(r'(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)', '***', text)
+    return text
 
 
 def contract_decision(decision: Decision) -> str:
@@ -228,8 +239,10 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     argv = list(args)
     process = subprocess.run(argv, input=stdin, capture_output=True, text=True, shell=False)
     if process.returncode != 0:
+        scrubbed_args = scrub_sensitive_data(' '.join(argv))
+        scrubbed_stderr = scrub_sensitive_data(process.stderr or "")
         raise RuntimeError(
-            f"Command failed ({process.returncode}): {' '.join(argv)}\n{process.stderr}"
+            f"Command failed ({process.returncode}): {scrubbed_args}\n{scrubbed_stderr}"
         )
     return process.stdout
 

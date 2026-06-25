@@ -185,6 +185,7 @@ def changed_new_lines(path_value: str) -> set[int]:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            shell=False,
         )
     except OSError:
         return set()

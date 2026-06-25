@@ -775,6 +775,19 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
     assert payload["decisions"][1]["contract_decision"] == "WAIT"
 
 
+def test_scrub_sensitive_data_and_run_error():
+    assert sched.scrub_sensitive_data("Authorization: Bearer mytoken123") == "Authorization: Bearer ***"
+    assert sched.scrub_sensitive_data("token mytoken123") == "token ***"
+    assert sched.scrub_sensitive_data("ghp_1234567890abcdef") == "***"
+    assert sched.scrub_sensitive_data("github_pat_11AAAAA_abcdefg") == "***"
+    assert sched.scrub_sensitive_data("No secrets here") == "No secrets here"
+    assert sched.scrub_sensitive_data("") == ""
+    assert sched.scrub_sensitive_data(None) is None
+
+    with pytest.raises(RuntimeError, match=r"Command failed \([12]\): .* \*\*\*"):
+        sched.run([sys.executable, "-c", "import sys; sys.exit(1)", "ghp_secret"], stdin=None)
+
+
 def test_main_keeps_scanning_after_update_branch_403_and_422(monkeypatch, capsys):
     prs = [make_pr(number=1), make_pr(number=2), make_pr(number=3)]
     seen = []
