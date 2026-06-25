@@ -118,11 +118,11 @@ both separately; a change can improve one while harming the other.
 The checked-in scheduler already does the minimal central path:
 
 - skips draft, wrong-base, and fork/external-head PRs;
-- blocks `DIRTY` or `CONFLICTING` with repair guidance that names the base branch, head branch, merge/rebase direction, conflict-marker cleanup, focused checks, same-branch push, and a compact `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` command path;
+- blocks `DIRTY` or `CONFLICTING` with repair guidance that names the base branch, head branch, merge/rebase direction, conflict-marker cleanup, focused checks, same-branch push, and a compact `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` command path; it explicitly does not retry `update-branch` for conflicted PRs because GitHub cannot choose the correct conflict resolution;
 - blocks unresolved review threads;
 - blocks current-head OpenCode `CHANGES_REQUESTED`;
 - blocks current-head failed check runs or status contexts before enabling auto-merge;
-- updates `BEHIND` only when OpenCode approved the exact current head and no current-head failed check is present, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]` instead of an OpenCode or personal credential; this path needs `pull-requests: write`, not `contents: write`;
+- updates `BEHIND` only when OpenCode approved the exact current head and no current-head failed check is present, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]` inside GitHub Actions instead of an OpenCode or maintainer-local credential; this path needs `pull-requests: write`, not `contents: write`;
 - enables native auto-merge only for current-head OpenCode approval;
 - dispatches same-head Strix evidence first when the current head has no completed Strix evidence;
 - waits while same-head Strix evidence is still running, so OpenCode is not started just to poll a peer check;
@@ -132,6 +132,7 @@ The checked-in scheduler already does the minimal central path:
 - writes the same per-PR decisions to the GitHub Actions step summary, so conflict repair and update-branch decisions are visible without opening raw logs.
 - prints a machine-readable `pr-review-merge-scheduler/v1` JSON contract with every inspected PR, the scheduler action, the bounded decision value (`UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`), and structured `guidance` for states that need action: `merge_conflict_repair` includes the base/head branches, repair steps, and merge-or-rebase commands; `github_actions_update_branch` names `github-actions[bot]`, the workflow `GITHUB_TOKEN`, `pull-requests: write`, `expected_head_sha`, and the new-head evidence required before merge.
 - caps each GraphQL PR page at 25 nodes, so large queues can be scanned without hitting GitHub's query resource limit.
+- excludes OpenCode Review's own `opencode-review` check from peer failed-check evidence, so a cancelled or stale OpenCode run cannot become a source-code `REQUEST_CHANGES` review against the same head.
 
 Small proof run:
 
@@ -180,6 +181,7 @@ PR #381: wait: OpenCode review is already in progress
 - `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.
 - `naruon` PR #756 completed the repo-local rollout for the scheduler contract. Its initial head failed backend governance and Scorecard because `actions: write`/`contents: write` were broader than the repo policy allows; the amended and merged head restores minimal `GITHUB_TOKEN` permissions, keeps `trigger_reviews` and `enable_auto_merge` defaulted off, keeps `update_branches` defaulted on, and still dry-runs PR #694/#721 as `update_branch`.
 - `update-branch` `422/403` now has a safe fixture: unit tests simulate both permission-denied and stale `expected_head_sha` failures, assert they become `action_error`, and assert later PRs are still inspected. A real live `422/403` case is still useful as operational evidence, but it is no longer missing from the decision contract test surface.
+- `bandscope` PR #378 exposed a self-referential failed-check loop after manual retry run `28155083916`: the retry run succeeded and approved step execution, but the check rollup still contained the cancelled older `OpenCode Review/opencode-review` run `28152862698`, so OpenCode posted current-head `CHANGES_REQUESTED` review `4569063977` with the banned generic `No deterministic missing-string markers...` text. The collector now excludes OpenCode's own check by check name and by both actual (`OpenCode Review`) and legacy (`OpenCode PR Review`) workflow names before failed-check fallback evidence is built.
 - Public repo drift is real, not hypothetical: only `.github` matched the central scheduler/workflow byte-for-byte in the 2026-06-25 scan. Some drift is policy-specific and should not be overwritten blindly, but `bandscope` had behaviorally unsafe drift and now has PR #450.
 - Required-check interpretation should stay delegated to GitHub native auto-merge until a repo needs immediate merge.
 - PR #28 proves the self-modifying trusted workflow bootstrap path after newer same-head evidence exists, but it does not prove update-branch behavior, stale approval dismissal after a head change, or cross-repository rollout.

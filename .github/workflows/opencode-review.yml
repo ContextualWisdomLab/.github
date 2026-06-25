@@ -377,6 +377,7 @@ jobs:
                   | .[]
                   | if .__typename == "CheckRun" then
                       select((.name // "") != "opencode-review")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
                       | select((.status // "") != "COMPLETED")
                     elif .__typename == "StatusContext" then

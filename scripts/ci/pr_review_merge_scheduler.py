@@ -11,6 +11,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -52,6 +53,7 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
                 name
                 status
                 conclusion
+                startedAt
                 checkSuite {
                   workflowRun {
                     workflow { name }
@@ -72,6 +74,8 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
 """
 
 OPEN_PRS_PAGE_SIZE = 25
+DEFAULT_STALE_OPENCODE_MINUTES = 45
+RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 
 
 @dataclass
@@ -144,6 +148,7 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
             "base_ref": base_ref,
             "head_ref": head_ref,
             "summary": "Repair the PR branch against the latest base branch, then push the same branch so review and required checks rerun on the new head.",
+            "automation_limit": "GitHub update-branch cannot choose merge-conflict resolutions; the scheduler must wait until the PR branch is repaired.",
             "steps": [
                 "Check out the PR branch.",
                 "Fetch the latest base branch.",
@@ -274,15 +279,58 @@ def is_strix_context(node: dict[str, Any]) -> bool:
     return (node.get("context") or "") in {"strix", "Strix Security Scan"}
 
 
-def opencode_in_progress(pr: dict[str, Any]) -> bool:
-    """Return whether any OpenCode review status for the PR is still running."""
+def parse_github_datetime(value: str | None) -> datetime | None:
+    """Parse a GitHub API timestamp into an aware UTC datetime."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def running_check_state(node: dict[str, Any]) -> str:
+    """Return running, complete, or absent for a check/status context."""
+    status = (node.get("status") or node.get("state") or "").upper()
+    if not status:
+        return "absent"
+    return "running" if status in RUNNING_CHECK_STATES else "complete"
+
+
+def opencode_progress_state(
+    pr: dict[str, Any],
+    *,
+    stale_after_minutes: int,
+    now: datetime | None = None,
+) -> str:
+    """Return absent, running, stale, or complete for current OpenCode review status."""
+    now = now or datetime.now(timezone.utc)
+    saw_complete = False
     for node in context_nodes(pr):
         if not is_opencode_context(node):
             continue
-        status = (node.get("status") or node.get("state") or "").upper()
-        if status and status not in {"COMPLETED", "SUCCESS", "FAILURE", "ERROR"}:
-            return True
-    return False
+        state = running_check_state(node)
+        if state == "absent":
+            continue
+        if state != "running":
+            saw_complete = True
+            continue
+        started_at = parse_github_datetime(node.get("startedAt"))
+        if started_at and stale_after_minutes >= 0:
+            age_seconds = (now - started_at).total_seconds()
+            if age_seconds >= stale_after_minutes * 60:
+                return "stale"
+        return "running"
+    return "complete" if saw_complete else "absent"
+
+
+def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None = None) -> bool:
+    """Return whether any OpenCode review status for the PR is still actively running."""
+    stale_after = DEFAULT_STALE_OPENCODE_MINUTES if stale_after_minutes is None else stale_after_minutes
+    return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
 
 
 def strix_evidence_state(pr: dict[str, Any]) -> str:
@@ -293,7 +341,7 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
             continue
         found = True
         status = (node.get("status") or node.get("state") or "").upper()
-        if status in {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}:
+        if status in RUNNING_CHECK_STATES:
             return "running"
         if node.get("__typename") == "CheckRun" and status != "COMPLETED":
             return "running"
@@ -452,7 +500,8 @@ def merge_conflict_guidance(pr: dict[str, Any], merge_state: str) -> str:
         f"`git merge --no-ff origin/{base_ref}` or `git rebase origin/{base_ref}`; "
         "use `git status --short` to find conflicted files, resolve conflict markers in the PR branch, "
         f"rerun focused checks, and push the same {head_ref} branch "
-        "(use `git push --force-with-lease` only if rebased)"
+        "(use `git push --force-with-lease` only if rebased); "
+        "do not retry update-branch until the conflict is repaired"
     )
 
 
@@ -467,6 +516,7 @@ def inspect_pr(
     workflow: str,
     security_workflow: str,
     base_branch: str,
+    stale_opencode_minutes: int = DEFAULT_STALE_OPENCODE_MINUTES,
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
@@ -515,8 +565,22 @@ def inspect_pr(
         enable_auto_merge(repo, pr, dry_run=dry_run)
         return Decision(number, "auto_merge", "current head is approved; auto-merge enabled")
 
-    if opencode_in_progress(pr):
+    opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+    if opencode_state == "running":
         return Decision(number, "wait", "OpenCode review is already in progress")
+    if opencode_state == "stale" and not trigger_reviews:
+        return Decision(
+            number,
+            "wait",
+            f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; review dispatch disabled",
+        )
+    if opencode_state == "stale":
+        dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        return Decision(
+            number,
+            "review_dispatch",
+            f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; same-head OpenCode re-dispatched",
+        )
 
     if trigger_reviews:
         strix_state = strix_evidence_state(pr)
@@ -652,6 +716,7 @@ def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
         "### Conflict repair",
         "",
         "GitHub cannot safely update `DIRTY` or `CONFLICTING` PR branches. Repair the PR branch, then push the same branch so OpenCode and required checks can run on the new head.",
+        "`update-branch` is not a conflict resolver: the scheduler waits here because GitHub cannot choose which side of a conflicted hunk is correct.",
     ]
     for decision, parsed in conflicted:
         assert parsed is not None
@@ -691,6 +756,7 @@ def update_branch_summary(decisions: list[Decision]) -> list[str]:
         "### Branch update requests",
         "",
         f"Requested `update-branch` for PR {pr_list} with the workflow `GITHUB_TOKEN`, guarded by the observed `expected_head_sha`.",
+        "This is intentionally done inside GitHub Actions, not from a maintainer's local `gh` credential, so the mechanical update is attributable to the automation actor.",
         "This branch-update API path needs `pull-requests: write`; it does not require the scheduler job to widen repository `contents` to write.",
         "When repository permissions allow the mutation, GitHub records the resulting branch update as `github-actions[bot]`.",
         "The updated head is not merge evidence by itself. Wait for the new head to receive OpenCode approval, Strix evidence, required checks, and unresolved-thread checks before merge or auto-merge.",
@@ -922,6 +988,7 @@ def self_test() -> None:
     assert conflict_guidance
     assert conflict_guidance["type"] == "merge_conflict_repair"
     assert conflict_guidance["merge_state"] == "DIRTY"
+    assert "update-branch cannot choose" in conflict_guidance["automation_limit"]
     assert "git status --short" in conflict_guidance["commands"]
     assert contract_decision(Decision(1, "update_branch", "ok")) == "UPDATE_BRANCH"
     assert contract_decision(Decision(1, "wait", "ok")) == "WAIT"
@@ -964,6 +1031,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--update-branches", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--review-workflow", default="OpenCode Review")
     parser.add_argument("--security-workflow", default="Strix Security Scan")
+    parser.add_argument(
+        "--stale-opencode-minutes",
+        type=int,
+        default=int(os.environ.get("STALE_OPENCODE_MINUTES", str(DEFAULT_STALE_OPENCODE_MINUTES))),
+    )
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -994,6 +1066,7 @@ def main(argv: list[str]) -> int:
                 workflow=args.review_workflow,
                 security_workflow=args.security_workflow,
                 base_branch=args.base_branch,
+                stale_opencode_minutes=args.stale_opencode_minutes,
             )
         except RuntimeError as exc:
             decision = Decision(

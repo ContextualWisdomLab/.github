@@ -293,6 +293,9 @@ gh api graphql \
 				select((.status // "") == "COMPLETED")
 				| select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)
+				| select((.name // "") != "opencode-review")
+				| select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
+				| select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
 				| [
 					"check_run",
 					(((.checkSuite.workflowRun.workflow.name // "") + "/" + (.name // "check")) | gsub("^/"; "")),

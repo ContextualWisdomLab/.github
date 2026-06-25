@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -39,6 +40,16 @@ def strix_check(status="COMPLETED", conclusion="SUCCESS", workflow="Strix Securi
         "status": status,
         "conclusion": conclusion,
         "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+    }
+
+
+def opencode_check(status="IN_PROGRESS", started_at=None):
+    return {
+        "__typename": "CheckRun",
+        "name": "opencode-review",
+        "status": status,
+        "startedAt": started_at,
+        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
     }
 
 
@@ -177,16 +188,59 @@ def test_context_review_and_check_helpers():
     assert sched.is_strix_context({"__typename": "CheckRun", "name": "strix", "checkSuite": {"workflowRun": {"workflow": None}}})
     assert not sched.is_strix_context({"context": "lint"})
 
-    running = make_pr(
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "opencode-review", "status": "IN_PROGRESS"}]}}
+    assert sched.parse_github_datetime(None) is None
+    assert sched.parse_github_datetime("not-a-date") is None
+    assert sched.parse_github_datetime("2026-06-25T07:00:00Z") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
+    assert sched.parse_github_datetime("2026-06-25T07:00:00") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
+    assert sched.running_check_state({}) == "absent"
+    assert sched.running_check_state({"status": "IN_PROGRESS"}) == "running"
+    assert sched.running_check_state({"status": "COMPLETED"}) == "complete"
+
+    missing_state = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
+                    }
+                ]
+            }
+        }
     )
+    assert not sched.opencode_in_progress(missing_state)
+    assert sched.opencode_progress_state(missing_state, stale_after_minutes=45) == "absent"
+
+    running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert sched.opencode_in_progress(running)
+    assert sched.opencode_progress_state(running, stale_after_minutes=45) == "running"
+    stale = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(started_at="2026-06-25T07:00:00Z"),
+                    {"context": "unrelated", "state": "PENDING"},
+                ]
+            }
+        }
+    )
+    assert (
+        sched.opencode_progress_state(
+            stale,
+            stale_after_minutes=45,
+            now=datetime(2026, 6, 25, 8, 0, tzinfo=timezone.utc),
+        )
+        == "stale"
+    )
     complete = make_pr(
         statusCheckRollup={"contexts": {"nodes": [{"context": "opencode-review", "state": "SUCCESS"}]}}
     )
     assert not sched.opencode_in_progress(complete)
+    assert sched.opencode_progress_state(complete, stale_after_minutes=45) == "complete"
     unrelated = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "PENDING"}]}})
     assert not sched.opencode_in_progress(unrelated)
+    assert sched.opencode_progress_state(unrelated, stale_after_minutes=45) == "absent"
     assert sched.strix_evidence_state(make_pr()) == "missing"
     assert sched.strix_evidence_state(unrelated) == "running"
     mixed_contexts = make_pr(
@@ -278,8 +332,12 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
     summary_path = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    conflict_reason = sched.merge_conflict_guidance(
+        make_pr(number=7, headRefName="feature|x"),
+        "DIRTY",
+    )
     decisions = [
-        sched.Decision(7, "block", "merge conflict: DIRTY; base=main, head=feature|x"),
+        sched.Decision(7, "block", conflict_reason),
         sched.Decision(
             8,
             "update_branch",
@@ -304,6 +362,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][0]["guidance"]["merge_state"] == "DIRTY"
     assert payload["decisions"][0]["guidance"]["base_ref"] == "main"
     assert payload["decisions"][0]["guidance"]["head_ref"] == "feature|x"
+    assert "update-branch cannot choose" in payload["decisions"][0]["guidance"]["automation_limit"]
     assert "gh pr checkout 7" in payload["decisions"][0]["guidance"]["commands"]
     assert "git merge --no-ff origin/main" in payload["decisions"][0]["guidance"]["commands"]
     assert payload["decisions"][1]["guidance"]["type"] == "github_actions_update_branch"
@@ -313,12 +372,14 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][1]["guidance"]["head_guard"] == "expected_head_sha"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
-    assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x |" in summary
+    assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; run" in summary
+    assert "do not retry update-branch until the conflict is repaired" in summary
     assert (
         "| #8 | update_branch | current-head OpenCode review approved; "
         "branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions) |"
     ) in summary
     assert "### Conflict repair" in summary
+    assert "`update-branch` is not a conflict resolver" in summary
     assert "PR #7 is `DIRTY` against `main` from `feature\\|x`:" not in summary
     assert "PR #7 is `DIRTY` against `main` from `feature|x`:" in summary
     assert "gh pr checkout 7" in summary
@@ -327,6 +388,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "git push --force-with-lease" in summary
     assert "### Branch update requests" in summary
     assert "Requested `update-branch` for PR #8 with the workflow `GITHUB_TOKEN`" in summary
+    assert "not from a maintainer's local `gh` credential" in summary
     assert "needs `pull-requests: write`" in summary
     assert "does not require the scheduler job to widen repository `contents` to write" in summary
     assert "github-actions[bot]" in summary
@@ -373,6 +435,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "rerun focused checks" in conflict.reason
     assert "git push --force-with-lease" in conflict.reason
     assert "push the same feature branch" in conflict.reason
+    assert "do not retry update-branch" in conflict.reason
     conflicting = inspect(make_pr(mergeStateStatus="CONFLICTING"))
     assert conflicting.action == "block"
     assert "merge conflict: CONFLICTING" in conflicting.reason
@@ -435,9 +498,7 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert inspect(approved).action == "auto_merge"
     assert merged == [("owner/repo", 1, True)]
 
-    running = make_pr(
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "opencode-review", "status": "IN_PROGRESS"}]}}
-    )
+    running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert inspect(running).reason == "OpenCode review is already in progress"
 
     dispatched = []
@@ -451,6 +512,23 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     )
     assert inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})).action == "review_dispatch"
     assert dispatched == ["Strix Security Scan", "OpenCode Review"]
+    stale_opencode = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(started_at="2026-06-25T07:00:00Z"),
+                    strix_check(),
+                ]
+            }
+        }
+    )
+    stale_decision = inspect(stale_opencode, stale_opencode_minutes=0)
+    assert stale_decision.action == "review_dispatch"
+    assert "retry threshold" in stale_decision.reason
+    assert dispatched == ["Strix Security Scan", "OpenCode Review", "OpenCode Review"]
+    stale_wait = inspect(stale_opencode, trigger_reviews=False, stale_opencode_minutes=0)
+    assert stale_wait.action == "wait"
+    assert "review dispatch disabled" in stale_wait.reason
     assert inspect(make_pr(), trigger_reviews=False).reason == "current head has no OpenCode approval"
 
 
@@ -471,10 +549,23 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     sched.self_test()
     assert "self-test passed" in capsys.readouterr().out
 
-    parsed = sched.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--no-trigger-reviews"])
+    parsed = sched.parse_args(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github",
+            "--no-trigger-reviews",
+            "--stale-opencode-minutes",
+            "5",
+        ]
+    )
     assert parsed.repo == "owner/repo"
     assert not parsed.trigger_reviews
     assert parsed.security_workflow == "Strix Security Scan"
+    assert parsed.stale_opencode_minutes == 5
 
     assert sched.main(["--self-test"]) == 0
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
