@@ -20,6 +20,8 @@ def make_pr(**overrides):
         "baseRefOid": "base",
         "headRefName": "feature",
         "headRefOid": "head",
+        "isCrossRepository": False,
+        "maintainerCanModify": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
         "autoMergeRequest": None,
         "commits": {
@@ -551,6 +553,11 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
             "workflow action required: opencode-review; approve or unblock the GitHub Actions run before treating checks as failed or passed",
             ("Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers.",),
         ),
+        sched.Decision(
+            11,
+            "wait",
+            "current-head OpenCode review approved, but head repo fork/repo is external and not writable by the scheduler credential; ask the PR author to update the branch against the base branch, or enable a maintainer-writable head path before rerunning",
+        ),
     ]
 
     sched.print_summary(decisions, dry_run=True, base_branch="main", project_flow="github-flow")
@@ -560,14 +567,15 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     payload = json.loads(output.splitlines()[-1])
     assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
     assert payload["base_branch"] == "main"
-    assert payload["counts"] == {"block": 1, "disable_auto_merge": 1, "update_branch": 1, "wait": 1}
+    assert payload["counts"] == {"block": 1, "disable_auto_merge": 1, "update_branch": 1, "wait": 2}
     assert payload["dry_run"] is True
-    assert payload["inspected"] == 4
+    assert payload["inspected"] == 5
     assert payload["project_flow"] == "github-flow"
     assert payload["decisions"][0]["contract_decision"] == "WAIT"
     assert payload["decisions"][1]["contract_decision"] == "UPDATE_BRANCH"
     assert payload["decisions"][2]["contract_decision"] == "WAIT"
     assert payload["decisions"][3]["contract_decision"] == "WAIT"
+    assert payload["decisions"][4]["contract_decision"] == "WAIT"
     assert payload["decisions"][3]["notes"] == [
         "Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers."
     ]
@@ -586,6 +594,8 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][2]["guidance"]["type"] == "unsafe_auto_merge_disabled"
     assert payload["decisions"][3]["guidance"]["type"] == "workflow_action_required"
     assert payload["decisions"][3]["guidance"]["checks"] == "opencode-review"
+    assert payload["decisions"][4]["guidance"]["type"] == "external_head_update_required"
+    assert payload["decisions"][4]["guidance"]["head_repository"] == "fork/repo"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; run" in summary
@@ -616,6 +626,9 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "### Workflow action required" in summary
     assert "`ACTION_REQUIRED` means GitHub Actions is waiting for approval" in summary
     assert "- PR #10: workflow action required: opencode-review" in summary
+    assert "### External head update required" in summary
+    assert "mutation-capability limit" in summary
+    assert "- PR #11: ask the author of `fork/repo` to update the branch" in summary
 
 
 def test_write_actions_summary_is_noop_without_summary_path(monkeypatch):
@@ -634,6 +647,7 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
     wait_decisions = [sched.Decision(1, "wait", "nothing to do")]
     assert sched.conflict_repair_summary(wait_decisions) == []
     assert sched.update_branch_summary(wait_decisions) == []
+    assert sched.external_head_update_summary(wait_decisions) == []
     assert sched.workflow_action_required_summary(wait_decisions) == []
     assert sched.outdated_thread_cleanup_summary(wait_decisions) == []
     assert sched.action_error_summary(wait_decisions) == []
@@ -674,7 +688,8 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(isDraft=True)).action == "skip"
     assert inspect(make_pr(baseRefName="develop")).reason == "base branch is develop; expected main"
-    assert inspect(make_pr(headRepository={"nameWithOwner": "fork/repo"})).action == "skip"
+    external_head = inspect(make_pr(headRepository={"nameWithOwner": "fork/repo"}, isCrossRepository=True))
+    assert external_head.action == "security_dispatch"
     conflict = inspect(make_pr(mergeStateStatus="DIRTY"))
     assert conflict.action == "block"
     assert "merge conflict: DIRTY" in conflict.reason
@@ -797,6 +812,32 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "github-actions[bot]" in decision.reason
     assert called == [("owner/repo", 1, True)]
     called.clear()
+    external_behind = make_pr(
+        mergeStateStatus="BEHIND",
+        isCrossRepository=True,
+        maintainerCanModify=False,
+        headRepository={"nameWithOwner": "fork/repo"},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    external_decision = inspect(external_behind)
+    assert external_decision.action == "wait"
+    assert "fork/repo is external and not writable" in external_decision.reason
+    assert sched.decision_guidance(external_decision)["type"] == "external_head_update_required"
+    assert called == []
+    external_mutable = make_pr(
+        mergeStateStatus="BEHIND",
+        isCrossRepository=True,
+        maintainerCanModify=True,
+        headRepository={"nameWithOwner": "fork/repo"},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    assert inspect(external_mutable).action == "update_branch"
+    assert called == [("owner/repo", 1, True)]
+    called.clear()
+    assert sched.can_update_pr_head("owner/repo", behind)
+    assert not sched.can_update_pr_head("owner/repo", external_behind)
+    assert sched.can_update_pr_head("owner/repo", external_mutable)
+    assert "same-repository head update permission" in sched.non_mutable_head_reason("owner/repo", behind)
     behind_failed = make_pr(
         mergeStateStatus="BEHIND",
         reviews={"nodes": [opencode_review("APPROVED", "head")]},

@@ -812,7 +812,9 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	local scheduler_file="$REPO_ROOT/scripts/ci/pr_review_merge_scheduler.py"
 	local readme_file="$REPO_ROOT/README.md"
 
-	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}' "scheduler branch updates and merges use the GitHub Actions bot token"
+	assert_file_contains "$workflow_file" 'workflow_call:' "scheduler can run as the central reusable workflow contract"
+	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ github.token }}' "scheduler uses the caller workflow token so mutations are attributed to GitHub Actions in the target repository"
+	assert_file_contains "$workflow_file" 'repository: ContextualWisdomLab/.github' "scheduler checks out the canonical implementation instead of relying on repo-local copies"
 	assert_file_contains "$workflow_file" "contents: write" "scheduler has write permission for GitHub Actions bot branch updates"
 	assert_file_contains "$workflow_file" "pull-requests: write" "scheduler has pull-request write permission for update-branch and auto-merge"
 	assert_file_contains "$scheduler_file" "update-branch" "scheduler calls the GitHub update-branch API for outdated approved PRs"
