@@ -72,11 +72,11 @@ STRUCTURAL_FAILURE_PATTERNS = (
 )
 
 NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES = (
-    "no deterministic missing-string markers",
-    "no deterministic missing string markers",
-    "strix report locations were recognized",
-    "use the failed-check evidence below to map",
-    "map each failed check to exact local source lines before approving",
+    "deterministic missing-string markers",
+    "deterministic missing string markers",
+    "strix report locations",
+    "failed-check evidence below",
+    "map each failed check to exact local source lines",
 )
 
 CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
