@@ -252,6 +252,31 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[3][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
 
 
+def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    decisions = [
+        sched.Decision(7, "block", "merge conflict: DIRTY; base=main, head=feature|x"),
+        sched.Decision(8, "update_branch", "current-head OpenCode review approved; branch update requested"),
+    ]
+
+    sched.print_summary(decisions, dry_run=True, base_branch="main", project_flow="github-flow")
+
+    output = capsys.readouterr().out
+    assert "PR #7: block: merge conflict: DIRTY" in output
+    assert json.loads(output.splitlines()[-1]) == {
+        "base_branch": "main",
+        "counts": {"block": 1, "update_branch": 1},
+        "dry_run": True,
+        "inspected": 2,
+        "project_flow": "github-flow",
+    }
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "## PR review merge scheduler" in summary
+    assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x |" in summary
+    assert "| #8 | update_branch | current-head OpenCode review approved; branch update requested |" in summary
+
+
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(isDraft=True)).action == "skip"
     assert inspect(make_pr(baseRefName="develop")).reason == "base branch is develop; expected main"

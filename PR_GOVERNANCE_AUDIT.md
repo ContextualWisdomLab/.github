@@ -118,6 +118,7 @@ The checked-in scheduler already does the minimal central path:
 - waits while same-head Strix evidence is still running, so OpenCode is not started just to poll a peer check;
 - dispatches OpenCode only after same-head Strix evidence is complete, including failed Strix evidence that OpenCode must explain from logs.
 - records mutation failures as `action_error` for the affected PR and continues scanning later PRs, so a permission failure on one merge/update action does not hide the rest of the queue.
+- writes the same per-PR decisions to the GitHub Actions step summary, so conflict repair and update-branch decisions are visible without opening raw logs.
 
 Small proof run:
 

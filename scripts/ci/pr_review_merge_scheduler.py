@@ -439,6 +439,13 @@ def print_summary(
     for decision in decisions:
         counts[decision.action] = counts.get(decision.action, 0) + 1
         print(f"PR #{decision.pr}: {decision.action}: {decision.reason}")
+    write_actions_summary(
+        decisions,
+        counts=counts,
+        dry_run=dry_run,
+        base_branch=base_branch,
+        project_flow=project_flow,
+    )
     print(
         json.dumps(
             {
@@ -451,6 +458,46 @@ def print_summary(
             sort_keys=True,
         )
     )
+
+
+def markdown_cell(value: object) -> str:
+    """Escape a value for a compact GitHub Actions summary table cell."""
+    return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+
+def write_actions_summary(
+    decisions: list[Decision],
+    *,
+    counts: dict[str, int],
+    dry_run: bool,
+    base_branch: str,
+    project_flow: str,
+) -> None:
+    """Append scheduler decisions to the GitHub Actions step summary."""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    lines = [
+        "## PR review merge scheduler",
+        "",
+        f"- Base branch: `{base_branch}`",
+        f"- Project flow: `{project_flow}`",
+        f"- Dry run: `{str(dry_run).lower()}`",
+        f"- Inspected PRs: `{len(decisions)}`",
+        f"- Actions: `{json.dumps(counts, sort_keys=True)}`",
+        "",
+        "| PR | Action | Reason |",
+        "| ---: | --- | --- |",
+    ]
+    lines.extend(
+        f"| #{decision.pr} | {markdown_cell(decision.action)} | {markdown_cell(decision.reason)} |"
+        for decision in decisions
+    )
+
+    with open(summary_path, "a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+        handle.write("\n")
 
 
 def summarize_action_error(exc: RuntimeError) -> str:
