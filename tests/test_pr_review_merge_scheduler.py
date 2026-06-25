@@ -307,8 +307,17 @@ def test_context_review_and_check_helpers():
         == "complete"
     )
 
-    threaded = make_pr(reviewThreads={"nodes": [{"isResolved": False}, {"isResolved": True}, {"isOutdated": True}]})
+    threaded = make_pr(
+        reviewThreads={
+            "nodes": [
+                {"id": "active", "isResolved": False},
+                {"id": "resolved", "isResolved": True},
+                {"id": "outdated", "isResolved": False, "isOutdated": True},
+            ]
+        }
+    )
     assert sched.unresolved_thread_count(threaded) == 1
+    assert sched.outdated_thread_ids(threaded) == ["outdated"]
     assert sched.review_author_login({}) == ""
     assert sched.review_author_login({"author": {"login": "OpenCode-Agent"}}) == "opencode-agent"
     assert sched.is_opencode_review(opencode_review())
@@ -483,6 +492,40 @@ def test_update_branch_refuses_local_credentials(monkeypatch):
     assert calls == []
 
 
+def test_resolve_outdated_review_threads_uses_github_actions_actor(monkeypatch):
+    calls = []
+    pr = make_pr(
+        reviewThreads={
+            "nodes": [
+                {"id": "thread-1", "isResolved": False, "isOutdated": True},
+                {"id": "thread-2", "isResolved": True, "isOutdated": True},
+                {"id": "thread-3", "isResolved": False, "isOutdated": False},
+                {"id": "thread-4", "isResolved": False, "isOutdated": True},
+            ]
+        }
+    )
+
+    def fake_graphql(query, **fields):
+        calls.append((query, fields))
+        return {"data": {"resolveReviewThread": {"thread": {"id": fields["threadId"], "isResolved": True}}}}
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    assert sched.resolve_outdated_review_threads(pr, dry_run=True) == 2
+    assert calls == []
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "local-token")
+    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
+        sched.resolve_outdated_review_threads(pr, dry_run=False)
+    assert calls == []
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    assert sched.resolve_outdated_review_threads(pr, dry_run=False) == 2
+    assert [fields["threadId"] for _, fields in calls] == ["thread-1", "thread-4"]
+    assert all(query == sched.RESOLVE_REVIEW_THREAD_MUTATION for query, _ in calls)
+
+
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
     summary_path = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
@@ -506,6 +549,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
             10,
             "wait",
             "workflow action required: opencode-review; approve or unblock the GitHub Actions run before treating checks as failed or passed",
+            ("Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers.",),
         ),
     ]
 
@@ -524,6 +568,9 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][1]["contract_decision"] == "UPDATE_BRANCH"
     assert payload["decisions"][2]["contract_decision"] == "WAIT"
     assert payload["decisions"][3]["contract_decision"] == "WAIT"
+    assert payload["decisions"][3]["notes"] == [
+        "Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers."
+    ]
     assert payload["decisions"][0]["guidance"]["type"] == "merge_conflict_repair"
     assert payload["decisions"][0]["guidance"]["merge_state"] == "DIRTY"
     assert payload["decisions"][0]["guidance"]["base_ref"] == "main"
@@ -543,6 +590,8 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "## PR review merge scheduler" in summary
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; run" in summary
     assert "do not retry update-branch until the conflict is repaired" in summary
+    assert "### Outdated review threads" in summary
+    assert "Would resolve 1 outdated review thread(s)" in summary
     assert (
         "| #8 | update_branch | current-head OpenCode review approved; "
         "branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions) |"
@@ -586,7 +635,22 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
     assert sched.conflict_repair_summary(wait_decisions) == []
     assert sched.update_branch_summary(wait_decisions) == []
     assert sched.workflow_action_required_summary(wait_decisions) == []
+    assert sched.outdated_thread_cleanup_summary(wait_decisions) == []
     assert sched.action_error_summary(wait_decisions) == []
+
+    outdated_lines = sched.outdated_thread_cleanup_summary(
+        [
+            sched.Decision(
+                4,
+                "wait",
+                "current head is approved; auto-merge already enabled",
+                ("Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers.",),
+            )
+        ]
+    )
+    assert "### Outdated review threads" in outdated_lines
+    assert "stale UI conversations do not block current-head decisions" in "\n".join(outdated_lines)
+    assert "- PR #4: Would resolve 1 outdated review thread(s)" in "\n".join(outdated_lines)
 
     action_required_lines = sched.workflow_action_required_summary(
         [
@@ -658,6 +722,16 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     )
     assert rest_clean.action == "auto_merge"
     assert inspect(make_pr(reviewThreads={"nodes": [{"isResolved": False}]})).reason == "1 unresolved review thread(s)"
+    outdated_only = inspect(
+        make_pr(
+            reviewThreads={"nodes": [{"id": "outdated-thread", "isResolved": False, "isOutdated": True}]},
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        )
+    )
+    assert outdated_only.action == "auto_merge"
+    assert outdated_only.notes == (
+        "Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers.",
+    )
     unresolved_auto = inspect(
         make_pr(
             reviewThreads={"nodes": [{"isResolved": False}]},

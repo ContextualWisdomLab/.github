@@ -44,7 +44,7 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
           }
         }
         reviewThreads(first: 100) {
-          nodes { isResolved isOutdated }
+          nodes { id isResolved isOutdated }
         }
         reviews(last: 50) {
           nodes {
@@ -109,6 +109,16 @@ class Decision:
     pr: int
     action: str
     reason: str
+    notes: tuple[str, ...] = ()
+
+
+RESOLVE_REVIEW_THREAD_MUTATION = """\
+mutation($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread { id isResolved }
+  }
+}
+"""
 
 
 def contract_decision(decision: Decision) -> str:
@@ -155,6 +165,8 @@ def decision_contract_entry(decision: Decision) -> dict[str, Any]:
     guidance = decision_guidance(decision)
     if guidance:
         entry["guidance"] = guidance
+    if decision.notes:
+        entry["notes"] = list(decision.notes)
     return entry
 
 
@@ -457,6 +469,46 @@ def unresolved_thread_count(pr: dict[str, Any]) -> int:
     return sum(1 for thread in threads if not thread.get("isResolved") and not thread.get("isOutdated"))
 
 
+def outdated_thread_ids(pr: dict[str, Any]) -> list[str]:
+    """Return unresolved review-thread IDs GitHub already marks outdated."""
+    threads = ((pr.get("reviewThreads") or {}).get("nodes") or [])
+    return [
+        thread["id"]
+        for thread in threads
+        if thread.get("id") and not thread.get("isResolved") and thread.get("isOutdated")
+    ]
+
+
+def resolve_review_thread(thread_id: str) -> None:
+    """Resolve one GitHub review thread by GraphQL node ID."""
+    gh_graphql(RESOLVE_REVIEW_THREAD_MUTATION, threadId=thread_id)
+
+
+def resolve_outdated_review_threads(pr: dict[str, Any], *, dry_run: bool) -> int:
+    """Resolve obsolete diff conversations before active-thread merge checks."""
+    thread_ids = outdated_thread_ids(pr)
+    if not thread_ids:
+        return 0
+    if dry_run:
+        return len(thread_ids)
+    require_github_actions_mutation_actor("resolve-outdated-review-thread")
+    for thread_id in thread_ids:
+        resolve_review_thread(thread_id)
+    return len(thread_ids)
+
+
+def with_outdated_thread_cleanup_note(decision: Decision, count: int, *, dry_run: bool) -> Decision:
+    """Annotate a decision with the outdated-thread cleanup side effect."""
+    if count <= 0:
+        return decision
+    verb = "Would resolve" if dry_run else "Resolved"
+    note = (
+        f"{verb} {count} outdated review thread(s) before active unresolved-thread checks; "
+        "outdated diff comments are not current-head review blockers."
+    )
+    return Decision(decision.pr, decision.action, decision.reason, (*decision.notes, note))
+
+
 def review_author_login(review: dict[str, Any]) -> str:
     """Return a normalized review author login."""
     return ((review.get("author") or {}).get("login") or "").lower()
@@ -688,108 +740,131 @@ def inspect_pr(
     if head_repo != repo:
         return Decision(number, "skip", f"fork or external head repo: {head_repo}")
 
+    outdated_cleanup_count = resolve_outdated_review_threads(pr, dry_run=dry_run)
+
+    def finish(decision: Decision) -> Decision:
+        """Attach outdated-thread cleanup evidence to the final decision."""
+        return with_outdated_thread_cleanup_note(
+            decision,
+            outdated_cleanup_count,
+            dry_run=dry_run,
+        )
+
+    def decide(action: str, reason: str) -> Decision:
+        """Create a decision after applying shared cleanup notes."""
+        return finish(Decision(number, action, reason))
+
     merge_state = effective_merge_state(pr)
     if merge_state == "UNKNOWN":
         if pr.get("autoMergeRequest"):
-            return disable_auto_merge_decision(
-                repo,
-                pr,
-                dry_run=dry_run,
-                reason="mergeability is still being calculated; wait for GitHub mergeability evidence before re-enabling auto-merge",
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason="mergeability is still being calculated; wait for GitHub mergeability evidence before re-enabling auto-merge",
+                )
             )
-        return Decision(number, "wait", "mergeability is still being calculated")
+        return decide("wait", "mergeability is still being calculated")
 
     if merge_state in {"DIRTY", "CONFLICTING"}:
         if pr.get("autoMergeRequest"):
-            return disable_auto_merge_decision(
-                repo,
-                pr,
-                dry_run=dry_run,
-                reason=f"{merge_conflict_guidance(pr, merge_state)}; repair the conflict before re-enabling auto-merge",
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason=f"{merge_conflict_guidance(pr, merge_state)}; repair the conflict before re-enabling auto-merge",
+                )
             )
-        return Decision(number, "block", merge_conflict_guidance(pr, merge_state))
+        return decide("block", merge_conflict_guidance(pr, merge_state))
 
     unresolved = unresolved_thread_count(pr)
     if unresolved:
         if pr.get("autoMergeRequest"):
-            return disable_auto_merge_decision(
-                repo,
-                pr,
-                dry_run=dry_run,
-                reason=f"{unresolved} unresolved review thread(s); resolve the active thread(s) before re-enabling auto-merge",
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason=f"{unresolved} unresolved review thread(s); resolve the active thread(s) before re-enabling auto-merge",
+                )
             )
-        return Decision(number, "block", f"{unresolved} unresolved review thread(s)")
+        return decide("block", f"{unresolved} unresolved review thread(s)")
 
     if has_current_head_changes_requested(pr):
         if pr.get("autoMergeRequest"):
-            return disable_auto_merge_decision(
-                repo,
-                pr,
-                dry_run=dry_run,
-                reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+                )
             )
-        return Decision(number, "block", "current-head OpenCode review requested changes")
+        return decide("block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
     if current_head_approved:
         failed_checks = failed_status_checks(pr)
         if failed_checks:
             if pr.get("autoMergeRequest"):
-                return disable_auto_merge_decision(
-                    repo,
-                    pr,
-                    dry_run=dry_run,
-                    reason=f"failed check(s): {', '.join(failed_checks[:5])}; fix or rerun checks before re-enabling auto-merge",
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason=f"failed check(s): {', '.join(failed_checks[:5])}; fix or rerun checks before re-enabling auto-merge",
+                    )
                 )
-            return Decision(number, "block", f"failed check(s): {', '.join(failed_checks[:5])}")
+            return decide("block", f"failed check(s): {', '.join(failed_checks[:5])}")
 
     workflow_action_required = action_required_checks(pr)
     if workflow_action_required:
         reason = workflow_action_required_reason(workflow_action_required)
         if pr.get("autoMergeRequest"):
-            return disable_auto_merge_decision(
-                repo,
-                pr,
-                dry_run=dry_run,
-                reason=f"{reason}; wait for current-head checks to rerun before re-enabling auto-merge",
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason=f"{reason}; wait for current-head checks to rerun before re-enabling auto-merge",
+                )
             )
-        return Decision(number, "wait", reason)
+        return decide("wait", reason)
 
     if merge_state == "BEHIND" and current_head_approved:
         if not update_branches:
-            return Decision(number, "wait", "current-head OpenCode review approved; branch update disabled")
+            return decide("wait", "current-head OpenCode review approved; branch update disabled")
         had_auto_merge = bool(pr.get("autoMergeRequest"))
         if had_auto_merge:
             disable_auto_merge(repo, pr, dry_run=dry_run)
         update_branch(repo, pr, dry_run=dry_run)
         prefix = "auto-merge disabled before branch update; " if had_auto_merge else ""
-        return Decision(
-            number,
+        return decide(
             "update_branch",
             f"{prefix}current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)",
         )
 
     if current_head_approved:
         if pr.get("autoMergeRequest"):
-            return Decision(number, "wait", "current head is approved; auto-merge already enabled")
+            return decide("wait", "current head is approved; auto-merge already enabled")
         if not enable_auto_merge_flag:
-            return Decision(number, "wait", "current head is approved; auto-merge disabled by scheduler inputs")
+            return decide("wait", "current head is approved; auto-merge disabled by scheduler inputs")
         enable_auto_merge(repo, pr, dry_run=dry_run)
-        return Decision(number, "auto_merge", "current head is approved; auto-merge enabled")
+        return decide("auto_merge", "current head is approved; auto-merge enabled")
 
     opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
     if opencode_state == "running":
-        return Decision(number, "wait", "OpenCode review is already in progress")
+        return decide("wait", "OpenCode review is already in progress")
     if opencode_state == "stale" and not trigger_reviews:
-        return Decision(
-            number,
+        return decide(
             "wait",
             f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; review dispatch disabled",
         )
     if opencode_state == "stale":
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
-        return Decision(
-            number,
+        return decide(
             "review_dispatch",
             f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; same-head OpenCode re-dispatched",
         )
@@ -798,31 +873,31 @@ def inspect_pr(
         strix_state = strix_evidence_state(pr)
         if strix_state == "missing":
             dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
-            return Decision(
-                number,
+            return decide(
                 "security_dispatch",
                 "current head has no completed Strix evidence; same-head Strix dispatched",
             )
         if strix_state == "running":
-            return Decision(number, "wait", "same-head Strix evidence is still running")
+            return decide("wait", "same-head Strix evidence is still running")
         # Legacy trusted-base Strix self-test sentinel while this scheduler rollout lands:
         # same-head Strix and OpenCode dispatched
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
-        return Decision(
-            number,
+        return decide(
             "review_dispatch",
             "current head has completed Strix evidence; same-head OpenCode dispatched",
         )
 
     if pr.get("autoMergeRequest"):
-        return disable_auto_merge_decision(
-            repo,
-            pr,
-            dry_run=dry_run,
-            reason="current head has no OpenCode approval; wait for fresh same-head approval before re-enabling auto-merge",
+        return finish(
+            disable_auto_merge_decision(
+                repo,
+                pr,
+                dry_run=dry_run,
+                reason="current head has no OpenCode approval; wait for fresh same-head approval before re-enabling auto-merge",
+            )
         )
 
-    return Decision(number, "block", "current head has no OpenCode approval")
+    return decide("block", "current head has no OpenCode approval")
 
 
 def print_summary(
@@ -893,6 +968,7 @@ def write_actions_summary(
         for decision in decisions
     )
     lines.extend(conflict_repair_summary(decisions))
+    lines.extend(outdated_thread_cleanup_summary(decisions))
     lines.extend(update_branch_summary(decisions))
     lines.extend(workflow_action_required_summary(decisions))
     lines.extend(action_error_summary(decisions))
@@ -965,6 +1041,27 @@ def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
                 "```",
             ]
         )
+    return lines
+
+
+def outdated_thread_cleanup_summary(decisions: list[Decision]) -> list[str]:
+    """Return a summary section for obsolete diff conversations resolved by the scheduler."""
+    cleanup_notes = [
+        (decision, note)
+        for decision in decisions
+        for note in decision.notes
+        if "outdated review thread" in note
+    ]
+    if not cleanup_notes:
+        return []
+
+    lines = [
+        "",
+        "### Outdated review threads",
+        "",
+        "GitHub `Outdated` review threads belong to obsolete diff hunks. The scheduler resolves them before counting active unresolved review threads, so stale UI conversations do not block current-head decisions.",
+    ]
+    lines.extend(f"- PR #{decision.pr}: {note}" for decision, note in cleanup_notes)
     return lines
 
 

@@ -17,7 +17,7 @@ OpenCode decides; GitHub Actions mutates.
   2026-06-25 check). Do not widen `contents` just to support `update-branch`.
 - Old approvals and old checks are not merge evidence after a head SHA changes.
 - OpenCode review evidence must be internally same-head as well as GitHub-attached same-head. If the review body includes `Gate evidence` with `Head SHA: <sha>`, that SHA must match the PR current `headRefOid`; otherwise the review is stale evidence even when GitHub attaches the review to the current commit.
-- Merge uses one path: current-head OpenCode approval, no unresolved review threads, required checks green or native auto-merge waiting on them, mergeable head, and no policy blocker.
+- Merge uses one path: current-head OpenCode approval, no active unresolved review threads, required checks green or native auto-merge waiting on them, mergeable head, and no policy blocker. GitHub `Outdated` review threads are obsolete diff conversations; the scheduler resolves them before counting active unresolved review blockers.
 - Prefer `gh pr merge --auto --merge --match-head-commit <head>` when native auto-merge is enabled.
 - Use direct `gh pr merge --merge --match-head-commit <head>` only when the repo policy already allows immediate merge.
 - OpenCode app-token merges are deprecated; keep app tokens for review publication, not mechanical branch mutation.
@@ -120,7 +120,8 @@ The checked-in scheduler already does the minimal central path:
 
 - skips draft, wrong-base, and fork/external-head PRs;
 - blocks UI `Conflicting`, API `DIRTY`, or API `CONFLICTING` with repair guidance that names the base branch, head branch, merge/rebase direction, conflict-marker cleanup, focused checks, same-branch push, and a compact `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` command path; it explicitly does not retry `update-branch` for conflicted PRs because GitHub cannot choose the correct conflict resolution;
-- blocks unresolved review threads;
+- resolves GitHub `Outdated` unresolved review threads through `resolveReviewThread` before active blocker checks, using the scheduler workflow `GITHUB_TOKEN` inside GitHub Actions; dry-runs report the cleanup as `notes` without mutating the PR;
+- blocks active, non-outdated unresolved review threads;
 - blocks current-head OpenCode `CHANGES_REQUESTED`;
 - blocks current-head failed check runs or status contexts before enabling auto-merge;
 - waits on `ACTION_REQUIRED` check runs as workflow approval or repository-policy states, not as source-code failures; failed checks still take precedence for current-head-approved PRs, so `ACTION_REQUIRED` cannot mask a real failed `strix`, lint, build, or required-check result;
@@ -133,7 +134,7 @@ The checked-in scheduler already does the minimal central path:
 - dispatches OpenCode only after same-head Strix evidence is complete, including failed Strix evidence that OpenCode must explain from logs.
 - records mutation failures as `action_error` for the affected PR and continues scanning later PRs, so a permission failure on one merge/update action does not hide the rest of the queue.
 - writes the same per-PR decisions to the GitHub Actions step summary, so conflict repair and update-branch decisions are visible without opening raw logs.
-- prints a machine-readable `pr-review-merge-scheduler/v2` JSON contract with every inspected PR, the scheduler action, the bounded decision value (`UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`), and structured `guidance` for states that need action: `merge_conflict_repair` includes the base/head branches, repair steps, and merge-or-rebase commands; `github_actions_update_branch` names `github-actions[bot]`, the workflow `GITHUB_TOKEN`, `pull-requests: write`, `expected_head_sha`, and the new-head evidence required before merge; `workflow_action_required` names the affected check runs and requires GitHub Actions approval or policy unblock before rerunning the scheduler.
+- prints a machine-readable `pr-review-merge-scheduler/v2` JSON contract with every inspected PR, the scheduler action, the bounded decision value (`UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`), optional cleanup `notes`, and structured `guidance` for states that need action: `merge_conflict_repair` includes the base/head branches, repair steps, and merge-or-rebase commands; `github_actions_update_branch` names `github-actions[bot]`, the workflow `GITHUB_TOKEN`, `pull-requests: write`, `expected_head_sha`, and the new-head evidence required before merge; `workflow_action_required` names the affected check runs and requires GitHub Actions approval or policy unblock before rerunning the scheduler.
 - caps each GraphQL PR page at 25 nodes, so large queues can be scanned without hitting GitHub's query resource limit.
 - excludes OpenCode Review's own `opencode-review` check from peer failed-check evidence, so a cancelled or stale OpenCode run cannot become a source-code `REQUEST_CHANGES` review against the same head.
 
