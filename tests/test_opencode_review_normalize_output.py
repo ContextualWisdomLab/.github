@@ -493,4 +493,6 @@ def test_main_normalizes_and_escapes_html_markers(tmp_path):
     assert "opencode-review-control-v1" in saved_text
     assert "<script>" not in saved_text
     assert "\\u003cscript\\u003e" in saved_text
-    assert "-->" not in saved_text.split("<!-- opencode-review-control-v1")[1].split("-->")[0].strip()
+    inner = saved_text.split("<!-- opencode-review-control-v1")[1]
+    assert "-->" in inner
+    assert "-->" not in inner.split("-->", 1)[0].strip()
