@@ -83,6 +83,107 @@ class Decision:
     reason: str
 
 
+def contract_decision(decision: Decision) -> str:
+    """Map scheduler actions into the bounded PR decision contract."""
+    if decision.action == "update_branch":
+        return "UPDATE_BRANCH"
+    if decision.action in {"wait", "security_dispatch", "review_dispatch", "action_error"}:
+        return "WAIT"
+    if decision.action in {"skip", "auto_merge"}:
+        return "NO_ACTION"
+    if decision.action == "block" and "current-head OpenCode review requested changes" in decision.reason:
+        return "REQUEST_CHANGES"
+    return "WAIT"
+
+
+def decision_payload(
+    decisions: list[Decision],
+    *,
+    counts: dict[str, int],
+    dry_run: bool,
+    base_branch: str,
+    project_flow: str,
+) -> dict[str, Any]:
+    """Return the machine-readable scheduler decision contract."""
+    return {
+        "schema_version": "pr-review-merge-scheduler/v1",
+        "base_branch": base_branch,
+        "dry_run": dry_run,
+        "inspected": len(decisions),
+        "counts": counts,
+        "project_flow": project_flow,
+        "decisions": [decision_contract_entry(decision) for decision in decisions],
+    }
+
+
+def decision_contract_entry(decision: Decision) -> dict[str, Any]:
+    """Return one machine-readable decision contract entry."""
+    entry: dict[str, Any] = {
+        "pr": decision.pr,
+        "action": decision.action,
+        "contract_decision": contract_decision(decision),
+        "reason": decision.reason,
+    }
+    guidance = decision_guidance(decision)
+    if guidance:
+        entry["guidance"] = guidance
+    return entry
+
+
+def decision_guidance(decision: Decision) -> dict[str, Any] | None:
+    """Return actionable repair or automation guidance for known scheduler states."""
+    parsed_conflict = parse_conflict_reason(decision.reason)
+    if parsed_conflict:
+        state, base_ref, head_ref = parsed_conflict
+        base_remote = f"origin/{base_ref}"
+        quoted_base_ref = shlex.quote(base_ref)
+        quoted_base_remote = shlex.quote(base_remote)
+        return {
+            "type": "merge_conflict_repair",
+            "merge_state": state,
+            "base_ref": base_ref,
+            "head_ref": head_ref,
+            "summary": "Repair the PR branch against the latest base branch, then push the same branch so review and required checks rerun on the new head.",
+            "steps": [
+                "Check out the PR branch.",
+                "Fetch the latest base branch.",
+                "Choose merge or rebase; do not treat the conflict as an OpenCode finding.",
+                "Resolve conflict markers in the PR branch and stage the resolved files.",
+                "Run the focused checks for the changed area.",
+                "Push the PR branch; use --force-with-lease only if the branch was rebased.",
+            ],
+            "commands": [
+                f"gh pr checkout {decision.pr}",
+                f"git fetch origin {quoted_base_ref}",
+                f"git merge --no-ff {quoted_base_remote}",
+                f"# or: git rebase {quoted_base_remote}",
+                "git status --short",
+                "git add <resolved-files>",
+                "# merge path: git commit",
+                "# rebase path: git rebase --continue",
+                "git push",
+                "# rebase path only: git push --force-with-lease",
+            ],
+        }
+    if decision.action == "update_branch":
+        return {
+            "type": "github_actions_update_branch",
+            "actor": "github-actions[bot]",
+            "token": "workflow GITHUB_TOKEN",
+            "required_permission": "pull-requests: write",
+            "head_guard": "expected_head_sha",
+            "summary": "GitHub Actions requests the PR branch update mechanically; the updated head must be reviewed again before merge.",
+            "next_required_evidence": [
+                "new head SHA after the update_branch mutation",
+                "OpenCode approval on that exact new head",
+                "same-head Strix evidence",
+                "required GitHub Checks success",
+                "zero active unresolved review threads",
+            ],
+        }
+    return None
+
+
 def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     """Run a command and return stdout, raising with stderr on failure."""
     if isinstance(args, str) or not all(isinstance(arg, str) for arg in args):
@@ -461,13 +562,13 @@ def print_summary(
     )
     print(
         json.dumps(
-            {
-                "base_branch": base_branch,
-                "dry_run": dry_run,
-                "inspected": len(decisions),
-                "counts": counts,
-                "project_flow": project_flow,
-            },
+            decision_payload(
+                decisions,
+                counts=counts,
+                dry_run=dry_run,
+                base_branch=base_branch,
+                project_flow=project_flow,
+            ),
             sort_keys=True,
         )
     )
@@ -817,6 +918,36 @@ def self_test() -> None:
     assert "git rebase origin/main" in decision.reason
     assert "git status --short" in decision.reason
     assert "resolve conflict markers" in decision.reason
+    conflict_guidance = decision_guidance(decision)
+    assert conflict_guidance
+    assert conflict_guidance["type"] == "merge_conflict_repair"
+    assert conflict_guidance["merge_state"] == "DIRTY"
+    assert "git status --short" in conflict_guidance["commands"]
+    assert contract_decision(Decision(1, "update_branch", "ok")) == "UPDATE_BRANCH"
+    assert contract_decision(Decision(1, "wait", "ok")) == "WAIT"
+    assert contract_decision(Decision(1, "action_error", "ok")) == "WAIT"
+    assert contract_decision(Decision(1, "auto_merge", "ok")) == "NO_ACTION"
+    assert contract_decision(Decision(1, "skip", "ok")) == "NO_ACTION"
+    assert (
+        contract_decision(Decision(1, "block", "current-head OpenCode review requested changes"))
+        == "REQUEST_CHANGES"
+    )
+    assert contract_decision(Decision(1, "block", "merge conflict: DIRTY")) == "WAIT"
+    update_guidance = decision_guidance(Decision(1, "update_branch", "ok"))
+    assert update_guidance
+    assert update_guidance["actor"] == "github-actions[bot]"
+    assert update_guidance["head_guard"] == "expected_head_sha"
+    assert decision_guidance(Decision(1, "wait", "ok")) is None
+    payload = decision_payload(
+        [Decision(1, "update_branch", "ok")],
+        counts={"update_branch": 1},
+        dry_run=True,
+        base_branch="main",
+        project_flow="github-flow",
+    )
+    assert payload["schema_version"] == "pr-review-merge-scheduler/v1"
+    assert payload["decisions"][0]["contract_decision"] == "UPDATE_BRANCH"
+    assert payload["decisions"][0]["guidance"]["actor"] == "github-actions[bot]"
     print("self-test passed")
 
 

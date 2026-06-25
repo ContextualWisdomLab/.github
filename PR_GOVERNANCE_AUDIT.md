@@ -130,6 +130,7 @@ The checked-in scheduler already does the minimal central path:
 - dispatches OpenCode only after same-head Strix evidence is complete, including failed Strix evidence that OpenCode must explain from logs.
 - records mutation failures as `action_error` for the affected PR and continues scanning later PRs, so a permission failure on one merge/update action does not hide the rest of the queue.
 - writes the same per-PR decisions to the GitHub Actions step summary, so conflict repair and update-branch decisions are visible without opening raw logs.
+- prints a machine-readable `pr-review-merge-scheduler/v1` JSON contract with every inspected PR, the scheduler action, the bounded decision value (`UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`), and structured `guidance` for states that need action: `merge_conflict_repair` includes the base/head branches, repair steps, and merge-or-rebase commands; `github_actions_update_branch` names `github-actions[bot]`, the workflow `GITHUB_TOKEN`, `pull-requests: write`, `expected_head_sha`, and the new-head evidence required before merge.
 - caps each GraphQL PR page at 25 nodes, so large queues can be scanned without hitting GitHub's query resource limit.
 
 Small proof run:
@@ -142,18 +143,18 @@ $ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/sco
 PR #119: block: merge conflict: DIRTY; base=develop, head=bolt/perf-format-number-1301647661105713430; run `gh pr checkout 119`, `git fetch origin develop`, then `git merge --no-ff origin/develop` or `git rebase origin/develop`; use `git status --short` to find conflicted files, resolve conflict markers in the PR branch, rerun focused checks, and push the same bolt/perf-format-number-1301647661105713430 branch (use `git push --force-with-lease` only if rebased)
 ...
 PR #127: wait: current head is approved; auto-merge disabled by scheduler inputs
-{"base_branch": "develop", "counts": {"block": 6, "wait": 1}, "dry_run": true, "inspected": 7, "project_flow": "git-flow"}
+{"base_branch": "develop", "counts": {"block": 6, "wait": 1}, "decisions": [...], "dry_run": true, "inspected": 7, "project_flow": "git-flow", "schema_version": "pr-review-merge-scheduler/v1"}
 
 $ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/.github --base-branch main --project-flow github-flow --dry-run --max-prs 40 --no-trigger-reviews --no-enable-auto-merge
 PR #44: wait: current head is approved; auto-merge already enabled
 ...
-{"base_branch": "main", "counts": {"block": 24, "wait": 1}, "dry_run": true, "inspected": 25, "project_flow": "github-flow"}
+{"base_branch": "main", "counts": {"block": 24, "wait": 1}, "decisions": [...], "dry_run": true, "inspected": 25, "project_flow": "github-flow", "schema_version": "pr-review-merge-scheduler/v1"}
 
 $ python3 scripts/ci/pr_review_merge_scheduler.py --repo ContextualWisdomLab/bandscope --base-branch develop --project-flow git-flow --dry-run --max-prs 40 --no-trigger-reviews --no-enable-auto-merge
 PR #378: wait: OpenCode review is already in progress
 PR #381: wait: OpenCode review is already in progress
 ...
-{"base_branch": "develop", "counts": {"block": 38, "wait": 2}, "dry_run": true, "inspected": 40, "project_flow": "git-flow"}
+{"base_branch": "develop", "counts": {"block": 38, "wait": 2}, "decisions": [...], "dry_run": true, "inspected": 40, "project_flow": "git-flow", "schema_version": "pr-review-merge-scheduler/v1"}
 ```
 
 ## Rollout List
@@ -178,7 +179,7 @@ PR #381: wait: OpenCode review is already in progress
 - PR #721 in `naruon` remains the historical fixture for this proof: head `b683deaf8b4761399321799279f58d884db57141`, current-head OpenCode approval `4558310923`, unresolved review threads `0`, and `mergeStateStatus=BEHIND`. Central `.github` dry-run selected `update_branch`, but `naruon` workflow run `28073586594` used the then-stale repo-local scheduler and did not update it. PR #756 has since rolled the central scheduler into `naruon`, so the next proof must use a fresh current-head outdated PR instead of reusing stale evidence from #721.
 - `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.
 - `naruon` PR #756 completed the repo-local rollout for the scheduler contract. Its initial head failed backend governance and Scorecard because `actions: write`/`contents: write` were broader than the repo policy allows; the amended and merged head restores minimal `GITHUB_TOKEN` permissions, keeps `trigger_reviews` and `enable_auto_merge` defaulted off, keeps `update_branches` defaulted on, and still dry-runs PR #694/#721 as `update_branch`.
-- `update-branch` `422/403` behavior still needs a safe fixture or a real blocked case before claiming standardized handling.
+- `update-branch` `422/403` now has a safe fixture: unit tests simulate both permission-denied and stale `expected_head_sha` failures, assert they become `action_error`, and assert later PRs are still inspected. A real live `422/403` case is still useful as operational evidence, but it is no longer missing from the decision contract test surface.
 - Public repo drift is real, not hypothetical: only `.github` matched the central scheduler/workflow byte-for-byte in the 2026-06-25 scan. Some drift is policy-specific and should not be overwritten blindly, but `bandscope` had behaviorally unsafe drift and now has PR #450.
 - Required-check interpretation should stay delegated to GitHub native auto-merge until a repo needs immediate merge.
 - PR #28 proves the self-modifying trusted workflow bootstrap path after newer same-head evidence exists, but it does not prove update-branch behavior, stale approval dismissal after a head change, or cross-repository rollout.
