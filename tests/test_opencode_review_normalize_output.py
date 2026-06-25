@@ -115,6 +115,11 @@ def test_label_and_full_coverage_detection():
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
     assert norm.label_section(combined, "missing:") == ""
+
+    # Test docstring coverage boundary avoidance (coverage pseudo-collision)
+    text_coverage = "performance: FAST docstring coverage: 100% something else coverage: 100%"
+    assert norm.label_section(text_coverage, "performance:") == " FAST "
+
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     assert not norm.mentions_full_coverage("", "")
     assert not norm.mentions_full_coverage("", FULL_SUMMARY.replace("100%", "99%", 1))
