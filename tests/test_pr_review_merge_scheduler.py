@@ -426,7 +426,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     output = capsys.readouterr().out
     assert "PR #7: block: merge conflict: DIRTY" in output
     payload = json.loads(output.splitlines()[-1])
-    assert payload["schema_version"] == "pr-review-merge-scheduler/v1"
+    assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
     assert payload["base_branch"] == "main"
     assert payload["counts"] == {"block": 1, "disable_auto_merge": 1, "update_branch": 1}
     assert payload["dry_run"] is True
@@ -447,7 +447,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][1]["guidance"]["token"] == "workflow GITHUB_TOKEN"
     assert payload["decisions"][1]["guidance"]["required_permission"] == "pull-requests: write"
     assert payload["decisions"][1]["guidance"]["head_guard"] == "expected_head_sha"
-    assert payload["decisions"][2]["guidance"]["type"] == "fresh_head_review_required"
+    assert payload["decisions"][2]["guidance"]["type"] == "unsafe_auto_merge_disabled"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; run" in summary
@@ -519,6 +519,14 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert conflicting.action == "block"
     assert "merge conflict: CONFLICTING" in conflicting.reason
     assert inspect(make_pr(reviewThreads={"nodes": [{"isResolved": False}]})).reason == "1 unresolved review thread(s)"
+    unresolved_auto = inspect(
+        make_pr(
+            reviewThreads={"nodes": [{"isResolved": False}]},
+            autoMergeRequest={"enabledAt": "now"},
+        )
+    )
+    assert unresolved_auto.action == "disable_auto_merge"
+    assert "unresolved review thread" in unresolved_auto.reason
     assert inspect(make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]})).reason == (
         "current-head OpenCode review requested changes"
     )
@@ -619,6 +627,9 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert stale_wait.action == "wait"
     assert "review dispatch disabled" in stale_wait.reason
     assert inspect(make_pr(), trigger_reviews=False).reason == "current head has no OpenCode approval"
+    missing_approval_auto = inspect(make_pr(autoMergeRequest={"enabledAt": "now"}), trigger_reviews=False)
+    assert missing_approval_auto.action == "disable_auto_merge"
+    assert "no OpenCode approval" in missing_approval_auto.reason
 
 
 def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
@@ -631,7 +642,7 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "PR #1: wait: ready" in output
     payload = json.loads(output.strip().splitlines()[-1])
-    assert payload["schema_version"] == "pr-review-merge-scheduler/v1"
+    assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
     assert payload["counts"] == {"wait": 2}
     assert [decision["contract_decision"] for decision in payload["decisions"]] == ["WAIT", "WAIT"]
 
