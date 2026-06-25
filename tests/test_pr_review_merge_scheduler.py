@@ -307,6 +307,25 @@ def test_review_state_and_failed_checks():
     )
     assert not sched.has_current_head_approval(stale_review)
     assert "predates the current head commit" in sched.stale_current_head_review_reason(stale_review)
+    missing_review_time = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "opencode-agent"},
+                    "commit": {"oid": "head"},
+                }
+            ]
+        }
+    )
+    assert not sched.has_current_head_approval(missing_review_time)
+    assert sched.stale_current_head_review_reason(missing_review_time) == (
+        "OpenCode review has no submission timestamp for the current head"
+    )
+    human_review_only = make_pr(
+        reviews={"nodes": [opencode_review("APPROVED", "head", login="human")]}
+    )
+    assert sched.stale_current_head_review_reason(human_review_only) is None
     superseded = make_pr(
         reviews={
             "nodes": [
