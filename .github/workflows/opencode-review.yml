@@ -476,7 +476,7 @@ jobs:
               "- mergeStateStatus: `" + $state + "`",
               "- mergeable: `" + ((.mergeable // "unknown") | tostring) + "`",
               if ($state == "DIRTY" or $state == "CONFLICTING") then
-                "- Review direction: PR has merge conflicts. OpenCode must explain how to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch."
+                "- Review direction: PR has merge conflicts. OpenCode must explain how to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch, including a compact command block with gh pr checkout, git fetch, merge or rebase, git status --short, and the normal or --force-with-lease push path."
               elif $state == "BLOCKED" then
                 "- Review direction: `BLOCKED` is a branch policy, review, or check state, not merge conflict evidence. Do not request conflict repair unless mergeStateStatus is `DIRTY` or `CONFLICTING`."
               else
@@ -787,7 +787,9 @@ jobs:
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
-          and push the same branch.
+          and push the same branch. Include a compact repair command block with gh pr checkout, git fetch,
+          merge or rebase, git status --short, the resolved-file step, the normal push path, and the
+          --force-with-lease path only for rebased branches.
           For Greptile-style specificity, include a P1/P2/P3 priority in each actionable finding,
           cite the evidence type behind the claim (nearby implementation, matching existing example,
           cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR
@@ -850,7 +852,9 @@ jobs:
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
-          and push the same branch.
+          and push the same branch. Include a compact repair command block with gh pr checkout, git fetch,
+          merge or rebase, git status --short, the resolved-file step, the normal push path, and the
+          --force-with-lease path only for rebased branches.
           For Greptile-style specificity, include a P1/P2/P3 priority in each actionable finding,
           cite the evidence type behind the claim (nearby implementation, matching existing example,
           cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR
@@ -1779,7 +1783,7 @@ jobs:
                     }
 
           append_merge_conflict_guidance() {
-            local pr_json merge_state base_ref head_ref
+            local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
             pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
@@ -1790,11 +1794,26 @@ jobs:
             fi
             base_ref="$(printf '%s' "$pr_json" | jq -r '.baseRefName // "base"')"
             head_ref="$(printf '%s' "$pr_json" | jq -r '.headRefName // "head"')"
+            printf -v base_fetch_ref '%q' "$base_ref"
+            printf -v base_origin_ref '%q' "origin/${base_ref}"
+            printf -v head_push_ref '%q' "HEAD:${head_ref}"
             printf '\n## Merge Conflict Guidance\n\n'
             printf '%s\n' "- Current merge state: \`${merge_state}\`"
             printf '%s\n' "- Base branch: \`${base_ref}\`"
             printf '%s\n' "- Head branch: \`${head_ref}\`"
             printf '%s\n' "- Fix direction: merge or rebase \`origin/${base_ref}\` into \`${head_ref}\`, resolve conflict markers in the changed files, rerun the focused checks, then push the same branch."
+            printf '%s\n' "- Repair commands:"
+            printf '%s\n' '```bash'
+            printf 'gh pr checkout %s --repo %s\n' "$PR_NUMBER" "$GH_REPOSITORY"
+            printf 'git fetch origin %s\n' "$base_fetch_ref"
+            printf 'git merge --no-ff %s  # or: git rebase %s\n' "$base_origin_ref" "$base_origin_ref"
+            printf 'git status --short\n'
+            printf '# resolve files, then git add <resolved-files>\n'
+            printf '# merge path: git commit\n'
+            printf '# rebase path: git rebase --continue\n'
+            printf 'git push origin %s\n' "$head_push_ref"
+            printf '# rebase path only: git push --force-with-lease origin %s\n' "$head_push_ref"
+            printf '%s\n' '```'
           }
 
           perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$review_output_file" >"$clean_output"
@@ -2028,7 +2047,7 @@ jobs:
                     }
 
           append_merge_conflict_guidance() {
-            local pr_json merge_state base_ref head_ref
+            local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
             pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
@@ -2039,11 +2058,26 @@ jobs:
             fi
             base_ref="$(printf '%s' "$pr_json" | jq -r '.baseRefName // "base"')"
             head_ref="$(printf '%s' "$pr_json" | jq -r '.headRefName // "head"')"
+            printf -v base_fetch_ref '%q' "$base_ref"
+            printf -v base_origin_ref '%q' "origin/${base_ref}"
+            printf -v head_push_ref '%q' "HEAD:${head_ref}"
             printf '\n## Merge Conflict Guidance\n\n'
             printf '%s\n' "- Current merge state: \`${merge_state}\`"
             printf '%s\n' "- Base branch: \`${base_ref}\`"
             printf '%s\n' "- Head branch: \`${head_ref}\`"
             printf '%s\n' "- Fix direction: merge or rebase \`origin/${base_ref}\` into \`${head_ref}\`, resolve conflict markers in the changed files, rerun the focused checks, then push the same branch."
+            printf '%s\n' "- Repair commands:"
+            printf '%s\n' '```bash'
+            printf 'gh pr checkout %s --repo %s\n' "$PR_NUMBER" "$GH_REPOSITORY"
+            printf 'git fetch origin %s\n' "$base_fetch_ref"
+            printf 'git merge --no-ff %s  # or: git rebase %s\n' "$base_origin_ref" "$base_origin_ref"
+            printf 'git status --short\n'
+            printf '# resolve files, then git add <resolved-files>\n'
+            printf '# merge path: git commit\n'
+            printf '# rebase path: git rebase --continue\n'
+            printf 'git push origin %s\n' "$head_push_ref"
+            printf '# rebase path only: git push --force-with-lease origin %s\n' "$head_push_ref"
+            printf '%s\n' '```'
           }
 
           update_review_overview() {
@@ -2113,6 +2147,25 @@ jobs:
             fi
             rm -f "$gh_error_file" "$review_payload_file"
             update_review_overview "$event" "$body"
+          }
+
+          stop_approval_without_review() {
+            local result="$1"
+            local body="$2"
+
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                printf '## OpenCode review state unchanged\n\n'
+                printf -- "- Result: \`%s\`\n" "$result"
+                printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
+                printf -- '- Workflow run: %s\n' "$RUN_ID"
+                printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
+                printf '%s\n' "$body"
+              } >>"$GITHUB_STEP_SUMMARY"
+            fi
+            printf '::error::%s: OpenCode did not change the pull request review state. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
+            echo "::endgroup::"
+            exit 1
           }
 
           collect_unresolved_human_review_threads() {
@@ -2447,9 +2500,9 @@ jobs:
               local helper_findings_file
               helper_findings_file="$(mktemp)"
               if "${repo_root%/}/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "$evidence_file" "$repo_root" >"$helper_findings_file"; then
-                if grep -Fq "No deterministic missing-string markers" "$helper_findings_file" ||
+                if grep -Eiq 'deterministic[ -]?missing[- ]string markers|strix report locations|map each failed check' "$helper_findings_file" ||
                   ! grep -Eq '^### [0-9]+\. ' "$helper_findings_file"; then
-                  printf 'OpenCode failed-check fallback helper returned non-source-backed generic output; leaving the PR review unchanged for rerun.\n' >&2
+                  printf 'OpenCode failed-check fallback helper returned non-source-backed output. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
                   rm -f "$helper_findings_file"
                   return 1
                 fi
@@ -2458,7 +2511,7 @@ jobs:
                 return 0
               fi
               rm -f "$helper_findings_file"
-              printf 'OpenCode failed-check fallback helper did not produce source-backed findings; leaving the PR review unchanged for rerun.\n' >&2
+              printf 'OpenCode failed-check fallback helper did not produce source-backed findings. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
               return 1
             fi
 
@@ -2627,7 +2680,7 @@ jobs:
             rm -f "$strix_evidence_file"
 
             if [ "$finding_index" -eq 0 ]; then
-              printf 'No automated source-backed fallback pattern matched this failed check; leaving the PR review unchanged for rerun.\n' >&2
+              printf 'No automated source-backed fallback pattern matched this failed check. No PR review was posted; retry after current-head failed-check logs or annotations are available, or rerun the failed check to collect them.\n' >&2
               return 1
             fi
           }
@@ -2666,6 +2719,23 @@ jobs:
               printf '\n</details>\n'
             } >"$body_file"
             rm -f "$findings_file"
+          }
+
+          stop_failed_check_fallback_unavailable() {
+            local body
+
+            body="$(printf '%s\n' \
+              "OpenCode could not derive source-backed line-specific findings after retries." \
+              "" \
+              "- Result: FAILED_CHECK_DIAGNOSIS_UNAVAILABLE" \
+              "- Reason: current-head failed checks were present, but neither model diagnosis nor deterministic fallback mapped them to concrete source-backed findings." \
+              "- Required next evidence: failed-check logs or annotations that identify an exact local file line and a concrete fix." \
+              "- Head SHA: \`${HEAD_SHA}\`" \
+              "- Workflow run: ${RUN_ID}" \
+              "- Workflow attempt: ${RUN_ATTEMPT}" \
+              "" \
+              "No PR review was posted because an evidence-mapping failure is a review-tool state, not a source finding.")"
+            stop_approval_without_review "FAILED_CHECK_DIAGNOSIS_UNAVAILABLE" "$body"
           }
 
           is_github_billing_lock_evidence() {
@@ -2825,13 +2895,13 @@ jobs:
             {
               printf '## Pull request overview\n\n'
               printf 'OpenCode reviewed the current-head bounded evidence but could not approve while peer GitHub Checks were still pending.\n\n'
-              printf '## Findings\n\n'
-              printf '### 1. HIGH .github/workflows/opencode-review.yml:1 - Peer GitHub Checks were still pending before approval\n'
+              printf '## Approval hold\n\n'
+              printf '### Peer GitHub Checks were still pending before approval\n'
               printf -- '- Problem: Current-head GitHub Checks did not all complete before the bounded approval wait ended.\n'
               printf -- '- Root cause: OpenCode cannot safely approve until security and build checks have finished for the same head SHA.\n'
               printf -- '- Fix: Re-run OpenCode after the pending checks finish, or wait for this approval step to observe completed peer checks.\n'
-              printf -- '- Regression test: Keep the approval gate waiting for peer checks and emitting REQUEST_CHANGES instead of approving stale evidence.\n\n'
-              printf -- '- Result: REQUEST_CHANGES\n'
+              printf -- '- Regression test: Keep the approval gate waiting for peer checks and stopping without approval instead of approving stale evidence.\n\n'
+              printf -- '- Result: WAITING_FOR_CHECKS\n'
               printf -- "- Reason: current-head GitHub Checks did not all complete before the bounded approval wait ended for \`%s\`.\n" "$HEAD_SHA"
               printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
               printf -- '- Workflow run: %s\n' "$RUN_ID"
@@ -2883,7 +2953,7 @@ jobs:
 
             {
               printf 'GitHub Checks failed after the initial OpenCode review. Diagnose the failed checks and return a line-specific REQUEST_CHANGES review for PR #%s in %s.\n' "$PR_NUMBER" "$GITHUB_WORKSPACE"
-              printf 'Use the failed log excerpt and annotations below as evidence, follow the Review language evidence from bounded-review-evidence.md for the final review language, then inspect local source files and focused hunks to identify the exact line to edit. For each actionable Strix or GitHub Check failure, provide one finding with path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. If PR mergeability evidence reports mergeStateStatus DIRTY, include merge-conflict repair direction that names base/head branches, tells the author to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch. Use Greptile-style specificity: preserve a P1/P2/P3 priority, cite the evidence type behind the claim (nearby implementation, matching existing example, cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR scope drift, make suggested diffs GitHub suggestion-ready minimal diffs when possible, and include one compact Mermaid DAG that names the changed file or surface and maps it to the affected execution path, main risk, and verification path; do not use generic placeholder nodes like Changed surface or Main risk. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Include the failed check label and exact failed log phrase in problem or root_cause; unrelated speculative findings are invalid. Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests. The fix_direction must state the concrete from/to change, not only the workflow URL. The suggested_diff must be source-backed and GitHub suggestion-ready when possible: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. If Strix evidence contains multiple model vulnerability reports, include every model-reported vulnerability as a separate evidence-backed finding and preserve each report'\''s model name, title, severity, endpoint, and Code Locations/path:line evidence in problem or root_cause when present. When evidence supports it, name the concrete CWE/KISA-style class such as injection, auth/authz, secrets, crypto, path traversal/file upload, XSS/CSRF/SSRF, error disclosure, or debug/deployment config; do not invent a category without evidence. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. If a failure is external infrastructure with no source fix, the finding must identify the exact external blocker, supporting log line, and why no repository line can fix it.\n\n'
+              printf 'Use the failed log excerpt and annotations below as evidence, follow the Review language evidence from bounded-review-evidence.md for the final review language, then inspect local source files and focused hunks to identify the exact line to edit. For each actionable Strix or GitHub Check failure, provide one finding with path,line,severity,title,problem,root_cause,fix_direction,regression_test_direction,suggested_diff. If PR mergeability evidence reports mergeStateStatus DIRTY, include merge-conflict repair direction that names base/head branches, tells the author to merge or rebase the latest base branch into the PR branch, resolve conflict markers, rerun focused checks, and push the same branch, including a compact command block with gh pr checkout, git fetch, merge or rebase, git status --short, and the normal or --force-with-lease push path. Use Greptile-style specificity: preserve a P1/P2/P3 priority, cite the evidence type behind the claim (nearby implementation, matching existing example, cross-file counterpart, current official docs, or failed check/log evidence), flag unrelated PR scope drift, make suggested diffs GitHub suggestion-ready minimal diffs when possible, and include one compact Mermaid DAG that names the changed file or surface and maps it to the affected execution path, main risk, and verification path; do not use generic placeholder nodes like Changed surface or Main risk. The line must be a positive line number from an actual changed or relevant local file; never use line 0. Include the failed check label and exact failed log phrase in problem or root_cause; unrelated speculative findings are invalid. Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests. The fix_direction must state the concrete from/to change, not only the workflow URL. The suggested_diff must be source-backed and GitHub suggestion-ready when possible: every removed line in the diff must exist in the cited current local file, so do not request changes for code you did not verify in the current source. If Strix evidence contains multiple model vulnerability reports, include every model-reported vulnerability as a separate evidence-backed finding and preserve each report'\''s model name, title, severity, endpoint, and Code Locations/path:line evidence in problem or root_cause when present. When evidence supports it, name the concrete CWE/KISA-style class such as injection, auth/authz, secrets, crypto, path traversal/file upload, XSS/CSRF/SSRF, error disclosure, or debug/deployment config; do not invent a category without evidence. One Strix model vulnerability report requires one distinct finding; do not combine duplicate titles or matching locations from different models into one finding. If a failure is external infrastructure with no source fix, the finding must identify the exact external blocker, supporting log line, and why no repository line can fix it.\n\n'
               printf 'Format the human-readable review with OpenCode-owned sections compatible with Copilot Review and CodeRabbitAI: start with a concise pull request overview, then list severity-ordered actionable findings without raw tool logs. Do not depend on those agents or a human reviewer being present.\n\n'
               printf 'Failed checks:\n'
               cat "$failed_checks_file"
@@ -3338,6 +3408,18 @@ jobs:
                         "- Problem: GitHub reports mergeStateStatus \`${merge_state}\` for this pull request." \
                         "- Root cause: Branch \`${head_ref}\` cannot be merged cleanly into \`${base_ref}\`; the changed-file flow below shows which review/runtime path is blocked by the conflict." \
                         "- Fix: Merge or rebase the latest \`${base_ref}\` into \`${head_ref}\`, resolve conflict markers in the PR branch, rerun the focused checks, and push the same branch." \
+                        "- Repair commands:" \
+                        '```bash' \
+                        "gh pr checkout ${PR_NUMBER} --repo ${GH_REPOSITORY}" \
+                        "git fetch origin ${base_ref}" \
+                        "git merge --no-ff origin/${base_ref}  # or: git rebase origin/${base_ref}" \
+                        "git status --short" \
+                        "# resolve files, then git add <resolved-files>" \
+                        "# merge path: git commit" \
+                        "# rebase path: git rebase --continue" \
+                        "git push origin HEAD:${head_ref}" \
+                        "# rebase path only: git push --force-with-lease origin HEAD:${head_ref}" \
+                        '```' \
                         "- Regression test: Keep OpenCode approval gated on mergeability so model-output failures cannot approve a conflicted PR." \
                         "" \
                         "## Change Flow DAG" \
@@ -3424,9 +3506,7 @@ jobs:
               elif build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
                 create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
               else
-                echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                echo "::endgroup::"
-                exit 1
+                stop_failed_check_fallback_unavailable
               fi
               echo "::endgroup::"
               exit 0
@@ -3435,9 +3515,18 @@ jobs:
             if request_changes_for_merge_conflict_if_present; then
               :
             else
-              echo "::error::OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}; all configured OpenCode model attempts failed to produce a usable current-head control block for head ${HEAD_SHA}. no valid source-backed review output was available after retries; it will not approve without source-backed current-head review evidence. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
-              echo "::endgroup::"
-              exit 1
+              body="$(printf '%s\n' \
+                "all configured OpenCode model attempts failed to produce a usable current-head control block." \
+                "" \
+                "- Result: OPENCODE_REVIEW_UNAVAILABLE" \
+                "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}." \
+                "- Required next evidence: rerun OpenCode with a model/tooling attempt that emits a valid source-backed control block for this head." \
+                "- Head SHA: \`${HEAD_SHA}\`" \
+                "- Workflow run: ${RUN_ID}" \
+                "- Workflow attempt: ${RUN_ATTEMPT}" \
+                "" \
+                "Leaving the PR review unchanged because this is review tooling instability, not a source-code finding.")"
+              stop_approval_without_review "OPENCODE_REVIEW_UNAVAILABLE" "$body"
             fi
             echo "::endgroup::"
             exit 0
@@ -3543,29 +3632,25 @@ jobs:
                   "" \
                   "OpenCode reviewed the current-head evidence but could not verify peer GitHub Checks before approval." \
                   "" \
-                  "## Findings" \
+                  "## Approval hold" \
                   "" \
-                  "### 1. HIGH .github/workflows/opencode-review.yml:1 - GitHub Checks statusCheckRollup could not be read before approval" \
+                  "### GitHub Checks statusCheckRollup could not be read before approval" \
                   "- Problem: GitHub Checks statusCheckRollup could not be read for the current head." \
                   "- Root cause: OpenCode cannot safely approve without verifying the same-head check rollup." \
                   "- Fix: Re-run OpenCode after GitHub statusCheckRollup is readable." \
                   "- Regression test: Keep the approval gate failing closed when check rollup lookup fails." \
                   "" \
-                  "- Result: REQUEST_CHANGES" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
                   "- Reason: GitHub Checks statusCheckRollup could not be read for current head \`${HEAD_SHA}\`." \
                   "- Head SHA: \`${HEAD_SHA}\`" \
                   "- Workflow run: ${RUN_ID}" \
                   "- Workflow attempt: ${RUN_ATTEMPT}")"
-                create_pull_review "REQUEST_CHANGES" "$body"
-                echo "::endgroup::"
-                exit 0
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
               if [ "$pending_wait_status" -ne 0 ]; then
                 failed_check_review_body_file="$(mktemp)"
                 build_pending_check_body "$pending_checks_file" "$failed_check_review_body_file"
-                create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
-                echo "::endgroup::"
-                exit 0
+                stop_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"
               fi
               failed_checks_file="$(mktemp)"
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
@@ -3574,22 +3659,20 @@ jobs:
                   "" \
                   "OpenCode reviewed the current-head evidence but could not verify peer GitHub Checks before approval." \
                   "" \
-                  "## Findings" \
+                  "## Approval hold" \
                   "" \
-                  "### 1. HIGH .github/workflows/opencode-review.yml:1 - GitHub Checks statusCheckRollup could not be read before approval" \
+                  "### GitHub Checks statusCheckRollup could not be read before approval" \
                   "- Problem: GitHub Checks statusCheckRollup could not be read for the current head." \
                   "- Root cause: OpenCode cannot safely approve without verifying the same-head check rollup." \
                   "- Fix: Re-run OpenCode after GitHub statusCheckRollup is readable." \
                   "- Regression test: Keep the approval gate failing closed when check rollup lookup fails." \
                   "" \
-                  "- Result: REQUEST_CHANGES" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
                   "- Reason: GitHub Checks statusCheckRollup could not be read for current head \`${HEAD_SHA}\`." \
                   "- Head SHA: \`${HEAD_SHA}\`" \
                   "- Workflow run: ${RUN_ID}" \
                   "- Workflow attempt: ${RUN_ATTEMPT}")"
-                create_pull_review "REQUEST_CHANGES" "$body"
-                echo "::endgroup::"
-                exit 0
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
               if [ -s "$failed_checks_file" ]; then
                 failed_check_evidence_file="$(mktemp)"
@@ -3616,9 +3699,7 @@ jobs:
                   echo "::endgroup::"
                   exit 0
                 else
-                  echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                  echo "::endgroup::"
-                  exit 1
+                  stop_failed_check_fallback_unavailable
                 fi
               fi
               unresolved_human_threads_file="$(mktemp)"
@@ -3663,9 +3744,18 @@ jobs:
               failed_check_inline_failure_body_file="$(mktemp)"
               failed_checks_file="$(mktemp)"
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
-                request_changes_for_gate_failure "GitHub Checks statusCheckRollup could not be read before validating OpenCode REQUEST_CHANGES against current-head failed checks."
-                echo "::endgroup::"
-                exit 0
+                body="$(printf '%s\n' \
+                  "OpenCode could not validate REQUEST_CHANGES against current-head failed checks." \
+                  "" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
+                  "- Reason: GitHub Checks statusCheckRollup could not be read before validating OpenCode REQUEST_CHANGES." \
+                  "- Required next evidence: readable current-head statusCheckRollup plus failed-check logs or annotations." \
+                  "- Head SHA: \`${HEAD_SHA}\`" \
+                  "- Workflow run: ${RUN_ID}" \
+                  "- Workflow attempt: ${RUN_ATTEMPT}" \
+                  "" \
+                  "No PR review was posted because check lookup failure is a review-tool state, not a source finding.")"
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
 
               if [ -s "$failed_checks_file" ]; then
@@ -3688,9 +3778,7 @@ jobs:
                 elif build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
                   create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
                 else
-                  echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                  echo "::endgroup::"
-                  exit 1
+                  stop_failed_check_fallback_unavailable
                 fi
               else
                 publish_request_changes_from_control "$control_json"
@@ -3702,9 +3790,18 @@ jobs:
               failed_check_inline_failure_body_file="$(mktemp)"
               failed_checks_file="$(mktemp)"
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
-                echo "::error::GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}. Leaving the PR review unchanged."
-                echo "::endgroup::"
-                exit 1
+                body="$(printf '%s\n' \
+                  "OpenCode could not interpret the model gate result because current-head checks were unavailable." \
+                  "" \
+                  "- Result: CHECKS_LOOKUP_FAILED" \
+                  "- Reason: GitHub Checks statusCheckRollup could not be read after OpenCode gate result ${gate_result:-empty}." \
+                  "- Required next evidence: readable current-head statusCheckRollup." \
+                  "- Head SHA: \`${HEAD_SHA}\`" \
+                  "- Workflow run: ${RUN_ID}" \
+                  "- Workflow attempt: ${RUN_ATTEMPT}" \
+                  "" \
+                  "No PR review was posted because check lookup failure is a review-tool state, not a source finding.")"
+                stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
               fi
 
               if [ -s "$failed_checks_file" ]; then
@@ -3725,17 +3822,24 @@ jobs:
                 elif build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
                   create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
                 else
-                  echo "::error::Failed GitHub Checks were present, but OpenCode could not derive source-backed line-specific findings after retries. Leaving the PR review unchanged so the current-head review can be rerun with better evidence."
-                  echo "::endgroup::"
-                  exit 1
+                  stop_failed_check_fallback_unavailable
                 fi
               else
                 if request_changes_for_merge_conflict_if_present; then
                   :
                 else
-                  echo "::error::OpenCode gate result ${gate_result:-empty} was not publishable for head ${HEAD_SHA}. Leaving the PR review unchanged because this is review tooling instability, not a source-code finding."
-                  echo "::endgroup::"
-                  exit 1
+                  body="$(printf '%s\n' \
+                    "OpenCode gate result was not publishable for the current head." \
+                    "" \
+                    "- Result: OPENCODE_REVIEW_UNAVAILABLE" \
+                    "- Reason: OpenCode gate result ${gate_result:-empty} was not publishable for head ${HEAD_SHA}." \
+                    "- Required next evidence: rerun OpenCode with a valid source-backed control block, or obtain a source-backed failed-check diagnosis." \
+                    "- Head SHA: \`${HEAD_SHA}\`" \
+                    "- Workflow run: ${RUN_ID}" \
+                    "- Workflow attempt: ${RUN_ATTEMPT}" \
+                    "" \
+                    "Leaving the PR review unchanged because this is review tooling instability, not a source-code finding.")"
+                  stop_approval_without_review "OPENCODE_REVIEW_UNAVAILABLE" "$body"
                 fi
               fi
               ;;

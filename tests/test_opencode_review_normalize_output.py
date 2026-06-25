@@ -155,14 +155,13 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path)
             control(
                 result="REQUEST_CHANGES",
                 summary=(
-                    "No deterministic missing-string markers or Strix report locations were "
-                    "recognized. Use the failed-check evidence below to map each failed check "
-                    "to exact local source lines before approving."
+                    "The review could not map each failed check to exact local source lines "
+                    "from the available logs, so it needs better failed-check evidence."
                 ),
                 findings=[
                     finding(
                         title="Generic failed-check deflection",
-                        problem="No deterministic missing-string markers were recognized.",
+                        problem="The failed-check diagnosis did not produce source-backed findings.",
                     )
                 ],
             )
@@ -206,9 +205,8 @@ def test_valid_control_filters_shape_head_and_review_contract():
             dict(
                 request,
                 summary=(
-                    "No deterministic missing-string markers or Strix report locations were "
-                    "recognized. Use the failed-check evidence below to map each failed check "
-                    "to exact local source lines before approving."
+                    "The review could not map each failed check to exact local source lines "
+                    "from the available logs, so it needs better failed-check evidence."
                 ),
             ),
             **kwargs,

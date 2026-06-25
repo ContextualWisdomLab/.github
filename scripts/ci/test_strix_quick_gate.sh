@@ -96,10 +96,12 @@ assert_strix_workflow_pr_trigger_hardened() {
 
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "strix workflow scopes concurrency to the active pull request"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.inputs.pr_number)" "strix workflow scopes manual PR evidence concurrency to the requested pull request"
+	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" "strix workflow scopes pull_request_target concurrency to the active pull request head"
+	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha)" "strix workflow scopes manual PR evidence concurrency to the requested pull request head"
+	assert_file_contains "$workflow_file" "github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number)" "strix workflow retains a manual PR fallback group when no head SHA is provided"
 	assert_file_contains "$workflow_file" "|| github.ref" "strix workflow scopes non-PR concurrency to the current ref"
 	assert_file_contains "$workflow_file" "cancel-in-progress: false" "strix workflow never cancels in-progress security evidence"
+	assert_file_contains "$workflow_file" "head SHA in PR groups prevents stale scans from serializing newer evidence" "strix workflow documents stale scan queue avoidance"
 	assert_file_contains "$workflow_file" "models: read" "strix workflow grants only the GitHub Models read permission needed for Strix"
 	assert_file_contains "$workflow_file" "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6" "strix workflow pins actions/setup-python"
 	assert_file_contains "$workflow_file" 'python-version: "3.13"' "strix workflow runs Python steps on Python 3.13"
@@ -213,7 +215,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://models.github.ai/inference" "strix workflow routes GitHub Models scans to the inference endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324" "strix workflow configures reachable stronger-than-GPT-4.1 GitHub Models fallback models"
+	assert_file_contains "$workflow_file" "github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528" "strix workflow configures reachable stronger-than-GPT-4.1 GitHub Models fallback models"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
 	assert_file_contains "$workflow_file" '${strix_model#github_models/}' "strix workflow strips manual github_models routing prefix for OpenAI GPT model names before passing model names to LiteLLM"
 	assert_file_contains "$workflow_file" "openai_direct/%s" "strix workflow keeps manual direct OpenAI scans distinct from GitHub Models openai/gpt-* routing"
@@ -423,6 +425,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'git -C "$OPENCODE_SOURCE_WORKDIR" ls-tree -r --name-only "$PR_HEAD_SHA" -- "$docs_dir"' "opencode review evidence lists current-head docs assets from the PR head worktree before judging docs claims"
 	assert_file_contains "$workflow_file" "Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it." "opencode review prompt forbids unsupported docs asset absence claims"
 	assert_file_contains "$workflow_file" "Merge Conflict Guidance" "opencode review overview includes conflict repair guidance"
+	assert_file_contains "$workflow_file" "gh pr checkout" "opencode merge-conflict guidance starts from checking out the PR branch"
+	assert_file_contains "$workflow_file" "git fetch origin" "opencode merge-conflict guidance fetches the latest base branch"
+	assert_file_contains "$workflow_file" "git status --short" "opencode merge-conflict guidance tells the author how to find unresolved conflict files"
+	assert_file_contains "$workflow_file" "git push --force-with-lease" "opencode merge-conflict guidance limits force pushes to the rebase path"
 	assert_file_contains "$workflow_file" "mergeStateStatus DIRTY or CONFLICTING" "opencode review prompt handles merge conflicts"
 	assert_file_contains "$workflow_file" "mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance" "opencode review prompt does not misclassify branch-policy blockers as merge conflicts"
 	if [ -e "$REPO_ROOT/.github/workflows/opencode-merge-conflict-guidance.yml" ]; then
@@ -726,8 +732,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" '"lsp": "allow"' "opencode generated config enables LSP"
 	assert_file_contains "$workflow_file" '"lsp": true' "opencode generated config starts built-in LSP servers when available"
 	assert_file_contains "$workflow_file" "OpenCode runtime tools are enabled: bash, task, webfetch, websearch, and lsp." "opencode review prompt names the enabled runtime tools"
-	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper did not produce source-backed findings; leaving the PR review unchanged for rerun." "opencode failed-check fallback avoids generic review comments when helper output is not source-backed"
-	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper returned non-source-backed generic output; leaving the PR review unchanged for rerun." "opencode failed-check fallback rejects stale helper scripts that exit zero with generic no-evidence text"
+	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper did not produce source-backed findings. No PR review was posted; retry after current-head failed-check logs or annotations are available" "opencode failed-check fallback avoids generic review comments when helper output is not source-backed"
+	assert_file_contains "$workflow_file" "OpenCode failed-check fallback helper returned non-source-backed output. No PR review was posted; retry after current-head failed-check logs or annotations are available" "opencode failed-check fallback rejects stale helper scripts that exit zero with generic no-evidence text"
 	assert_file_contains "$workflow_file" "could not derive source-backed line-specific findings after retries" "opencode failed-check fallback fails the check instead of posting URL-only request-changes reviews"
 	assert_file_not_contains "$workflow_file" "OpenCode failed-check fallback helper exited non-zero; using inline fallback." "opencode failed-check fallback must not silently downgrade helper failures to generic inline fallback reviews"
 	assert_file_contains "$workflow_file" "Do not depend on Copilot Review, CodeRabbitAI, or any human reviewer" "opencode review format is independent of other review agents"
@@ -1729,7 +1735,7 @@ EOF
 	assert_file_contains "$output_file" "Strix provider failure blocked current-head security evidence" "fallback treats no-report summary as provider blocker"
 	assert_file_contains "$output_file" "api.deepseek.com" "fallback preserves direct DeepSeek endpoint failure evidence"
 	assert_file_contains "$output_file" "Authentication Fails" "fallback preserves direct DeepSeek authentication failure evidence"
-	assert_file_contains "$output_file" "github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324" "fallback gives exact GitHub Models fallback list"
+	assert_file_contains "$output_file" "github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528" "fallback gives exact GitHub Models fallback list"
 	assert_file_contains "$output_file" "Suggested edit: \`.github/workflows/strix.yml" "fallback gives a line-specific suggested edit for provider routing"
 	assert_file_not_contains "$output_file" "Strix provider signal left current-head security evidence incomplete" "fallback does not invent vulnerability report windows from a no-report summary"
 	assert_file_not_contains "$output_file" "after vulnerability reports" "fallback does not contradict no-report evidence"
@@ -1925,7 +1931,7 @@ jobs:
     steps:
       - name: Run Strix
         env:
-          STRIX_FALLBACK_MODELS: github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324
+          STRIX_FALLBACK_MODELS: github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528
 EOF
 
 	cat >"$evidence_file" <<'EOF'
@@ -9362,11 +9368,11 @@ run_gate_case "github-models-fallback-requires-api-base" \
 
 run_gate_case "github-models-fallback-success" \
 	"vertex_ai/missing-primary" \
-	"github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-v3-0324" \
+	"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528" \
 	"0" \
-	"REGEX:Strix quick scan succeeded with fallback model 'github_models/deepseek/deepseek-r1-0528' in [0-9]+s\\." \
+	"REGEX:Strix quick scan succeeded with fallback model 'github_models/deepseek/deepseek-v3-0324' in [0-9]+s\\." \
 	"2" \
-	"vertex_ai/missing-primary|openai/deepseek/deepseek-r1-0528" \
+	"vertex_ai/missing-primary|openai/deepseek/deepseek-v3-0324" \
 	"<unset>|https://models.github.ai/inference" \
 	"vertex_ai" \
 	"https://models.github.ai/inference" \
