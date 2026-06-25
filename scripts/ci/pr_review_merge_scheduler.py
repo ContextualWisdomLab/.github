@@ -85,6 +85,17 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
 OPEN_PRS_PAGE_SIZE = 25
 DEFAULT_STALE_OPENCODE_MINUTES = 45
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+REST_MERGEABLE_STATE_MAP = {
+    "behind": "BEHIND",
+    "blocked": "BLOCKED",
+    "clean": "CLEAN",
+    "dirty": "DIRTY",
+    "draft": "DRAFT",
+    "has_hooks": "HAS_HOOKS",
+    "unknown": "UNKNOWN",
+    "unstable": "UNSTABLE",
+}
+REST_MERGEABLE_STATES = set(REST_MERGEABLE_STATE_MAP.values())
 
 
 @dataclass
@@ -265,7 +276,42 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             break
         cursor = pr_page["pageInfo"]["endCursor"]
 
+    enrich_rest_mergeable_states(repo, prs)
     return prs
+
+
+def fetch_rest_mergeable_state(repo: str, number: int) -> str:
+    """Fetch and normalize GitHub REST mergeable_state for one pull request."""
+    raw_state = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{number}",
+            "--jq",
+            ".mergeable_state // \"\"",
+        ]
+    ).strip()
+    return REST_MERGEABLE_STATE_MAP.get(raw_state.lower(), raw_state.upper())
+
+
+def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
+    """Attach REST mergeability evidence to GraphQL pull request payloads."""
+    for pr in prs:
+        try:
+            pr["restMergeableState"] = fetch_rest_mergeable_state(repo, int(pr["number"]))
+        except RuntimeError as exc:
+            pr["restMergeableStateError"] = bounded_error_summary(str(exc))
+
+
+def effective_merge_state(pr: dict[str, Any]) -> str:
+    """Return the safest merge state from GraphQL plus REST mergeability evidence."""
+    graph_state = (pr.get("mergeStateStatus") or "").upper()
+    rest_state = (pr.get("restMergeableState") or "").upper()
+    if rest_state in REST_MERGEABLE_STATES:
+        return rest_state
+    if graph_state in {"BEHIND", "DIRTY", "CONFLICTING", "UNKNOWN"}:
+        return graph_state
+    return rest_state or graph_state
 
 
 def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
@@ -576,7 +622,17 @@ def inspect_pr(
     if head_repo != repo:
         return Decision(number, "skip", f"fork or external head repo: {head_repo}")
 
-    merge_state = (pr.get("mergeStateStatus") or "").upper()
+    merge_state = effective_merge_state(pr)
+    if merge_state == "UNKNOWN":
+        if pr.get("autoMergeRequest"):
+            return disable_auto_merge_decision(
+                repo,
+                pr,
+                dry_run=dry_run,
+                reason="mergeability is still being calculated; wait for GitHub mergeability evidence before re-enabling auto-merge",
+            )
+        return Decision(number, "wait", "mergeability is still being calculated")
+
     if merge_state in {"DIRTY", "CONFLICTING"}:
         if pr.get("autoMergeRequest"):
             return disable_auto_merge_decision(
@@ -911,6 +967,7 @@ def self_test() -> None:
         "baseRefOid": "base",
         "headRefName": "feature",
         "mergeStateStatus": "CLEAN",
+        "restMergeableState": "CLEAN",
         "isDraft": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
         "reviewDecision": "REVIEW_REQUIRED",
@@ -952,6 +1009,50 @@ def self_test() -> None:
         base_branch="main",
     )
     assert decision.action == "auto_merge"
+    sample["restMergeableState"] = "BEHIND"
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "update_branch"
+    sample["restMergeableState"] = "DIRTY"
+    sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "disable_auto_merge"
+    assert "merge conflict: DIRTY" in decision.reason
+    sample["restMergeableState"] = "UNKNOWN"
+    sample["autoMergeRequest"] = None
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "wait"
+    assert "mergeability is still being calculated" in decision.reason
+    sample["restMergeableState"] = "CLEAN"
     sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
     sample["statusCheckRollup"]["contexts"]["nodes"] = [
         {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"}
@@ -1032,6 +1133,7 @@ def self_test() -> None:
     assert opencode_in_progress(sample)
     sample["statusCheckRollup"]["contexts"]["nodes"] = []
     sample["mergeStateStatus"] = "BEHIND"
+    sample["restMergeableState"] = ""
     sample["reviews"]["nodes"] = [
         {
             "state": "APPROVED",

@@ -14,6 +14,7 @@ def make_pr(**overrides):
         "isDraft": False,
         "mergeable": "MERGEABLE",
         "mergeStateStatus": "CLEAN",
+        "restMergeableState": "",
         "reviewDecision": "REVIEW_REQUIRED",
         "baseRefName": "main",
         "baseRefOid": "base",
@@ -163,6 +164,7 @@ def test_fetch_open_prs_paginates(monkeypatch):
         return pages.pop(0)
 
     monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
     assert sched.fetch_open_prs("owner/repo", 3) == [{"number": 1}, {"number": 2}]
     assert seen[0]["pageSize"] == 3
     assert seen[1]["cursor"] == "cursor"
@@ -185,9 +187,36 @@ def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypa
         }
 
     monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
 
     assert sched.fetch_open_prs("owner/repo", 120) == [{"number": sched.OPEN_PRS_PAGE_SIZE}]
     assert seen[0]["pageSize"] == sched.OPEN_PRS_PAGE_SIZE
+
+
+def test_rest_mergeable_state_helpers(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        return "dirty\n"
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    assert sched.fetch_rest_mergeable_state("owner/repo", 7) == "DIRTY"
+    assert calls == [["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".mergeable_state // \"\""]]
+
+    prs = [{"number": 8}]
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
+    sched.enrich_rest_mergeable_states("owner/repo", prs)
+    assert prs == [{"number": 8, "restMergeableState": "owner/repo:8"}]
+
+    def raise_lookup_error(repo, number):
+        raise RuntimeError("transient REST failure")
+
+    prs = [{"number": 9}]
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", raise_lookup_error)
+    sched.enrich_rest_mergeable_states("owner/repo", prs)
+    assert prs == [{"number": 9, "restMergeableStateError": "transient REST failure"}]
 
 
 def test_context_review_and_check_helpers():
@@ -511,6 +540,35 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     conflicting = inspect(make_pr(mergeStateStatus="CONFLICTING"))
     assert conflicting.action == "block"
     assert "merge conflict: CONFLICTING" in conflicting.reason
+    rest_conflict = inspect(
+        make_pr(
+            mergeStateStatus="CLEAN",
+            restMergeableState="DIRTY",
+            autoMergeRequest={"enabledAt": "now"},
+        )
+    )
+    assert rest_conflict.action == "disable_auto_merge"
+    assert "merge conflict: DIRTY" in rest_conflict.reason
+    unknown_mergeability = inspect(make_pr(mergeStateStatus="CLEAN", restMergeableState="UNKNOWN"))
+    assert unknown_mergeability.action == "wait"
+    assert unknown_mergeability.reason == "mergeability is still being calculated"
+    unknown_auto_merge = inspect(
+        make_pr(
+            mergeStateStatus="CLEAN",
+            restMergeableState="UNKNOWN",
+            autoMergeRequest={"enabledAt": "now"},
+        )
+    )
+    assert unknown_auto_merge.action == "disable_auto_merge"
+    assert "mergeability is still being calculated" in unknown_auto_merge.reason
+    rest_clean = inspect(
+        make_pr(
+            mergeStateStatus="BEHIND",
+            restMergeableState="CLEAN",
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        )
+    )
+    assert rest_clean.action == "auto_merge"
     assert inspect(make_pr(reviewThreads={"nodes": [{"isResolved": False}]})).reason == "1 unresolved review thread(s)"
     unresolved_auto = inspect(
         make_pr(
@@ -566,6 +624,17 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         autoMergeRequest={"enabledAt": "now"},
     )
     assert inspect(behind_auto_merge_enabled).action == "update_branch"
+    assert called == [("owner/repo", 1, True)]
+    called.clear()
+    rest_behind = make_pr(
+        mergeStateStatus="CLEAN",
+        restMergeableState="BEHIND",
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        autoMergeRequest={"enabledAt": "now"},
+    )
+    rest_behind_decision = inspect(rest_behind)
+    assert rest_behind_decision.action == "update_branch"
+    assert "github-actions[bot]" in rest_behind_decision.reason
     assert called == [("owner/repo", 1, True)]
 
 
