@@ -15,9 +15,10 @@ because it adds noise or misleading review experience.
 
 OpenCode judges PRs; GitHub Actions performs mechanical updates and merges.
 The scheduler updates a same-repository PR branch only when the latest OpenCode
-review is approved and GitHub reports the PR as behind. After that update, the
-new head must pass OpenCode, Strix, required checks, and review-thread gates
-again before auto-merge or `--match-head-commit` merge can proceed.
+review is approved, no current-head failed check is present, and GitHub reports
+the PR as behind. After that update, the new head must pass OpenCode, Strix,
+required checks, and review-thread gates again before auto-merge or
+`--match-head-commit` merge can proceed.
 Branch updates and merges run through the workflow `GITHUB_TOKEN`, so GitHub
 records those mechanical mutations as `github-actions[bot]` rather than an
 OpenCode app token or a personal token.

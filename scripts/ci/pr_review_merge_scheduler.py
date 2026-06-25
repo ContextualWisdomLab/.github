@@ -386,7 +386,13 @@ def inspect_pr(
     if has_current_head_changes_requested(pr):
         return Decision(number, "block", "current-head OpenCode review requested changes")
 
-    if merge_state == "BEHIND" and has_current_head_approval(pr):
+    current_head_approved = has_current_head_approval(pr)
+    if current_head_approved:
+        failed_checks = failed_status_checks(pr)
+        if failed_checks:
+            return Decision(number, "block", f"failed check(s): {', '.join(failed_checks[:5])}")
+
+    if merge_state == "BEHIND" and current_head_approved:
         if not update_branches:
             return Decision(number, "wait", "current-head OpenCode review approved; branch update disabled")
         update_branch(repo, pr, dry_run=dry_run)
@@ -396,10 +402,7 @@ def inspect_pr(
             "current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)",
         )
 
-    if has_current_head_approval(pr):
-        failed_checks = failed_status_checks(pr)
-        if failed_checks:
-            return Decision(number, "block", f"failed check(s): {', '.join(failed_checks[:5])}")
+    if current_head_approved:
         if pr.get("autoMergeRequest"):
             return Decision(number, "wait", "current head is approved; auto-merge already enabled")
         if not enable_auto_merge_flag:
@@ -648,6 +651,23 @@ def self_test() -> None:
         base_branch="main",
     )
     assert decision.action == "update_branch"
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"}
+    ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "block"
+    assert decision.reason == "failed check(s): strix"
+    sample["statusCheckRollup"]["contexts"]["nodes"] = []
     sample["mergeStateStatus"] = "DIRTY"
     decision = inspect_pr(
         "owner/repo",

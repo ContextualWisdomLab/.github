@@ -7,14 +7,15 @@ Live check: 2026-06-25 10:49 KST, GitHub API via `gh` as `seonghobae`.
 OpenCode decides; GitHub Actions mutates.
 
 - OpenCode may return only a decision: `UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`.
-- GitHub Actions updates same-repository PR heads with `expected_head_sha`.
+- GitHub Actions updates same-repository PR heads with `expected_head_sha`
+  only after current-head failed checks have been ruled out.
 - Old approvals and old checks are not merge evidence after a head SHA changes.
 - Merge uses one path: current-head OpenCode approval, no unresolved review threads, required checks green or native auto-merge waiting on them, mergeable head, and no policy blocker.
 - Prefer `gh pr merge --auto --merge --match-head-commit <head>` when native auto-merge is enabled.
 - Use direct `gh pr merge --merge --match-head-commit <head>` only when the repo policy already allows immediate merge.
 - OpenCode app-token merges are deprecated; keep app tokens for review publication, not mechanical branch mutation.
 - OpenCode approval publication must be bounded. Peer GitHub Checks can be awaited, but the approval step itself must time out instead of running for hours; the current central limit is a 45 minute approval step with 81 peer-check probes at 30 seconds.
-- Tool failures are not source findings. Model failure, API transient, update-branch `422/403`, fork/write-permission failure, conflict, failed checks, and stale review state must be reported as distinct scheduler outcomes.
+- Tool failures are not source findings. Model failure, API transient, update-branch `422/403`, fork/write-permission failure, conflict, failed checks, and stale review state must be reported as distinct scheduler outcomes. A failed current-head check blocks `UPDATE_BRANCH`; the scheduler must not use a branch update as a way to hide or bypass failed evidence.
 - Developer experience and user experience are separate review surfaces. Reviews must adopt helpful sibling-repo automation, review, setup, documentation, and product-flow patterns when they reduce friction, and flag noisy automation, false failures, misleading status, repeated waiting, or URL-only diagnostics as experience defects instead of treating them as neutral implementation detail.
 
 ## Non-Actionable Findings Ban
@@ -112,7 +113,7 @@ The checked-in scheduler already does the minimal central path:
 - blocks unresolved review threads;
 - blocks current-head OpenCode `CHANGES_REQUESTED`;
 - blocks current-head failed check runs or status contexts before enabling auto-merge;
-- updates `BEHIND` only when OpenCode approved the exact current head, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]`;
+- updates `BEHIND` only when OpenCode approved the exact current head and no current-head failed check is present, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]`;
 - enables native auto-merge only for current-head OpenCode approval;
 - dispatches same-head Strix evidence first when the current head has no completed Strix evidence;
 - waits while same-head Strix evidence is still running, so OpenCode is not started just to poll a peer check;
@@ -169,6 +170,8 @@ PR #367: wait: current head is approved; auto-merge already enabled
 
 ## Remaining Proof Gaps
 
+- 2026-06-25 13:11 KST continuation snapshot: `.github` PR #58 still has current-head Strix pending on head `8f75fce7adb06481d8e5c688843a9ab8e5d36d73`; `bandscope` PR #450 is still `BEHIND` with OpenCode, macOS build gates, and rust gate pending; `newsdom-api` PR #207 has head `cc4ab795dfbafb2734dfe1bfe61d36638ad832fd` with all observed checks green except Strix pending; `scopeweave` PR #127 has head `0b27abae82738776d7e5a1d9bce07744d7b4f46f` with Strix self-test passing and Strix/OpenCode still pending; `naruon` PR #760 has head `57a2f8e4fcdfd0c23380c4a5c80a12901e4fe606` with Strix self-test and image validation passing and OpenCode still pending.
+- `newsdom-api` PR #207 is not update-branch proof. Its newer head contains a human-authored merge commit `e3b1a411e858a0c016e0721939fef84cb5e105be` and follow-up commit `cc4ab795dfbafb2734dfe1bfe61d36638ad832fd`; the GitHub Actions bot update-branch proof must use a head commit authored by `github-actions[bot]` or an Actions run log showing the `update-branch` API call.
 - A live current-head review -> same-head manual Strix status bridge -> OpenCode approval -> guarded merge trace has been completed on `.github` PR #28.
 - No live outdated -> update-branch -> new-head review -> merge/auto-merge trace has been completed yet. `bandscope` PR #450 is the first corrective rollout after live evidence showed the stale scheduler was waiting instead of updating. The update-branch leg now has a live partial proof: `bandscope` scheduler run `28139266598` selected PR #378 for `update_branch`, and the resulting PR head commit `68d5153ac9d5667c13b8e5e6a231c9fbb2a68f9f` was authored by `github-actions[bot]`.
 - `bandscope` PR #378 still needs the new-head review/check/merge leg before the full outdated -> update-branch -> new-head review -> merge/auto-merge trace can be closed.

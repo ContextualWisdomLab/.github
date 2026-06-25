@@ -345,6 +345,15 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "github-actions[bot]" in decision.reason
     assert called == [("owner/repo", 1, True)]
     called.clear()
+    behind_failed = make_pr(
+        mergeStateStatus="BEHIND",
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}]}},
+    )
+    failed_decision = inspect(behind_failed)
+    assert failed_decision.action == "block"
+    assert failed_decision.reason == "failed check(s): strix"
+    assert called == []
     behind_auto_merge_enabled = make_pr(
         mergeStateStatus="BEHIND",
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
