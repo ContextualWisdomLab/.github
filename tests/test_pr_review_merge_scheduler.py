@@ -21,6 +21,17 @@ def make_pr(**overrides):
         "headRefOid": "head",
         "headRepository": {"nameWithOwner": "owner/repo"},
         "autoMergeRequest": None,
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "oid": "head",
+                        "authoredDate": "2026-06-25T07:00:00Z",
+                        "committedDate": "2026-06-25T07:00:00Z",
+                    }
+                }
+            ]
+        },
         "reviewThreads": {"nodes": []},
         "reviews": {"nodes": []},
         "statusCheckRollup": {"contexts": {"nodes": []}},
@@ -29,8 +40,18 @@ def make_pr(**overrides):
     return value
 
 
-def opencode_review(state="APPROVED", commit="head", login="opencode-agent"):
-    return {"state": state, "author": {"login": login}, "commit": {"oid": commit}}
+def opencode_review(
+    state="APPROVED",
+    commit="head",
+    login="opencode-agent",
+    submitted_at="2026-06-25T07:01:00Z",
+):
+    return {
+        "state": state,
+        "author": {"login": login},
+        "submittedAt": submitted_at,
+        "commit": {"oid": commit},
+    }
 
 
 def strix_check(status="COMPLETED", conclusion="SUCCESS", workflow="Strix Security Scan"):
@@ -192,6 +213,8 @@ def test_context_review_and_check_helpers():
     assert sched.parse_github_datetime("not-a-date") is None
     assert sched.parse_github_datetime("2026-06-25T07:00:00Z") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
     assert sched.parse_github_datetime("2026-06-25T07:00:00") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
+    assert sched.head_commit_datetime(make_pr()) == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
+    assert sched.review_submitted_datetime(opencode_review()) == datetime(2026, 6, 25, 7, 1, tzinfo=timezone.utc)
     assert sched.running_check_state({}) == "absent"
     assert sched.running_check_state({"status": "IN_PROGRESS"}) == "running"
     assert sched.running_check_state({"status": "COMPLETED"}) == "complete"
@@ -271,6 +294,19 @@ def test_review_state_and_failed_checks():
     assert sched.current_head_review_state(pr, "APPROVED")
     assert sched.has_current_head_approval(pr)
     assert not sched.has_current_head_changes_requested(pr)
+    stale_review = make_pr(
+        reviews={
+            "nodes": [
+                opencode_review(
+                    "APPROVED",
+                    "head",
+                    submitted_at="2026-06-25T06:59:59Z",
+                )
+            ]
+        }
+    )
+    assert not sched.has_current_head_approval(stale_review)
+    assert "predates the current head commit" in sched.stale_current_head_review_reason(stale_review)
     superseded = make_pr(
         reviews={
             "nodes": [
@@ -313,20 +349,23 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
     pr = make_pr()
     sched.enable_auto_merge("owner/repo", pr, dry_run=True)
+    sched.disable_auto_merge("owner/repo", pr, dry_run=True)
     sched.update_branch("owner/repo", pr, dry_run=True)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=True)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=True)
     assert calls == []
 
     sched.enable_auto_merge("owner/repo", pr, dry_run=False)
+    sched.disable_auto_merge("owner/repo", pr, dry_run=False)
     sched.update_branch("owner/repo", pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
-    assert calls[1][:4] == ["gh", "api", "-X", "PUT"]
-    assert calls[1][-1] == "expected_head_sha=head"
-    assert calls[2][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
-    assert calls[3][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+    assert calls[1] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
+    assert calls[2][:4] == ["gh", "api", "-X", "PUT"]
+    assert calls[2][-1] == "expected_head_sha=head"
+    assert calls[3][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
+    assert calls[4][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
 
 
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
@@ -343,6 +382,11 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
             "update_branch",
             "current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)",
         ),
+        sched.Decision(
+            9,
+            "disable_auto_merge",
+            "auto-merge disabled; OpenCode review predates the current head commit; wait for a fresh same-head OpenCode review",
+        ),
     ]
 
     sched.print_summary(decisions, dry_run=True, base_branch="main", project_flow="github-flow")
@@ -352,12 +396,13 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     payload = json.loads(output.splitlines()[-1])
     assert payload["schema_version"] == "pr-review-merge-scheduler/v1"
     assert payload["base_branch"] == "main"
-    assert payload["counts"] == {"block": 1, "update_branch": 1}
+    assert payload["counts"] == {"block": 1, "disable_auto_merge": 1, "update_branch": 1}
     assert payload["dry_run"] is True
-    assert payload["inspected"] == 2
+    assert payload["inspected"] == 3
     assert payload["project_flow"] == "github-flow"
     assert payload["decisions"][0]["contract_decision"] == "WAIT"
     assert payload["decisions"][1]["contract_decision"] == "UPDATE_BRANCH"
+    assert payload["decisions"][2]["contract_decision"] == "WAIT"
     assert payload["decisions"][0]["guidance"]["type"] == "merge_conflict_repair"
     assert payload["decisions"][0]["guidance"]["merge_state"] == "DIRTY"
     assert payload["decisions"][0]["guidance"]["base_ref"] == "main"
@@ -370,6 +415,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][1]["guidance"]["token"] == "workflow GITHUB_TOKEN"
     assert payload["decisions"][1]["guidance"]["required_permission"] == "pull-requests: write"
     assert payload["decisions"][1]["guidance"]["head_guard"] == "expected_head_sha"
+    assert payload["decisions"][2]["guidance"]["type"] == "fresh_head_review_required"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; run" in summary
@@ -378,6 +424,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
         "| #8 | update_branch | current-head OpenCode review approved; "
         "branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions) |"
     ) in summary
+    assert "fresh same-head OpenCode review" in summary
     assert "### Conflict repair" in summary
     assert "`update-branch` is not a conflict resolver" in summary
     assert "PR #7 is `DIRTY` against `main` from `feature\\|x`:" not in summary
@@ -443,6 +490,16 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]})).reason == (
         "current-head OpenCode review requested changes"
     )
+    stale_auto = make_pr(
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={"nodes": [opencode_review("APPROVED", "head", submitted_at="2026-06-25T06:59:59Z")]},
+    )
+    disabled = []
+    monkeypatch.setattr(sched, "disable_auto_merge", lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)))
+    stale_auto_decision = inspect(stale_auto)
+    assert stale_auto_decision.action == "disable_auto_merge"
+    assert "predates the current head commit" in stale_auto_decision.reason
+    assert disabled == [("owner/repo", 1, True)]
 
     stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
     dispatched = []

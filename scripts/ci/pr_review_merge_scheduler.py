@@ -33,6 +33,15 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
         headRefOid
         headRepository { nameWithOwner }
         autoMergeRequest { enabledAt }
+        commits(last: 1) {
+          nodes {
+            commit {
+              oid
+              authoredDate
+              committedDate
+            }
+          }
+        }
         reviewThreads(first: 100) {
           nodes { isResolved isOutdated }
         }
@@ -91,7 +100,7 @@ def contract_decision(decision: Decision) -> str:
     """Map scheduler actions into the bounded PR decision contract."""
     if decision.action == "update_branch":
         return "UPDATE_BRANCH"
-    if decision.action in {"wait", "security_dispatch", "review_dispatch", "action_error"}:
+    if decision.action in {"wait", "security_dispatch", "review_dispatch", "disable_auto_merge", "action_error"}:
         return "WAIT"
     if decision.action in {"skip", "auto_merge"}:
         return "NO_ACTION"
@@ -183,6 +192,17 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
                 "OpenCode approval on that exact new head",
                 "same-head Strix evidence",
                 "required GitHub Checks success",
+                "zero active unresolved review threads",
+            ],
+        }
+    if decision.action == "disable_auto_merge":
+        return {
+            "type": "fresh_head_review_required",
+            "summary": "Auto-merge was disabled because the PR needs fresh same-head review evidence before it can be merged.",
+            "next_required_evidence": [
+                "OpenCode approval submitted after the current head commit was created",
+                "required GitHub Checks success on the current head",
+                "same-head Strix evidence",
                 "zero active unresolved review threads",
             ],
         }
@@ -292,6 +312,57 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def head_commit_datetime(pr: dict[str, Any]) -> datetime | None:
+    """Return the current PR head commit time from the GraphQL commit edge."""
+    commits = ((pr.get("commits") or {}).get("nodes") or [])
+    if not commits:
+        return None
+    commit = (commits[-1].get("commit") or {})
+    return parse_github_datetime(commit.get("committedDate"))
+
+
+def review_submitted_datetime(review: dict[str, Any]) -> datetime | None:
+    """Return the review submission time as an aware UTC datetime."""
+    return parse_github_datetime(review.get("submittedAt"))
+
+
+def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> bool:
+    """Return whether a review is valid evidence for the current head commit."""
+    head = pr.get("headRefOid")
+    commit = (review.get("commit") or {}).get("oid")
+    if commit != head:
+        return False
+    head_time = head_commit_datetime(pr)
+    if not head_time:
+        return True
+    submitted_at = review_submitted_datetime(review)
+    return bool(submitted_at and submitted_at >= head_time)
+
+
+def stale_current_head_review_reason(pr: dict[str, Any]) -> str | None:
+    """Explain why a same-commit OpenCode review is stale for the current head."""
+    head = pr.get("headRefOid")
+    head_time = head_commit_datetime(pr)
+    if not head or not head_time:
+        return None
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review):
+            continue
+        commit = (review.get("commit") or {}).get("oid")
+        if commit != head:
+            continue
+        submitted_at = review_submitted_datetime(review)
+        if not submitted_at:
+            return "OpenCode review has no submission timestamp for the current head"
+        if submitted_at < head_time:
+            return (
+                "OpenCode review predates the current head commit "
+                f"({submitted_at.isoformat()} < {head_time.isoformat()})"
+            )
+        return None
+    return None
+
+
 def running_check_state(node: dict[str, Any]) -> str:
     """Return running, complete, or absent for a check/status context."""
     status = (node.get("status") or node.get("state") or "").upper()
@@ -366,12 +437,10 @@ def is_opencode_review(review: dict[str, Any]) -> bool:
 
 def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
     """Return whether OpenCode's latest current-head review has the target state."""
-    head = pr.get("headRefOid")
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
         if not is_opencode_review(review):
             continue
-        commit = (review.get("commit") or {}).get("oid")
-        if commit != head:
+        if not review_matches_current_head(review, pr):
             continue
         return (review.get("state") or "").upper() == state
     return False
@@ -417,6 +486,14 @@ def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
     run(["gh", "pr", "merge", number, "--repo", repo, "--auto", "--merge", "--match-head-commit", head])
+
+
+def disable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    """Disable auto-merge when the current head no longer has fresh review evidence."""
+    number = str(pr["number"])
+    if dry_run:
+        return
+    run(["gh", "pr", "merge", number, "--repo", repo, "--disable-auto"])
 
 
 def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -542,6 +619,14 @@ def inspect_pr(
         return Decision(number, "block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
+    stale_review_reason = stale_current_head_review_reason(pr)
+    if stale_review_reason and pr.get("autoMergeRequest"):
+        disable_auto_merge(repo, pr, dry_run=dry_run)
+        return Decision(
+            number,
+            "disable_auto_merge",
+            f"auto-merge disabled; {stale_review_reason}; wait for a fresh same-head OpenCode review",
+        )
     if current_head_approved:
         failed_checks = failed_status_checks(pr)
         if failed_checks:
