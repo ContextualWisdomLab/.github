@@ -347,7 +347,7 @@ def merge_conflict_guidance(pr: dict[str, Any], merge_state: str) -> str:
     return (
         f"merge conflict: {merge_state}; base={base_ref}, head={head_ref}; "
         f"merge origin/{base_ref} into {head_ref}, or rebase {head_ref} onto origin/{base_ref}; resolve conflict markers in the PR branch, "
-        f"rerun focused checks, and push the same {head_ref} branch"
+        f"rerun focused checks, and push the same {head_ref} branch (use --force-with-lease only if rebased)"
     )
 
 
