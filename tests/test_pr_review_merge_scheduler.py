@@ -306,7 +306,20 @@ def test_review_state_and_failed_checks():
         }
     )
     assert not sched.has_current_head_approval(stale_review)
-    assert "predates the current head commit" in sched.stale_current_head_review_reason(stale_review)
+    assert "does not postdate the current head commit" in sched.stale_current_head_review_reason(stale_review)
+    same_timestamp_review = make_pr(
+        reviews={
+            "nodes": [
+                opencode_review(
+                    "APPROVED",
+                    "head",
+                    submitted_at="2026-06-25T07:00:00Z",
+                )
+            ]
+        }
+    )
+    assert not sched.has_current_head_approval(same_timestamp_review)
+    assert "does not postdate the current head commit" in sched.stale_current_head_review_reason(same_timestamp_review)
     missing_review_time = make_pr(
         reviews={
             "nodes": [
@@ -404,7 +417,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
         sched.Decision(
             9,
             "disable_auto_merge",
-            "auto-merge disabled; OpenCode review predates the current head commit; wait for a fresh same-head OpenCode review",
+            "auto-merge disabled; OpenCode review does not postdate the current head commit; wait for a fresh same-head OpenCode review",
         ),
     ]
 
@@ -517,7 +530,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     monkeypatch.setattr(sched, "disable_auto_merge", lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)))
     stale_auto_decision = inspect(stale_auto)
     assert stale_auto_decision.action == "disable_auto_merge"
-    assert "predates the current head commit" in stale_auto_decision.reason
+    assert "does not postdate the current head commit" in stale_auto_decision.reason
     assert disabled == [("owner/repo", 1, True)]
 
     stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})

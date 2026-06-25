@@ -336,7 +336,7 @@ def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> b
     if not head_time:
         return True
     submitted_at = review_submitted_datetime(review)
-    return bool(submitted_at and submitted_at >= head_time)
+    return bool(submitted_at and submitted_at > head_time)
 
 
 def stale_current_head_review_reason(pr: dict[str, Any]) -> str | None:
@@ -354,10 +354,10 @@ def stale_current_head_review_reason(pr: dict[str, Any]) -> str | None:
         submitted_at = review_submitted_datetime(review)
         if not submitted_at:
             return "OpenCode review has no submission timestamp for the current head"
-        if submitted_at < head_time:
+        if submitted_at <= head_time:
             return (
-                "OpenCode review predates the current head commit "
-                f"({submitted_at.isoformat()} < {head_time.isoformat()})"
+                "OpenCode review does not postdate the current head commit "
+                f"({submitted_at.isoformat()} <= {head_time.isoformat()})"
             )
         return None
     return None
