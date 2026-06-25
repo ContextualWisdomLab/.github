@@ -309,11 +309,17 @@ def fetch_rest_mergeable_state(repo: str, number: int) -> str:
 
 def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
     """Attach REST mergeability evidence to GraphQL pull request payloads."""
-    for pr in prs:
+    import concurrent.futures
+
+    def enrich(pr: dict[str, Any]) -> None:
         try:
             pr["restMergeableState"] = fetch_rest_mergeable_state(repo, int(pr["number"]))
         except RuntimeError as exc:
             pr["restMergeableStateError"] = bounded_error_summary(str(exc))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(prs) or 1)) as executor:
+        # ⚡ Bolt: Execute REST calls concurrently to avoid N+1 API blocking
+        list(executor.map(enrich, prs))
 
 
 def effective_merge_state(pr: dict[str, Any]) -> str:
