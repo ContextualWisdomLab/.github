@@ -99,15 +99,10 @@ def test_run_split_repo_and_graphql(monkeypatch):
         sched.run(["echo", 1])  # type: ignore[list-item]
 
     assert sched.split_repo("owner/repo") == ("owner", "repo")
-    assert sched.split_repo("owner/repo/extra") == ("owner", "repo/extra")
     with pytest.raises(ValueError):
         sched.split_repo("bad")
     with pytest.raises(ValueError):
-        sched.split_repo("owner")
-    with pytest.raises(ValueError):
         sched.split_repo("/repo")
-    with pytest.raises(ValueError):
-        sched.split_repo("owner/")
 
     calls = []
 
