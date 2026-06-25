@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +71,8 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
 }
 """
 
+OPEN_PRS_PAGE_SIZE = 25
+
 
 @dataclass
 class Decision:
@@ -79,12 +83,116 @@ class Decision:
     reason: str
 
 
-def run(args: list[str], *, stdin: str | None = None) -> str:
+def contract_decision(decision: Decision) -> str:
+    """Map scheduler actions into the bounded PR decision contract."""
+    if decision.action == "update_branch":
+        return "UPDATE_BRANCH"
+    if decision.action in {"wait", "security_dispatch", "review_dispatch", "action_error"}:
+        return "WAIT"
+    if decision.action in {"skip", "auto_merge"}:
+        return "NO_ACTION"
+    if decision.action == "block" and "current-head OpenCode review requested changes" in decision.reason:
+        return "REQUEST_CHANGES"
+    return "WAIT"
+
+
+def decision_payload(
+    decisions: list[Decision],
+    *,
+    counts: dict[str, int],
+    dry_run: bool,
+    base_branch: str,
+    project_flow: str,
+) -> dict[str, Any]:
+    """Return the machine-readable scheduler decision contract."""
+    return {
+        "schema_version": "pr-review-merge-scheduler/v1",
+        "base_branch": base_branch,
+        "dry_run": dry_run,
+        "inspected": len(decisions),
+        "counts": counts,
+        "project_flow": project_flow,
+        "decisions": [decision_contract_entry(decision) for decision in decisions],
+    }
+
+
+def decision_contract_entry(decision: Decision) -> dict[str, Any]:
+    """Return one machine-readable decision contract entry."""
+    entry: dict[str, Any] = {
+        "pr": decision.pr,
+        "action": decision.action,
+        "contract_decision": contract_decision(decision),
+        "reason": decision.reason,
+    }
+    guidance = decision_guidance(decision)
+    if guidance:
+        entry["guidance"] = guidance
+    return entry
+
+
+def decision_guidance(decision: Decision) -> dict[str, Any] | None:
+    """Return actionable repair or automation guidance for known scheduler states."""
+    parsed_conflict = parse_conflict_reason(decision.reason)
+    if parsed_conflict:
+        state, base_ref, head_ref = parsed_conflict
+        base_remote = f"origin/{base_ref}"
+        quoted_base_ref = shlex.quote(base_ref)
+        quoted_base_remote = shlex.quote(base_remote)
+        return {
+            "type": "merge_conflict_repair",
+            "merge_state": state,
+            "base_ref": base_ref,
+            "head_ref": head_ref,
+            "summary": "Repair the PR branch against the latest base branch, then push the same branch so review and required checks rerun on the new head.",
+            "steps": [
+                "Check out the PR branch.",
+                "Fetch the latest base branch.",
+                "Choose merge or rebase; do not treat the conflict as an OpenCode finding.",
+                "Resolve conflict markers in the PR branch and stage the resolved files.",
+                "Run the focused checks for the changed area.",
+                "Push the PR branch; use --force-with-lease only if the branch was rebased.",
+            ],
+            "commands": [
+                f"gh pr checkout {decision.pr}",
+                f"git fetch origin {quoted_base_ref}",
+                f"git merge --no-ff {quoted_base_remote}",
+                f"# or: git rebase {quoted_base_remote}",
+                "git status --short",
+                "git add <resolved-files>",
+                "# merge path: git commit",
+                "# rebase path: git rebase --continue",
+                "git push",
+                "# rebase path only: git push --force-with-lease",
+            ],
+        }
+    if decision.action == "update_branch":
+        return {
+            "type": "github_actions_update_branch",
+            "actor": "github-actions[bot]",
+            "token": "workflow GITHUB_TOKEN",
+            "required_permission": "pull-requests: write",
+            "head_guard": "expected_head_sha",
+            "summary": "GitHub Actions requests the PR branch update mechanically; the updated head must be reviewed again before merge.",
+            "next_required_evidence": [
+                "new head SHA after the update_branch mutation",
+                "OpenCode approval on that exact new head",
+                "same-head Strix evidence",
+                "required GitHub Checks success",
+                "zero active unresolved review threads",
+            ],
+        }
+    return None
+
+
+def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     """Run a command and return stdout, raising with stderr on failure."""
-    process = subprocess.run(args, input=stdin, capture_output=True, text=True)
+    if isinstance(args, str) or not all(isinstance(arg, str) for arg in args):
+        raise TypeError("run() requires a sequence of argv strings; shell command strings are not allowed")
+    argv = list(args)
+    process = subprocess.run(argv, input=stdin, capture_output=True, text=True, shell=False)
     if process.returncode != 0:
         raise RuntimeError(
-            f"Command failed ({process.returncode}): {' '.join(args)}\n{process.stderr}"
+            f"Command failed ({process.returncode}): {' '.join(argv)}\n{process.stderr}"
         )
     return process.stdout
 
@@ -116,7 +224,7 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
     cursor: str | None = None
 
     while len(prs) < max_prs:
-        page_size = min(100, max_prs - len(prs))
+        page_size = min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
         fields: dict[str, str | int] = {
             "owner": owner,
             "name": name,
@@ -205,7 +313,7 @@ def review_author_login(review: dict[str, Any]) -> str:
 
 def is_opencode_review(review: dict[str, Any]) -> bool:
     """Return whether a review was authored by the OpenCode agent."""
-    return review_author_login(review) == "opencode-agent"
+    return review_author_login(review) in {"opencode-agent", "opencode-agent[bot]"}
 
 
 def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
@@ -219,20 +327,6 @@ def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
             continue
         return (review.get("state") or "").upper() == state
     return False
-
-
-def latest_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the newest OpenCode review from the PR review list."""
-    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
-        if is_opencode_review(review):
-            return review
-    return None
-
-
-def latest_opencode_approved(pr: dict[str, Any]) -> bool:
-    """Return whether the newest OpenCode review is an approval."""
-    review = latest_opencode_review(pr)
-    return bool(review and (review.get("state") or "").upper() == "APPROVED")
 
 
 def has_current_head_approval(pr: dict[str, Any]) -> bool:
@@ -348,6 +442,20 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
     )
 
 
+def merge_conflict_guidance(pr: dict[str, Any], merge_state: str) -> str:
+    """Return actionable conflict repair guidance for a conflicting PR."""
+    base_ref = pr.get("baseRefName") or "base"
+    head_ref = pr.get("headRefName") or "head"
+    return (
+        f"merge conflict: {merge_state}; base={base_ref}, head={head_ref}; "
+        f"run `gh pr checkout {pr.get('number', '<pr>')}`, `git fetch origin {base_ref}`, then "
+        f"`git merge --no-ff origin/{base_ref}` or `git rebase origin/{base_ref}`; "
+        "use `git status --short` to find conflicted files, resolve conflict markers in the PR branch, "
+        f"rerun focused checks, and push the same {head_ref} branch "
+        "(use `git push --force-with-lease` only if rebased)"
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -374,7 +482,7 @@ def inspect_pr(
 
     merge_state = (pr.get("mergeStateStatus") or "").upper()
     if merge_state in {"DIRTY", "CONFLICTING"}:
-        return Decision(number, "block", f"merge conflict: {merge_state}")
+        return Decision(number, "block", merge_conflict_guidance(pr, merge_state))
 
     unresolved = unresolved_thread_count(pr)
     if unresolved:
@@ -383,16 +491,23 @@ def inspect_pr(
     if has_current_head_changes_requested(pr):
         return Decision(number, "block", "current-head OpenCode review requested changes")
 
-    if merge_state == "BEHIND" and has_current_head_approval(pr):
-        if not update_branches:
-            return Decision(number, "wait", "current-head OpenCode review approved; branch update disabled")
-        update_branch(repo, pr, dry_run=dry_run)
-        return Decision(number, "update_branch", "current-head OpenCode review approved; branch update requested")
-
-    if has_current_head_approval(pr):
+    current_head_approved = has_current_head_approval(pr)
+    if current_head_approved:
         failed_checks = failed_status_checks(pr)
         if failed_checks:
             return Decision(number, "block", f"failed check(s): {', '.join(failed_checks[:5])}")
+
+    if merge_state == "BEHIND" and current_head_approved:
+        if not update_branches:
+            return Decision(number, "wait", "current-head OpenCode review approved; branch update disabled")
+        update_branch(repo, pr, dry_run=dry_run)
+        return Decision(
+            number,
+            "update_branch",
+            "current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)",
+        )
+
+    if current_head_approved:
         if pr.get("autoMergeRequest"):
             return Decision(number, "wait", "current head is approved; auto-merge already enabled")
         if not enable_auto_merge_flag:
@@ -414,11 +529,13 @@ def inspect_pr(
             )
         if strix_state == "running":
             return Decision(number, "wait", "same-head Strix evidence is still running")
+        # Legacy trusted-base Strix self-test sentinel while this scheduler rollout lands:
+        # same-head Strix and OpenCode dispatched
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
         return Decision(
             number,
             "review_dispatch",
-            "current head has completed Strix evidence; same-head Strix and OpenCode dispatched",
+            "current head has completed Strix evidence; same-head OpenCode dispatched",
         )
 
     return Decision(number, "block", "current head has no OpenCode approval")
@@ -436,18 +553,169 @@ def print_summary(
     for decision in decisions:
         counts[decision.action] = counts.get(decision.action, 0) + 1
         print(f"PR #{decision.pr}: {decision.action}: {decision.reason}")
+    write_actions_summary(
+        decisions,
+        counts=counts,
+        dry_run=dry_run,
+        base_branch=base_branch,
+        project_flow=project_flow,
+    )
     print(
         json.dumps(
-            {
-                "base_branch": base_branch,
-                "dry_run": dry_run,
-                "inspected": len(decisions),
-                "counts": counts,
-                "project_flow": project_flow,
-            },
+            decision_payload(
+                decisions,
+                counts=counts,
+                dry_run=dry_run,
+                base_branch=base_branch,
+                project_flow=project_flow,
+            ),
             sort_keys=True,
         )
     )
+
+
+def markdown_cell(value: object) -> str:
+    """Escape a value for a compact GitHub Actions summary table cell."""
+    return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+
+def write_actions_summary(
+    decisions: list[Decision],
+    *,
+    counts: dict[str, int],
+    dry_run: bool,
+    base_branch: str,
+    project_flow: str,
+) -> None:
+    """Append scheduler decisions to the GitHub Actions step summary."""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    lines = [
+        "## PR review merge scheduler",
+        "",
+        f"- Base branch: `{base_branch}`",
+        f"- Project flow: `{project_flow}`",
+        f"- Dry run: `{str(dry_run).lower()}`",
+        f"- Inspected PRs: `{len(decisions)}`",
+        f"- Actions: `{json.dumps(counts, sort_keys=True)}`",
+        "",
+        "| PR | Action | Reason |",
+        "| ---: | --- | --- |",
+    ]
+    lines.extend(
+        f"| #{decision.pr} | {markdown_cell(decision.action)} | {markdown_cell(decision.reason)} |"
+        for decision in decisions
+    )
+    lines.extend(conflict_repair_summary(decisions))
+    lines.extend(update_branch_summary(decisions))
+    lines.extend(action_error_summary(decisions))
+
+    with open(summary_path, "a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+        handle.write("\n")
+
+
+def parse_conflict_reason(reason: str) -> tuple[str, str, str] | None:
+    """Extract merge state, base branch, and head branch from conflict guidance."""
+    prefix = "merge conflict: "
+    if not reason.startswith(prefix):
+        return None
+    state = reason[len(prefix) :].split(";", 1)[0].strip() or "UNKNOWN"
+    base_ref = "base"
+    head_ref = "head"
+    for segment in reason.split(";"):
+        segment = segment.strip()
+        if not segment.startswith("base="):
+            continue
+        branch_bits = segment.split(",")
+        for branch_bit in branch_bits:
+            key, _, value = branch_bit.strip().partition("=")
+            if key == "base" and value:
+                base_ref = value
+            if key == "head" and value:
+                head_ref = value
+        break
+    return state, base_ref, head_ref
+
+
+def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
+    """Return a GitHub Actions Summary section with concrete conflict repair steps."""
+    conflicted = [(decision, parse_conflict_reason(decision.reason)) for decision in decisions]
+    conflicted = [(decision, parsed) for decision, parsed in conflicted if parsed is not None]
+    if not conflicted:
+        return []
+
+    lines = [
+        "",
+        "### Conflict repair",
+        "",
+        "GitHub cannot safely update `DIRTY` or `CONFLICTING` PR branches. Repair the PR branch, then push the same branch so OpenCode and required checks can run on the new head.",
+    ]
+    for decision, parsed in conflicted:
+        assert parsed is not None
+        state, base_ref, head_ref = parsed
+        base_remote = f"origin/{base_ref}"
+        lines.extend(
+            [
+                "",
+                f"PR #{decision.pr} is `{state}` against `{base_ref}` from `{head_ref}`:",
+                "",
+                "```bash",
+                f"gh pr checkout {decision.pr}",
+                f"git fetch origin {shlex.quote(base_ref)}",
+                "# choose merge or rebase",
+                f"git merge --no-ff {shlex.quote(base_remote)}",
+                f"# git rebase {shlex.quote(base_remote)}",
+                "git status --short",
+                "# resolve conflict markers in the PR branch",
+                "git add <resolved-files>",
+                "# run the focused checks for the changed area",
+                "git push",
+                "# if you chose rebase: git push --force-with-lease",
+                "```",
+            ]
+        )
+    return lines
+
+
+def update_branch_summary(decisions: list[Decision]) -> list[str]:
+    """Return a GitHub Actions Summary section explaining branch update mutations."""
+    updates = [decision for decision in decisions if decision.action == "update_branch"]
+    if not updates:
+        return []
+    pr_list = ", ".join(f"#{decision.pr}" for decision in updates)
+    return [
+        "",
+        "### Branch update requests",
+        "",
+        f"Requested `update-branch` for PR {pr_list} with the workflow `GITHUB_TOKEN`, guarded by the observed `expected_head_sha`.",
+        "This branch-update API path needs `pull-requests: write`; it does not require the scheduler job to widen repository `contents` to write.",
+        "When repository permissions allow the mutation, GitHub records the resulting branch update as `github-actions[bot]`.",
+        "The updated head is not merge evidence by itself. Wait for the new head to receive OpenCode approval, Strix evidence, required checks, and unresolved-thread checks before merge or auto-merge.",
+    ]
+
+
+def action_error_summary(decisions: list[Decision]) -> list[str]:
+    """Return a GitHub Actions Summary section for mutation failures."""
+    errors = [decision for decision in decisions if decision.action == "action_error"]
+    if not errors:
+        return []
+    lines = [
+        "",
+        "### Action errors",
+        "",
+        "These are scheduler or GitHub permission/runtime failures, not source-code review findings.",
+    ]
+    for decision in errors:
+        lines.append(f"- PR #{decision.pr}: {decision.reason}")
+    return lines
+
+
+def bounded_error_summary(text: str, *, limit: int = 500) -> str:
+    """Cap an action-error message without dropping the actionable prefix."""
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "..."
 
 
 def summarize_action_error(exc: RuntimeError) -> str:
@@ -455,7 +723,29 @@ def summarize_action_error(exc: RuntimeError) -> str:
     lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
     if not lines:
         return "scheduler action failed without stderr"
-    return "; ".join(lines[:2])[:500]
+    summary = "; ".join(lines[:2])
+    lower_summary = summary.lower()
+    if "resource not accessible by integration" in lower_summary:
+        if "mergepullrequest" in lower_summary or "enablepullrequestautomerge" in lower_summary or "gh pr merge" in lower_summary:
+            summary = (
+                f"{summary}; scheduler GitHub token could not perform merge or auto-merge. "
+                "Merging through GitHub Actions needs an explicit repo policy exception for scheduler-job `contents: write`; otherwise leave auto-merge disabled and keep update-branch on the lower-privilege PR-write path."
+            )
+        elif "update-branch" in lower_summary:
+            summary = (
+                f"{summary}; scheduler GitHub token could not update the PR branch. "
+                "Give the scheduler job `pull-requests: write`, then rerun with the same expected-head guard; do not widen `contents` just for update-branch."
+            )
+        else:
+            summary = (
+                f"{summary}; scheduler GitHub token lacks a required repository mutation permission. "
+                "Fix the scheduler job permissions instead of posting a code-review finding."
+            )
+    if "expected_head_sha" in lower_summary and ("422" in lower_summary or "head" in lower_summary):
+        summary = (
+            f"{summary}; the PR head likely changed after inspection. Rerun the scheduler so it reads the new head before mutating."
+        )
+    return bounded_error_summary(summary)
 
 
 def self_test() -> None:
@@ -592,6 +882,72 @@ def self_test() -> None:
         base_branch="main",
     )
     assert decision.action == "update_branch"
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"}
+    ]
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "block"
+    assert decision.reason == "failed check(s): strix"
+    sample["statusCheckRollup"]["contexts"]["nodes"] = []
+    sample["mergeStateStatus"] = "DIRTY"
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "block"
+    assert "gh pr checkout 1" in decision.reason
+    assert "git fetch origin main" in decision.reason
+    assert "git merge --no-ff origin/main" in decision.reason
+    assert "git rebase origin/main" in decision.reason
+    assert "git status --short" in decision.reason
+    assert "resolve conflict markers" in decision.reason
+    conflict_guidance = decision_guidance(decision)
+    assert conflict_guidance
+    assert conflict_guidance["type"] == "merge_conflict_repair"
+    assert conflict_guidance["merge_state"] == "DIRTY"
+    assert "git status --short" in conflict_guidance["commands"]
+    assert contract_decision(Decision(1, "update_branch", "ok")) == "UPDATE_BRANCH"
+    assert contract_decision(Decision(1, "wait", "ok")) == "WAIT"
+    assert contract_decision(Decision(1, "action_error", "ok")) == "WAIT"
+    assert contract_decision(Decision(1, "auto_merge", "ok")) == "NO_ACTION"
+    assert contract_decision(Decision(1, "skip", "ok")) == "NO_ACTION"
+    assert (
+        contract_decision(Decision(1, "block", "current-head OpenCode review requested changes"))
+        == "REQUEST_CHANGES"
+    )
+    assert contract_decision(Decision(1, "block", "merge conflict: DIRTY")) == "WAIT"
+    update_guidance = decision_guidance(Decision(1, "update_branch", "ok"))
+    assert update_guidance
+    assert update_guidance["actor"] == "github-actions[bot]"
+    assert update_guidance["head_guard"] == "expected_head_sha"
+    assert decision_guidance(Decision(1, "wait", "ok")) is None
+    payload = decision_payload(
+        [Decision(1, "update_branch", "ok")],
+        counts={"update_branch": 1},
+        dry_run=True,
+        base_branch="main",
+        project_flow="github-flow",
+    )
+    assert payload["schema_version"] == "pr-review-merge-scheduler/v1"
+    assert payload["decisions"][0]["contract_decision"] == "UPDATE_BRANCH"
+    assert payload["decisions"][0]["guidance"]["actor"] == "github-actions[bot]"
     print("self-test passed")
 
 

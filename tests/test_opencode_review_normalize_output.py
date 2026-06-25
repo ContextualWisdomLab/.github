@@ -149,6 +149,27 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path)
     request_changes.write_text(json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8")
     assert norm.check_structural_approval(request_changes) == 0
 
+    generic_deflection = tmp_path / "generic-deflection.json"
+    generic_deflection.write_text(
+        json.dumps(
+            control(
+                result="REQUEST_CHANGES",
+                summary=(
+                    "The review could not map each failed check to exact local source lines "
+                    "from the available logs, so it needs better failed-check evidence."
+                ),
+                findings=[
+                    finding(
+                        title="Generic failed-check deflection",
+                        problem="The failed-check diagnosis did not produce source-backed findings.",
+                    )
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert norm.check_structural_approval(generic_deflection) == 4
+
 
 def test_valid_control_filters_shape_head_and_review_contract():
     kwargs = {
@@ -179,6 +200,19 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(dict(request, findings=[finding(line=True)]), **kwargs) is None
     assert norm.valid_control(dict(request, findings=[finding(line=0)]), **kwargs) is None
     assert norm.valid_control(dict(request, findings=[finding(title="")]), **kwargs) is None
+    assert (
+        norm.valid_control(
+            dict(
+                request,
+                summary=(
+                    "The review could not map each failed check to exact local source lines "
+                    "from the available logs, so it needs better failed-check evidence."
+                ),
+            ),
+            **kwargs,
+        )
+        is None
+    )
     assert norm.valid_control(request, **kwargs)["result"] == "REQUEST_CHANGES"
 
     approve_without_findings_key = control()

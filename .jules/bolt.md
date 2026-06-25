@@ -4,6 +4,6 @@
 ## 2024-06-23 - `iter_json_objects` 최적화
 **Learning:** Python의 `json.JSONDecoder().raw_decode()`를 사용할 때 문자열을 하나씩 순회하며 슬라이싱(`text[index:]`)을 수행하면, O(N^2)의 메모리 할당 및 복사 작업이 발생하여 매우 큰 병목(Bottleneck)이 될 수 있습니다.
 **Action:** `str.find("{", index)`를 사용하여 JSON 객체의 시작 위치를 빠르게 건너뛰고, `raw_decode(text, index)`에서 제공하는 `idx` 인자를 활용해 슬라이싱 없이 직접 파싱을 수행하여 최적화합니다.
-## $(date +%Y-%m-%d) - JSON Decoding Time Complexity Improvement
-**Learning:** `json.JSONDecoder().raw_decode(text, index)` returns a tuple `(value, end_index)`. If `end_index` is not used to advance the search cursor, parsing deeply nested JSON or multiple JSON objects can cause incorrect nested object extractions and extreme O(N^2) memory/time complexity because it repeatedly parses inner objects.
-**Action:** Always assign `index = end_index` after a successful `raw_decode` to skip the entire parsed JSON block efficiently.
+## 2024-11-20 - JSON Decoding Performance - Index Advancement
+**Learning:** Even when avoiding string slicing using `json.JSONDecoder().raw_decode(text, index)`, failing to correctly advance the index by ignoring the returned `end` index (`value, _ = decoder.raw_decode(...)`) forces the search loop to repeatedly attempt to decode nested JSON structures (e.g., inner braces `{`) sequentially. This leads to massive O(N^2) time complexity and redundant parsing for large, deeply nested JSON objects.
+**Action:** Always capture and use the new end index returned by `raw_decode` (e.g., `value, next_idx = decoder.raw_decode(text, index)`) to jump over the completely parsed object and proceed efficiently.
