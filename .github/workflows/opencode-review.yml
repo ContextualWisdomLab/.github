@@ -2135,6 +2135,7 @@ jobs:
             local review_payload_file
             gh_error_file="$(mktemp)"
             review_payload_file="$(mktemp)"
+            emit_review_body_to_action_log "$event" "$body"
             jq -n \
               --arg event "$event" \
               --arg body "$body" \
@@ -2148,6 +2149,61 @@ jobs:
             fi
             rm -f "$gh_error_file" "$review_payload_file"
             update_review_overview "$event" "$body"
+          }
+
+          emit_review_body_to_action_log() {
+            local event="$1" body="$2" review_payload_file="${3:-}"
+            local stop_token
+
+            case "$event" in
+              REQUEST_CHANGES | INLINE_COMMENT_PUBLISH_FAILED) ;;
+              *) return 0 ;;
+            esac
+
+            stop_token="opencode-review-body-${RUN_ID}-${RUN_ATTEMPT}-${RANDOM}"
+            printf '::group::OpenCode %s review body\n' "$event"
+            printf '::stop-commands::%s\n' "$stop_token"
+            printf 'OpenCode is publishing this review content to PR #%s.\n\n' "$PR_NUMBER"
+            printf -- '- Event: %s\n' "$event"
+            printf -- '- Head SHA: %s\n' "$HEAD_SHA"
+            printf -- '- Workflow run: %s\n' "$RUN_ID"
+            printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
+            printf '%s\n' "$body"
+            if [ -s "$review_payload_file" ]; then
+              printf '\n## Inline review comments\n\n'
+              jq -r '
+                (.comments // [])
+                | to_entries[]
+                | "### Inline comment " + ((.key + 1) | tostring)
+                  + " on `" + (.value.path // "unknown") + ":" + ((.value.line // 0) | tostring) + "`\n\n"
+                  + (.value.body // "")
+                  + "\n"
+              ' "$review_payload_file" || true
+            fi
+            printf '::%s::\n' "$stop_token"
+            printf '::endgroup::\n'
+
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                printf '## OpenCode %s review body\n\n' "$event"
+                printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
+                printf -- '- Workflow run: %s\n' "$RUN_ID"
+                printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
+                printf '%s\n' "$body"
+                if [ -s "$review_payload_file" ]; then
+                  printf '\n## Inline review comments\n\n'
+                  jq -r '
+                    (.comments // [])
+                    | to_entries[]
+                    | "### Inline comment " + ((.key + 1) | tostring)
+                      + " on `" + (.value.path // "unknown") + ":" + ((.value.line // 0) | tostring) + "`\n\n"
+                      + (.value.body // "")
+                      + "\n"
+                  ' "$review_payload_file" || true
+                fi
+                printf '\n'
+              } >>"$GITHUB_STEP_SUMMARY"
+            fi
           }
 
           stop_approval_without_review() {
@@ -2348,6 +2404,7 @@ jobs:
             local event="$1" body="$2" review_payload_file="$3" fallback_body_file="$4"
             local gh_error_file
             gh_error_file="$(mktemp)"
+            emit_review_body_to_action_log "$event" "$body" "$review_payload_file"
             if ! gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$gh_error_file"; then
               warn_gh_publication_failure "pull review inline comments" "$gh_error_file"
               rm -f "$gh_error_file"

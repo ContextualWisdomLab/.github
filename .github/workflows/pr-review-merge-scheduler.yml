@@ -1,6 +1,53 @@
 name: PR Review Merge Scheduler
 
 on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Print planned actions without mutating PRs
+        required: false
+        default: false
+        type: boolean
+      max_prs:
+        description: Maximum open PRs to inspect
+        required: false
+        default: "100"
+        type: string
+      trigger_reviews:
+        description: Dispatch OpenCode Review for PR heads without current approval
+        required: false
+        default: true
+        type: boolean
+      enable_auto_merge:
+        description: Enable auto-merge for current-head approved PRs
+        required: false
+        default: true
+        type: boolean
+      update_branches:
+        description: Update outdated PR branches after OpenCode approval
+        required: false
+        default: true
+        type: boolean
+      stale_opencode_minutes:
+        description: Redispatch OpenCode Review when an in-progress OpenCode check is older than this many minutes
+        required: false
+        default: "45"
+        type: string
+      project_flow:
+        description: Project flow, usually github-flow or git-flow
+        required: false
+        default: ""
+        type: string
+      base_branch:
+        description: Base branch to scan; defaults to the caller repository default branch
+        required: false
+        default: ""
+        type: string
+      canonical_ref:
+        description: Ref of ContextualWisdomLab/.github to use for scheduler code
+        required: false
+        default: "main"
+        type: string
   schedule:
     - cron: "17 */2 * * *"
   workflow_dispatch:
@@ -35,7 +82,7 @@ on:
         default: "45"
 
 concurrency:
-  group: pr-review-merge-scheduler
+  group: pr-review-merge-scheduler-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -48,19 +95,22 @@ jobs:
       pull-requests: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+      GH_TOKEN: ${{ github.token }}
+      DEFAULT_BRANCH: ${{ inputs.base_branch || github.event.repository.default_branch }}
+      DRY_RUN: ${{ inputs.dry_run == true }}
       MAX_PRS: ${{ inputs.max_prs || '100' }}
-      PROJECT_FLOW: ${{ vars.PROJECT_FLOW || 'git-flow' }}
-      TRIGGER_REVIEWS: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_reviews == true }}
-      ENABLE_AUTO_MERGE: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_auto_merge == true }}
-      UPDATE_BRANCHES: ${{ github.event_name != 'workflow_dispatch' || inputs.update_branches == true }}
+      PROJECT_FLOW: ${{ inputs.project_flow || vars.PROJECT_FLOW || 'git-flow' }}
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || inputs.trigger_reviews == true }}
+      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || inputs.enable_auto_merge == true }}
+      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || inputs.update_branches == true }}
       STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '45' }}
+      CANONICAL_REF: ${{ inputs.canonical_ref || 'main' }}
     steps:
       - name: Checkout trusted scheduler
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ env.CANONICAL_REF }}
           fetch-depth: 1
 
       - name: Self-test scheduler

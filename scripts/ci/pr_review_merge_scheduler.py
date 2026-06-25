@@ -32,6 +32,8 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
         baseRefOid
         headRefName
         headRefOid
+        isCrossRepository
+        maintainerCanModify
         headRepository { nameWithOwner }
         autoMergeRequest { enabledAt }
         commits(last: 1) {
@@ -228,6 +230,22 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
                 "current-head check rerun after the unblock",
                 "OpenCode approval on the exact current head",
                 "same-head Strix evidence",
+                "zero active unresolved review threads",
+            ],
+        }
+    external_update = parse_external_head_update_reason(decision.reason)
+    if external_update:
+        return {
+            "type": "external_head_update_required",
+            "head_repository": external_update,
+            "summary": "The PR can be reviewed centrally, but this head branch is not writable by the scheduler credential.",
+            "automation_limit": "The scheduler should not skip the PR; it waits for the author to update the branch or for maintainers to enable a writable head path.",
+            "next_required_evidence": [
+                "PR author updates the head branch against the base branch, or maintainer edit permission is enabled",
+                "new head SHA after the branch update",
+                "OpenCode approval on that exact new head",
+                "same-head Strix evidence",
+                "required GitHub Checks success",
                 "zero active unresolved review threads",
             ],
         }
@@ -646,6 +664,26 @@ def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     )
 
 
+def can_update_pr_head(repo: str, pr: dict[str, Any]) -> bool:
+    """Return whether the scheduler may try to mutate the PR head branch."""
+    head_repo = (pr.get("headRepository") or {}).get("nameWithOwner")
+    if head_repo == repo:
+        return True
+    return bool(pr.get("maintainerCanModify"))
+
+
+def non_mutable_head_reason(repo: str, pr: dict[str, Any]) -> str:
+    """Explain why a PR can be reviewed but not mechanically updated."""
+    head_repo = (pr.get("headRepository") or {}).get("nameWithOwner") or "<unknown>"
+    if head_repo == repo:
+        return "current-head OpenCode review approved, but same-repository head update permission is unavailable"
+    return (
+        f"current-head OpenCode review approved, but head repo {head_repo} is external and not writable by "
+        "the scheduler credential; ask the PR author to update the branch against the base branch, or enable "
+        "a maintainer-writable head path before rerunning"
+    )
+
+
 def require_github_actions_mutation_actor(action: str) -> None:
     """Refuse mutating PR branches from a maintainer-local gh credential."""
     if os.environ.get("GITHUB_ACTIONS") != "true":
@@ -742,15 +780,12 @@ def inspect_pr(
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
-    head_repo = (pr.get("headRepository") or {}).get("nameWithOwner")
     base_ref = pr.get("baseRefName")
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
     if base_ref != base_branch:
         return Decision(number, "skip", f"base branch is {base_ref}; expected {base_branch}")
-    if head_repo != repo:
-        return Decision(number, "skip", f"fork or external head repo: {head_repo}")
 
     outdated_cleanup_count = resolve_outdated_review_threads(pr, dry_run=dry_run)
 
@@ -848,6 +883,8 @@ def inspect_pr(
     if merge_state == "BEHIND" and current_head_approved:
         if not update_branches:
             return decide("wait", "current-head OpenCode review approved; branch update disabled")
+        if not can_update_pr_head(repo, pr):
+            return decide("wait", non_mutable_head_reason(repo, pr))
         had_auto_merge = bool(pr.get("autoMergeRequest"))
         if had_auto_merge:
             disable_auto_merge(repo, pr, dry_run=dry_run)
@@ -982,6 +1019,7 @@ def write_actions_summary(
     lines.extend(conflict_repair_summary(decisions))
     lines.extend(outdated_thread_cleanup_summary(decisions))
     lines.extend(update_branch_summary(decisions))
+    lines.extend(external_head_update_summary(decisions))
     lines.extend(workflow_action_required_summary(decisions))
     lines.extend(action_error_summary(decisions))
 
@@ -1096,6 +1134,40 @@ def update_branch_summary(decisions: list[Decision]) -> list[str]:
     ]
 
 
+def parse_external_head_update_reason(reason: str) -> str | None:
+    """Extract the external head repository from non-mutable update guidance."""
+    match = re.search(r"head repo ([^\s]+) is external and not writable", reason)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def external_head_update_summary(decisions: list[Decision]) -> list[str]:
+    """Return a GitHub Actions Summary section for non-mutable external PR heads."""
+    external_waits = [
+        (decision, parse_external_head_update_reason(decision.reason))
+        for decision in decisions
+        if parse_external_head_update_reason(decision.reason)
+    ]
+    if not external_waits:
+        return []
+
+    lines = [
+        "",
+        "### External head update required",
+        "",
+        "These PRs remain in the central review pipeline, but their head branches are not writable by the scheduler credential. This is a mutation-capability limit, not a fork/non-fork onboarding exception.",
+    ]
+    for decision, head_repo in external_waits:
+        lines.extend(
+            [
+                "",
+                f"- PR #{decision.pr}: ask the author of `{head_repo}` to update the branch against the base branch, or enable maintainer edit permission and rerun the scheduler.",
+            ]
+        )
+    return lines
+
+
 def action_error_summary(decisions: list[Decision]) -> list[str]:
     """Return a GitHub Actions Summary section for mutation failures."""
     errors = [decision for decision in decisions if decision.action == "action_error"]
@@ -1190,6 +1262,8 @@ def self_test() -> None:
         "mergeStateStatus": "CLEAN",
         "restMergeableState": "CLEAN",
         "isDraft": False,
+        "isCrossRepository": False,
+        "maintainerCanModify": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
         "reviewDecision": "REVIEW_REQUIRED",
         "commits": {
@@ -1408,6 +1482,39 @@ def self_test() -> None:
         base_branch="main",
     )
     assert decision.action == "update_branch"
+    sample["headRepository"] = {"nameWithOwner": "external/repo"}
+    sample["isCrossRepository"] = True
+    sample["maintainerCanModify"] = False
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "wait"
+    assert "external/repo" in decision.reason
+    assert decision_guidance(decision)["type"] == "external_head_update_required"
+    sample["maintainerCanModify"] = True
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "update_branch"
+    sample["headRepository"] = {"nameWithOwner": "owner/repo"}
+    sample["isCrossRepository"] = False
+    sample["maintainerCanModify"] = False
     sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
     decision = inspect_pr(
         "owner/repo",
