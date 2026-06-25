@@ -6,3 +6,7 @@
 **Vulnerability:** Workflow CI Security Bypass / Markdown Injection
 **Learning:** The GitHub Actions workflow `opencode-review.yml` attempted to optimize performance by doing a fast-path bash string extraction. If this succeeded, it skipped the Python JSON normalizer (`opencode_review_normalize_output.py`). This is a security flaw because the bash script does not escape `<, >, &` characters, allowing attackers to inject `-->` directly in JSON strings to break out of HTML comment sections.
 **Prevention:** Removed the fast-path check entirely. We must always enforce JSON normalization via `opencode_review_normalize_output.py` because it correctly parses the JSON payload and safely escapes all characters as `\u003c`, `\u003e` and `\u0026`.
+## 2024-06-25 - Prevent Credential Leak in CI Subprocess Errors
+**Vulnerability:** Credential Exposure in Logs
+**Learning:** When subprocesses execute GitHub CLI commands or curl requests in CI, failing commands throw errors that include the full command arguments and stderr. These strings often contain GitHub Personal Access Tokens (PATs) or Bearer/token authorizations, leading to credential leakage in GitHub Actions logs.
+**Prevention:** Scrub sensitive tokens (e.g., GitHub PATs, Bearer, or Token authorizations) from both `stderr` and stringified command arguments before raising exceptions or logging when executing shell commands via subprocess in CI scripts.

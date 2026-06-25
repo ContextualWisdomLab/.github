@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -196,9 +197,12 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     argv = list(args)
     process = subprocess.run(argv, input=stdin, capture_output=True, text=True, shell=False)
     if process.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({process.returncode}): {' '.join(argv)}\n{process.stderr}"
-        )
+        err_msg = f"Command failed ({process.returncode}): {' '.join(argv)}\n{process.stderr}"
+        # Mask GitHub PATs, Bearer, and Token authorizations
+        err_msg = re.sub(r"(gh[pousr]_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59})", "***", err_msg)
+        err_msg = re.sub(r"(Bearer\s+)[^\s]+", r"\g<1>***", err_msg, flags=re.IGNORECASE)
+        err_msg = re.sub(r"(token\s+)[^\s]+", r"\g<1>***", err_msg, flags=re.IGNORECASE)
+        raise RuntimeError(err_msg)
     return process.stdout
 
 

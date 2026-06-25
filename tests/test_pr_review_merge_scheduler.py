@@ -684,3 +684,40 @@ def test_action_error_guidance_distinguishes_update_branch_from_merge():
     )
     assert "PR head likely changed after inspection" in stale_head_error
     assert "reads the new head before mutating" in stale_head_error
+
+def test_run_masks_secrets(monkeypatch):
+    import sys
+    import pytest
+    from scripts.ci import pr_review_merge_scheduler as sched
+
+    with pytest.raises(RuntimeError) as exc_info:
+        sched.run([
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.write('ghp_abcdef1234567890abcdef1234567890abcdef\\nBearer super_secret\\ntoken my_secret\\n'); sys.exit(1)"
+        ])
+
+    err_msg = str(exc_info.value)
+    assert "ghp_abcdef1234567890abcdef1234567890abcdef" not in err_msg
+    assert "***" in err_msg
+    assert "Bearer super_secret" not in err_msg
+    assert "Bearer ***" in err_msg
+    assert "token my_secret" not in err_msg
+    assert "token ***" in err_msg
+
+def test_run_masks_secrets_in_args(monkeypatch):
+    import sys
+    import pytest
+    from scripts.ci import pr_review_merge_scheduler as sched
+
+    with pytest.raises(RuntimeError) as exc_info:
+        sched.run([
+            sys.executable,
+            "-c",
+            "import sys; sys.exit(1)",
+            "ghp_abcdef1234567890abcdef1234567890abcdef"
+        ])
+
+    err_msg = str(exc_info.value)
+    assert "ghp_abcdef1234567890abcdef1234567890abcdef" not in err_msg
+    assert "***" in err_msg
