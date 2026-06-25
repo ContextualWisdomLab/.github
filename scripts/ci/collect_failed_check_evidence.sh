@@ -292,6 +292,7 @@ gh api graphql \
 			if .__typename == "CheckRun" then
 				select((.status // "") == "COMPLETED")
 				| select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
+				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)
 				| [
 					"check_run",
 					(((.checkSuite.workflowRun.workflow.name // "") + "/" + (.name // "check")) | gsub("^/"; "")),

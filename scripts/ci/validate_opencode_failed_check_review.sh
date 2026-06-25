@@ -52,6 +52,23 @@ contains_review_text() {
   grep -Fqi -- "$needle" <<<"$review_text"
 }
 
+reject_non_actionable_failed_check_review() {
+  local marker
+
+  for marker in \
+    "No deterministic missing-string markers" \
+    "No deterministic missing string markers" \
+    "Strix report locations were recognized" \
+    "Use the failed-check evidence below to map" \
+    "map each failed check to exact local source lines before approving"
+  do
+    if contains_review_text "$marker"; then
+      echo "FAILED_CHECK_EVIDENCE_NOT_REFERENCED"
+      exit 4
+    fi
+  done
+}
+
 extract_strix_required_markers() {
   perl -CS -ne '
     s/\r//g;
@@ -349,6 +366,8 @@ for report in reports:
         raise SystemExit(1)
 PY
 }
+
+reject_non_actionable_failed_check_review
 
 while IFS= read -r failed_check_line; do
   case "$failed_check_line" in
