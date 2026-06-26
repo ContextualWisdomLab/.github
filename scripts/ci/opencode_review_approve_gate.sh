@@ -206,6 +206,9 @@ def changed_new_lines(path_value: str) -> set[int]:
     return line_numbers
 
 
+_file_cache: dict[Path, list[str]] = {}
+
+
 def finding_is_source_backed(finding: dict[str, object]) -> bool:
     path_value = str(finding.get("path", ""))
     if (
@@ -225,7 +228,9 @@ def finding_is_source_backed(finding: dict[str, object]) -> bool:
         return False
 
     try:
-        source_lines = source_file.read_text(encoding="utf-8").splitlines()
+        if source_file not in _file_cache:
+            _file_cache[source_file] = source_file.read_text(encoding="utf-8").splitlines()
+        source_lines = _file_cache[source_file]
     except UnicodeDecodeError:
         return False
 

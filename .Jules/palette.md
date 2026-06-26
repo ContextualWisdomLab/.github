@@ -1,3 +1,3 @@
-## 2024-05-20 - Repository without UI Codebase
-**Learning:** This repository is a GitHub organization profile consisting entirely of Markdown documentation and static assets, and does not contain an active UI or frontend application codebase.
-**Action:** Since there is no UI, no UX enhancements can be applied. Aborting UX enhancements and PR creation as per instructions.
+## Performance Optimizations
+- **Embedded Python Scripts:** When optimizing embedded Python scripts inside shell scripts, you can extract the Python code to benchmark it efficiently before pasting it back.
+- **I/O Caching:** Introducing a module-level dictionary to cache file contents (e.g. `_file_cache: dict[Path, list[str]] = {}`) is a quick and highly effective method to prevent repeated disk access when iterating over file findings.
