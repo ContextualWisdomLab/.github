@@ -62,11 +62,79 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Materialize trusted workspace
+      - name: Resolve trusted Strix source ref
+        id: trusted_source
+        env:
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
+          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
+
+          try:
+              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
+              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+
+          trusted_repository = str(
+              job_context.get("workflow_repository") or "ContextualWisdomLab/.github"
+          ).strip()
+          trusted_ref = str(
+              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
+          ).strip()
+          workflow_ref = str(
+              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
+          ).strip()
+
+          if not trusted_ref:
+              trusted_ref = "main"
+              prefix = "ContextualWisdomLab/.github/.github/workflows/strix.yml@"
+              if workflow_ref.startswith(prefix):
+                  trusted_ref = workflow_ref.split("@", 1)[1]
+
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", trusted_repository):
+              print("::error::Trusted workflow repository resolved to an invalid name.", file=sys.stderr)
+              raise SystemExit(1)
+          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
+              print("::error::Trusted workflow ref resolved to an invalid value.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"repository={trusted_repository}")
+          print(f"ref={trusted_ref}")
+          PY
+
+      - name: Checkout trusted Strix source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ steps.trusted_source.outputs.repository }}
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ steps.trusted_source.outputs.ref }}
+          path: trusted-strix-source
+
+      - name: Export trusted Strix source paths
+        run: |
+          set -euo pipefail
+          trusted_strix_source="$GITHUB_WORKSPACE/trusted-strix-source"
+          test -f "$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
+          test -f "$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
+          {
+            echo "TRUSTED_STRIX_SOURCE=$trusted_strix_source"
+            echo "TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
+            echo "TRUSTED_STRIX_GATE_TEST=$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
+          } >> "$GITHUB_ENV"
+
+      - name: Materialize target workspace
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          TRUSTED_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          TARGET_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
         run: |
           set -euo pipefail
           trusted_workspace="$RUNNER_TEMP/trusted-workspace"
@@ -74,13 +142,11 @@ jobs:
           git init -q "$trusted_workspace"
           gh auth setup-git
           git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
-          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$TRUSTED_WORKSPACE_SHA"
-          git -C "$trusted_workspace" checkout --detach --quiet "$TRUSTED_WORKSPACE_SHA"
-          git -C "$trusted_workspace" cat-file -e "$TRUSTED_WORKSPACE_SHA^{commit}"
+          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$TARGET_WORKSPACE_SHA"
+          git -C "$trusted_workspace" checkout --detach --quiet "$TARGET_WORKSPACE_SHA"
+          git -C "$trusted_workspace" cat-file -e "$TARGET_WORKSPACE_SHA^{commit}"
           {
             echo "TRUSTED_WORKSPACE=$trusted_workspace"
-            echo "TRUSTED_STRIX_GATE=$trusted_workspace/scripts/ci/strix_quick_gate.sh"
-            echo "TRUSTED_STRIX_GATE_TEST=$trusted_workspace/scripts/ci/test_strix_quick_gate.sh"
           } >> "$GITHUB_ENV"
 
       - name: Fetch pull request head for trusted scan
@@ -145,7 +211,7 @@ jobs:
 
       - name: Self-test Strix gate script
         timeout-minutes: 10
-        working-directory: ${{ runner.temp }}/trusted-workspace
+        working-directory: trusted-strix-source
         run: |
           set -euo pipefail
           printf 'Running Strix gate self-test with a 10-minute step timeout.\n'
@@ -214,7 +280,7 @@ jobs:
 
       - name: Install Strix
         if: steps.gate.outputs.enabled == 'true'
-        working-directory: ${{ runner.temp }}/trusted-workspace
+        working-directory: trusted-strix-source
         run: |
           python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
 
@@ -363,6 +429,7 @@ jobs:
         working-directory: ${{ runner.temp }}/trusted-workspace
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
+          STRIX_REPO_ROOT: ${{ runner.temp }}/trusted-workspace
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
           STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == 'vertex_ai' && 'vertex_ai' || 'openai' }}
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}

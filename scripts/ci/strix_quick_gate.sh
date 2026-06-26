@@ -10,7 +10,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$({ CDPATH='' && cd -P -- "$(dirname -- "$0")" && pwd -P; })"
-REPO_ROOT="$({ CDPATH='' && cd -P -- "$SCRIPT_DIR/../.." && pwd -P; })"
+DEFAULT_REPO_ROOT="$({ CDPATH='' && cd -P -- "$SCRIPT_DIR/../.." && pwd -P; })"
+RAW_REPO_ROOT="${STRIX_REPO_ROOT:-$DEFAULT_REPO_ROOT}"
+if [ -z "$RAW_REPO_ROOT" ] || [ ! -d "$RAW_REPO_ROOT" ] || [ -L "$RAW_REPO_ROOT" ]; then
+	echo "ERROR: STRIX_REPO_ROOT must reference a regular directory when provided." >&2
+	exit 2
+fi
+REPO_ROOT="$({ CDPATH='' && cd -P -- "$RAW_REPO_ROOT" && pwd -P; })"
 RAW_TARGET_PATH="${STRIX_TARGET_PATH:-./}"
 TARGET_PATH=""
 PR_SCOPE_TARGET_SENTINEL="__PR_SCOPE__"
