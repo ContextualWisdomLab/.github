@@ -530,3 +530,15 @@ def test_main_normalizes_and_escapes_html_markers(tmp_path):
     inner = saved_text.split("<!-- opencode-review-control-v1")[1]
     assert "-->" in inner
     assert "-->" not in inner.split("-->", 1)[0].strip()
+
+def test_label_section_multiple_coverage():
+    """Test that multiple coverage candidates are handled and bypassed properly if docstring coverage"""
+    from scripts.ci.opencode_review_normalize_output import label_section
+    text = "coverage: x docstring coverage: y coverage: z dag:"
+    assert label_section(text, "coverage:") == " z "
+
+def test_label_section_multiple_coverage_forward():
+    """Test the forward find skips docstring coverage candidates properly."""
+    from scripts.ci.opencode_review_normalize_output import label_section
+    text = "tdd/regression: aa docstring coverage: bb coverage: cc"
+    assert label_section(text, "tdd/regression:") == " aa "
