@@ -7,3 +7,6 @@
 ## 2024-11-20 - JSON Decoding Performance - Index Advancement
 **Learning:** Even when avoiding string slicing using `json.JSONDecoder().raw_decode(text, index)`, failing to correctly advance the index by ignoring the returned `end` index (`value, _ = decoder.raw_decode(...)`) forces the search loop to repeatedly attempt to decode nested JSON structures (e.g., inner braces `{`) sequentially. This leads to massive O(N^2) time complexity and redundant parsing for large, deeply nested JSON objects.
 **Action:** Always capture and use the new end index returned by `raw_decode` (e.g., `value, next_idx = decoder.raw_decode(text, index)`) to jump over the completely parsed object and proceed efficiently.
+## 2025-02-23 - GitHub API N+1 Query Optimization
+**Learning:** In scripts parsing GitHub PR lists, fetching REST API attributes (`fetch_rest_mergeable_state`) for each PR sequentially creates a severe N+1 HTTP request bottleneck.
+**Action:** Use `concurrent.futures.ThreadPoolExecutor` to parallelize multiple independent network calls instead of doing them sequentially.
