@@ -10,7 +10,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$({ CDPATH='' && cd -P -- "$(dirname -- "$0")" && pwd -P; })"
-REPO_ROOT="$({ CDPATH='' && cd -P -- "$SCRIPT_DIR/../.." && pwd -P; })"
+DEFAULT_REPO_ROOT="$({ CDPATH='' && cd -P -- "$SCRIPT_DIR/../.." && pwd -P; })"
+RAW_REPO_ROOT="${STRIX_REPO_ROOT:-$DEFAULT_REPO_ROOT}"
+REPO_ROOT="$({ CDPATH='' && cd -P -- "$RAW_REPO_ROOT" && pwd -P; })"
 RAW_TARGET_PATH="${STRIX_TARGET_PATH:-./}"
 TARGET_PATH=""
 PR_SCOPE_TARGET_SENTINEL="__PR_SCOPE__"

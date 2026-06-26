@@ -62,11 +62,46 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Materialize trusted workspace
+      - name: Resolve trusted Strix source ref
+        id: trusted_source
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          trusted_ref="main"
+          case "$WORKFLOW_REF" in
+            ContextualWisdomLab/.github/.github/workflows/strix.yml@*)
+              trusted_ref="${WORKFLOW_REF##*@}"
+              ;;
+          esac
+          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout trusted Strix source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ steps.trusted_source.outputs.ref }}
+          path: trusted-strix-source
+
+      - name: Export trusted Strix source paths
+        run: |
+          set -euo pipefail
+          trusted_strix_source="$GITHUB_WORKSPACE/trusted-strix-source"
+          test -f "$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
+          test -f "$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
+          {
+            echo "TRUSTED_STRIX_SOURCE=$trusted_strix_source"
+            echo "TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
+            echo "TRUSTED_STRIX_GATE_TEST=$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
+          } >> "$GITHUB_ENV"
+
+      - name: Materialize target workspace
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          TRUSTED_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          TARGET_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
         run: |
           set -euo pipefail
           trusted_workspace="$RUNNER_TEMP/trusted-workspace"
@@ -74,13 +109,11 @@ jobs:
           git init -q "$trusted_workspace"
           gh auth setup-git
           git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
-          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$TRUSTED_WORKSPACE_SHA"
-          git -C "$trusted_workspace" checkout --detach --quiet "$TRUSTED_WORKSPACE_SHA"
-          git -C "$trusted_workspace" cat-file -e "$TRUSTED_WORKSPACE_SHA^{commit}"
+          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$TARGET_WORKSPACE_SHA"
+          git -C "$trusted_workspace" checkout --detach --quiet "$TARGET_WORKSPACE_SHA"
+          git -C "$trusted_workspace" cat-file -e "$TARGET_WORKSPACE_SHA^{commit}"
           {
             echo "TRUSTED_WORKSPACE=$trusted_workspace"
-            echo "TRUSTED_STRIX_GATE=$trusted_workspace/scripts/ci/strix_quick_gate.sh"
-            echo "TRUSTED_STRIX_GATE_TEST=$trusted_workspace/scripts/ci/test_strix_quick_gate.sh"
           } >> "$GITHUB_ENV"
 
       - name: Fetch pull request head for trusted scan
@@ -145,7 +178,7 @@ jobs:
 
       - name: Self-test Strix gate script
         timeout-minutes: 10
-        working-directory: ${{ runner.temp }}/trusted-workspace
+        working-directory: trusted-strix-source
         run: |
           set -euo pipefail
           printf 'Running Strix gate self-test with a 10-minute step timeout.\n'
@@ -214,7 +247,7 @@ jobs:
 
       - name: Install Strix
         if: steps.gate.outputs.enabled == 'true'
-        working-directory: ${{ runner.temp }}/trusted-workspace
+        working-directory: trusted-strix-source
         run: |
           python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
 
@@ -363,6 +396,7 @@ jobs:
         working-directory: ${{ runner.temp }}/trusted-workspace
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
+          STRIX_REPO_ROOT: ${{ runner.temp }}/trusted-workspace
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
           STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == 'vertex_ai' && 'vertex_ai' || 'openai' }}
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
