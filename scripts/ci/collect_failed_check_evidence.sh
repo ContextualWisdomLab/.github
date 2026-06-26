@@ -63,6 +63,7 @@ emit_failure_signal_summary() {
 		/LLM CONNECTION FAILED/ ||
 		/RateLimitError/ ||
 		/Too many requests/ ||
+		/For more on scraping GitHub/ ||
 		/HTTPStatusError/ ||
 		/401 Unauthorized/ ||
 		/api\.deepseek\.com/ ||
@@ -111,6 +112,7 @@ emit_strix_vulnerability_evidence() {
 		/LLM CONNECTION FAILED/ ||
 		/RateLimitError/ ||
 		/Too many requests/ ||
+		/For more on scraping GitHub/ ||
 		/HTTPStatusError/ ||
 		/401 Unauthorized/ ||
 		/api\.deepseek\.com/ ||
