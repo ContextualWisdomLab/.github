@@ -7,3 +7,6 @@
 ## 2024-11-20 - JSON Decoding Performance - Index Advancement
 **Learning:** Even when avoiding string slicing using `json.JSONDecoder().raw_decode(text, index)`, failing to correctly advance the index by ignoring the returned `end` index (`value, _ = decoder.raw_decode(...)`) forces the search loop to repeatedly attempt to decode nested JSON structures (e.g., inner braces `{`) sequentially. This leads to massive O(N^2) time complexity and redundant parsing for large, deeply nested JSON objects.
 **Action:** Always capture and use the new end index returned by `raw_decode` (e.g., `value, next_idx = decoder.raw_decode(text, index)`) to jump over the completely parsed object and proceed efficiently.
+## 2026-06-25 - Regex overhead in constant string searches
+**Learning:** Using `re.finditer(re.escape(string), text)` has extremely high overhead compared to Python's C-optimized `str.find()`, resulting in ~10x slower execution for simple substring searches in large texts. This becomes a bottleneck when parsing and extracting multiple fixed labels from text blocks.
+**Action:** Replace `re.finditer` with a `while True: idx = text.find(candidate, idx)` loop when searching for exact strings, especially inside frequently called section extraction functions.
