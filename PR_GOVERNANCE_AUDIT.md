@@ -37,6 +37,12 @@ OpenCode decides; GitHub Actions mutates.
   OpenCode Review, and PR Review Merge Scheduler from `ContextualWisdomLab/.github`
   for each target repository's default branch. Repository-local copies are now
   cleanup candidates, not rollout prerequisites.
+- Strix is part of the same central governance contract, not a repo-specific
+  security scanner to copy into each repository. The model allow-list, provider
+  routing, fallback models, secret gate, PR-scope fetch, artifact/report
+  handling, fail-closed severity policy, and self-test harness must be owned in
+  `ContextualWisdomLab/.github`. Target repositories supply repository content,
+  event context, and inherited secrets; they do not redefine the Strix gate.
 - OpenCode may return only a decision: `UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`.
 - GitHub Actions updates only mutable PR heads with `expected_head_sha` after
   current-head failed checks have been ruled out. Same-repository heads are
@@ -88,6 +94,38 @@ and provide a minimal fix plus a verification target. Cancelled checks,
 provider budget/rate-limit errors, missing artifacts, and GitHub permission
 failures are external execution states unless current-head source evidence ties
 them to a local defect.
+
+## Central Strix Contract
+
+The central Strix surface is the required workflow from repository
+`ContextualWisdomLab/.github` through organization ruleset `18156473`. The live
+ruleset pins `.github/workflows/strix.yml`, `.github/workflows/opencode-review.yml`,
+and `.github/workflows/pr-review-merge-scheduler.yml` to repository ID
+`1274066402` at SHA `807254a04efafd5f806e0f70cb067ecf050cfd11` for default
+branches in the current target set.
+
+Strix centralization includes these files and contracts:
+
+- `.github/workflows/strix.yml` owns the privileged GitHub Actions trigger,
+  trusted-base materialization, PR-head fetch, model/provider gate, report
+  artifact upload, and same-head manual evidence status.
+- `scripts/ci/strix_quick_gate.sh` owns PR-scope scan construction, transient
+  retry, fallback model sequencing, report parsing, provider-signal handling,
+  and fail-closed severity decisions.
+- `scripts/ci/strix_model_utils.sh` owns model normalization and provider
+  classification used by both the gate and the self-test harness.
+- `scripts/ci/test_strix_quick_gate.sh` is the executable regression contract
+  for the workflow, gate, model routing, PR-scope safety, and report behavior.
+- `requirements-strix-ci-hashes.txt` pins the Strix CI dependency set used by
+  the central required workflow.
+
+Repository-local Strix files are transitional compatibility artifacts. They may
+remain only while proving that the central required workflow is stable for the
+repository's current PR heads. After that proof, local Strix workflow and helper
+copies should be removed or reduced to a thin caller only when the organization
+required-workflow mechanism cannot cover that repository. Repo-specific security
+or product checks can stay local, but they are separate from the Strix
+governance contract.
 
 ## Live Repository Inventory
 
@@ -228,7 +266,10 @@ PR #381: wait: OpenCode review is already in progress
 
 ## Rollout List
 
-1. Stop thick per-repository scheduler/OpenCode/Strix copies. `bandscope` PR
+1. Stop thick per-repository scheduler/OpenCode/Strix copies. For Strix, that
+   means the workflow, gate script, model utility, self-test harness, and hashed
+   dependency contract are centralized together; copying only the workflow while
+   leaving gate helpers to drift is still a failed rollout shape. `bandscope` PR
    #460 is closed as the negative example of the wrong rollout shape.
 2. Keep the canonical workflows in `ContextualWisdomLab/.github`. Organization
    required workflow rule `18156473` now supplies the PR-event trigger and target
@@ -240,9 +281,10 @@ PR #381: wait: OpenCode review is already in progress
 4. Treat fork and non-fork repositories uniformly for onboarding. At runtime,
    classify only the PR head mutation capability: observable/reviewable,
    updateable, auto-mergeable, or mergeable.
-5. Keep repo-specific product/build/autofix workflows repo-local only when they
-   are not part of the governance contract. `pg-erd-cloud` autofix stays
-   repo-local; PR review/merge governance should not.
+5. Keep repo-specific product/build/autofix/security workflows repo-local only
+   when they are not part of the governance contract. `pg-erd-cloud` autofix
+   stays repo-local; Strix, OpenCode review, and PR review/merge governance
+   should not.
 6. Use `contextual-orchestrator` as the no-copy onboarding fixture when it next
    has a real PR. It now inherits central required workflows, but lacks
    repo-local branch-lock/stale-dismissal policy and has no open PR to prove
