@@ -46,7 +46,7 @@ if ! bash -n "$gate_script" "$full_gate_test"; then
 	record_failure "Strix gate scripts must pass bash syntax checks"
 fi
 
-checkout_count="$(grep -Fc "uses: actions/checkout@" "$workflow_file")"
+checkout_count="$(grep -Fc "uses: actions/checkout@" "$workflow_file" || true)"
 if [ "$checkout_count" != "1" ]; then
 	record_failure "Strix workflow must use actions/checkout exactly once for central trusted source checkout"
 fi
