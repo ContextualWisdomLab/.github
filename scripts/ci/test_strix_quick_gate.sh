@@ -820,6 +820,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$scheduler_file" "update-branch" "scheduler calls the GitHub update-branch API for outdated approved PRs"
 	assert_file_contains "$scheduler_file" "expected_head_sha={head}" "scheduler guards branch updates with the current PR head SHA"
 	assert_file_contains "$scheduler_file" "shell=False" "scheduler subprocess wrapper forbids shell command execution"
+	assert_file_contains "$scheduler_file" "check=True" "scheduler subprocess wrapper raises on failed commands"
 	assert_file_contains "$REPO_ROOT/tests/test_pr_review_merge_scheduler.py" "test_run_passes_shell_metacharacters_as_plain_arguments" "scheduler tests prove branch-like shell metacharacters stay argv data"
 	assert_file_contains "$scheduler_file" "dispatch_strix_evidence" "scheduler dispatches same-head Strix evidence before OpenCode review"
 	assert_file_contains "$scheduler_file" "--security-workflow" "scheduler allows the canonical Strix workflow name to be configured"
