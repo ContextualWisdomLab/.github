@@ -18,6 +18,11 @@ OpenCode decides; GitHub Actions mutates.
   Runtime decisions classify the PR head capability instead: observable,
   reviewable, updateable, auto-mergeable, and mergeable. External heads may be
   fully reviewable while remaining non-mutable by the scheduler credential.
+  The same rule applies to repository onboarding: a public fork can be governed
+  by the same reusable workflow if it deliberately opts in, while a non-fork
+  PR head can still be non-mutable at runtime. The scheduler must decide from
+  observed PR permissions and current-head evidence, not from the repository's
+  `fork` flag alone.
 - GitHub workflow templates can help create thin callers, but templates are
   scaffolding, not centralized execution. Reusable workflows (`workflow_call`)
   centralize implementation while a caller or required-workflow trigger supplies
@@ -45,6 +50,11 @@ OpenCode decides; GitHub Actions mutates.
 - Merge uses one path: current-head OpenCode approval, no active unresolved review threads, required checks green or native auto-merge waiting on them, mergeable head, and no policy blocker. GitHub `Outdated` review threads are obsolete diff conversations; the scheduler resolves them before counting active unresolved review blockers.
 - Prefer `gh pr merge --auto --merge --match-head-commit <head>` when native auto-merge is enabled.
 - Use direct `gh pr merge --merge --match-head-commit <head>` only when the repo policy already allows immediate merge.
+- Scheduler merge behavior is explicit: `merge_mode=auto` uses native GitHub
+  auto-merge, `merge_mode=direct` performs an immediate guarded merge with the
+  workflow `GITHUB_TOKEN`, and `merge_mode=disabled` reports the approved head
+  without mutating it. Direct merge requires `CLEAN` mergeability and is a
+  repository policy choice, not a fallback for missing evidence.
 - OpenCode app-token merges are deprecated; keep app tokens for review publication, not mechanical branch mutation.
 - OpenCode approval publication must be bounded. Peer GitHub Checks can be awaited, but the approval step itself must time out instead of running for hours; the current central limit is a 45 minute approval step with 81 peer-check probes at 30 seconds.
 - Tool failures are not source findings. Model failure, API transient, update-branch `422/403`, fork/write-permission failure, conflict, failed checks, and stale review state must be reported as distinct scheduler outcomes. A failed current-head check blocks `UPDATE_BRANCH`; the scheduler must not use a branch update as a way to hide or bypass failed evidence.
@@ -77,7 +87,18 @@ them to a local defect.
 
 ## Live Repository Inventory
 
-Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST. PR #58, #65, #66, and #68 post-merge refreshes: 2026-06-25 KST. The current organization target inventory contains 12 public repositories from the prior scan; `VibeSec` was not in that target set, and `appguardrail` was.
+Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST. PR #58, #65, #66, #68, and #71 post-merge refreshes: 2026-06-25 to 2026-06-26 KST. The current organization target inventory contains 12 public non-fork repositories, and the public fork inventory contains 6 repositories. `VibeSec` was not in that target set, and `appguardrail` was.
+
+Continuation snapshot: 2026-06-26 09:45 KST (`2026-06-26T00:45:40Z`). Every
+public repository can be observed under the same governance scan, but write
+actions remain PR-head capability checks.
+
+| Bucket | Repositories | Scheduler implication |
+|---|---|---|
+| Public target repos with OpenCode, Strix, and scheduler present | `.github`, `appguardrail`, `clearfolio`, `codec-carver`, `ContextualWisdomLab.github.io`, `naruon`, `newsdom-api`, `pg-erd-cloud`, `scopeweave` | Convert thick scheduler copies to thin callers after the central reusable workflow supports the needed merge mode. |
+| Public target repos missing Strix | `bandscope`, `hyosung-itx-slogan-brief` | Do not blindly enable `trigger_reviews`; first add Strix or call the scheduler with review dispatch disabled. |
+| Public target repos missing all governance workflows | `contextual-orchestrator` | Decide whether it opts in or remains unmanaged. |
+| Public forks | `argos`, `html4tree`, `nonnest2`, `seedream_evasepic`, `vooster`, `vooster-v2-mvp` | Fork status is not a categorical exclusion; onboarding is an explicit repository decision, and PR mutation remains capability-gated per head. |
 
 | Repo | Flow | Default | Auto | Rulesets | Required checks | Stale dismissal | Open PRs | Workflows | Recent merged actor |
 |---|---:|---:|---:|---|---|---:|---:|---|---|
@@ -98,7 +119,7 @@ Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge r
 
 | Repo | Gap |
 |---|---|
-| `.github` | PR #37, #38, #41, #42, #49, #58, #65, #66, and #68 are merged. PR #49 is the central proof that generic failed-check deflections are rejected before publication. PR #58 extends that contract so pending checks, check-rollup lookup failures, failed-check diagnosis gaps, conflict repair guidance, update-branch explanations, and scheduler decisions stay tool states or Actions Summary output instead of becoming user-facing Findings. PR #65 adds explicit conflict guidance and workflow-token `update-branch`; PR #66 requires exact current-head approval by commit OID; PR #68 adds REST mergeability because GraphQL `mergeStateStatus` stayed stale after live updates. |
+| `.github` | PR #37, #38, #41, #42, #49, #58, #65, #66, #68, and #71 are merged. PR #49 is the central proof that generic failed-check deflections are rejected before publication. PR #58 extends that contract so pending checks, check-rollup lookup failures, failed-check diagnosis gaps, conflict repair guidance, update-branch explanations, and scheduler decisions stay tool states or Actions Summary output instead of becoming user-facing Findings. PR #65 adds explicit conflict guidance and workflow-token `update-branch`; PR #66 requires exact current-head approval by commit OID; PR #68 adds REST mergeability because GraphQL `mergeStateStatus` stayed stale after live updates; PR #71 makes the scheduler callable as canonical organization workflow code instead of another repo-local copy. |
 | `bandscope` | Required checks are repo-specific and broad; keep GitHub native auto-merge as the check interpreter. PR #459 merged the REST mergeability guard downstream. Scheduler run `28192186833` proved two current contracts: PR #450 emitted concrete conflict repair guidance instead of retrying `update-branch`, and PR #451/#446 requested `update-branch` with the workflow `GITHUB_TOKEN`, producing new heads authored by `github-actions[bot]`. That run also exposed a post-update `ACTION_REQUIRED` state with no jobs, so the scheduler must report workflow approval/policy wait rather than a source failure when it recurs. Follow-up PR #460 was closed because it copied the central scheduler into `bandscope` and would preserve exactly the repo-local drift this rollout should remove. |
 | `clearfolio` | PR #13 is merged at `4bc17c6` after same-head manual Strix run `28051319530`, same-head manual OpenCode run `28051665082`, unresolved review threads `0`, and guarded merge against head `5fe1791`. Auto-merge remains off, so direct guarded merge is the repo path. |
 | `codec-carver` | PR #98 replaced the legacy scheduler with the central GitHub Actions path. Keep #94 as the historical negative sample because it used `opencode-agent` as a merge actor. |
@@ -161,13 +182,18 @@ The checked-in scheduler already does the minimal central path:
 - updates `BEHIND` only when OpenCode approved the exact current head, no current-head failed check is present, and the PR head is actually mutable by the scheduler credential, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]` inside GitHub Actions instead of an OpenCode or maintainer-local credential; the script now refuses non-dry-run `update-branch` outside GitHub Actions, and this path needs `pull-requests: write`, not `contents: write`;
 - waits with `external_head_update_required` guidance when a current-head-approved external PR head is behind but is not writable by the scheduler credential, instead of treating fork/non-fork as an onboarding exception;
 - enables native auto-merge only for current-head OpenCode approval;
+- supports explicit merge policy through `merge_mode`: `auto` enables native
+  auto-merge, `direct` performs a guarded `gh pr merge --merge
+  --match-head-commit <head>` through `github-actions[bot]` for repositories
+  that do not use native auto-merge after GitHub reports `CLEAN` mergeability,
+  and `disabled` records the approval without mutating the PR;
 - dispatches same-head Strix evidence first when the current head has no completed Strix evidence;
 - waits while same-head Strix evidence is still running, so OpenCode is not started just to poll a peer check;
 - keeps old Strix evidence running instead of cancelling it, but scopes PR Strix concurrency by head SHA so an obsolete scan does not serialize newer current-head evidence;
 - dispatches OpenCode only after same-head Strix evidence is complete, including failed Strix evidence that OpenCode must explain from logs.
 - records mutation failures as `action_error` for the affected PR and continues scanning later PRs, so a permission failure on one merge/update action does not hide the rest of the queue.
 - writes the same per-PR decisions to the GitHub Actions step summary, so conflict repair and update-branch decisions are visible without opening raw logs.
-- prints a machine-readable `pr-review-merge-scheduler/v2` JSON contract with every inspected PR, the scheduler action, the bounded decision value (`UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`), optional cleanup `notes`, and structured `guidance` for states that need action: `merge_conflict_repair` includes the base/head branches, repair steps, and merge-or-rebase commands; `github_actions_update_branch` names `github-actions[bot]`, the workflow `GITHUB_TOKEN`, `pull-requests: write`, `expected_head_sha`, and the new-head evidence required before merge; `workflow_action_required` names the affected check runs and requires GitHub Actions approval or policy unblock before rerunning the scheduler.
+- prints a machine-readable `pr-review-merge-scheduler/v2` JSON contract with every inspected PR, the scheduler action, the bounded decision value (`UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`), optional cleanup `notes`, and structured `guidance` for states that need action: `merge_conflict_repair` includes the base/head branches, repair steps, and merge-or-rebase commands; `github_actions_update_branch` names `github-actions[bot]`, the workflow `GITHUB_TOKEN`, `pull-requests: write`, `expected_head_sha`, and the new-head evidence required before merge; `github_actions_direct_merge` names `github-actions[bot]`, the workflow `GITHUB_TOKEN`, `contents: write`, `gh pr merge --match-head-commit`, and post-merge evidence; `workflow_action_required` names the affected check runs and requires GitHub Actions approval or policy unblock before rerunning the scheduler.
 - caps each GraphQL PR page at 25 nodes, so large queues can be scanned without hitting GitHub's query resource limit.
 - excludes OpenCode Review's own `opencode-review` check from peer failed-check evidence, so a cancelled or stale OpenCode run cannot become a source-code `REQUEST_CHANGES` review against the same head.
 

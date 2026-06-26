@@ -139,7 +139,7 @@ def contract_decision(decision: Decision) -> str:
         return "UPDATE_BRANCH"
     if decision.action in {"wait", "security_dispatch", "review_dispatch", "disable_auto_merge", "action_error"}:
         return "WAIT"
-    if decision.action in {"skip", "auto_merge"}:
+    if decision.action in {"skip", "auto_merge", "merge"}:
         return "NO_ACTION"
     if decision.action == "block" and "current-head OpenCode review requested changes" in decision.reason:
         return "REQUEST_CHANGES"
@@ -263,6 +263,22 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
                 "same-head Strix evidence",
                 "required GitHub Checks success",
                 "zero active unresolved review threads",
+            ],
+        }
+    if decision.action == "merge":
+        return {
+            "type": "github_actions_direct_merge",
+            "actor": "github-actions[bot]",
+            "token": "workflow GITHUB_TOKEN",
+            "required_permission": "contents: write",
+            "head_guard": "gh pr merge --match-head-commit",
+            "summary": "GitHub Actions performed an immediate guarded merge because repo policy does not use native auto-merge for this queue.",
+            "next_required_evidence": [
+                "merge commit recorded by GitHub",
+                "merged head SHA matches the inspected current head",
+                "no active unresolved review threads before merge",
+                "same-head OpenCode approval before merge",
+                "required GitHub Checks success before merge",
             ],
         }
     if decision.action == "disable_auto_merge":
@@ -621,7 +637,18 @@ def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     head = pr["headRefOid"]
     if dry_run:
         return
+    require_github_actions_mutation_actor("enable-auto-merge")
     run(["gh", "pr", "merge", number, "--repo", repo, "--auto", "--merge", "--match-head-commit", head])
+
+
+def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+    """Merge a current-head-approved PR immediately with a head guard."""
+    number = str(pr["number"])
+    head = pr["headRefOid"]
+    if dry_run:
+        return
+    require_github_actions_mutation_actor("direct-merge")
+    run(["gh", "pr", "merge", number, "--repo", repo, "--merge", "--match-head-commit", head])
 
 
 def disable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -629,6 +656,7 @@ def disable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     number = str(pr["number"])
     if dry_run:
         return
+    require_github_actions_mutation_actor("disable-auto-merge")
     run(["gh", "pr", "merge", number, "--repo", repo, "--disable-auto"])
 
 
@@ -776,6 +804,7 @@ def inspect_pr(
     workflow: str,
     security_workflow: str,
     base_branch: str,
+    merge_mode: str = "auto",
     stale_opencode_minutes: int = DEFAULT_STALE_OPENCODE_MINUTES,
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
@@ -900,6 +929,21 @@ def inspect_pr(
             return decide("wait", "current head is approved; auto-merge already enabled")
         if not enable_auto_merge_flag:
             return decide("wait", "current head is approved; auto-merge disabled by scheduler inputs")
+        if merge_mode == "disabled":
+            return decide("wait", "current head is approved; merge mode disabled by scheduler inputs")
+        if merge_mode == "direct":
+            if merge_state != "CLEAN":
+                return decide(
+                    "wait",
+                    f"current head is approved; direct merge waits for CLEAN mergeability, current merge state is {merge_state}",
+                )
+            merge_pr(repo, pr, dry_run=dry_run)
+            return decide(
+                "merge",
+                "current head is approved; direct merge requested with workflow GH_TOKEN and --match-head-commit",
+            )
+        if merge_mode != "auto":
+            return decide("wait", f"current head is approved; unsupported merge mode: {merge_mode}")
         enable_auto_merge(repo, pr, dry_run=dry_run)
         return decide("auto_merge", "current head is approved; auto-merge enabled")
 
@@ -1595,6 +1639,7 @@ def self_test() -> None:
     assert contract_decision(Decision(1, "action_error", "ok")) == "WAIT"
     assert contract_decision(Decision(1, "disable_auto_merge", "ok")) == "WAIT"
     assert contract_decision(Decision(1, "auto_merge", "ok")) == "NO_ACTION"
+    assert contract_decision(Decision(1, "merge", "ok")) == "NO_ACTION"
     assert contract_decision(Decision(1, "skip", "ok")) == "NO_ACTION"
     assert (
         contract_decision(Decision(1, "block", "current-head OpenCode review requested changes"))
@@ -1608,6 +1653,10 @@ def self_test() -> None:
     disable_guidance = decision_guidance(Decision(1, "disable_auto_merge", "ok"))
     assert disable_guidance
     assert disable_guidance["type"] == "unsafe_auto_merge_disabled"
+    merge_guidance = decision_guidance(Decision(1, "merge", "ok"))
+    assert merge_guidance
+    assert merge_guidance["type"] == "github_actions_direct_merge"
+    assert merge_guidance["head_guard"] == "gh pr merge --match-head-commit"
     assert decision_guidance(Decision(1, "wait", "ok")) is None
     payload = decision_payload(
         [Decision(1, "update_branch", "ok")],
@@ -1619,6 +1668,15 @@ def self_test() -> None:
     assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
     assert payload["decisions"][0]["contract_decision"] == "UPDATE_BRANCH"
     assert payload["decisions"][0]["guidance"]["actor"] == "github-actions[bot]"
+    payload = decision_payload(
+        [Decision(1, "merge", "ok")],
+        counts={"merge": 1},
+        dry_run=True,
+        base_branch="main",
+        project_flow="github-flow",
+    )
+    assert payload["decisions"][0]["contract_decision"] == "NO_ACTION"
+    assert payload["decisions"][0]["guidance"]["type"] == "github_actions_direct_merge"
     print("self-test passed")
 
 
@@ -1632,6 +1690,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--merge-mode",
+        choices=("auto", "direct", "disabled"),
+        default=os.environ.get("MERGE_MODE", "auto"),
+    )
     parser.add_argument("--update-branches", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--review-workflow", default="OpenCode Review")
     parser.add_argument("--security-workflow", default="Strix Security Scan")
@@ -1666,6 +1729,7 @@ def main(argv: list[str]) -> int:
                 dry_run=args.dry_run,
                 trigger_reviews=args.trigger_reviews,
                 enable_auto_merge_flag=args.enable_auto_merge,
+                merge_mode=args.merge_mode,
                 update_branches=args.update_branches,
                 workflow=args.review_workflow,
                 security_workflow=args.security_workflow,

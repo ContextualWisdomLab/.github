@@ -456,6 +456,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
     pr = make_pr()
     sched.enable_auto_merge("owner/repo", pr, dry_run=True)
+    sched.merge_pr("owner/repo", pr, dry_run=True)
     sched.disable_auto_merge("owner/repo", pr, dry_run=True)
     sched.update_branch("owner/repo", pr, dry_run=True)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=True)
@@ -465,32 +466,37 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
     sched.enable_auto_merge("owner/repo", pr, dry_run=False)
+    sched.merge_pr("owner/repo", pr, dry_run=False)
     sched.disable_auto_merge("owner/repo", pr, dry_run=False)
     sched.update_branch("owner/repo", pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
-    assert calls[1] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
-    assert calls[2][:4] == ["gh", "api", "-X", "PUT"]
-    assert calls[2][-1] == "expected_head_sha=head"
-    assert calls[3][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
-    assert calls[4][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+    assert calls[0][-2:] == ["--match-head-commit", "head"]
+    assert calls[1] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--merge", "--match-head-commit", "head"]
+    assert calls[2] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
+    assert calls[3][:4] == ["gh", "api", "-X", "PUT"]
+    assert calls[3][-1] == "expected_head_sha=head"
+    assert calls[4][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
+    assert calls[5][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
 
 
-def test_update_branch_refuses_local_credentials(monkeypatch):
+def test_mutations_refuse_local_credentials(monkeypatch):
     calls = []
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setenv("GH_TOKEN", "local-token")
 
-    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
-        sched.update_branch("owner/repo", make_pr(), dry_run=False)
+    for mutation in (sched.update_branch, sched.enable_auto_merge, sched.merge_pr, sched.disable_auto_merge):
+        with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
+            mutation("owner/repo", make_pr(), dry_run=False)
     assert calls == []
 
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.delenv("GH_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="refused without GH_TOKEN"):
-        sched.update_branch("owner/repo", make_pr(), dry_run=False)
+    for mutation in (sched.update_branch, sched.enable_auto_merge, sched.merge_pr, sched.disable_auto_merge):
+        with pytest.raises(RuntimeError, match="refused without GH_TOKEN"):
+            mutation("owner/repo", make_pr(), dry_run=False)
     assert calls == []
 
 
@@ -543,6 +549,11 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
             "current-head OpenCode review approved; branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions)",
         ),
         sched.Decision(
+            12,
+            "merge",
+            "current head is approved; direct merge requested with workflow GH_TOKEN and --match-head-commit",
+        ),
+        sched.Decision(
             9,
             "disable_auto_merge",
             "auto-merge disabled; OpenCode review does not postdate the current head commit; wait for a fresh same-head OpenCode review",
@@ -567,16 +578,17 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     payload = json.loads(output.splitlines()[-1])
     assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
     assert payload["base_branch"] == "main"
-    assert payload["counts"] == {"block": 1, "disable_auto_merge": 1, "update_branch": 1, "wait": 2}
+    assert payload["counts"] == {"block": 1, "disable_auto_merge": 1, "merge": 1, "update_branch": 1, "wait": 2}
     assert payload["dry_run"] is True
-    assert payload["inspected"] == 5
+    assert payload["inspected"] == 6
     assert payload["project_flow"] == "github-flow"
     assert payload["decisions"][0]["contract_decision"] == "WAIT"
     assert payload["decisions"][1]["contract_decision"] == "UPDATE_BRANCH"
-    assert payload["decisions"][2]["contract_decision"] == "WAIT"
+    assert payload["decisions"][2]["contract_decision"] == "NO_ACTION"
     assert payload["decisions"][3]["contract_decision"] == "WAIT"
     assert payload["decisions"][4]["contract_decision"] == "WAIT"
-    assert payload["decisions"][3]["notes"] == [
+    assert payload["decisions"][5]["contract_decision"] == "WAIT"
+    assert payload["decisions"][4]["notes"] == [
         "Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers."
     ]
     assert payload["decisions"][0]["guidance"]["type"] == "merge_conflict_repair"
@@ -591,11 +603,14 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][1]["guidance"]["token"] == "workflow GITHUB_TOKEN"
     assert payload["decisions"][1]["guidance"]["required_permission"] == "pull-requests: write"
     assert payload["decisions"][1]["guidance"]["head_guard"] == "expected_head_sha"
-    assert payload["decisions"][2]["guidance"]["type"] == "unsafe_auto_merge_disabled"
-    assert payload["decisions"][3]["guidance"]["type"] == "workflow_action_required"
-    assert payload["decisions"][3]["guidance"]["checks"] == "opencode-review"
-    assert payload["decisions"][4]["guidance"]["type"] == "external_head_update_required"
-    assert payload["decisions"][4]["guidance"]["head_repository"] == "fork/repo"
+    assert payload["decisions"][2]["guidance"]["type"] == "github_actions_direct_merge"
+    assert payload["decisions"][2]["guidance"]["required_permission"] == "contents: write"
+    assert payload["decisions"][2]["guidance"]["head_guard"] == "gh pr merge --match-head-commit"
+    assert payload["decisions"][3]["guidance"]["type"] == "unsafe_auto_merge_disabled"
+    assert payload["decisions"][4]["guidance"]["type"] == "workflow_action_required"
+    assert payload["decisions"][4]["guidance"]["checks"] == "opencode-review"
+    assert payload["decisions"][5]["guidance"]["type"] == "external_head_update_required"
+    assert payload["decisions"][5]["guidance"]["head_repository"] == "fork/repo"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
     assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; run" in summary
@@ -606,6 +621,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
         "| #8 | update_branch | current-head OpenCode review approved; "
         "branch update requested with workflow GH_TOKEN (github-actions[bot] in GitHub Actions) |"
     ) in summary
+    assert "| #12 | merge | current head is approved; direct merge requested with workflow GH_TOKEN" in summary
     assert "fresh same-head OpenCode review" in summary
     assert "### Conflict repair" in summary
     assert "When GitHub shows `Conflicting`" in summary
@@ -908,11 +924,40 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert inspect(approved, enable_auto_merge_flag=False).reason == (
         "current head is approved; auto-merge disabled by scheduler inputs"
     )
+    assert inspect(approved, merge_mode="disabled").reason == (
+        "current head is approved; merge mode disabled by scheduler inputs"
+    )
+    assert inspect(approved, merge_mode="unknown").reason == (
+        "current head is approved; unsupported merge mode: unknown"
+    )
 
-    merged = []
-    monkeypatch.setattr(sched, "enable_auto_merge", lambda repo, pr, dry_run: merged.append((repo, pr["number"], dry_run)))
+    direct_merges = []
+    monkeypatch.setattr(
+        sched,
+        "merge_pr",
+        lambda repo, pr, dry_run: direct_merges.append((repo, pr["number"], dry_run)),
+    )
+    blocked_direct = inspect(
+        make_pr(
+            mergeStateStatus="BLOCKED",
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        ),
+        merge_mode="direct",
+    )
+    assert blocked_direct.action == "wait"
+    assert blocked_direct.reason == (
+        "current head is approved; direct merge waits for CLEAN mergeability, current merge state is BLOCKED"
+    )
+    assert direct_merges == []
+    direct = inspect(approved, merge_mode="direct")
+    assert direct.action == "merge"
+    assert "--match-head-commit" in direct.reason
+    assert direct_merges == [("owner/repo", 1, True)]
+
+    auto_merges = []
+    monkeypatch.setattr(sched, "enable_auto_merge", lambda repo, pr, dry_run: auto_merges.append((repo, pr["number"], dry_run)))
     assert inspect(approved).action == "auto_merge"
-    assert merged == [("owner/repo", 1, True)]
+    assert auto_merges == [("owner/repo", 1, True)]
 
     running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert inspect(running).reason == "OpenCode review is already in progress"

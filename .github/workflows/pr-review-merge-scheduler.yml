@@ -23,6 +23,11 @@ on:
         required: false
         default: true
         type: boolean
+      merge_mode:
+        description: "Merge behavior for current-head approved PRs: auto, direct, or disabled"
+        required: false
+        default: auto
+        type: string
       update_branches:
         description: Update outdated PR branches after OpenCode approval
         required: false
@@ -71,6 +76,10 @@ on:
         required: false
         default: true
         type: boolean
+      merge_mode:
+        description: "Merge behavior for current-head approved PRs: auto, direct, or disabled"
+        required: false
+        default: auto
       update_branches:
         description: Update outdated PR branches after OpenCode approval
         required: false
@@ -102,6 +111,7 @@ jobs:
       PROJECT_FLOW: ${{ inputs.project_flow || vars.PROJECT_FLOW || 'git-flow' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || inputs.trigger_reviews == true }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || inputs.enable_auto_merge == true }}
+      MERGE_MODE: ${{ inputs.merge_mode || vars.PR_MERGE_MODE || 'auto' }}
       UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || inputs.update_branches == true }}
       STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '45' }}
       CANONICAL_REF: ${{ inputs.canonical_ref || 'main' }}
@@ -140,6 +150,7 @@ jobs:
           else
             args+=(--no-enable-auto-merge)
           fi
+          args+=(--merge-mode "$MERGE_MODE")
           if [ "$UPDATE_BRANCHES" = "true" ]; then
             args+=(--update-branches)
           else
