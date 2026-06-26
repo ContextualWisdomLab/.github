@@ -116,8 +116,28 @@ def test_label_and_full_coverage_detection():
     assert "100%" in norm.label_section(combined, "coverage:")
     assert norm.label_section(combined, "missing:") == ""
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
+    no_source_summary = FULL_SUMMARY.replace(
+        "coverage execution evidence proves 100% test coverage",
+        "coverage execution evidence reports test coverage as not applicable because no supported source files or package manifests were found",
+    ).replace(
+        "coverage execution evidence proves 100% docstring coverage",
+        "coverage execution evidence reports docstring coverage as not applicable because no supported source files or package manifests were found",
+    )
+    assert norm.mentions_full_coverage("", no_source_summary)
     assert not norm.mentions_full_coverage("", "")
     assert not norm.mentions_full_coverage("", FULL_SUMMARY.replace("100%", "99%", 1))
+    assert not norm.mentions_full_coverage("", FULL_SUMMARY.replace("100%", "not applicable", 1))
+    assert not norm.mentions_full_coverage(
+        "",
+        FULL_SUMMARY.replace(
+            "coverage execution evidence proves 100% test coverage",
+            "coverage execution evidence did not prove 100% test coverage",
+        ),
+    )
+    assert norm.evidence_coverage_mode(
+        "- Result: PASS\n"
+        "- Test coverage: not applicable (no supported source files or package manifests)\n"
+    ) is None
     assert not norm.mentions_full_coverage(
         "",
         FULL_SUMMARY.replace("coverage execution evidence", "measured evidence", 1),
@@ -431,6 +451,22 @@ M\tREADME.md
     )
     assert summary is not None
     assert "and 1 more" in summary
+
+    no_source_summary = norm.build_approval_repair_summary(
+        "No blockers were found.",
+        """\
+## Coverage execution evidence
+- Result: PASS
+- Test coverage: not applicable (no supported source files or package manifests)
+- Docstring coverage: not applicable (no supported source files or package manifests)
+## Changed files
+M\tscripts/ci/example.py
+""",
+    )
+    assert no_source_summary is not None
+    assert "test coverage as not applicable" in no_source_summary
+    assert "docstring coverage as not applicable" in no_source_summary
+    assert norm.mentions_full_coverage("", no_source_summary)
 
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text("placeholder", encoding="utf-8")

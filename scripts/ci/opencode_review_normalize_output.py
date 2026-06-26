@@ -121,6 +121,8 @@ COVERAGE_FAILURE_PHRASES = (
     "missing",
     "partial",
     "unknown",
+    "did not prove",
+    "does not prove",
     "did not run",
     "did not publish",
     "job did not run",
@@ -228,22 +230,31 @@ def label_section(text: str, label: str) -> str:
     return text[start:end]
 
 
+def coverage_section_is_valid(section: str) -> bool:
+    """Return whether one approval coverage label cites acceptable evidence."""
+    if "coverage execution evidence" not in section:
+        return False
+    if (
+        "not applicable" in section
+        and "no supported source files or package manifests" in section
+    ):
+        return True
+    if any(phrase in section for phrase in COVERAGE_FAILURE_PHRASES):
+        return False
+    if "100%" in section:
+        return True
+    return False
+
+
 def mentions_full_coverage(reason: str, summary: str) -> bool:
-    """Return whether test and docstring coverage are both explicitly 100%."""
+    """Return whether test and docstring coverage labels cite valid evidence."""
     combined = f"{reason}\n{summary}".casefold()
     coverage_section = label_section(combined, "coverage:")
     docstring_section = label_section(combined, "docstring coverage:")
     required_sections = (coverage_section, docstring_section)
     if not all(required_sections):
         return False
-    for section in required_sections:
-        if any(phrase in section for phrase in COVERAGE_FAILURE_PHRASES):
-            return False
-        if "coverage execution evidence" not in section:
-            return False
-        if "100%" not in section:
-            return False
-    return True
+    return all(coverage_section_is_valid(section) for section in required_sections)
 
 
 def approval_repair_evidence_file() -> Path | None:
@@ -301,34 +312,52 @@ def changed_files_from_evidence(text: str) -> list[str]:
     return files
 
 
-def evidence_proves_full_coverage(text: str) -> bool:
-    """Return whether bounded evidence proves 100% test and docstring coverage."""
+def evidence_coverage_mode(text: str) -> str | None:
+    """Return the coverage mode proven by bounded evidence."""
     section = text.casefold()
-    return (
-        "- result: pass" in section
-        and "- test coverage: 100%" in section
-        and "- docstring coverage: 100%" in section
-    )
+    if "- result: pass" not in section:
+        return None
+    if "- test coverage: 100%" in section and "- docstring coverage: 100%" in section:
+        return "full"
+    no_source = "no supported source files or package manifests" in section
+    test_na = "- test coverage: not applicable" in section
+    docstring_na = "- docstring coverage: not applicable" in section
+    if no_source and test_na and docstring_na:
+        return "not_applicable"
+    return None
 
 
 def build_approval_repair_summary(summary: str, evidence_text: str) -> str | None:
     """Append missing approval labels from bounded current-head evidence."""
     changed_files = changed_files_from_evidence(evidence_text)
-    if not changed_files or not evidence_proves_full_coverage(evidence_text):
+    coverage_mode = evidence_coverage_mode(evidence_text)
+    if not changed_files or coverage_mode is None:
         return None
 
     first_file = changed_files[0]
     file_list = ", ".join(changed_files[:5])
     if len(changed_files) > 5:
         file_list += f", and {len(changed_files) - 5} more"
+    if coverage_mode == "not_applicable":
+        coverage_line = (
+            "Coverage: coverage execution evidence reports test coverage as not applicable "
+            "because no supported source files or package manifests were found."
+        )
+        docstring_line = (
+            "Docstring coverage: coverage execution evidence reports docstring coverage as not applicable "
+            "because no supported source files or package manifests were found."
+        )
+    else:
+        coverage_line = "Coverage: coverage execution evidence proves 100% test coverage."
+        docstring_line = "Docstring coverage: coverage execution evidence proves 100% docstring coverage."
 
     repair = f"""\
 
 Verification posture: CodeGraph evidence was initialized and bounded current-head evidence reviewed for changed-file evidence including {file_list}.
 Linter/static: workflow/static review evidence is bounded by the current-head GitHub Checks gate and changed-file evidence.
 TDD/regression: coverage execution evidence and focused changed hunks were reviewed from bounded-review-evidence.md.
-Coverage: coverage execution evidence proves 100% test coverage.
-Docstring coverage: coverage execution evidence proves 100% docstring coverage.
+{coverage_line}
+{docstring_line}
 DAG: Change Flow DAG maps {first_file} through bounded evidence, review risk, and required checks.
 PoC/execution: coverage-evidence job executed on the current head and reported PASS.
 DDD/domain: workflow and repository-governance invariants were reviewed against changed files in bounded evidence.
