@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-06-26 16:40 KST
+Updated: 2026-06-26 17:06 KST
 
 ## Decision
 
@@ -12,14 +12,16 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on each target repository's default branch (`~DEFAULT_BRANCH`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Required workflow paths:
+- Active required workflow paths:
   - `.github/workflows/strix.yml`
   - `.github/workflows/opencode-review.yml`
+- Scheduler path prepared for the same central required-workflow mechanism:
+  - `.github/workflows/pr-review-merge-scheduler.yml`
 - Required workflow ref: `refs/heads/main`
 - Required workflow SHA: `6440d493816f8a4d66e32f2e5e8e6a9156d7f488`
 - Required workflow trigger support: `pull_request_target`
 
-This keeps Strix security evidence and OpenCode review evidence centralized. Target repositories do not need local copies of these workflows for the organization required workflow rule.
+This keeps Strix security evidence, OpenCode review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule.
 
 ## OpenCode required workflow posture
 
@@ -36,6 +38,20 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate still rechecks current-head peer checks before approving
 
 Keep the OpenCode required workflow active only while the central workflow keeps proving current-head coverage, CodeGraph initialization, bounded evidence, model review output, and approval-gate publication on the current head.
+
+## Scheduler required workflow posture
+
+The central `.github/workflows/pr-review-merge-scheduler.yml` now supports `pull_request_target` so it can be added to the same organization required workflow ruleset after the implementation lands on `main`.
+
+- Required workflow trigger support: `pull_request_target`
+- Stable required check job name: `scan-pr-queue`
+- Trusted source: `ContextualWisdomLab/.github`
+- PR-event scope: when GitHub invokes the workflow for a PR, the scheduler passes `--pr-number` and inspects only that PR instead of scanning or mutating the whole repository queue
+- Token posture: the workflow passes `GH_TOKEN: ${{ github.token }}` so stale-thread resolution, branch update, auto-merge, and direct merge mutations are attributed to the target repository's `github-actions[bot]`
+- Flow posture: default branches named `main` or `master` are treated as GitHub Flow; default branches named `develop` are treated as Git Flow unless a repository explicitly sets `PROJECT_FLOW`
+- Automation boundary: `update-branch` handles `BEHIND` PRs only after current-head OpenCode approval; `DIRTY` or `CONFLICTING` PRs still require author or maintainer conflict resolution guidance
+
+Do not centralize the scheduler by running a `.github` scheduled job against other repositories with the `.github` repository token. That would either fail permission checks or use the wrong mutation actor. The central path is a required workflow executed in each target repository context.
 
 ## Scope
 
@@ -58,8 +74,8 @@ The active ruleset targets the public, non-fork, non-archived repositories found
 
 ## Current policy
 
-1. Security evidence and review evidence are centralized through the organization `workflows` ruleset rule.
-2. The central required workflows come from `.github`; repositories should not receive copied Strix or OpenCode workflow files only to satisfy this rollout.
+1. Security evidence, review evidence, and mechanical merge/update automation are centralized through the organization `workflows` ruleset rule.
+2. The central required workflows come from `.github`; repositories should not receive copied Strix, OpenCode, or scheduler workflow files only to satisfy this rollout.
 3. GitHub Flow repositories are those whose default branch is `main`.
 4. Git Flow repositories are those whose default branch is `develop`.
 5. OpenCode remains responsible for review judgment and structured decisions.
@@ -91,5 +107,5 @@ The active ruleset targets the public, non-fork, non-archived repositories found
 
 - Existing open PRs may need a new push or base update before the newly required OpenCode check appears on their current head.
 - The central Strix workflow still defaults to GPT-5 and falls back to DeepSeek models. The PR `#77` central required run passed in 9m25s, but earlier runs have been slower. If runtime or rate limits continue, adjust Strix model routing separately.
-- Some repositories still have local Strix/OpenCode/scheduler workflows. Do not copy more workflows into repositories; instead, decide which local files can be retired after the organization ruleset has proven stable.
+- Some repositories still have local Strix/OpenCode/scheduler workflows. Do not copy more workflows into repositories; instead, retire local copies after the organization ruleset proves the central required workflows stable on current heads.
 - Some repositories use classic branch protection while others use rulesets. The next rollout pass should normalize branch protection into rulesets without removing repository-specific required application checks.

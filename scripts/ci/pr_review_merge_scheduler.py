@@ -16,74 +16,90 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-OPEN_PRS_QUERY = """\
-query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequests(first: $pageSize, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: ASC}) {
-      pageInfo { hasNextPage endCursor }
+PULL_REQUEST_FIELDS_FRAGMENT = """\
+fragment SchedulerPullRequestFields on PullRequest {
+  number
+  title
+  isDraft
+  mergeable
+  mergeStateStatus
+  reviewDecision
+  baseRefName
+  baseRefOid
+  headRefName
+  headRefOid
+  isCrossRepository
+  maintainerCanModify
+  headRepository { nameWithOwner }
+  autoMergeRequest { enabledAt }
+  commits(last: 1) {
+    nodes {
+      commit {
+        oid
+        authoredDate
+        committedDate
+      }
+    }
+  }
+  reviewThreads(first: 100) {
+    nodes { id isResolved isOutdated }
+  }
+  reviews(last: 50) {
+    nodes {
+      state
+      body
+      submittedAt
+      author { login }
+      commit { oid }
+    }
+  }
+  statusCheckRollup {
+    contexts(first: 100) {
       nodes {
-        number
-        title
-        isDraft
-        mergeable
-        mergeStateStatus
-        reviewDecision
-        baseRefName
-        baseRefOid
-        headRefName
-        headRefOid
-        isCrossRepository
-        maintainerCanModify
-        headRepository { nameWithOwner }
-        autoMergeRequest { enabledAt }
-        commits(last: 1) {
-          nodes {
-            commit {
-              oid
-              authoredDate
-              committedDate
+        __typename
+        ... on CheckRun {
+          name
+          status
+          conclusion
+          startedAt
+          checkSuite {
+            workflowRun {
+              workflow { name }
             }
           }
         }
-        reviewThreads(first: 100) {
-          nodes { id isResolved isOutdated }
-        }
-        reviews(last: 50) {
-          nodes {
-            state
-            body
-            submittedAt
-            author { login }
-            commit { oid }
-          }
-        }
-        statusCheckRollup {
-          contexts(first: 100) {
-            nodes {
-              __typename
-              ... on CheckRun {
-                name
-                status
-                conclusion
-                startedAt
-                checkSuite {
-                  workflowRun {
-                    workflow { name }
-                  }
-                }
-              }
-              ... on StatusContext {
-                context
-                state
-              }
-            }
-          }
+        ... on StatusContext {
+          context
+          state
         }
       }
     }
   }
 }
 """
+
+OPEN_PRS_QUERY = """\
+query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: $pageSize, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        ...SchedulerPullRequestFields
+      }
+    }
+  }
+}
+""" + PULL_REQUEST_FIELDS_FRAGMENT
+
+PR_BY_NUMBER_QUERY = """\
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      ...SchedulerPullRequestFields
+    }
+  }
+}
+""" + PULL_REQUEST_FIELDS_FRAGMENT
 
 OPEN_PRS_PAGE_SIZE = 25
 DEFAULT_STALE_OPENCODE_MINUTES = 45
@@ -361,6 +377,16 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             break
         cursor = pr_page["pageInfo"]["endCursor"]
 
+    enrich_rest_mergeable_states(repo, prs)
+    return prs
+
+
+def fetch_pr(repo: str, number: int) -> list[dict[str, Any]]:
+    """Fetch one pull request by number using the same evidence shape as the queue scan."""
+    owner, name = split_repo(repo)
+    payload = gh_graphql(PR_BY_NUMBER_QUERY, owner=owner, name=name, number=number)
+    pr = payload["data"]["repository"].get("pullRequest")
+    prs = [pr] if pr else []
     enrich_rest_mergeable_states(repo, prs)
     return prs
 
@@ -1693,6 +1719,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--base-branch", default=os.environ.get("DEFAULT_BRANCH", ""))
     parser.add_argument("--project-flow", default=os.environ.get("PROJECT_FLOW", ""))
     parser.add_argument("--max-prs", type=int, default=100)
+    parser.add_argument("--pr-number", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)
@@ -1725,7 +1752,9 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--base-branch is required")
     if not args.project_flow:
         raise SystemExit("--project-flow is required")
-    prs = fetch_open_prs(args.repo, args.max_prs)
+    if args.pr_number < 0:
+        raise SystemExit("--pr-number must be positive")
+    prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
     decisions = []
     for pr in prs:
         try:

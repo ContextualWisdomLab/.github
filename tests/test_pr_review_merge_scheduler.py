@@ -195,6 +195,26 @@ def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypa
     assert seen[0]["pageSize"] == sched.OPEN_PRS_PAGE_SIZE
 
 
+def test_fetch_pr_uses_exact_pull_request_number(monkeypatch):
+    seen = []
+
+    def fake_graphql(query, **fields):
+        seen.append(fields)
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {"number": fields["number"]},
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
+
+    assert sched.fetch_pr("owner/repo", 42) == [{"number": 42}]
+    assert seen == [{"owner": "owner", "name": "repo", "number": 42}]
+
+
 def test_rest_mergeable_state_helpers(monkeypatch):
     calls = []
 
@@ -1024,12 +1044,15 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
             "--no-trigger-reviews",
             "--stale-opencode-minutes",
             "5",
+            "--pr-number",
+            "12",
         ]
     )
     assert parsed.repo == "owner/repo"
     assert not parsed.trigger_reviews
     assert parsed.security_workflow == "Strix Security Scan"
     assert parsed.stale_opencode_minutes == 5
+    assert parsed.pr_number == 12
 
     assert sched.main(["--self-test"]) == 0
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
@@ -1045,6 +1068,27 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [make_pr(number=3)])
     monkeypatch.setattr(sched, "inspect_pr", lambda *args, **kwargs: sched.Decision(3, "skip", "done"))
     assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
+
+    exact_fetches = []
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: exact_fetches.append((repo, number)) or [make_pr(number=number)])
+    assert (
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github",
+                "--pr-number",
+                "7",
+            ]
+        )
+        == 0
+    )
+    assert exact_fetches == [("owner/repo", 7)]
+    with pytest.raises(SystemExit):
+        sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--pr-number", "-1"])
 
 
 def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):

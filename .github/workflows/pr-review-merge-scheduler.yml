@@ -1,6 +1,8 @@
 name: PR Review Merge Scheduler
 
 on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_call:
     inputs:
       dry_run:
@@ -108,7 +110,8 @@ jobs:
       DEFAULT_BRANCH: ${{ inputs.base_branch || github.event.repository.default_branch }}
       DRY_RUN: ${{ inputs.dry_run == true }}
       MAX_PRS: ${{ inputs.max_prs || '100' }}
-      PROJECT_FLOW: ${{ inputs.project_flow || vars.PROJECT_FLOW || 'git-flow' }}
+      PROJECT_FLOW_INPUT: ${{ inputs.project_flow || vars.PROJECT_FLOW || '' }}
+      PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || inputs.trigger_reviews == true }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ inputs.merge_mode || vars.PR_MERGE_MODE || 'auto' }}
@@ -129,14 +132,25 @@ jobs:
       - name: Inspect PR review and merge queue
         run: |
           set -euo pipefail
+          project_flow="$PROJECT_FLOW_INPUT"
+          if [ -z "$project_flow" ]; then
+            case "$DEFAULT_BRANCH" in
+              main|master) project_flow="github-flow" ;;
+              develop) project_flow="git-flow" ;;
+              *) project_flow="github-flow" ;;
+            esac
+          fi
           args=(
             --repo "$GITHUB_REPOSITORY"
             --base-branch "$DEFAULT_BRANCH"
             --max-prs "$MAX_PRS"
-            --project-flow "$PROJECT_FLOW"
+            --project-flow "$project_flow"
             --review-workflow "OpenCode Review"
             --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
           )
+          if [ -n "$PULL_REQUEST_NUMBER" ]; then
+            args+=(--pr-number "$PULL_REQUEST_NUMBER")
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi

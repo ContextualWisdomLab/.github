@@ -39,10 +39,16 @@ include a compact command block covering `gh pr checkout`, `git fetch`, merge or
 rebase, `git status --short`, resolved-file staging, normal push, and
 `--force-with-lease` only for rebased branches.
 
-OpenCode review execution is `workflow_dispatch`-only. The scheduler dispatches
-same-head Strix evidence first, then dispatches OpenCode for the same PR head.
-This avoids running PR-head review, CodeGraph, coverage, or PoC code from a
-privileged `pull_request_target` OpenCode workflow.
+Strix, OpenCode, and the scheduler are sourced from the central
+`ContextualWisdomLab/.github` workflows rather than copied into each repository.
+Required-workflow runs execute in the target repository context, so mechanical
+branch updates, stale-thread resolution, and merges use that repository's
+`github-actions[bot]` token while the trusted implementation still comes from
+the central repository. The scheduler dispatches same-head Strix evidence first,
+then dispatches OpenCode for the same PR head when review evidence is missing or
+stale.
+This avoids running PR-head review, CodeGraph, coverage, or PoC code as an
+unbounded local workflow copy.
 Strix keeps `cancel-in-progress: false` so old evidence is not cancelled by a
 force-push, but PR-scoped concurrency includes the head SHA so an obsolete scan
 does not serialize newer current-head evidence.
