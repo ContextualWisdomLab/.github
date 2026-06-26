@@ -881,7 +881,7 @@ jobs:
 
           jq -n --arg workspace "$OPENCODE_SOURCE_WORKDIR" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "github-models/openai/gpt-5",
+            "model": "github-models/deepseek/deepseek-r1-0528",
             "small_model": "github-models/deepseek/deepseek-v3-0324",
             "enabled_providers": ["github-models"],
             "lsp": true,
@@ -1002,6 +1002,24 @@ jobs:
                       "output": 100000
                     }
                   },
+                  "openai/gpt-5-chat": {
+                    "name": "OpenAI GPT-5 Chat",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 200000,
+                      "output": 100000
+                    }
+                  },
+                  "openai/gpt-5-mini": {
+                    "name": "OpenAI GPT-5 Mini",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 200000,
+                      "output": 100000
+                    }
+                  },
                   "deepseek/deepseek-r1-0528": {
                     "name": "DeepSeek R1 0528",
                     "tool_call": true,
@@ -1028,6 +1046,15 @@ jobs:
                       "output": 100000
                     }
                   },
+                  "openai/o3-mini": {
+                    "name": "OpenAI o3-mini",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 200000,
+                      "output": 100000
+                    }
+                  },
                   "openai/o4-mini": {
                     "name": "OpenAI o4-mini",
                     "tool_call": true,
@@ -1035,6 +1062,22 @@ jobs:
                     "limit": {
                       "context": 200000,
                       "output": 100000
+                    }
+                  },
+                  "mistral-ai/mistral-medium-2505": {
+                    "name": "Mistral Medium 3 25.05",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 128000,
+                      "output": 4096
+                    }
+                  },
+                  "meta/llama-4-scout-17b-16e-instruct": {
+                    "name": "Llama 4 Scout 17B 16E Instruct",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 1000000,
+                      "output": 4096
                     }
                   }
                 }
@@ -1044,21 +1087,21 @@ jobs:
 
           printf 'Prepared isolated OpenCode review workspace: %s\n' "$OPENCODE_REVIEW_WORKDIR"
 
-      - name: Run OpenCode PR Review (GPT-5)
+      - name: Run OpenCode PR Review (DeepSeek R1)
         id: opencode_review_primary
         if: needs.coverage-evidence.result == 'success'
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 15
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODEL: github-models/openai/gpt-5
+          MODEL: github-models/deepseek/deepseek-r1-0528
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_MODEL_ATTEMPTS: "3"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -1171,7 +1214,7 @@ jobs:
           fi
           record_review_status "success"
 
-      - name: Run OpenCode PR Review fallback (DeepSeek R1)
+      - name: Run OpenCode PR Review fallback (DeepSeek V3)
         id: opencode_review_fallback
         if: >-
           always()
@@ -1182,7 +1225,7 @@ jobs:
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODEL: github-models/deepseek/deepseek-r1-0528
+          MODEL: github-models/deepseek/deepseek-v3-0324
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -1206,7 +1249,7 @@ jobs:
           }
           prompt_file="${RUNNER_TEMP}/opencode-review-prompt.md"
           cat >"$prompt_file" <<EOF
-          GPT-5 failed; review PR #${PR_NUMBER} in ${OPENCODE_SOURCE_WORKDIR} with DeepSeek R1-0528. The trusted workflow checkout is ${GITHUB_WORKSPACE}; inspect the pull request head source only from ${OPENCODE_SOURCE_WORKDIR}. Be general-purpose and meticulous: actively consult CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups such as action/tool release facts, industry standards, international standards, official platform specifications, and comparable issue or PR precedents when applicable. Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain terminology when a search source is available. If a configured MCP source is unavailable or not applicable, say so briefly in the review summary. Inspect changed files and focused hunks directly when MCP evidence is insufficient. Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it. If an external MCP source is unavailable, state that as a source limitation, not as a repository fact.
+          DeepSeek R1-0528 failed; review PR #${PR_NUMBER} in ${OPENCODE_SOURCE_WORKDIR} with DeepSeek V3-0324. The trusted workflow checkout is ${GITHUB_WORKSPACE}; inspect the pull request head source only from ${OPENCODE_SOURCE_WORKDIR}. Be general-purpose and meticulous: actively consult CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups such as action/tool release facts, industry standards, international standards, official platform specifications, and comparable issue or PR precedents when applicable. Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain terminology when a search source is available. If a configured MCP source is unavailable or not applicable, say so briefly in the review summary. Inspect changed files and focused hunks directly when MCP evidence is insufficient. Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it. If an external MCP source is unavailable, state that as a source limitation, not as a repository fact.
           Structural exploration is mandatory for every PR, including dependency-only, lockfile-only, workflow-only, docs-only, and no-source-code changes; inspect the relevant manifest, lockfile, workflow, config, docs, dependency edges, generated side effects, code-to-documentation consistency, documentation-to-code consistency, and test-command contracts. Docs-only changes still require CodeGraph, DeepWiki, Context7, or web_search evidence when they make claims about behavior, APIs, setup, workflows, dependencies, standards, or product/domain concepts. If changed documentation contradicts current code, generated behavior, official docs, repository docs, or reachable standards evidence, request changes with a source-backed fix direction: either fix the documentation claim or update the code/contract that makes the claim false. Never state that structural exploration, structural analysis, or structural review is not required or unnecessary. If structural exploration was not possible or changed files could not be inspected after reading bounded-review-evidence.md and the changed files, do not approve. If evidence is truncated, inspect focused hunks and changed files directly before deciding. Do not request changes solely because the prompt did not inline the full evidence.
           Use CodeGraph for blast-radius, call graph, and test-coverage questions before broad local reads. Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests. Follow the Review language evidence section: write human-readable review prose in Korean when the PR title or body is primarily Korean, and in English when it is primarily English. Keep file paths, code identifiers, commands, logs, quoted source, error text, numbers, and protocol literals unchanged. For Korean prose, preserve facts, identifiers, numbers, and quotes while removing only formulaic filler or translationese.
           Cover security/privacy boundaries, tenant isolation, workflow contracts, developer experience, user-facing behavior, tests, cross-file compatibility, repository conventions, and regression risk. Compare repository-local patterns before judging DX or UX: preserve helpful automation, review, setup, documentation, and product-flow patterns from sibling repositories when they reduce cognitive load or user friction, and flag patterns that only add noise, false failures, misleading status, repeated waiting, or URL-only diagnostics. For schema, migration, database, API, workflow, security, or compliance changes, compare against nearby implementation, code conventions, reserved words, naming rules, applicable standards, git history, and deployment evidence before approving. For breaking changes, especially when bounded evidence shows production deployment records, comment on backward-compatibility impact, migration or bridge-module needs, rollout/rollback path, and lower-version compatibility.
@@ -1254,7 +1297,7 @@ jobs:
             fi
           done
           if [ "$opencode_run_status" -ne 0 ]; then
-            echo "OpenCode DeepSeek R1 review attempt did not complete; next fallback review will run."
+            echo "OpenCode DeepSeek V3 review attempt did not complete; next fallback review will run."
             record_review_status "failed"
             exit 0
           fi
@@ -1301,7 +1344,7 @@ jobs:
           fi
           record_review_status "success"
 
-      - name: Run OpenCode PR Review fallback (DeepSeek V3)
+      - name: Run OpenCode PR Review fallback (GPT-5)
         id: opencode_review_second_fallback
         if: >-
           always()
@@ -1309,16 +1352,16 @@ jobs:
           && steps.opencode_review_primary.outputs.review_status != 'success'
           && steps.opencode_review_fallback.outputs.review_status != 'success'
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 8
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODEL: github-models/deepseek/deepseek-v3-0324
+          MODEL: github-models/openai/gpt-5
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_ATTEMPTS: "3"
+          OPENCODE_MODEL_ATTEMPTS: "1"
           OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
@@ -1337,7 +1380,7 @@ jobs:
           }
           prompt_file="${RUNNER_TEMP}/opencode-review-prompt.md"
           cat >"$prompt_file" <<EOF
-          GPT-5 and DeepSeek R1-0528 failed; review PR #${PR_NUMBER} in ${OPENCODE_SOURCE_WORKDIR} with DeepSeek V3-0324. The trusted workflow checkout is ${GITHUB_WORKSPACE}; inspect the pull request head source only from ${OPENCODE_SOURCE_WORKDIR}. Be general-purpose and meticulous: actively consult CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups such as action/tool release facts, industry standards, international standards, official platform specifications, and comparable issue or PR precedents when applicable. Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain terminology when a search source is available. If a configured MCP source is unavailable or not applicable, say so briefly in the review summary. Inspect changed files and focused hunks directly when MCP evidence is insufficient. Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it. If an external MCP source is unavailable, state that as a source limitation, not as a repository fact.
+          DeepSeek R1-0528 and DeepSeek V3-0324 failed; review PR #${PR_NUMBER} in ${OPENCODE_SOURCE_WORKDIR} with GPT-5. The trusted workflow checkout is ${GITHUB_WORKSPACE}; inspect the pull request head source only from ${OPENCODE_SOURCE_WORKDIR}. Be general-purpose and meticulous: actively consult CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups such as action/tool release facts, industry standards, international standards, official platform specifications, and comparable issue or PR precedents when applicable. Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain terminology when a search source is available. If a configured MCP source is unavailable or not applicable, say so briefly in the review summary. Inspect changed files and focused hunks directly when MCP evidence is insufficient. Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it. If an external MCP source is unavailable, state that as a source limitation, not as a repository fact.
           Structural exploration is mandatory for every PR, including dependency-only, lockfile-only, workflow-only, docs-only, and no-source-code changes; inspect the relevant manifest, lockfile, workflow, config, docs, dependency edges, generated side effects, code-to-documentation consistency, documentation-to-code consistency, and test-command contracts. Docs-only changes still require CodeGraph, DeepWiki, Context7, or web_search evidence when they make claims about behavior, APIs, setup, workflows, dependencies, standards, or product/domain concepts. If changed documentation contradicts current code, generated behavior, official docs, repository docs, or reachable standards evidence, request changes with a source-backed fix direction: either fix the documentation claim or update the code/contract that makes the claim false. Never state that structural exploration, structural analysis, or structural review is not required or unnecessary. If structural exploration was not possible or changed files could not be inspected after reading bounded-review-evidence.md and the changed files, do not approve. If evidence is truncated, inspect focused hunks and changed files directly before deciding. Do not request changes solely because the prompt did not inline the full evidence.
           Use CodeGraph for blast-radius, call graph, and test-coverage questions before broad local reads. Prefer deletion, stdlib/native platform features, and already-installed dependencies before proposing new code or packages, but do not simplify away trust-boundary validation, data-loss handling, security, accessibility, or required tests. Follow the Review language evidence section: write human-readable review prose in Korean when the PR title or body is primarily Korean, and in English when it is primarily English. Keep file paths, code identifiers, commands, logs, quoted source, error text, numbers, and protocol literals unchanged. For Korean prose, preserve facts, identifiers, numbers, and quotes while removing only formulaic filler or translationese.
           Cover security/privacy boundaries, tenant isolation, workflow contracts, developer experience, user-facing behavior, tests, cross-file compatibility, repository conventions, and regression risk. Compare repository-local patterns before judging DX or UX: preserve helpful automation, review, setup, documentation, and product-flow patterns from sibling repositories when they reduce cognitive load or user friction, and flag patterns that only add noise, false failures, misleading status, repeated waiting, or URL-only diagnostics. For schema, migration, database, API, workflow, security, or compliance changes, compare against nearby implementation, code conventions, reserved words, naming rules, applicable standards, git history, and deployment evidence before approving. For breaking changes, especially when bounded evidence shows production deployment records, comment on backward-compatibility impact, migration or bridge-module needs, rollout/rollback path, and lower-version compatibility.
@@ -1385,7 +1428,7 @@ jobs:
             fi
           done
           if [ "$opencode_run_status" -ne 0 ]; then
-            echo "OpenCode DeepSeek V3 review attempt did not complete."
+            echo "OpenCode GPT-5 review attempt did not complete."
             record_review_status "failed"
             exit 0
           fi
@@ -1432,8 +1475,8 @@ jobs:
           fi
           record_review_status "success"
 
-      - name: Run OpenCode PR Review fallback (OpenAI o-series)
-        id: opencode_review_o_series_fallback
+      - name: Run OpenCode PR Review fallback (catalog model pool)
+        id: opencode_review_catalog_fallback
         if: >-
           always()
           && needs.coverage-evidence.result == 'success'
@@ -1449,11 +1492,11 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_CANDIDATES: "github-models/openai/o3 github-models/openai/o4-mini"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-chat github-models/openai/gpt-5-mini github-models/openai/o3 github-models/openai/o3-mini github-models/openai/o4-mini github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-scout-17b-16e-instruct"
           OPENCODE_MODEL_ATTEMPTS: "2"
           OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
-          OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
+          OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-catalog-fallback.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
@@ -1494,7 +1537,7 @@ jobs:
             opencode_export_file="${candidate_output_file}.session.json"
             prompt_file="${RUNNER_TEMP}/opencode-review-${model_candidate//\//-}-prompt.md"
             cat >"$prompt_file" <<EOF
-          GPT-5, DeepSeek R1, and DeepSeek V3 did not produce a usable review. Review PR #${PR_NUMBER} in ${OPENCODE_SOURCE_WORKDIR} with ${model_candidate}. The trusted workflow checkout is ${GITHUB_WORKSPACE}; inspect the pull request head source only from ${OPENCODE_SOURCE_WORKDIR}.
+          DeepSeek R1-0528, DeepSeek V3-0324, and GPT-5 did not produce a usable review. Review PR #${PR_NUMBER} in ${OPENCODE_SOURCE_WORKDIR} with ${model_candidate}. The trusted workflow checkout is ${GITHUB_WORKSPACE}; inspect the pull request head source only from ${OPENCODE_SOURCE_WORKDIR}.
           CodeGraph MCP is mandatory for structural checks. Also use DeepWiki for repo docs, Context7 for current library/API docs, and web_search for bounded external lookups such as user-claimed concepts, industry standards, international standards, official platform specifications, and comparable issue or PR precedents when applicable. Do not rely on model memory for concepts, standards, runtime support, or domain terminology when a search source is available.
           Read ./bounded-review-evidence.md first, follow its Review language evidence for the final review language, then inspect changed files and focused hunks under the PR head worktree. Cover security/privacy boundaries, tenant isolation, workflow contracts, developer experience, user-facing behavior, tests, cross-file compatibility, repository conventions, deployment evidence, git history, breaking-change/backcompat impact, and regression risk. Compare repository-local patterns before judging DX or UX: preserve helpful automation, review, setup, documentation, and product-flow patterns from sibling repositories when they reduce cognitive load or user friction, and flag patterns that only add noise, false failures, misleading status, repeated waiting, or URL-only diagnostics. For schema, migration, database, API, workflow, security, or compliance changes, compare against nearby implementation, code conventions, reserved words, naming rules, applicable standards, and production deployment evidence before approving.
           Before APPROVE, the summary must name at least one exact changed file path and include a Verification posture section with these exact labels: Linter/static:, TDD/regression:, Coverage:, Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:, Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:, Performance:, Developer experience:, User experience:, Security/privacy:. The CDD/context label must explicitly mention CodeGraph or structural MCP evidence. Coverage and Docstring coverage labels must cite Coverage execution evidence proving 100%; missing, partial, skipped, unavailable, or not-applicable measurement is a blocker, not an approval condition. DAG: must name the rendered Change Flow DAG or an equivalent Mermaid DAG that maps changed files to affected execution path, main risk, and verification path. Developer experience: must state whether the change helps or obstructs maintainers, reviewers, CI operators, and future contributors, citing concrete repository evidence. User experience: must state whether product, documentation, review-comment, or status-check readers get clearer or worse outcomes, citing concrete evidence. PoC/execution: must cite the scratch proof, repro, focused test, lint, security, performance, or UI verification command that was actually run and its result; if no meaningful PoC can be run, state the exact repository limitation and request changes when the claim cannot otherwise be proven. If a surface is not applicable or unavailable, say why using that label.
@@ -1515,7 +1558,7 @@ jobs:
                 --agent ci-review-fallback \
                 --model "$model_candidate" \
                 --format json \
-                --title "PR #${PR_NUMBER} OpenCode bounded o-series review ${model_candidate} attempt ${opencode_attempt}/${opencode_attempts}" >"$opencode_json_file"
+                --title "PR #${PR_NUMBER} OpenCode bounded catalog fallback review ${model_candidate} attempt ${opencode_attempt}/${opencode_attempts}" >"$opencode_json_file"
               opencode_run_status=$?
               set -e
               if [ "$opencode_run_status" -ne 0 ]; then
@@ -1628,7 +1671,7 @@ jobs:
           && (steps.opencode_review_primary.outputs.review_status == 'success'
               || steps.opencode_review_fallback.outputs.review_status == 'success'
               || steps.opencode_review_second_fallback.outputs.review_status == 'success'
-              || steps.opencode_review_o_series_fallback.outputs.review_status == 'success')
+              || steps.opencode_review_catalog_fallback.outputs.review_status == 'success')
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || secrets.GITHUB_TOKEN }}
           GH_REPOSITORY: ${{ github.repository }}
@@ -1639,11 +1682,11 @@ jobs:
           OPENCODE_PRIMARY_OUTCOME: ${{ steps.opencode_review_primary.outputs.review_status }}
           OPENCODE_FALLBACK_OUTCOME: ${{ steps.opencode_review_fallback.outputs.review_status }}
           OPENCODE_SECOND_FALLBACK_OUTCOME: ${{ steps.opencode_review_second_fallback.outputs.review_status }}
-          OPENCODE_O_SERIES_FALLBACK_OUTCOME: ${{ steps.opencode_review_o_series_fallback.outputs.review_status }}
+          OPENCODE_CATALOG_FALLBACK_OUTCOME: ${{ steps.opencode_review_catalog_fallback.outputs.review_status }}
           OPENCODE_PRIMARY_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_SECOND_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
-          OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
+          OPENCODE_CATALOG_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-catalog-fallback.md
           # The publish gate re-runs source-backed validation against PR-head data.
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
@@ -1658,7 +1701,7 @@ jobs:
           elif [ "$OPENCODE_SECOND_FALLBACK_OUTCOME" = "success" ]; then
             review_output_file="$OPENCODE_SECOND_FALLBACK_OUTPUT_FILE"
           else
-            review_output_file="$OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE"
+            review_output_file="$OPENCODE_CATALOG_FALLBACK_OUTPUT_FILE"
           fi
 
           clean_output="$(mktemp)"
@@ -1901,7 +1944,7 @@ jobs:
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
-          MODEL: github-models/openai/gpt-5
+          MODEL: github-models/deepseek/deepseek-r1-0528
           USE_GITHUB_TOKEN: "true"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -1912,11 +1955,11 @@ jobs:
           OPENCODE_PRIMARY_OUTCOME: ${{ steps.opencode_review_primary.outputs.review_status }}
           OPENCODE_FALLBACK_OUTCOME: ${{ steps.opencode_review_fallback.outputs.review_status }}
           OPENCODE_SECOND_FALLBACK_OUTCOME: ${{ steps.opencode_review_second_fallback.outputs.review_status }}
-          OPENCODE_O_SERIES_FALLBACK_OUTCOME: ${{ steps.opencode_review_o_series_fallback.outputs.review_status }}
+          OPENCODE_CATALOG_FALLBACK_OUTCOME: ${{ steps.opencode_review_catalog_fallback.outputs.review_status }}
           OPENCODE_PRIMARY_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-primary.md
           OPENCODE_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-fallback.md
           OPENCODE_SECOND_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-second-fallback.md
-          OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-o-series-fallback.md
+          OPENCODE_CATALOG_FALLBACK_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-catalog-fallback.md
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "81"
@@ -2670,8 +2713,8 @@ jobs:
               ".github/workflows/strix.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
             emit_known_missing_string_finding \
-              "MODEL: github-models/openai/gpt-5" \
-              "OpenCode review must try GitHub Models GPT-5 first" \
+              "MODEL: github-models/deepseek/deepseek-r1-0528" \
+              "OpenCode review must start with DeepSeek R1" \
               ".github/workflows/opencode-review.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
 
@@ -3527,7 +3570,7 @@ jobs:
             opencode_review_outcome="${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}"
           fi
           if [ "$opencode_review_outcome" != "success" ]; then
-            opencode_review_outcome="${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}"
+            opencode_review_outcome="${OPENCODE_CATALOG_FALLBACK_OUTCOME:-unknown}"
           fi
 
           if [ "$opencode_review_outcome" != "success" ]; then
@@ -3577,7 +3620,7 @@ jobs:
                 "all configured OpenCode model attempts failed to produce a usable current-head control block." \
                 "" \
                 "- Result: OPENCODE_REVIEW_UNAVAILABLE" \
-                "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, o_series_fallback=${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-unknown}." \
+                "- Reason: OpenCode action outcomes were primary=${OPENCODE_PRIMARY_OUTCOME:-unknown}, fallback=${OPENCODE_FALLBACK_OUTCOME:-unknown}, second_fallback=${OPENCODE_SECOND_FALLBACK_OUTCOME:-unknown}, catalog_fallback=${OPENCODE_CATALOG_FALLBACK_OUTCOME:-unknown}." \
                 "- Required next evidence: rerun OpenCode with a model/tooling attempt that emits a valid source-backed control block for this head." \
                 "- Head SHA: \`${HEAD_SHA}\`" \
                 "- Workflow run: ${RUN_ID}" \
@@ -3597,8 +3640,8 @@ jobs:
             selected_review_output_file="${OPENCODE_FALLBACK_OUTPUT_FILE}"
           elif [ "${OPENCODE_SECOND_FALLBACK_OUTCOME:-}" = "success" ]; then
             selected_review_output_file="${OPENCODE_SECOND_FALLBACK_OUTPUT_FILE}"
-          elif [ "${OPENCODE_O_SERIES_FALLBACK_OUTCOME:-}" = "success" ]; then
-            selected_review_output_file="${OPENCODE_O_SERIES_FALLBACK_OUTPUT_FILE}"
+          elif [ "${OPENCODE_CATALOG_FALLBACK_OUTCOME:-}" = "success" ]; then
+            selected_review_output_file="${OPENCODE_CATALOG_FALLBACK_OUTPUT_FILE}"
           fi
 
           load_selected_review_output() {

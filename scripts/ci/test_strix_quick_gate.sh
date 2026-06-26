@@ -447,14 +447,14 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Do not spend the session listing every changed path before reviewing" "opencode review prompt prevents fallback sessions from exhausting steps on file listing"
 	assert_file_contains "$workflow_file" "Always return a final control block instead of a progress summary" "opencode review prompt requires a gate conclusion instead of a progress summary"
 	assert_file_contains "$workflow_file" 'timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-180}s" opencode run' "opencode review primary model has a kill-after bounded timeout so fallback review can publish promptly"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' "opencode primary review has enough bounded time for tool-backed current-head review"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' "opencode primary review is bounded tightly enough to reach fallback models promptly"
 	assert_file_contains "$workflow_file" "&& needs.coverage-evidence.result == 'success'" "opencode model fallbacks only run after coverage evidence passed"
-	assert_file_contains "$workflow_file" "&& steps.opencode_review_primary.outputs.review_status != 'success'" "opencode DeepSeek R1 fallback still runs after a primary model timeout or step failure when coverage evidence passed"
+	assert_file_contains "$workflow_file" "&& steps.opencode_review_primary.outputs.review_status != 'success'" "opencode DeepSeek V3 fallback still runs after a primary model timeout or step failure when coverage evidence passed"
 	assert_file_contains "$workflow_file" "always()" "opencode fallback chain uses always() so failed model steps cannot skip every fallback"
-	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary review uses one longer attempt before exhausting the primary model"
-	assert_file_contains "$workflow_file" "Run OpenCode PR Review fallback (OpenAI o-series)" "opencode review includes extra reasoning-model fallback"
+	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode GPT-5 fallback uses one bounded attempt before trying the catalog pool"
+	assert_file_contains "$workflow_file" "Run OpenCode PR Review fallback (catalog model pool)" "opencode review includes a broad catalog fallback pool"
 	assert_file_contains "$workflow_file" "continue-on-error: true" "opencode model step timeouts do not prevent fallback review publication"
-	assert_file_contains "$workflow_file" "github-models/openai/o3 github-models/openai/o4-mini" "opencode review tries o-series reasoning models after GPT-5 and DeepSeek fallbacks"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-5-chat github-models/openai/gpt-5-mini github-models/openai/o3 github-models/openai/o3-mini github-models/openai/o4-mini github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-scout-17b-16e-instruct" "opencode review tries catalog-available tool-calling fallbacks after DeepSeek and GPT-5 paths"
 	assert_file_contains "$workflow_file" "The publish gate re-runs source-backed validation against PR-head data" "opencode review publish gate validates model output against the PR-head worktree"
 	assert_file_contains "$workflow_file" '"openai/o3"' "opencode config declares OpenAI o3 fallback"
 	assert_file_contains "$workflow_file" '"openai/o4-mini"' "opencode config declares OpenAI o4-mini fallback"
@@ -524,9 +524,9 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "all configured OpenCode model attempts failed to produce a usable current-head control block" "opencode model-output failures fail the check without publishing a review"
 	assert_file_contains "$workflow_file" "Leaving the PR review unchanged because this is review tooling instability, not a source-code finding." "opencode model-failure path avoids PR review noise"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "3"' "opencode primary and deepseek review paths retry model execution"
-	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "2"' "opencode o-series fallback retries each reasoning model"
-	assert_file_contains "$workflow_file" "OpenCode %s fallback attempt %s/%s failed" "opencode o-series fallback records per-model retry failures"
-	assert_file_contains "$workflow_file" "github-models/openai/o3 github-models/openai/o4-mini" "opencode review includes additional OpenAI reasoning model fallbacks"
+	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "2"' "opencode catalog fallback retries each model"
+	assert_file_contains "$workflow_file" "OpenCode %s fallback attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
+	assert_file_contains "$workflow_file" "github-models/openai/o3 github-models/openai/o3-mini github-models/openai/o4-mini" "opencode review includes additional OpenAI reasoning model fallbacks"
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_dispatch'" "manual current-head OpenCode reviews measure coverage instead of approving skipped coverage evidence"
 	assert_file_contains "$workflow_file" "if: github.event_name == 'workflow_dispatch'" "pull_request_target must not execute PR-head coverage scripts"
@@ -617,9 +617,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" 'repos/${{ github.repository }}' "opencode review workflow must pass repository expressions through env before shell use"
 	assert_file_contains "$workflow_file" "GH_REPOSITORY:" "opencode review workflow exports repository context through env"
 	assert_file_contains "$workflow_file" 'repos/${GH_REPOSITORY}' "opencode review workflow uses env-backed repository context in shell commands"
-	assert_file_contains "$workflow_file" "MODEL: github-models/openai/gpt-5" "opencode review tries GitHub Models GPT-5 first"
-	assert_file_contains "$workflow_file" "MODEL: github-models/deepseek/deepseek-r1-0528" "opencode review falls back to a reachable DeepSeek R1 reasoning model"
-	assert_file_contains "$workflow_file" "MODEL: github-models/deepseek/deepseek-v3-0324" "opencode review has a second reachable DeepSeek V3 fallback model"
+	assert_file_contains "$workflow_file" "Run OpenCode PR Review (DeepSeek R1)" "opencode review starts with DeepSeek R1"
+	assert_file_contains "$workflow_file" "MODEL: github-models/deepseek/deepseek-r1-0528" "opencode review starts with a reachable DeepSeek R1 reasoning model"
+	assert_file_contains "$workflow_file" "MODEL: github-models/deepseek/deepseek-v3-0324" "opencode review has a reachable DeepSeek V3 fallback model"
+	assert_file_contains "$workflow_file" "MODEL: github-models/openai/gpt-5" "opencode review still has a bounded GPT-5 fallback model"
 	assert_file_contains "$workflow_file" "Publish bounded OpenCode review comment" "opencode review workflow publishes the agent control comment for the approval gate"
 	assert_file_contains "$workflow_file" "statusCheckRollup" "opencode review workflow reads current-head GitHub Checks before approval"
 	assert_file_contains "$workflow_file" "OPENCODE_FAILED_CHECK_EVIDENCE_FILE" "opencode review workflow persists failed-check evidence across review and approval steps"
@@ -768,8 +769,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" '["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"]' "opencode review workflow treats failed check-run conclusions as request-changes blockers"
 	assert_file_contains "$workflow_file" '["FAILURE","ERROR"]' "opencode review workflow treats failed status contexts as request-changes blockers"
 	assert_file_not_contains "$workflow_file" "MODEL: github-models/gpt-4.1" "opencode review must not fall back to GPT-4.1"
-	assert_file_not_contains "$workflow_file" "MODEL: github-models/openai/gpt-5-chat" "opencode review must not use unavailable GitHub Models GPT-5 chat fallback"
-	assert_file_not_contains "$workflow_file" "MODEL: github-models/openai/gpt-5-mini" "opencode review must not use unavailable GitHub Models GPT-5 mini fallback"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-5-chat" "opencode review includes GitHub Models GPT-5 chat as a catalog fallback"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-5-mini" "opencode review includes GitHub Models GPT-5 mini as a catalog fallback"
 
 	assert_file_contains "$opencode_config" '"mcp"' "opencode config declares MCP servers"
 	assert_file_contains "$opencode_config" '"codegraph"' "opencode config declares the CodeGraph MCP server"
@@ -782,14 +783,13 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$opencode_config" '"serve"' "opencode config launches the CodeGraph MCP server"
 	assert_file_contains "$opencode_config" '"--mcp"' "opencode config launches CodeGraph in MCP mode"
 	assert_file_contains "$opencode_config" '"small_model": "github-models/deepseek/deepseek-v3-0324"' "opencode config uses a reachable DeepSeek V3 small model"
+	assert_file_contains "$opencode_config" '"model": "github-models/deepseek/deepseek-r1-0528"' "opencode config defaults review sessions to DeepSeek R1"
 	assert_file_contains "$opencode_config" '"openai/gpt-5"' "opencode config defines GitHub Models GPT-5 with full model id"
 	assert_file_contains "$opencode_config" '"deepseek/deepseek-r1-0528"' "opencode config defines DeepSeek R1 fallback"
 	assert_file_contains "$opencode_config" '"deepseek/deepseek-v3-0324"' "opencode config defines DeepSeek V3 fallback"
 	assert_file_contains "$opencode_config" '"context": 200000' "opencode config uses the GitHub Models GPT-5 200k context window"
 	assert_file_contains "$opencode_config" '"output": 100000' "opencode config uses the GitHub Models GPT-5 100k output window"
 	assert_file_not_contains "$opencode_config" "gpt-4.1" "opencode config must not define GPT-4.1 fallback"
-	assert_file_not_contains "$opencode_config" "gpt-5-chat" "opencode config must not define unavailable GPT-5 chat fallback"
-	assert_file_not_contains "$opencode_config" "gpt-5-mini" "opencode config must not define unavailable GPT-5 mini fallback"
 }
 
 assert_opencode_review_posts_suggested_diffs_inline() {
@@ -1380,7 +1380,7 @@ Model deepseek/deepseek-v3-0324 Vulnerabilities 1
 
 FAIL: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.inputs.strix_llm || 'openai/gpt-5'')
 FAIL: strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model')
-FAIL: opencode review tries GitHub Models GPT-5 first (missing 'MODEL: github-models/openai/gpt-5')
+FAIL: opencode review starts with DeepSeek R1 (missing 'MODEL: github-models/deepseek/deepseek-r1-0528')
 EOF
 	cat >"$control_json" <<'EOF'
 {"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Generic security concern","summary":"Generic speculative CI issues.","findings":[{"path":"scripts/ci/collect_failed_check_evidence.sh","line":15,"severity":"HIGH","title":"Generic finding","problem":"Speculative input validation issue unrelated to failed checks.","root_cause":"The review did not use the failed Strix evidence.","fix_direction":"Add generic validation.","regression_test_direction":"Add a generic test.","suggested_diff":"diff --git a/scripts/ci/collect_failed_check_evidence.sh b/scripts/ci/collect_failed_check_evidence.sh\n--- a/scripts/ci/collect_failed_check_evidence.sh\n+++ b/scripts/ci/collect_failed_check_evidence.sh\n@@ -1 +1 @@\n-old\n+new"}]}
@@ -1478,11 +1478,11 @@ Model deepseek/deepseek-v3-0324 Vulnerabilities 1
 
 FAIL: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.inputs.strix_llm || 'openai/gpt-5'')
 FAIL: strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model')
-FAIL: opencode review tries GitHub Models GPT-5 first (missing 'MODEL: github-models/openai/gpt-5')
+FAIL: opencode review starts with DeepSeek R1 (missing 'MODEL: github-models/deepseek/deepseek-r1-0528')
 EOF
 
 	cat >"$control_json" <<'EOF'
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"Strix Security Scan/strix failed in Self-test Strix gate script and reported github-models/openai/gpt-5 Authentication Bypass via X-Dev-User Header with Severity: CRITICAL at backend/app/auth.py:132-135 plus deepseek/deepseek-v3-0324 Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure with Severity: HIGH.","findings":[{"path":".github/workflows/strix.yml","line":120,"severity":"HIGH","title":"Strix workflow default is not visible to trusted self-test","problem":"Strix Security Scan/strix failed in Self-test Strix gate script: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.inputs.strix_llm || 'openai/gpt-5''); strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model'); opencode review tries GitHub Models GPT-5 first (missing 'MODEL: github-models/openai/gpt-5'). The same failed Strix evidence includes github-models/openai/gpt-5 report Authentication Bypass via X-Dev-User Header, Severity: CRITICAL, /api/me, Method: GET, backend/app/auth.py:132-135.","root_cause":"The failed check evidence shows Self-test Strix gate script could not find github.event.inputs.strix_llm, STRIX_LLM must select, and MODEL: github-models/openai/gpt-5 in trusted-base files, and the model report identifies the backend auth fallback line.","fix_direction":"Update the workflow lines that provide the Strix model default and OpenCode model env so the trusted self-test can find those exact strings, then remove the unauthenticated X-Dev-User fallback at backend/app/auth.py:132-135.","regression_test_direction":"Keep the static self-test assertions for all three missing strings and add auth tests proving /api/me rejects forged X-Dev-User requests without signed auth.","suggested_diff":"diff --git a/.github/workflows/strix.yml b/.github/workflows/strix.yml\n--- a/.github/workflows/strix.yml\n+++ b/.github/workflows/strix.yml\n@@ -120 +120 @@\n-          STRIX_MODEL: old\n+          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'openai/gpt-5' }}"},{"path":"frontend/src/app/page.tsx","line":1,"severity":"HIGH","title":"Strix frontend model report must be reviewed separately","problem":"Strix Security Scan/strix failed with a separate deepseek/deepseek-v3-0324 report: Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure, Severity: HIGH.","root_cause":"The failed Strix evidence contains a second model vulnerability report, so OpenCode must not collapse it into the first backend finding.","fix_direction":"Inspect the frontend source lines responsible for token storage, hardcoded credentials, dynamic error rendering, and missing CSP, then remove or harden each concrete line before approval.","regression_test_direction":"Add frontend tests covering safe token/session handling, output encoding, and security headers for the affected route.","suggested_diff":"diff --git a/frontend/src/app/page.tsx b/frontend/src/app/page.tsx\n--- a/frontend/src/app/page.tsx\n+++ b/frontend/src/app/page.tsx\n@@ -1 +1 @@\n-export default function Page() { return null }\n+export default function Page() { return null }"}]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"Strix Security Scan/strix failed in Self-test Strix gate script and reported github-models/openai/gpt-5 Authentication Bypass via X-Dev-User Header with Severity: CRITICAL at backend/app/auth.py:132-135 plus deepseek/deepseek-v3-0324 Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure with Severity: HIGH.","findings":[{"path":".github/workflows/strix.yml","line":120,"severity":"HIGH","title":"Strix workflow default is not visible to trusted self-test","problem":"Strix Security Scan/strix failed in Self-test Strix gate script: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.inputs.strix_llm || 'openai/gpt-5''); strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model'); opencode review starts with DeepSeek R1 (missing 'MODEL: github-models/deepseek/deepseek-r1-0528'). The same failed Strix evidence includes github-models/openai/gpt-5 report Authentication Bypass via X-Dev-User Header, Severity: CRITICAL, /api/me, Method: GET, backend/app/auth.py:132-135.","root_cause":"The failed check evidence shows Self-test Strix gate script could not find github.event.inputs.strix_llm, STRIX_LLM must select, and MODEL: github-models/deepseek/deepseek-r1-0528 in trusted-base files, and the model report identifies the backend auth fallback line.","fix_direction":"Update the workflow lines that provide the Strix model default and OpenCode model env so the trusted self-test can find those exact strings, then remove the unauthenticated X-Dev-User fallback at backend/app/auth.py:132-135.","regression_test_direction":"Keep the static self-test assertions for all three missing strings and add auth tests proving /api/me rejects forged X-Dev-User requests without signed auth.","suggested_diff":"diff --git a/.github/workflows/strix.yml b/.github/workflows/strix.yml\n--- a/.github/workflows/strix.yml\n+++ b/.github/workflows/strix.yml\n@@ -120 +120 @@\n-          STRIX_MODEL: old\n+          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'openai/gpt-5' }}"},{"path":"frontend/src/app/page.tsx","line":1,"severity":"HIGH","title":"Strix frontend model report must be reviewed separately","problem":"Strix Security Scan/strix failed with a separate deepseek/deepseek-v3-0324 report: Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure, Severity: HIGH.","root_cause":"The failed Strix evidence contains a second model vulnerability report, so OpenCode must not collapse it into the first backend finding.","fix_direction":"Inspect the frontend source lines responsible for token storage, hardcoded credentials, dynamic error rendering, and missing CSP, then remove or harden each concrete line before approval.","regression_test_direction":"Add frontend tests covering safe token/session handling, output encoding, and security headers for the affected route.","suggested_diff":"diff --git a/frontend/src/app/page.tsx b/frontend/src/app/page.tsx\n--- a/frontend/src/app/page.tsx\n+++ b/frontend/src/app/page.tsx\n@@ -1 +1 @@\n-export default function Page() { return null }\n+export default function Page() { return null }"}]}
 EOF
 	set +e
 	bash "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" \
