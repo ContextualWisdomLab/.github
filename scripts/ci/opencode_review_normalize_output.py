@@ -408,35 +408,49 @@ def check_structural_approval(control_file: Path) -> int:
     return 0
 
 
-def valid_control(
-    value: Any,
-    *,
+def _is_valid_metadata(
+    value: dict[str, Any],
     expected_head_sha: str,
     expected_run_id: str,
     expected_run_attempt: str,
-) -> dict[str, Any] | None:
-    """Return a normalized control block when it matches the current run."""
-    if not isinstance(value, dict):
-        return None
-
+) -> bool:
     if value.get("head_sha") != expected_head_sha:
-        return None
+        return False
     if value.get("run_id") != expected_run_id:
-        return None
+        return False
     if value.get("run_attempt") != expected_run_attempt:
-        return None
+        return False
+    return True
 
-    result = value.get("result")
-    if result not in {"APPROVE", "REQUEST_CHANGES"}:
-        return None
 
-    if not isinstance(value.get("reason"), str) or not value["reason"].strip():
-        return None
-    if not isinstance(value.get("summary"), str) or not value["summary"].strip():
-        return None
-    reason = value["reason"].strip()
-    summary = value["summary"].strip()
+def _is_valid_finding(finding: Any) -> bool:
+    if not isinstance(finding, dict):
+        return False
+    line = finding.get("line")
+    if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
+        return False
+    required_finding_fields = (
+        "path",
+        "severity",
+        "title",
+        "problem",
+        "root_cause",
+        "fix_direction",
+        "regression_test_direction",
+        "suggested_diff",
+    )
+    for field in required_finding_fields:
+        if not isinstance(finding.get(field), str) or not finding[field].strip():
+            return False
+    return True
 
+
+def _get_valid_findings(
+    value: dict[str, Any],
+    result: str,
+    reason: str,
+    summary: str,
+) -> list[Any] | None:
     findings = value.get("findings")
     if findings is None and result == "APPROVE":
         findings = []
@@ -459,25 +473,46 @@ def valid_control(
         if not mentions_full_coverage(reason, summary):
             return None
 
-    required_finding_fields = (
-        "path",
-        "severity",
-        "title",
-        "problem",
-        "root_cause",
-        "fix_direction",
-        "regression_test_direction",
-        "suggested_diff",
-    )
     for finding in findings:
-        if not isinstance(finding, dict):
+        if not _is_valid_finding(finding):
             return None
-        line = finding.get("line")
-        if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
-            return None
-        for field in required_finding_fields:
-            if not isinstance(finding.get(field), str) or not finding[field].strip():
-                return None
+
+    return findings
+
+
+def valid_control(
+    value: Any,
+    *,
+    expected_head_sha: str,
+    expected_run_id: str,
+    expected_run_attempt: str,
+) -> dict[str, Any] | None:
+    """Return a normalized control block when it matches the current run."""
+    if not isinstance(value, dict):
+        return None
+
+    if not _is_valid_metadata(
+        value,
+        expected_head_sha=expected_head_sha,
+        expected_run_id=expected_run_id,
+        expected_run_attempt=expected_run_attempt,
+    ):
+        return None
+
+    result = value.get("result")
+    if result not in {"APPROVE", "REQUEST_CHANGES"}:
+        return None
+
+    if not isinstance(value.get("reason"), str) or not value["reason"].strip():
+        return None
+    if not isinstance(value.get("summary"), str) or not value["summary"].strip():
+        return None
+    reason = value["reason"].strip()
+    summary = value["summary"].strip()
+
+    findings = _get_valid_findings(value, result, reason, summary)
+    if findings is None:
+        return None
 
     return {
         "head_sha": value["head_sha"],
