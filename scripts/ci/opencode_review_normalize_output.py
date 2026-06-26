@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 STRUCTURAL_FAILURE_PHRASES = (
     "structural exploration was not possible",
     "structural exploration not possible",
@@ -182,7 +181,9 @@ def current_changed_files() -> set[str]:
     try:
         return {
             line.strip()
-            for line in Path(changed_files_path).read_text(encoding="utf-8").splitlines()
+            for line in Path(changed_files_path)
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         }
     except OSError:
@@ -201,16 +202,23 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
 def mentions_verification_posture(reason: str, summary: str) -> bool:
     """Return whether an approval records the concrete review surfaces checked."""
     combined = f"{reason}\n{summary}".casefold()
-    return all(label in combined for label in APPROVAL_VERIFICATION_LABELS) and "codegraph" in combined
+    return (
+        all(label in combined for label in APPROVAL_VERIFICATION_LABELS)
+        and "codegraph" in combined
+    )
 
 
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
+
     def label_matches(candidate: str) -> list[re.Match[str]]:
         """Return exact verification-label matches without suffix collisions."""
         matches = []
         for match in re.finditer(re.escape(candidate), text):
-            if candidate == "coverage:" and text[max(0, match.start() - 10) : match.start()] == "docstring ":
+            if (
+                candidate == "coverage:"
+                and text[max(0, match.start() - 10) : match.start()] == "docstring "
+            ):
                 continue
             matches.append(match)
         return matches
@@ -377,9 +385,11 @@ Security/privacy: workflow-token, review-gate, and repository-automation securit
 
 def repair_approval_summary(reason: str, summary: str) -> str:
     """Repair an APPROVE summary only from objective bounded evidence."""
-    if mentions_changed_file_evidence(reason, summary) and mentions_verification_posture(
-        reason, summary
-    ) and mentions_full_coverage(reason, summary):
+    if (
+        mentions_changed_file_evidence(reason, summary)
+        and mentions_verification_posture(reason, summary)
+        and mentions_full_coverage(reason, summary)
+    ):
         return summary
 
     evidence_file = approval_repair_evidence_file()
