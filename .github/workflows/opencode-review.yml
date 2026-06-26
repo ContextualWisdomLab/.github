@@ -1,6 +1,8 @@
 name: OpenCode Review
 
 on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -15,13 +17,14 @@ on:
         description: Pull request base SHA
         required: true
         type: string
-      pr_head_ref:
-        description: Pull request head branch
-        required: false
-        type: string
       pr_head_sha:
         description: Pull request head SHA
         required: true
+        type: string
+      canonical_ref:
+        description: Ref of ContextualWisdomLab/.github to use for trusted review scripts
+        required: false
+        default: main
         type: string
 
 concurrency:
@@ -34,7 +37,12 @@ permissions:
 jobs:
   coverage-evidence:
     name: coverage-evidence
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'pull_request_target'
+        && github.event.pull_request.head.repo.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,12 +51,37 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - name: Resolve trusted OpenCode source ref
+        id: trusted_source
+        env:
+          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          trusted_ref="${INPUT_CANONICAL_REF:-main}"
+          case "$WORKFLOW_REF" in
+            ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@*)
+              trusted_ref="${WORKFLOW_REF##*@}"
+              ;;
+          esac
+          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout trusted OpenCode coverage contract
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ steps.trusted_source.outputs.ref }}
+
       - name: Checkout pull request head for coverage measurement
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.inputs.pr_head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          path: pr-head
 
       - name: Install Python coverage measurement tools
         run: python3 -m pip install --disable-pip-version-check -r requirements-opencode-review-ci.txt
@@ -56,9 +89,11 @@ jobs:
       - name: Measure test and docstring coverage at 100 percent
         id: measure
         env:
-          PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
         run: |
           set -euo pipefail
+          cd "$COVERAGE_SOURCE_WORKDIR"
 
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
           failures=0
@@ -218,13 +253,14 @@ jobs:
   opencode-review-target:
     name: opencode-review
     needs: [coverage-evidence]
-    if: always() && github.event_name == 'workflow_dispatch'
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target')
     runs-on: ubuntu-latest
     permissions:
       actions: read
       checks: read
       id-token: write
       contents: read
+      models: read
       statuses: read
       deployments: read
       pull-requests: read
@@ -232,40 +268,63 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout current-head review workflow for manual PR review
+      - name: Resolve trusted OpenCode source ref
+        id: trusted_source
+        env:
+          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          trusted_ref="${INPUT_CANONICAL_REF:-main}"
+          case "$WORKFLOW_REF" in
+            ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@*)
+              trusted_ref="${WORKFLOW_REF##*@}"
+              ;;
+          esac
+          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout trusted OpenCode review workflow
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ContextualWisdomLab/.github
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.inputs.pr_head_sha }}
+          ref: ${{ steps.trusted_source.outputs.ref }}
 
       - name: Materialize pull request head for OpenCode review data
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.inputs.pr_base_ref }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || github.event.inputs.pr_head_ref || '' }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
         run: |
           set -euo pipefail
           gh auth setup-git
-          if [ -z "${PR_HEAD_REF:-}" ]; then
-            PR_HEAD_REF="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json headRefName --jq '.headRefName // empty')"
-          fi
-          git fetch --no-tags origin \
-            "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
-          if [ -n "${PR_HEAD_REF:-}" ]; then
-            git fetch --no-tags origin \
-              "+refs/heads/${PR_HEAD_REF}:refs/remotes/origin/${PR_HEAD_REF}" || true
-          fi
+          git remote remove pr-source 2>/dev/null || true
+          git remote add pr-source "$GITHUB_SERVER_URL/$GH_REPOSITORY.git"
+          git fetch --no-tags pr-source \
+            "+refs/heads/${PR_BASE_REF}:refs/remotes/pr-source/${PR_BASE_REF}"
           if ! git cat-file -e "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1; then
-            git fetch --no-tags origin "$PR_BASE_SHA"
+            git fetch --no-tags pr-source "$PR_BASE_SHA"
           fi
           if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
-            git fetch --no-tags origin "$PR_HEAD_SHA"
+            git fetch --no-tags pr-source "$PR_HEAD_SHA" || true
+          fi
+          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+            for pr_head_fetch_attempt in 1 2 3 4 5 6; do
+              git fetch --no-tags --prune pr-source "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr-source/pull/${PR_NUMBER}/head"
+              fetched_head_sha="$(git rev-parse "refs/remotes/pr-source/pull/${PR_NUMBER}/head")"
+              if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
+                break
+              fi
+              if [ "$pr_head_fetch_attempt" -lt 6 ]; then
+                echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; retrying after propagation delay." >&2
+                sleep 10
+              fi
+            done
           fi
           git cat-file -e "${PR_BASE_SHA}^{commit}"
           git cat-file -e "${PR_HEAD_SHA}^{commit}"
@@ -311,7 +370,7 @@ jobs:
       - name: Prepare bounded OpenCode review evidence
         timeout-minutes: 40
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
@@ -322,8 +381,8 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
-          FAILED_CHECK_EVIDENCE_ATTEMPTS: "75"
-          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "30"
+          FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"
+          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
         run: |
           set -euo pipefail
           printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
@@ -1093,8 +1152,8 @@ jobs:
         continue-on-error: true
         timeout-minutes: 15
         env:
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           MODEL: github-models/deepseek/deepseek-r1-0528
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
@@ -1223,8 +1282,8 @@ jobs:
         continue-on-error: true
         timeout-minutes: 15
         env:
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           MODEL: github-models/deepseek/deepseek-v3-0324
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
@@ -1354,8 +1413,8 @@ jobs:
         continue-on-error: true
         timeout-minutes: 8
         env:
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           MODEL: github-models/openai/gpt-5
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
@@ -1486,8 +1545,8 @@ jobs:
         continue-on-error: true
         timeout-minutes: 20
         env:
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -1673,7 +1732,7 @@ jobs:
               || steps.opencode_review_second_fallback.outputs.review_status == 'success'
               || steps.opencode_review_catalog_fallback.outputs.review_status == 'success')
         env:
-          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
@@ -1933,9 +1992,9 @@ jobs:
         if: always()
         timeout-minutes: 45
         env:
-          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ github.repository }}
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN }}
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md

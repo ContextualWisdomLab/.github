@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-06-26 14:55 KST
+Updated: 2026-06-26 15:48 KST
 
 ## Decision
 
@@ -18,6 +18,22 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Required workflow trigger support: `pull_request_target`
 
 This keeps Strix security evidence centralized. Target repositories do not need local copies of the Strix workflow for this required workflow rule.
+
+## OpenCode required workflow candidate
+
+The central `.github/workflows/opencode-review.yml` is being prepared as the next organization required workflow.
+
+- Required workflow trigger support: `pull_request_target`
+- Stable required check job name: `opencode-review`
+- Trusted source: `ContextualWisdomLab/.github`
+- PR-head handling: checkout or fetch PR head as review data only; trusted scripts come from the central `.github` ref
+- Model token posture: use the organization `STRIX_GITHUB_MODELS_TOKEN` secret for GitHub Models calls, with `github.token` as the fallback; live workflow evidence showed `github.token` alone can return 403 from `models.github.ai/inference`
+- Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; `github.token` remains the last fallback and publication failures are soft-failed
+- Coverage execution posture: privileged `pull_request_target` coverage runs only for same-repository PR heads; fork PR heads must be covered by an unprivileged PR-side check or manually trusted dispatch before approval
+- Fork posture: PR heads are fetched through `refs/pull/<number>/head` when direct head-SHA fetch is not available, so review can inspect fork PR source as data without executing it in the trusted workflow context
+- Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate still rechecks current-head peer checks before approving
+
+Do not activate an organization OpenCode required-workflow ruleset until the central PR proving this workflow shape has passed `opencode-review`, `strix`, YAML/actionlint, and the OpenCode contract tests on the current head.
 
 ## Scope
 
@@ -66,8 +82,7 @@ The active ruleset targets the public, non-fork, non-archived repositories found
 
 ## Risks and follow-up
 
-- OpenCode is not yet enforced as an organization required workflow because the current central `OpenCode Review` workflow is `workflow_dispatch` only. A required workflow must use a supported PR or merge trigger.
+- OpenCode is not yet enforced as an organization required workflow. The central workflow now has a required-workflow-compatible PR trigger on the rollout branch; activate the organization ruleset only after the PR is merged and a current-head PR run proves the check.
 - The central Strix workflow still defaults to GPT-5 and falls back to DeepSeek models. It passed, but the post-merge run took 21m39s. If runtime or rate limits continue, adjust Strix model routing separately.
 - Some repositories still have local Strix/OpenCode/scheduler workflows. Do not copy more workflows into repositories; instead, decide which local files can be retired after the organization ruleset has proven stable.
 - Some repositories use classic branch protection while others use rulesets. The next rollout pass should normalize branch protection into rulesets without removing repository-specific required application checks.
-

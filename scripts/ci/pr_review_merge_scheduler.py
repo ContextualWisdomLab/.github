@@ -755,8 +755,6 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             "-f",
             f"pr_base_sha={pr['baseRefOid']}",
             "-f",
-            f"pr_head_ref={pr['headRefName']}",
-            "-f",
             f"pr_head_sha={pr['headRefOid']}",
         ]
     )
