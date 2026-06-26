@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-06-26 17:06 KST
+Updated: 2026-06-26 17:42 KST
 
 ## Decision
 
@@ -15,10 +15,9 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Active required workflow paths:
   - `.github/workflows/strix.yml`
   - `.github/workflows/opencode-review.yml`
-- Scheduler path prepared for the same central required-workflow mechanism:
   - `.github/workflows/pr-review-merge-scheduler.yml`
 - Required workflow ref: `refs/heads/main`
-- Required workflow SHA: `6440d493816f8a4d66e32f2e5e8e6a9156d7f488`
+- Required workflow SHA: `807254a04efafd5f806e0f70cb067ecf050cfd11`
 - Required workflow trigger support: `pull_request_target`
 
 This keeps Strix security evidence, OpenCode review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule.
@@ -41,7 +40,7 @@ Keep the OpenCode required workflow active only while the central workflow keeps
 
 ## Scheduler required workflow posture
 
-The central `.github/workflows/pr-review-merge-scheduler.yml` now supports `pull_request_target` so it can be added to the same organization required workflow ruleset after the implementation lands on `main`.
+The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the active organization required workflow ruleset.
 
 - Required workflow trigger support: `pull_request_target`
 - Stable required check job name: `scan-pr-queue`
@@ -91,8 +90,11 @@ The active ruleset targets the public, non-fork, non-archived repositories found
 - `.github` PR `#77` merged the central OpenCode required-workflow path.
 - `.github` PR `#77` same-head OpenCode proof run `28224085121` passed coverage evidence, CodeGraph initialization, bounded evidence preparation, model review, review comment publication, and approval-gate publication on head `59a8da0b2f56b862f6c5a0c69885f4045d6dc732`.
 - `.github` PR `#77` central Strix required workflow run `28223698075` passed on the same head before merge.
-- Organization ruleset `18156473` was renamed to `CWL Central required workflows` and now requires both `.github/workflows/strix.yml` and `.github/workflows/opencode-review.yml` from `.github@main` SHA `6440d493816f8a4d66e32f2e5e8e6a9156d7f488`.
-- `ContextualWisdomLab/naruon` reports inherited active ruleset `18156473`, proving target-repository inheritance after the ruleset update.
+- Organization ruleset `18156473` was renamed to `CWL Central required workflows` and required `.github/workflows/strix.yml` and `.github/workflows/opencode-review.yml` from `.github@main` SHA `6440d493816f8a4d66e32f2e5e8e6a9156d7f488`.
+- `.github` PR `#79` merged the central scheduler `pull_request_target` path and PR-scoped `--pr-number` lookup.
+- `.github` PR `#79` second current-head proof passed coverage evidence in 10s, Strix in 8m33s, and OpenCode review in 8m57s on head `17c62f3809c57ca4b1a9a63e14f325c9f2a1acdb`.
+- Organization ruleset `18156473` now requires `.github/workflows/strix.yml`, `.github/workflows/opencode-review.yml`, and `.github/workflows/pr-review-merge-scheduler.yml` from `.github@main` SHA `807254a04efafd5f806e0f70cb067ecf050cfd11`.
+- `ContextualWisdomLab/naruon` reports inherited active ruleset `18156473` with all three required workflow paths, proving target-repository inheritance after the scheduler ruleset update.
 - `ContextualWisdomLab/ContextualWisdomLab.github.io` PR `#25` merged the thin central scheduler caller and repository-local bootstrap fixes. Its main Strix run `28217860369` passed.
 - The organization ruleset API reports the central required workflows ruleset as `active` and inherited by each public non-fork target repository.
 
