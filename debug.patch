@@ -1,0 +1,8 @@
+--- scripts/ci/emit_opencode_failed_check_fallback_findings.sh
++++ scripts/ci/emit_opencode_failed_check_fallback_findings.sh
+@@ -743,6 +743,7 @@
+ emit_strix_report_findings "$strix_evidence_file"
++echo "before provider failure: $finding_index" >&2
+ emit_strix_provider_failure_finding "$strix_evidence_file"
++echo "after provider failure: $finding_index" >&2
+ emit_strix_cancelled_without_log_finding "$strix_evidence_file"
