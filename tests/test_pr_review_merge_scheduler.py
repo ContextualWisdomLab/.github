@@ -1087,7 +1087,7 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
         == 0
     )
     assert exact_fetches == [("owner/repo", 7)]
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit, match="--pr-number must not be negative"):
         sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--pr-number", "-1"])
 
 

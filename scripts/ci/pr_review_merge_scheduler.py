@@ -1753,7 +1753,7 @@ def main(argv: list[str]) -> int:
     if not args.project_flow:
         raise SystemExit("--project-flow is required")
     if args.pr_number < 0:
-        raise SystemExit("--pr-number must be positive")
+        raise SystemExit("--pr-number must not be negative")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
     decisions = []
     for pr in prs:

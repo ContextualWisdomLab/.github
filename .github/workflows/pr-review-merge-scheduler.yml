@@ -112,10 +112,10 @@ jobs:
       MAX_PRS: ${{ inputs.max_prs || '100' }}
       PROJECT_FLOW_INPUT: ${{ inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || '' }}
-      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || inputs.trigger_reviews == true }}
-      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || inputs.enable_auto_merge == true }}
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'pull_request_target' || inputs.trigger_reviews == true }}
+      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'pull_request_target' || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ inputs.merge_mode || vars.PR_MERGE_MODE || 'auto' }}
-      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || inputs.update_branches == true }}
+      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'pull_request_target' || inputs.update_branches == true }}
       STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '45' }}
       CANONICAL_REF: ${{ inputs.canonical_ref || 'main' }}
     steps:
