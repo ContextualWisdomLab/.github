@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -407,11 +408,17 @@ def fetch_rest_mergeable_state(repo: str, number: int) -> str:
 
 def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
     """Attach REST mergeability evidence to GraphQL pull request payloads."""
-    for pr in prs:
+    def _fetch_state(pr: dict[str, Any]) -> None:
         try:
             pr["restMergeableState"] = fetch_rest_mergeable_state(repo, int(pr["number"]))
         except RuntimeError as exc:
             pr["restMergeableStateError"] = bounded_error_summary(str(exc))
+
+    # ⚡ Bolt Optimization: Use ThreadPoolExecutor to prevent N+1 HTTP request bottleneck
+    # when sequentially fetching mergeability states for multiple PRs from the REST API.
+    with ThreadPoolExecutor(max_workers=min(10, len(prs) or 1)) as executor:
+        for _ in executor.map(_fetch_state, prs):
+            pass
 
 
 def effective_merge_state(pr: dict[str, Any]) -> str:
