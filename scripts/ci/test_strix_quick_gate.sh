@@ -341,7 +341,7 @@ assert_strix_child_target_uses_constant_argument() {
 
 assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
-	local opencode_config="$REPO_ROOT/opencode.jsonc"
+	local opencode_config="$REPO_ROOT/.github/workflows/opencode-review.yml"
 
 	assert_file_contains "$workflow_file" "pull_request_target:" "opencode review workflow can be enforced as an organization required workflow"
 	assert_file_contains "$workflow_file" "types: [opened, synchronize, reopened, ready_for_review]" "opencode required workflow reacts to current PR head changes"

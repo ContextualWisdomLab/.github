@@ -372,15 +372,17 @@ if ! gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
 	: >"$manual_success_contexts"
 fi
 
-while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; do
-	if [ -z "$run_id" ]; then
-		continue
-	fi
-	if awk -F '\t' -v run_id="$run_id" '$5 == run_id { found = 1 } END { exit found ? 0 : 1 }' "$failed_contexts"; then
-		continue
-	fi
-	printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$kind" "$label" "$conclusion" "$details_url" "$run_id" "$check_run_id" >>"$failed_contexts"
-done <"$workflow_run_contexts"
+awk -F '\t' -v OFS='\t' '
+	FILENAME == ARGV[1] {
+		if ($5 != "") seen[$5] = 1
+		next
+	}
+	{
+		if ($5 == "" || seen[$5]) next
+		seen[$5] = 1
+		print $0
+	}
+' "$failed_contexts" "$workflow_run_contexts" >>"$failed_contexts"
 
 while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; do
 	if success_line="$(manual_success_for_label "$label" "$run_id")"; then
