@@ -6,3 +6,7 @@
 **Vulnerability:** Workflow CI Security Bypass / Markdown Injection
 **Learning:** The GitHub Actions workflow `opencode-review.yml` attempted to optimize performance by doing a fast-path bash string extraction. If this succeeded, it skipped the Python JSON normalizer (`opencode_review_normalize_output.py`). This is a security flaw because the bash script does not escape `<, >, &` characters, allowing attackers to inject `-->` directly in JSON strings to break out of HTML comment sections.
 **Prevention:** Removed the fast-path check entirely. We must always enforce JSON normalization via `opencode_review_normalize_output.py` because it correctly parses the JSON payload and safely escapes all characters as `\u003c`, `\u003e` and `\u0026`.
+## 2024-06-26 - Expanded GitHub token scrubbing in CI review scheduler
+**Vulnerability:** Token leak in logs/outputs (Medium)
+**Learning:** `scrub_sensitive_data` only targeted GitHub PATs (`ghp_` / `github_pat_`). GitHub issues many specialized tokens (e.g., `ghs_` for Actions, `ghr_` for runners, `gho_` for OAuth). If an API call utilizing one of these failed, the token could be logged in plain text when exceptions are printed.
+**Prevention:** Always cover the entire `gh[pousr]_` space (and `github_pat_`) when attempting to mask GitHub tokens in custom text scrubbers.
