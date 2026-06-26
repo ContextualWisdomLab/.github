@@ -124,10 +124,12 @@ jobs:
           trusted_strix_source="$GITHUB_WORKSPACE/trusted-strix-source"
           test -f "$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
           test -f "$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
+          test -f "$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"
           {
             echo "TRUSTED_STRIX_SOURCE=$trusted_strix_source"
             echo "TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
             echo "TRUSTED_STRIX_GATE_TEST=$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
+            echo "TRUSTED_STRIX_REQUIRED_SMOKE=$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"
           } >> "$GITHUB_ENV"
 
       - name: Materialize target workspace
@@ -209,13 +211,13 @@ jobs:
           echo "::error::PR head ref did not resolve to expected commit $PR_HEAD_SHA after retries." >&2
           exit 1
 
-      - name: Self-test Strix gate script
-        timeout-minutes: 10
+      - name: Self-test Strix required workflow contract
+        timeout-minutes: 2
         working-directory: trusted-strix-source
         run: |
           set -euo pipefail
-          printf 'Running Strix gate self-test with a 10-minute step timeout.\n'
-          bash "$TRUSTED_STRIX_GATE_TEST"
+          printf 'Running bounded Strix required-workflow smoke test.\n'
+          bash "$TRUSTED_STRIX_REQUIRED_SMOKE"
 
       - name: Gate Strix secrets
         id: gate
