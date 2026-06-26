@@ -301,13 +301,21 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     if isinstance(args, str) or not all(isinstance(arg, str) for arg in args):
         raise TypeError("run() requires a sequence of argv strings; shell command strings are not allowed")
     argv = list(args)
-    process = subprocess.run(argv, input=stdin, capture_output=True, text=True, shell=False)
-    if process.returncode != 0:
-        scrubbed_args = scrub_sensitive_data(' '.join(argv))
-        scrubbed_stderr = scrub_sensitive_data(process.stderr or "")
-        raise RuntimeError(
-            f"Command failed ({process.returncode}): {scrubbed_args}\n{scrubbed_stderr}"
+    try:
+        process = subprocess.run(
+            argv,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=True,
         )
+    except subprocess.CalledProcessError as exc:
+        scrubbed_args = scrub_sensitive_data(' '.join(argv))
+        scrubbed_stderr = scrub_sensitive_data(exc.stderr or "")
+        raise RuntimeError(
+            f"Command failed ({exc.returncode}): {scrubbed_args}\n{scrubbed_stderr}"
+        ) from exc
     return process.stdout
 
 
