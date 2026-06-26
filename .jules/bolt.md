@@ -7,3 +7,6 @@
 ## 2024-11-20 - JSON Decoding Performance - Index Advancement
 **Learning:** Even when avoiding string slicing using `json.JSONDecoder().raw_decode(text, index)`, failing to correctly advance the index by ignoring the returned `end` index (`value, _ = decoder.raw_decode(...)`) forces the search loop to repeatedly attempt to decode nested JSON structures (e.g., inner braces `{`) sequentially. This leads to massive O(N^2) time complexity and redundant parsing for large, deeply nested JSON objects.
 **Action:** Always capture and use the new end index returned by `raw_decode` (e.g., `value, next_idx = decoder.raw_decode(text, index)`) to jump over the completely parsed object and proceed efficiently.
+## 2024-06-26 - [Concurrent Network Calls via ThreadPoolExecutor]
+**Learning:** Sequential execution of subprocesses making network calls (like `gh api`) inside a loop causes accumulated O(N) I/O wait latency, which forms a significant performance bottleneck during bulk PR inspections.
+**Action:** Use `concurrent.futures.ThreadPoolExecutor` to execute independent subprocess I/O calls concurrently, avoiding O(N) wait times while maintaining safety since `subprocess.run` drops the Python GIL.

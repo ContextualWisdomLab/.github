@@ -1205,3 +1205,21 @@ def test_action_error_guidance_distinguishes_update_branch_from_merge():
     )
     assert "PR head likely changed after inspection" in stale_head_error
     assert "reads the new head before mutating" in stale_head_error
+
+def test_enrich_rest_mergeable_states_concurrently(monkeypatch):
+    """Test that enrich_rest_mergeable_states calls enrich properly."""
+    import scripts.ci.pr_review_merge_scheduler as scheduler
+
+    def mock_fetch(repo, number):
+        if number == 1:
+            return "CLEAN"
+        raise RuntimeError("API limit")
+
+    monkeypatch.setattr(scheduler, "fetch_rest_mergeable_state", mock_fetch)
+
+    prs = [{"number": 1}, {"number": 2}]
+    scheduler.enrich_rest_mergeable_states("repo", prs)
+
+    assert prs[0]["restMergeableState"] == "CLEAN"
+    assert "restMergeableStateError" in prs[1]
+    assert prs[1]["restMergeableStateError"] == "API limit"

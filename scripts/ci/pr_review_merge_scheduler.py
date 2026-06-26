@@ -407,11 +407,21 @@ def fetch_rest_mergeable_state(repo: str, number: int) -> str:
 
 def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
     """Attach REST mergeability evidence to GraphQL pull request payloads."""
-    for pr in prs:
+    import concurrent.futures
+
+    def enrich(pr: dict[str, Any]) -> None:
+        """Fetch and attach REST mergeability for one PR."""
         try:
             pr["restMergeableState"] = fetch_rest_mergeable_state(repo, int(pr["number"]))
         except RuntimeError as exc:
             pr["restMergeableStateError"] = bounded_error_summary(str(exc))
+
+    # ⚡ Bolt: Execute gh api calls concurrently to prevent O(N) network latency accumulation
+    # ThreadPoolExecutor is safe here since subprocess.run drops the GIL during execution.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(prs) or 1, 10)) as executor:
+        # We must exhaust the iterator to ensure exceptions (if any unhandled) are raised
+        # or just to wait for all threads to finish.
+        list(executor.map(enrich, prs))
 
 
 def effective_merge_state(pr: dict[str, Any]) -> str:
@@ -1329,7 +1339,7 @@ def summarize_action_error(exc: RuntimeError) -> str:
 
 def self_test() -> None:
     """Exercise scheduler invariants without GitHub network access."""
-    sample = {
+    sample: dict[str, Any] = {
         "number": 1,
         "headRefOid": "abc",
         "baseRefName": "main",
@@ -1574,7 +1584,9 @@ def self_test() -> None:
     )
     assert decision.action == "wait"
     assert "external/repo" in decision.reason
-    assert decision_guidance(decision)["type"] == "external_head_update_required"
+    wait_guidance = decision_guidance(decision)
+    assert wait_guidance is not None
+    assert wait_guidance["type"] == "external_head_update_required"
     sample["maintainerCanModify"] = True
     decision = inspect_pr(
         "owner/repo",
