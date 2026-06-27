@@ -110,6 +110,13 @@ APPROVAL_VERIFICATION_LABELS = (
     "security/privacy:",
 )
 
+# ⚡ Bolt: Pre-compile regex patterns for deep label-scanning loops.
+# This prevents redundant `re.compile(re.escape(label))` calls during inner-loop text inspections,
+# eliminating the measurable overhead caused by compiling regexes for 18 labels repeatedly per document.
+APPROVAL_VERIFICATION_PATTERNS = {
+    label: re.compile(re.escape(label)) for label in APPROVAL_VERIFICATION_LABELS
+}
+
 COVERAGE_FAILURE_PHRASES = (
     "not measured",
     "unmeasured",
@@ -209,7 +216,10 @@ def label_section(text: str, label: str) -> str:
     def label_matches(candidate: str) -> list[re.Match[str]]:
         """Return exact verification-label matches without suffix collisions."""
         matches = []
-        for match in re.finditer(re.escape(candidate), text):
+        pattern = APPROVAL_VERIFICATION_PATTERNS.get(candidate)
+        if pattern is None:
+            pattern = re.compile(re.escape(candidate))
+        for match in pattern.finditer(text):
             if candidate == "coverage:" and text[max(0, match.start() - 10) : match.start()] == "docstring ":
                 continue
             matches.append(match)
