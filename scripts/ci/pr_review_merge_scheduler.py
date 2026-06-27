@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import concurrent.futures
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -407,12 +408,21 @@ def fetch_rest_mergeable_state(repo: str, number: int) -> str:
 
 def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
     """Attach REST mergeability evidence to GraphQL pull request payloads."""
-    for pr in prs:
+    if not prs:
+        return
+
+    # ⚡ Bolt: Parallelize REST API calls for mergeable state.
+    # Impact: Reduces script execution time from O(N) to roughly O(1) by resolving
+    #         all N independent I/O-bound subprocess calls concurrently.
+    def _fetch(pr: dict[str, Any]) -> None:
+        """Fetch and set the REST mergeable state for a single PR."""
         try:
             pr["restMergeableState"] = fetch_rest_mergeable_state(repo, int(pr["number"]))
         except RuntimeError as exc:
             pr["restMergeableStateError"] = bounded_error_summary(str(exc))
 
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(prs))) as executor:
+        list(executor.map(_fetch, prs))
 
 def effective_merge_state(pr: dict[str, Any]) -> str:
     """Return the safest merge state from GraphQL plus REST mergeability evidence."""

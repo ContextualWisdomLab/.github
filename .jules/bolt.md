@@ -7,3 +7,6 @@
 ## 2024-11-20 - JSON Decoding Performance - Index Advancement
 **Learning:** Even when avoiding string slicing using `json.JSONDecoder().raw_decode(text, index)`, failing to correctly advance the index by ignoring the returned `end` index (`value, _ = decoder.raw_decode(...)`) forces the search loop to repeatedly attempt to decode nested JSON structures (e.g., inner braces `{`) sequentially. This leads to massive O(N^2) time complexity and redundant parsing for large, deeply nested JSON objects.
 **Action:** Always capture and use the new end index returned by `raw_decode` (e.g., `value, next_idx = decoder.raw_decode(text, index)`) to jump over the completely parsed object and proceed efficiently.
+## 2024-06-27 - REST API Parallelization
+**Learning:** `enrich_rest_mergeable_states` fetches REST API data sequentially for multiple PRs, causing severe I/O bottlenecks. Python's `concurrent.futures.ThreadPoolExecutor` effectively parallelizes these calls without requiring `asyncio` rewrites, resulting in an order-of-magnitude speedup.
+**Action:** When making multiple independent network or subprocess I/O calls, immediately consider parallel execution via `ThreadPoolExecutor`.

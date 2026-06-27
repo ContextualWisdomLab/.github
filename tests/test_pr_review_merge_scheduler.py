@@ -227,6 +227,10 @@ def test_rest_mergeable_state_helpers(monkeypatch):
     assert sched.fetch_rest_mergeable_state("owner/repo", 7) == "DIRTY"
     assert calls == [["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".mergeable_state // \"\""]]
 
+    empty_prs = []
+    sched.enrich_rest_mergeable_states("owner/repo", empty_prs)
+    assert empty_prs == []
+
     prs = [{"number": 8}]
     monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
     sched.enrich_rest_mergeable_states("owner/repo", prs)
