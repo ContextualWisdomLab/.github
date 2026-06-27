@@ -415,6 +415,7 @@ def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
     # Impact: Reduces script execution time from O(N) to roughly O(1) by resolving
     #         all N independent I/O-bound subprocess calls concurrently.
     def _fetch(pr: dict[str, Any]) -> None:
+        """Fetch and set the REST mergeable state for a single PR."""
         try:
             pr["restMergeableState"] = fetch_rest_mergeable_state(repo, int(pr["number"]))
         except RuntimeError as exc:
