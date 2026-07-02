@@ -43,6 +43,7 @@ SENSITIVE_DATA_SCRUB_PATTERNS = (
     (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
     (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
     (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
 )
 
 def scrub_sensitive_data(text: str | None) -> str | None:
