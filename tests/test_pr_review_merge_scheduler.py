@@ -114,6 +114,32 @@ def test_run_split_repo_and_graphql(monkeypatch):
     with pytest.raises(ValueError):
         sched.split_repo("/repo")
 
+    assert sched.validate_git_ref("feature/safe.branch-1") == "feature/safe.branch-1"
+    for bad_ref in (
+        "",
+        "-bad",
+        "HEAD",
+        "feature/../main",
+        "feature/.tmp/main",
+        "feature/./main",
+        "feature//main",
+        "feature/main.",
+        "feature/@{upstream}",
+        "feat;echo pwned",
+    ):
+        with pytest.raises(ValueError):
+            sched.validate_git_ref(bad_ref)
+
+    assert sched.validate_git_sha("a" * 40) == "a" * 40
+    for bad_sha in ("", "a" * 39, "g" * 40, "a" * 40 + ";echo pwned"):
+        with pytest.raises(ValueError):
+            sched.validate_git_sha(bad_sha)
+
+    assert sched.validate_github_repository("owner/repo.name") == "owner/repo.name"
+    for bad_repo in ("", "owner", "owner/repo/extra", "owner/repo;echo pwned"):
+        with pytest.raises(ValueError):
+            sched.validate_github_repository(bad_repo)
+
     calls = []
 
     def fake_run(args, stdin=None):
@@ -1032,6 +1058,8 @@ def test_run_command_failure_scrubs_secrets(monkeypatch):
 
 def test_actions_call_gh_with_expected_arguments(monkeypatch):
     calls = []
+    head_sha = "a" * 40
+    base_sha = "b" * 40
 
     def fake_run(args, stdin=None):
         calls.append(args)
@@ -1040,7 +1068,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         return ""
 
     monkeypatch.setattr(sched, "run", fake_run)
-    pr = make_pr()
+    pr = make_pr(baseRefOid=base_sha, headRefOid=head_sha)
     sched.enable_auto_merge("owner/repo", pr, dry_run=True)
     sched.merge_pr("owner/repo", pr, dry_run=True)
     sched.disable_auto_merge("owner/repo", pr, dry_run=True)
@@ -1060,11 +1088,21 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
     assert "--squash" in calls[0]
-    assert calls[0][-2:] == ["--match-head-commit", "head"]
-    assert calls[1] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--squash", "--match-head-commit", "head"]
+    assert calls[0][-2:] == ["--match-head-commit", head_sha]
+    assert calls[1] == [
+        "gh",
+        "pr",
+        "merge",
+        "1",
+        "--repo",
+        "owner/repo",
+        "--squash",
+        "--match-head-commit",
+        head_sha,
+    ]
     assert calls[2] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
     assert calls[3][:4] == ["gh", "api", "-X", "PUT"]
-    assert calls[3][-1] == "expected_head_sha=head"
+    assert calls[3][-1] == f"expected_head_sha={head_sha}"
     assert calls[4][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
     assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[6][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
@@ -1107,7 +1145,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
 
-    pr = make_pr()
+    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
     sched.rerun_actions_job("owner/repo", "101", dry_run=False, action="rerun-opencode-review")
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
@@ -1120,8 +1158,67 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     assert calls[4][0][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
 
 
+def test_missing_evidence_dispatch_uses_central_required_workflow_repository(monkeypatch):
+    calls = []
+    head_sha = "a" * 40
+    base_sha = "b" * 40
+
+    def fake_run_with_env(args, *, stdin=None, env=None):
+        calls.append((args, None if env is None else env.get("GH_TOKEN")))
+        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+            return '{"workflow_runs": []}'
+        return ""
+
+    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+
+    pr = make_pr(baseRefName="develop", baseRefOid=base_sha, headRefOid=head_sha)
+    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+
+    strix_call = calls[0][0]
+    opencode_call = calls[-1][0]
+
+    assert calls and all(call[1] == "workflow-actions-token" for call in calls)
+    assert strix_call[:7] == [
+        "gh",
+        "workflow",
+        "run",
+        "Strix Security Scan",
+        "--repo",
+        "ContextualWisdomLab/.github",
+        "--ref",
+    ]
+    assert strix_call[7] == "main"
+    assert "-f" in strix_call
+    assert "target_repository=owner/repo" in strix_call
+    assert f"pr_base_sha={base_sha}" in strix_call
+    assert f"pr_head_sha={head_sha}" in strix_call
+
+    assert opencode_call[:7] == [
+        "gh",
+        "workflow",
+        "run",
+        "OpenCode Review",
+        "--repo",
+        "ContextualWisdomLab/.github",
+        "--ref",
+    ]
+    assert opencode_call[7] == "main"
+    assert "target_repository=owner/repo" in opencode_call
+    assert "pr_base_ref=develop" in opencode_call
+    assert f"pr_base_sha={base_sha}" in opencode_call
+    assert f"pr_head_sha={head_sha}" in opencode_call
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
+    head_sha = "a" * 40
+    base_sha = "b" * 40
     stale_same_pr = {
         "id": 9001,
         "name": "OpenCode Review",
@@ -1131,7 +1228,7 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     current_same_pr = {
         "id": 9002,
         "name": "OpenCode Review",
-        "head_sha": "head",
+        "head_sha": head_sha,
         "pull_requests": [{"number": 1}],
     }
     stale_other_pr = {
@@ -1159,7 +1256,12 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
 
-    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", make_pr(), dry_run=False)
+    sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(baseRefOid=base_sha, headRefOid=head_sha),
+        dry_run=False,
+    )
 
     assert ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls

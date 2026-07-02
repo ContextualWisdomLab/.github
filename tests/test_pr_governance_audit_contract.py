@@ -45,5 +45,7 @@ def test_new_public_nonfork_repos_are_classified_in_rollout_inventory():
 
     assert "current PR #60 lacked central check runs" in rollout
     assert "runtime proof gap" in audit
-    assert "PR #6 shows central required workflow runs" in rollout
+    assert "PR #6 merged after central workflow proof" in rollout
+    assert "PR #8 is now the open current-head runtime proof fixture" in rollout
     assert "43b62b5f347d1532c81b5ae38d8e41b4494fd486" in audit
+    assert "48d8b56a0f995829fc95de4fed129d1c33aaadff" in audit

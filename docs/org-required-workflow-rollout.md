@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-02 13:21 KST
+Updated: 2026-07-02 18:15 KST
 
 ## Decision
 
@@ -17,10 +17,10 @@ Use an organization repository ruleset instead of copying workflow files into ea
   - `.github/workflows/opencode-review.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
 - Required workflow ref: `refs/heads/main`
-- Last verified workflow implementation base commit: `dbd33b3a0384de0129aa082a210383188d012415` (`#249`)
+- Last verified workflow implementation base commit: `ef9950e6b55bf943c0295e1df3e34c94210d21cc` (`#283`)
 - Required workflow trigger support: `pull_request_target`, `push`, `workflow_run`
 
-`.github` PRs through `#249` are now in `main`. The required-workflow
+`.github` PRs through `#283` are now in `main`. The required-workflow
 ruleset points at `.github@main`; if live organization ruleset inspection
 reports another ref, treat that as operations drift and restore ruleset
 `18156473` to the current `main` head.
@@ -66,7 +66,7 @@ Do not centralize the scheduler by running a `.github` scheduled job against oth
 ## Scope
 
 The active ruleset no longer maintains a repository-name allowlist. Live
-ruleset inspection on 2026-07-02 13:21 KST reports
+ruleset inspection on 2026-07-02 18:15 KST reports
 `repository_name.include=["~ALL"]`, so all current and future organization
 repositories inherit the three central required workflows on their default
 branch unless a later ruleset exclusion is added. The table below is the public
@@ -74,11 +74,11 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 | Repository | Visibility | Default branch | Flow | Open PRs | Local central-workflow copies on default branch | Rollout status |
 | --- | --- | --- | --- | ---: | --- | --- |
-| `ContextualWisdomLab/.github` | public | `main` | GitHub Flow | 32 | central source; keep | single source of truth; central PRs through `#267` merged |
-| `ContextualWisdomLab/aFIPC` | public | `master` | GitHub Flow | 21 | none | central checks proven on PR `#78`; active queue still needs per-PR review |
+| `ContextualWisdomLab/.github` | public | `main` | GitHub Flow | 27 | central source; keep | single source of truth; central PRs through `#283` merged; PR `#286` current head queued after review-thread fixes |
+| `ContextualWisdomLab/aFIPC` | public | `master` | GitHub Flow | 22 | none | central checks proven on PR `#78`; active queue still needs per-PR review |
 | `ContextualWisdomLab/pg-erd-cloud` | public | `main` | GitHub Flow | 81 | none | repo-local autofix worker removed by PR `#393`; default branch now keeps only repository-owned application and security workflows |
 | `ContextualWisdomLab/fast-mlsirm` | public | `main` | GitHub Flow | 25 | none | migrated; re-verify inherited checks on current open PRs |
-| `ContextualWisdomLab/bandscope` | public | `develop` | Git Flow | 61 | none | no local central copies observed; verify inherited checks on active PRs |
+| `ContextualWisdomLab/bandscope` | public | `develop` | Git Flow | 36 | none | no local central copies observed; verify inherited checks on active PRs |
 | `ContextualWisdomLab/contextual-orchestrator` | public | `main` | GitHub Flow | 2 | none | default branch has no local central copies; current open PRs are runtime proof fixtures |
 | `ContextualWisdomLab/naruon` | public | `develop` | Git Flow | 7 | none | default branch has no repo-local OpenCode, Strix, or scheduler copies; application/security workflows remain repository-owned |
 | `ContextualWisdomLab/newsdom-api` | public | `develop` | Git Flow | 3 | none | local workflows already gone; re-verify inherited checks on current open PRs |
@@ -87,10 +87,10 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 | `ContextualWisdomLab/ContextualWisdomLab.github.io` | public | `main` | GitHub Flow | 19 | none | migrated; re-verify inherited checks on current open PRs |
 | `ContextualWisdomLab/codec-carver` | public | `main` | GitHub Flow | 42 | none | local workflows already gone; quality uplift still needs 100% test/docstring evidence before closure |
 | `ContextualWisdomLab/clearfolio` | public | `main` | GitHub Flow | 57 | none | migrated; re-verify inherited checks before final closure |
-| `ContextualWisdomLab/semantic-data-portal` | public | `main` | GitHub Flow | 2 | none | PR `#3` merged; default branch has no local central copies |
+| `ContextualWisdomLab/semantic-data-portal` | public | `main` | GitHub Flow | 3 | none | PR `#3` merged; default branch has no local central copies |
 | `ContextualWisdomLab/hyosung-itx-slogan-brief` | public | `main` | GitHub Flow | 1 | none | migrated; re-verify inherited checks on current open PR |
-| `ContextualWisdomLab/kaefa` | public | `develop` | Git Flow | 5 | none | newly discovered public non-fork target; ruleset inherited but current PR #60 lacked central check runs in status rollup |
-| `ContextualWisdomLab/waf-ids-ai-soc` | public | `main` | GitHub Flow | 1 | none | newly discovered public non-fork target; PR #6 shows central required workflow runs on current head |
+| `ContextualWisdomLab/kaefa` | public | `develop` | Git Flow | 6 | none | newly discovered public non-fork target; ruleset inherited but current PR #60 lacked central check runs in status rollup |
+| `ContextualWisdomLab/waf-ids-ai-soc` | public | `main` | GitHub Flow | 1 | none | newly discovered public non-fork target; PR #6 merged after central workflow proof; PR #8 is now the open current-head runtime proof fixture |
 
 ## Current policy
 
@@ -124,14 +124,15 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - `.github` PR `#247` was closed without merge because its reviewed-merge-update fallback would have approved a current head from previous-parent approval evidence after model exhaustion. That path conflicts with the current fail-closed policy: model timeout, model-pool exhaustion, or missing usable control output must lead to retry, alternate model execution, or a source-backed request for changes, not deterministic approval.
 - `.github` PR `#249` guarded the central PR Review Fix Scheduler so `CHANGES_REQUESTED` review states dispatch the central autofix worker only when the latest OpenCode review is on the current head, the merge state is `CLEAN` or `HAS_HOOKS`, and the review body does not indicate process-only blockers such as merge conflict, model-pool exhaustion, unresolved human review threads, failed checks, `coverage-evidence`, or failed Strix evidence. It merged at `dbd33b3a0384de0129aa082a210383188d012415` after current-head `coverage-evidence`, `strix`, `opencode-review`, `noema-review`, and `scan-pr-queue` all completed successfully.
 - `.github` PR `#255` removed the remaining deterministic low-risk approval fallback from the OpenCode approval gate and changed `coverage-evidence` blocker handling to publish a `REQUEST_CHANGES` review event, producing the PR review state `CHANGES_REQUESTED`, instead of leaving only a failed check/log. It merged at `e2beae72b87a8817cd57f9f51bab3947353baa61`; the first current-head OpenCode run reached an `APPROVE` gate result but hit the OpenCode GitHub App installation rate limit while publishing the review, then a rerun published approval and native auto-merge completed.
+- `.github` PR `#283` refreshed the central OpenCode model configuration so every reasoning-capable review candidate sets `reasoning=true`, `options.reasoningEffort: high`, and `variants.high.reasoningEffort: high`; non-reasoning fallback candidates remain available without a false effort claim. It merged at `ef9950e6b55bf943c0295e1df3e34c94210d21cc`.
 - After PR `#255` merged, `ContextualWisdomLab/bandscope` PRs `#493`, `#494`, `#495`, and `#500` were rechecked for branch freshness. Merge simulation against `develop` found real conflicts rather than update-branch candidates: `#493` conflicts in `apps/desktop/src/App.tsx` plus the design-system docs, while `#494`, `#495`, and `#500` conflict in `docs/design-system/README.md`, `docs/design-system/component-contract.md`, and `docs/design-system/figma-to-code-workflow.md`. Each PR received a corrected conflict-resolution comment with the exact file list and merge/rebase repair commands.
 - `ContextualWisdomLab/aFIPC` PR `#78` is no longer a target-coverage gap. It merged after current-head central `coverage-evidence`, `opencode-review`, `strix`, and `scan-pr-queue` checks all passed on head `b1ddafced86302f461e95259699f1efde5ec87c9`; the OpenCode review approved the same head on 2026-06-30 06:02:55Z.
 - `ContextualWisdomLab/pg-erd-cloud` PR `#393` removed the repo-local `pr-review-autofix.yml` worker after the central autofix worker merged.
   The first OpenCode run on head `9d8eed5be47670b1b46f413295d9a6044d7327b2` exhausted the older model pool and requested changes.
   After `.github` PR `#246` merged, central OpenCode run `28485070313` approved the same head and the PR merged at `1e0d6a3dda5ea9afcd74dcd8380689672e1c8ef1` on 2026-07-01 00:33:50Z.
   Live default-branch content lookup returned 404 for `.github/workflows/pr-review-autofix.yml` after merge.
-- Live non-fork inventory on 2026-07-02 13:21 KST found 17 public non-fork repositories, inherited ruleset `18156473` on `kaefa` and `waf-ids-ai-soc`, and no default-branch copies of `opencode-review.yml`, `strix.yml`, or `pr-review-merge-scheduler.yml` outside `.github`.
-- `ContextualWisdomLab/waf-ids-ai-soc` PR `#6` current head `43b62b5f347d1532c81b5ae38d8e41b4494fd486` showed central `coverage-evidence`, `strix`, and `scan-pr-queue` check runs plus local Rust CI; `opencode-review` was still in progress at the 2026-07-02 13:21 KST refresh.
+- Live non-fork inventory on 2026-07-02 18:15 KST found 17 public non-fork repositories, inherited ruleset `18156473` on `kaefa` and `waf-ids-ai-soc`, and no default-branch copies of `opencode-review.yml`, `strix.yml`, or `pr-review-merge-scheduler.yml` outside `.github`.
+- `ContextualWisdomLab/waf-ids-ai-soc` PR `#6` merged at `e1c0a85fd4a8e6dd67039be43eb7f659fec22abd` after central required workflow proof on head `43b62b5f347d1532c81b5ae38d8e41b4494fd486`; PR `#8` current head `48d8b56a0f995829fc95de4fed129d1c33aaadff` is now the open runtime proof fixture with central and local Rust checks queued at the 2026-07-02 18:15 KST refresh.
 - `ContextualWisdomLab/kaefa` inherits ruleset `18156473`, but PR `#60` current head `13c9089855fcdd34391173560ccf6935bac1eebe` showed only repo-local R-CMD-check, dependency-review, and CodeQL signals in status rollup. Treat this as a runtime proof gap until a new PR event or manual dispatch proves central OpenCode, Strix, and scheduler checks on a kaefa current head.
 - `.github` scheduler default merge mode is now `direct_or_auto`: approved same-repository `CLEAN` PRs request immediate guarded merge, approved non-clean same-repository PRs can queue native auto-merge, and fork or external-head PRs are left for maintainer merge.
 - OpenCode approval runs the trusted central merge scheduler script directly with `pr_number` and `max_prs=1`, so the just-reviewed PR is inspected immediately even when organization required workflows are not repo-local `workflow_dispatch` targets.

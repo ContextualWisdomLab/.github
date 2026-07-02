@@ -248,6 +248,8 @@ jobs:
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
           SCHEDULER_READ_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
+          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ steps.trusted_source.outputs.ref }}
         run: |
           set -euo pipefail
           project_flow="$PROJECT_FLOW_INPUT"
