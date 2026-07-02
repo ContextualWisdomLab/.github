@@ -665,6 +665,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "publish REQUEST_CHANGES when coverage-evidence blocker states such as cancelled, skipped, failed, unsupported-tooling, or below-100 evidence are present" "opencode approval turns coverage-evidence blocker states into actionable review state"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model steps skip when coverage-evidence already failed"
 	assert_file_contains "$workflow_file" "supported repository test suites passed" "opencode coverage evidence requires supported repository test suites to pass"
+	assert_file_contains "$workflow_file" "nested Rust coverage is not measured by this central workflow" "opencode coverage evidence treats nested Rust crates as peer-CI evidence instead of failing on missing root Cargo.toml"
+	assert_file_contains "$workflow_file" "keep repo-local Rust CI/build/security checks required for nested crates" "opencode coverage evidence documents the required peer checks for nested Rust crates"
 	assert_file_contains "$workflow_file" "Python project dependencies (requirements.txt)" "opencode coverage evidence records repository Python dependency installation"
 	assert_file_contains "$workflow_file" "python3 -m pip install --disable-pip-version-check -r requirements.txt" "opencode coverage evidence installs repository Python requirements before pytest"
 	assert_file_contains "$workflow_file" "'requirements.txt' '*/requirements.txt'" "opencode coverage evidence discovers nested requirements-only Python test projects"

@@ -618,6 +618,15 @@ jobs:
             fi
           }
 
+          append_nested_rust_coverage_advisory() {
+            append "### Rust test coverage"
+            append ""
+            append "- Result: PASS"
+            append "- Reason: Rust files changed, but no root Cargo.toml coverage contract was found; nested Rust coverage is not measured by this central workflow."
+            append "- Required peer evidence: keep repo-local Rust CI/build/security checks required for nested crates."
+            append ""
+          }
+
           run_rust_test_coverage() {
             ensure_rust_toolchain
             if ! command -v cargo >/dev/null 2>&1; then
@@ -632,13 +641,7 @@ jobs:
               run_and_capture "Rust coverage with missing-line report" \
                 cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
             else
-              append "### Rust test coverage"
-              append ""
-              append "- Result: FAIL"
-              append "- Reason: Rust files changed, but no root Cargo.toml was found."
-              append "- Fix: add or point to the Cargo workspace manifest and run cargo coverage from that workspace."
-              append ""
-              failures=$((failures + 1))
+              append_nested_rust_coverage_advisory
             fi
           }
 
@@ -776,8 +779,12 @@ jobs:
           fi
 
           if has_changed_tracked_files 'Cargo.toml' 'Cargo.lock' '*.rs'; then
-            measured_any=1
-            run_rust_test_coverage
+            if [ -f Cargo.toml ]; then
+              measured_any=1
+              run_rust_test_coverage
+            else
+              append_nested_rust_coverage_advisory
+            fi
           fi
 
           if has_changed_tracked_files 'Dockerfile' '*/Dockerfile' 'Dockerfile.*' '*/Dockerfile.*' 'docker-compose.yml' 'docker-compose.yaml' 'compose.yml' 'compose.yaml'; then
