@@ -266,7 +266,17 @@ def finding_is_source_backed(finding: dict[str, object]) -> bool:
     return True
 
 
-if not all(finding_is_source_backed(finding) for finding in control.get("findings", [])):
+for finding in control.get("findings", []):
+    if finding_is_source_backed(finding):
+        continue
+    path_value = str(finding.get("path", "<missing-path>"))
+    line_value = finding.get("line", "<missing-line>")
+    title_value = str(finding.get("title", "<missing-title>"))
+    print(
+        "REQUEST_CHANGES finding is not source-backed by the current-head diff: "
+        f"{path_value}:{line_value} {title_value}",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 PY
 then
