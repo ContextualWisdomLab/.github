@@ -1877,8 +1877,10 @@ vulnerability_record_intersects_changed_file() {
 		echo "ERROR: unable to create temporary diff file for changed-line evaluation." >&2
 		return 1
 	}
+	trap 'rm -f -- "$diff_output_file"' RETURN
 	printf '%s' "$diff_output" >"$diff_output_file"
-	python3 - "$diff_output_file" "$start_line" "$end_line" <<'PY'
+	local intersects_rc
+	if python3 - "$diff_output_file" "$start_line" "$end_line" <<'PY'
 import re
 import sys
 
@@ -1901,8 +1903,13 @@ with open(diff_output_path, "r", encoding="utf-8") as handle:
             raise SystemExit(0)
 raise SystemExit(1)
 PY
-	local intersects_rc=$?
+	then
+		intersects_rc=0
+	else
+		intersects_rc=$?
+	fi
 	rm -f -- "$diff_output_file"
+	trap - RETURN
 	return "$intersects_rc"
 }
 
@@ -2587,6 +2594,32 @@ is_vertex_not_found_error() {
 	return 1
 }
 
+github_models_api_base_is_active() {
+	if [ -z "$LLM_API_BASE_FILE" ]; then
+		return 1
+	fi
+
+	local resolved_llm_api_base_file
+	if ! resolved_llm_api_base_file="$(resolve_trusted_input_file "LLM_API_BASE_FILE" "$LLM_API_BASE_FILE" 2>/dev/null)"; then
+		return 1
+	fi
+
+	local llm_api_base_value
+	llm_api_base_value="$(cat -- "$resolved_llm_api_base_file" 2>/dev/null)" || return 1
+	llm_api_base_value="${llm_api_base_value%%/generateContent*}"
+	llm_api_base_value="${llm_api_base_value%%:generateContent*}"
+	llm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
+	is_github_models_api_base "$llm_api_base_value"
+}
+
+strix_log_has_github_models_context() {
+	if grep -Eiq '(models\.github\.ai|GitHub Models|github_models)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	github_models_api_base_is_active
+}
+
 is_github_models_unavailable_model_error() {
 	if grep -Eiq 'Unavailable model:[[:space:]]*[^[:space:]]+' "$STRIX_LOG" &&
 		grep -Eiq '(litellm\.BadRequestError|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|models\.github\.ai|GitHub Models|openai)' "$STRIX_LOG"; then
@@ -2600,7 +2633,7 @@ is_github_models_unavailable_model_error() {
 	fi
 
 	if grep -Eiq '(UnsupportedToolUse|tool use\. Using tool is not supported by this model|Using tool is not supported by this model)' "$STRIX_LOG" &&
-		grep -Eiq '(models\.github\.ai|GitHub Models|openai|OpenAIException)' "$STRIX_LOG"; then
+		strix_log_has_github_models_context; then
 		return 0
 	fi
 
