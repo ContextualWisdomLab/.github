@@ -222,6 +222,10 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     with pytest.raises(RuntimeError, match="unsupported decision"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
+    with pytest.raises(ValueError, match="URL must start with http:// or https://"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
 
 def test_format_findings_and_submit_review(monkeypatch):
     findings = noema.format_findings(
