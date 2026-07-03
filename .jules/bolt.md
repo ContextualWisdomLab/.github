@@ -25,3 +25,6 @@
 ## 2024-05-19 - Pre-compile Regex Patterns in Loop-called Functions
 **Learning:** In `scripts/ci/pr_review_merge_scheduler.py`, the `scrub_sensitive_data` function was repeatedly compiling multiple regex patterns via `re.sub` for every log line or text scrubbed. This incurs measurable overhead due to cache lookups and object recreation in tightly looped string processing.
 **Action:** When using multiple regex replacements inside functions that are called frequently or process large amounts of text, define and pre-compile the regex objects at the module level (e.g., `SENSITIVE_DATA_SCRUB_PATTERNS`) and iterate over them using `pattern.sub()`.
+## 2024-05-19 - Pre-compile Regex Patterns in Loop-called Functions
+**Learning:** In `scripts/ci/noema_review_gate.py`, the `scrub_sensitive_data` function was repeatedly compiling multiple regex patterns via `re.sub` inside the function, executing on every call. This causes measurable overhead due to object recreation when processing large text data or called frequently in a loop.
+**Action:** When using multiple regex replacements inside frequently called functions, define and pre-compile the regex objects at the module level (e.g., `SENSITIVE_DATA_SCRUB_PATTERNS = (...)`) and iterate over them using `pattern.sub()`.
