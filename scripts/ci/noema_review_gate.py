@@ -267,6 +267,8 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
     if not api_url or not api_key:
         print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
         return None
+    if not (api_url.startswith("http://") or api_url.startswith("https://")):
+        raise ValueError(f"Noema LLM review unavailable: NOEMA_LLM_API_URL must start with http:// or https://, got: {api_url}")
 
     prompt = {
         "role": "user",
@@ -304,7 +306,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
