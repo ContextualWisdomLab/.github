@@ -396,7 +396,7 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     """Return whether an approval names an exact current-head changed file."""
     changed_files = current_changed_files()
     combined = f"{reason}\n{summary}".casefold()
-    if not changed_files and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined):
+    if not changed_files and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined or "no ui codebase changes" in combined):
         return True
     if not changed_files:
         return mentions_changed_file_evidence(reason, summary)
@@ -407,7 +407,7 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
 def mentions_verification_posture(reason: str, summary: str) -> bool:
     """Return whether an approval records the concrete review surfaces checked."""
     combined = f"{reason}\n{summary}".casefold()
-    if not current_changed_files() and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined):
+    if not current_changed_files() and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined or "no ui codebase changes" in combined):
         # Handle no-op PRs with empty/no changed files where deep verification labels may be omitted by model.
         return True
     return (
@@ -478,7 +478,7 @@ def coverage_section_is_valid(section: str) -> bool:
 def mentions_full_coverage(reason: str, summary: str) -> bool:
     """Return whether test and docstring coverage labels cite valid evidence."""
     combined = f"{reason}\n{summary}".casefold()
-    if not current_changed_files() and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined):
+    if not current_changed_files() and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined or "no ui codebase changes" in combined):
         return True
     coverage_section = label_section(combined, "coverage:")
     docstring_section = label_section(combined, "docstring coverage:")
