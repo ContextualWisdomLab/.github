@@ -2239,7 +2239,7 @@ jobs:
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
         continue-on-error: true
-        timeout-minutes: 300
+        timeout-minutes: 360
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2251,7 +2251,7 @@ jobs:
           OPENCODE_MODEL_ATTEMPTS: "5"
           OPENCODE_RUN_TIMEOUT_SECONDS: "900"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "7200"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "14400"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "60"
           OPENCODE_BACKOFF_MAX_SECONDS: "600"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
