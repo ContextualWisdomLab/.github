@@ -253,17 +253,20 @@ def control_review_text(value: dict[str, Any]) -> str:
     for finding in value.get("findings", []) or []:
         if not isinstance(finding, dict):
             continue
-        chunks.extend(str(finding.get(field, "")) for field in (
-            "path",
-            "line",
-            "severity",
-            "title",
-            "problem",
-            "root_cause",
-            "fix_direction",
-            "regression_test_direction",
-            "suggested_diff",
-        ))
+        chunks.extend(
+            str(finding.get(field, ""))
+            for field in (
+                "path",
+                "line",
+                "severity",
+                "title",
+                "problem",
+                "root_cause",
+                "fix_direction",
+                "regression_test_direction",
+                "suggested_diff",
+            )
+        )
     return "\n".join(chunks)
 
 
@@ -301,13 +304,22 @@ def contains_non_actionable_failed_check_review(value: dict[str, Any]) -> bool:
 def non_actionable_failed_check_review_phrase(value: dict[str, Any]) -> str:
     """Return the failed-check deflection phrase found in the review, if any."""
     combined = control_review_text(value).casefold()
-    return next((phrase for phrase in NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES if phrase in combined), "")
+    return next(
+        (
+            phrase
+            for phrase in NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES
+            if phrase in combined
+        ),
+        "",
+    )
 
 
 def model_failure_approval_phrase(reason: str, summary: str) -> str:
     """Return the model-failure approval phrase found in approval prose, if any."""
     combined = f"{reason}\n{summary}".casefold()
-    return next((phrase for phrase in MODEL_FAILURE_APPROVAL_PHRASES if phrase in combined), "")
+    return next(
+        (phrase for phrase in MODEL_FAILURE_APPROVAL_PHRASES if phrase in combined), ""
+    )
 
 
 def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
@@ -378,13 +390,23 @@ def contradicts_changed_file_kinds(reason: str, summary: str) -> bool:
         "no supported source files or package manifests",
         "",
     )
-    has_source_like_change = any(changed_file_is_source_like(path) for path in changed_files)
-    has_test_like_change = any(changed_file_is_test_like(path) for path in changed_files)
-    if has_source_like_change and any(phrase in combined_for_kind_claims for phrase in SOURCE_KIND_FALSE_PHRASES):
+    has_source_like_change = any(
+        changed_file_is_source_like(path) for path in changed_files
+    )
+    has_test_like_change = any(
+        changed_file_is_test_like(path) for path in changed_files
+    )
+    if has_source_like_change and any(
+        phrase in combined_for_kind_claims for phrase in SOURCE_KIND_FALSE_PHRASES
+    ):
         return True
-    if has_source_like_change and any(phrase in combined_for_kind_claims for phrase in EXECUTABLE_KIND_FALSE_PHRASES):
+    if has_source_like_change and any(
+        phrase in combined_for_kind_claims for phrase in EXECUTABLE_KIND_FALSE_PHRASES
+    ):
         return True
-    if has_test_like_change and any(phrase in combined for phrase in TEST_KIND_FALSE_PHRASES):
+    if has_test_like_change and any(
+        phrase in combined for phrase in TEST_KIND_FALSE_PHRASES
+    ):
         return True
     return False
 
@@ -457,12 +479,9 @@ def coverage_section_is_valid(section: str) -> bool:
     """Return whether one approval coverage label cites acceptable evidence."""
     if "coverage execution evidence" not in section:
         return False
-    if (
-        "not applicable" in section
-        and (
-            "no supported source files or package manifests" in section
-            or "no supported changed source files or package manifests" in section
-        )
+    if "not applicable" in section and (
+        "no supported source files or package manifests" in section
+        or "no supported changed source files or package manifests" in section
     ):
         return True
     if any(phrase in section for phrase in COVERAGE_FAILURE_PHRASES):
@@ -554,7 +573,8 @@ def evidence_coverage_mode(text: str) -> str | None:
         return "full"
     if (
         "- test evidence: supported repository test suites passed" in section
-        and "- docstring evidence: configured repository docstring gates passed or docstring coverage was advisory" in section
+        and "- docstring evidence: configured repository docstring gates passed or docstring coverage was advisory"
+        in section
     ):
         return "suite_passed"
     no_source = (
@@ -689,6 +709,7 @@ def repair_approval_reason(reason: str, summary: str) -> str:
 
 def check_structural_approval(control_file: Path) -> int:
     """Validate an already-normalized control block before publishing approval."""
+
     def reject(reason: str) -> int:
         """Reject approval with a stable no-conclusion reason."""
         print(f"NO_CONCLUSION: {reason}", file=sys.stderr)
@@ -722,7 +743,9 @@ def check_structural_approval(control_file: Path) -> int:
         str(value.get("reason", "")),
         str(value.get("summary", "")),
     ):
-        return reject("approval does not prove 100% coverage or an explicit no-source exception")
+        return reject(
+            "approval does not prove 100% coverage or an explicit no-source exception"
+        )
     if value.get("result") == "APPROVE" and contradicts_changed_file_kinds(
         str(value.get("reason", "")),
         str(value.get("summary", "")),
@@ -850,10 +873,12 @@ def extract_dicts(obj: Any) -> list[Any]:
     if isinstance(obj, dict):
         results.append(obj)
         for v in obj.values():
-            results.extend(extract_dicts(v))
+            if isinstance(v, (dict, list)):
+                results.extend(extract_dicts(v))
     elif isinstance(obj, list):
         for item in obj:
-            results.extend(extract_dicts(item))
+            if isinstance(item, (dict, list)):
+                results.extend(extract_dicts(item))
     return results
 
 
@@ -925,7 +950,12 @@ def main(argv: list[str]) -> int:
         if control is None:
             continue
 
-        normalized_json = json.dumps(control, separators=(",", ":"), ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        normalized_json = (
+            json.dumps(control, separators=(",", ":"), ensure_ascii=False)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
         output_file.write_text(
             "\n".join(
                 [

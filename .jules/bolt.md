@@ -25,3 +25,6 @@
 ## 2024-05-19 - Pre-compile Regex Patterns in Loop-called Functions
 **Learning:** In `scripts/ci/pr_review_merge_scheduler.py`, the `scrub_sensitive_data` function was repeatedly compiling multiple regex patterns via `re.sub` for every log line or text scrubbed. This incurs measurable overhead due to cache lookups and object recreation in tightly looped string processing.
 **Action:** When using multiple regex replacements inside functions that are called frequently or process large amounts of text, define and pre-compile the regex objects at the module level (e.g., `SENSITIVE_DATA_SCRUB_PATTERNS`) and iterate over them using `pattern.sub()`.
+## 2025-05-15 - Fast-path recursive JSON extraction with strict type checking
+**Learning:** In deeply nested JSON parsing, recursively calling a function for every scalar value (strings, ints, booleans) and relying on `isinstance(obj, dict)` adds significant overhead due to Python's function call cost and `isinstance` checks against abstract base classes.
+**Action:** Use `isinstance(v, (dict, list))` to short-circuit recursion before making the recursive call. This avoids pushing scalar values onto the call stack entirely while still correctly handling dictionary and list subclasses, significantly improving extraction speed without breaking Python's type inheritance.
