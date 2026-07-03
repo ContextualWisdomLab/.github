@@ -198,6 +198,11 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     monkeypatch.delenv("NOEMA_LLM_API_KEY", raising=False)
     assert noema.call_llm("owner/repo", 1, pr, "diff", False) is None
 
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    with pytest.raises(ValueError, match="must start with http:// or https://"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "review-model")
