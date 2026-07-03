@@ -37,9 +37,9 @@ SENSITIVE_DATA_SCRUB_PATTERNS = (
     (re.compile(r'(bearer\s+)[^\s"\'\\]+', re.IGNORECASE), r'\1***'),
     (re.compile(r'(token\s+)[^\s"\'\\]+', re.IGNORECASE), r'\1***'),
     (re.compile(r'\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b', re.IGNORECASE), '***'),
-    (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
-    (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
-    (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
+    (re.compile(r'\bsk-[A-Za-z0-9_-]+'), '***'),
+    (re.compile(r'\bxox[baprs]-[A-Za-z0-9-]+'), '***'),
+    (re.compile(r'\bAKIA[0-9A-Z]{16}'), '***'),
     (re.compile(r'((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?', re.IGNORECASE), r'\g<1>***'),
 )
 
