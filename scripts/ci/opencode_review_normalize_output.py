@@ -91,6 +91,7 @@ MODEL_FAILURE_APPROVAL_PHRASES = (
     "catalog_fallback=failed",
 )
 
+LIST_ITEM_PREFIX_PATTERN = re.compile(r"^[-*+]\s+")
 CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/){1,64}(?:[A-Za-z0-9_.@+-]+\."
     r"(?:py|js|jsx|ts|tsx|mjs|cjs|sh|bash|yml|yaml|json|jsonc|toml|lock|md|txt|css|scss|html|sql|go|rs|java|kt|swift|rb|php|cs|xml|ini|cfg)"
@@ -531,7 +532,7 @@ def changed_files_from_evidence(text: str) -> list[str]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        line = re.sub(r"^[-*+]\s+", "", line)
+        line = LIST_ITEM_PREFIX_PATTERN.sub("", line)
         parts = line.split("\t")
         path = parts[-1].strip()
         if not path or path.startswith("["):
