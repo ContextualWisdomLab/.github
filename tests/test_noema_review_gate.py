@@ -222,9 +222,60 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     with pytest.raises(RuntimeError, match="unsupported decision"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
+    # Test case-insensitive valid URL
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "HTTPS://llm.example.test/chat")
+    monkeypatch.setattr(noema.urllib.request, "urlopen", fake_urlopen)
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+    # Test invalid scheme (and no original URL in error)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
-    with pytest.raises(ValueError, match="URL must start with http:// or https://"):
+    with pytest.raises(ValueError, match="URL scheme must be http or https"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test localhost rejection
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost/chat")
+    with pytest.raises(ValueError, match="URL cannot target localhost"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test missing hostname
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http:///chat")
+    with pytest.raises(ValueError, match="URL must have a valid hostname"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test internal IP rejection
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://169.254.169.254/chat")
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    import socket
+    original_getaddrinfo = socket.getaddrinfo
+
+    # Test DNS resolution bypass
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "resolved-to-local.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test unresolved hostname does not break
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
+    def fake_getaddrinfo_error(host, port, *args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
+    monkeypatch.setattr(noema.urllib.request, "urlopen", fake_urlopen)
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+    # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
+    def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
+        if host == "weird-dns.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
 
 
 def test_format_findings_and_submit_review(monkeypatch):
