@@ -13,8 +13,40 @@ permissions:
   contents: read
 
 jobs:
+  detect-languages:
+    name: Detect CodeQL languages
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build language matrix
+        id: detect
+        run: |
+          matrix='[]'
+          if [ -d .github/workflows ]; then
+            matrix=$(echo "$matrix" | jq '. + [{"language":"actions","build-mode":"none"}]')
+          fi
+          if find . -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' \) \
+            -not -path './.git/*' | head -1 | grep -q .; then
+            matrix=$(echo "$matrix" | jq '. + [{"language":"javascript-typescript","build-mode":"none"}]')
+          fi
+          if find . -type f -name '*.py' -not -path './.git/*' | head -1 | grep -q .; then
+            matrix=$(echo "$matrix" | jq '. + [{"language":"python","build-mode":"none"}]')
+          fi
+          if [ "$(echo "$matrix" | jq 'length')" -eq 0 ]; then
+            matrix='[{"language":"actions","build-mode":"none"}]'
+          fi
+          echo "matrix={\"include\":${matrix}}" >> "$GITHUB_OUTPUT"
+
   analyze-head:
     name: CodeQL compatibility analysis (${{ matrix.language }})
+    needs: detect-languages
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -22,14 +54,7 @@ jobs:
       security-events: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - language: actions
-            build-mode: none
-          - language: javascript-typescript
-            build-mode: none
-          - language: python
-            build-mode: none
+      matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -58,6 +83,8 @@ jobs:
 
   analyze-merge:
     name: CodeQL merge preview (${{ matrix.language }})
+    needs: detect-languages
+    if: github.event.pull_request.merge_commit_sha != ''
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -65,14 +92,7 @@ jobs:
       security-events: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - language: actions
-            build-mode: none
-          - language: javascript-typescript
-            build-mode: none
-          - language: python
-            build-mode: none
+      matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
