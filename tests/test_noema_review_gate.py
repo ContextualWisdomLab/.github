@@ -305,3 +305,11 @@ def test_parse_args_and_main(monkeypatch):
 
     with pytest.raises(SystemExit, match="--pr-number must be positive"):
         noema.main(["--repo", "owner/repo", "--pr-number", "0"])
+
+def test_call_llm_rejects_unsafe_url_schemes(monkeypatch):
+    pr = make_pr()
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+
+    with pytest.raises(ValueError, match="URL must start with http:// or https://"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
