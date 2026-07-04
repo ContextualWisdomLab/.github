@@ -62,6 +62,29 @@ not the ephemeral merge ref OID.
 Repository-local `codeql.yml` push/default-branch scans may remain for branch
 history, but PR merge gates should rely on the central `codeql-pr.yml` workflow.
 
+### Repository-local CodeQL inventory (2026-07-04)
+
+Org audit of default-branch workflow files. Repos without any local CodeQL
+workflow depend entirely on central `codeql-pr.yml` once ruleset `18156473`
+includes that path; they are the most exposed to
+`Code scanning is waiting for results from CodeQL` until the ruleset update
+lands.
+
+| Repository | Default branch | Local CodeQL workflow | PR trigger | merge_commit_sha SARIF |
+| --- | --- | --- | ---: | ---: |
+| `aFIPC` | `master` | `codeql.yml` | yes | no |
+| `bandscope` | `develop` | `codeql.yml` | yes | no |
+| `newsdom-api` | `develop` | `codeql.yml` | yes | no |
+| `pg-erd-cloud` | `main` | `codeql.yml`, `codeql-backfill.yml` | yes (`codeql.yml`) | no |
+| `xtrmLLMBatchPython` | `develop` | `codeql.yml` | yes | no |
+| `naruon` | `develop` | `codeql.yml` | yes (temporary; PR `#916` retires PR trigger) | yes (repo-local interim fix) |
+| all other public non-fork org repos | varies | none observed | — | — |
+
+No repository-local PR CodeQL workflow besides `naruon` uploads merge-preview
+SARIF on `merge_commit_sha`. Centralizing through `codeql-pr.yml` fixes every
+inherited repository in one ruleset change; per-repo deletion of PR triggers is
+optional cleanup to avoid duplicate scans.
+
 ## Scheduler required workflow posture
 
 The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the active organization required workflow ruleset.
