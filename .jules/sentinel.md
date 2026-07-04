@@ -22,3 +22,7 @@
 **Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
 **Learning:** Functions that fetch URLs provided via user inputs (e.g., `wait_for_url` fetching `--backend-ready-url` in CI scripts) can inadvertently read local files if they do not validate the scheme. Python's `urllib.request.urlopen` supports `file://` schemes, allowing attackers to access arbitrary file contents from the host machine or sandbox if they can control the URL parameter.
 **Prevention:** Always validate URL inputs to restrict allowed schemes. Check that URLs explicitly start with `http://` or `https://` before fetching them with standard libraries like `urllib`.
+## 2026-06-30 - Prevent SSRF in Noema Review Gate
+**Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
+**Learning:** In `scripts/ci/noema_review_gate.py`, `urllib.request.urlopen` was used to fetch the `api_url` without verifying the URL scheme. An attacker could potentially set `NOEMA_LLM_API_URL` to `file:///etc/passwd` leading to unauthorized file access on the CI host.
+**Prevention:** Ensured the URL prefix is correctly verified to be either `http://` or `https://` before performing the HTTP request. Added the `# nosec B310` bandit annotation to explicitly mark the `urllib.request.urlopen` call as safe after validation.

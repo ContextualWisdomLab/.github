@@ -214,6 +214,11 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert seen["url"] == "https://llm.example.test/chat"
     assert seen["body"]["model"] == "review-model"
 
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
+    with pytest.raises(ValueError, match="must start with http:// or https://"):
+        noema.call_llm("owner/repo", 1, pr, "diff", True)
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setattr(
         noema.urllib.request,
         "urlopen",
