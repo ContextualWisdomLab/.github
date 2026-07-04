@@ -315,21 +315,26 @@ def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
     return bool(CHANGED_FILE_EVIDENCE_PATTERN.search(f"{reason}\n{summary}"))
 
 
-def current_changed_files() -> set[str]:
-    """Return the exact current-head changed files when the workflow provides them."""
+def current_changed_files() -> set[str] | None:
+    """Return the exact current-head changed files when the workflow provides them, or None if unavailable."""
     changed_files_path = os.environ.get("OPENCODE_CHANGED_FILES_FILE")
     if not changed_files_path:
-        return set()
+        return None
+
+    path = Path(changed_files_path)
+    if not path.is_file():
+        return None
+
     try:
         return {
             line.strip()
-            for line in Path(changed_files_path)
+            for line in path
             .read_text(encoding="utf-8")
             .splitlines()
             if line.strip()
         }
     except OSError:
-        return set()
+        return None
 
 
 def changed_file_is_source_like(path: str) -> bool:
@@ -404,8 +409,10 @@ def contradicts_material_changed_file_scope(reason: str, summary: str) -> bool:
 def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     """Return whether an approval names an exact current-head changed file."""
     changed_files = current_changed_files()
-    if not changed_files:
+    if changed_files is None:
         return mentions_changed_file_evidence(reason, summary)
+    if not changed_files:
+        return True
     combined = f"{reason}\n{summary}"
     return any(changed_file in combined for changed_file in changed_files)
 
@@ -572,13 +579,18 @@ def build_approval_repair_summary(summary: str, evidence_text: str) -> str | Non
     """Append missing approval labels from bounded current-head evidence."""
     changed_files = changed_files_from_evidence(evidence_text)
     coverage_mode = evidence_coverage_mode(evidence_text)
-    if not changed_files or coverage_mode is None:
+    if coverage_mode is None:
         return None
 
-    first_file = changed_files[0]
-    file_list = ", ".join(changed_files[:5])
-    if len(changed_files) > 5:
-        file_list += f", and {len(changed_files) - 5} more"
+    if not changed_files:
+        first_file = "no-files-changed"
+        file_list = "no files changed"
+    else:
+        first_file = changed_files[0]
+        file_list = ", ".join(changed_files[:5])
+        if len(changed_files) > 5:
+            file_list += f", and {len(changed_files) - 5} more"
+
     if coverage_mode == "not_applicable":
         coverage_line = (
             "Coverage: coverage execution evidence reports test coverage as not applicable "

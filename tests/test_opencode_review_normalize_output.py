@@ -92,7 +92,7 @@ def test_changed_file_and_verification_posture_detection():
 
 def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
-    assert norm.current_changed_files() == set()
+    assert norm.current_changed_files() is None
     assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
 
     changed_files = tmp_path / "changed-files.txt"
@@ -126,8 +126,26 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, 
     )
 
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(tmp_path / "missing.txt"))
-    assert norm.current_changed_files() == set()
+    assert norm.current_changed_files() is None
     assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
+
+    empty_files = tmp_path / "empty-files.txt"
+    empty_files.write_text("", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(empty_files))
+    assert norm.current_changed_files() == set()
+    assert norm.mentions_actual_changed_file("No files changed", "Empty PR")
+
+    dir_path = tmp_path / "a_directory"
+    dir_path.mkdir()
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(dir_path))
+    assert norm.current_changed_files() is None
+
+    def raise_os_error(*args, **kwargs):
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(norm.Path, "read_text", raise_os_error)
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    assert norm.current_changed_files() is None
 
 
 def test_preferred_review_language_handles_unreadable_and_unknown_evidence(tmp_path, monkeypatch):
@@ -485,6 +503,29 @@ def test_valid_control_filters_shape_head_and_review_contract():
 
 
 def test_valid_control_repairs_approval_summary_from_bounded_evidence(tmp_path, monkeypatch):
+    evidence = tmp_path / "bounded-review-evidence-empty.md"
+    evidence.write_text(
+        """\
+# OpenCode bounded PR review evidence
+
+## Coverage execution evidence
+
+# Coverage Evidence
+
+## Coverage Decision
+
+- Result: PASS
+- Test coverage: not applicable because no supported changed source files or package manifests were found.
+- Docstring coverage: not applicable
+
+## Changed files
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
+    assert norm.build_approval_repair_summary("", evidence.read_text(encoding="utf-8")) is not None
+
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
