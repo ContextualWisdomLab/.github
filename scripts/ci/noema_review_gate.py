@@ -295,6 +295,9 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
             prompt,
         ],
     }
+    if not (api_url.startswith("http://") or api_url.startswith("https://")):
+        raise ValueError(f"URL must start with http:// or https://, got: {api_url}")
+
     request = urllib.request.Request(
         api_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -304,7 +307,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
