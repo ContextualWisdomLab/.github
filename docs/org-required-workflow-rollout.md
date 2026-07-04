@@ -16,6 +16,9 @@ Use an organization repository ruleset instead of copying workflow files into ea
   - `.github/workflows/strix.yml`
   - `.github/workflows/opencode-review.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
+  - `.github/workflows/osv-scanner-pr.yml`
+  - `.github/workflows/scorecard-pr.yml`
+  - `.github/workflows/codeql-pr.yml`
 - Required workflow ref: `refs/heads/main`
 - Last verified workflow implementation base commit: `ef9950e6b55bf943c0295e1df3e34c94210d21cc` (`#283`)
 - Required workflow trigger support: `pull_request_target`, `push`, `workflow_run`
@@ -43,6 +46,21 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate still rechecks current-head peer checks before approving
 
 Keep the OpenCode required workflow active only while the central workflow keeps proving current-head coverage, CodeGraph initialization, bounded evidence, model review output, and approval-gate publication on the current head.
+
+## Code scanning required workflow posture
+
+The central `.github/workflows/codeql-pr.yml`, `.github/workflows/scorecard-pr.yml`,
+and `.github/workflows/osv-scanner-pr.yml` workflows supply PR-head and merge-preview
+code scanning analyses for ruleset `18156473` `code_scanning` (CodeQL, Scorecard,
+osv-scanner). They trigger on pull requests to `main`, `master`, and `develop` so
+Git Flow repositories on `develop` inherit the same merge gate as GitHub Flow repos.
+
+CodeQL merge preview checks out `refs/pull/<n>/merge` and uploads SARIF with
+`sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit,
+not the ephemeral merge ref OID.
+
+Repository-local `codeql.yml` push/default-branch scans may remain for branch
+history, but PR merge gates should rely on the central `codeql-pr.yml` workflow.
 
 ## Scheduler required workflow posture
 
