@@ -30,19 +30,23 @@ jobs:
         run: |
           matrix='[]'
           if [ -d .github/workflows ]; then
-            matrix=$(echo "$matrix" | jq '. + [{"language":"actions","build-mode":"none"}]')
+            matrix=$(echo "$matrix" | jq -c '. + [{"language":"actions","build-mode":"none"}]')
           fi
           if find . -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' \) \
             -not -path './.git/*' | head -1 | grep -q .; then
-            matrix=$(echo "$matrix" | jq '. + [{"language":"javascript-typescript","build-mode":"none"}]')
+            matrix=$(echo "$matrix" | jq -c '. + [{"language":"javascript-typescript","build-mode":"none"}]')
           fi
           if find . -type f -name '*.py' -not -path './.git/*' | head -1 | grep -q .; then
-            matrix=$(echo "$matrix" | jq '. + [{"language":"python","build-mode":"none"}]')
+            matrix=$(echo "$matrix" | jq -c '. + [{"language":"python","build-mode":"none"}]')
           fi
           if [ "$(echo "$matrix" | jq 'length')" -eq 0 ]; then
             matrix='[{"language":"actions","build-mode":"none"}]'
           fi
-          echo "matrix={\"include\":${matrix}}" >> "$GITHUB_OUTPUT"
+          {
+            echo 'matrix<<EOF'
+            jq -nc --argjson include "$matrix" '{include: $include}'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
   analyze-head:
     name: CodeQL compatibility analysis (${{ matrix.language }})
