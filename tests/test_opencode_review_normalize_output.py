@@ -108,6 +108,19 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, 
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
 
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
+    assert norm.mentions_actual_changed_file("No executable changes here", "no changed files")
+    assert norm.mentions_verification_posture("No executable changes here", "no changed files")
+    assert norm.mentions_full_coverage("No executable changes here", "no changed files")
+    assert norm.mentions_actual_changed_file("No changes", "no changes")
+    assert norm.mentions_verification_posture("No changes", "no changes")
+    assert norm.mentions_full_coverage("No changes", "no changes")
+    assert norm.mentions_actual_changed_file("No UI codebase changes", "No UI codebase changes")
+    assert norm.mentions_verification_posture("No UI codebase changes", "No UI codebase changes")
+    assert norm.mentions_full_coverage("No UI codebase changes", "No UI codebase changes")
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+
+
     assert norm.current_changed_files() == {
         ".github/workflows/opencode-review.yml",
         "scripts/ci/opencode_review_normalize_output.py",
