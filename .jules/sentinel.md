@@ -22,7 +22,3 @@
 **Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
 **Learning:** Functions that fetch URLs provided via user inputs (e.g., `wait_for_url` fetching `--backend-ready-url` in CI scripts) can inadvertently read local files if they do not validate the scheme. Python's `urllib.request.urlopen` supports `file://` schemes, allowing attackers to access arbitrary file contents from the host machine or sandbox if they can control the URL parameter.
 **Prevention:** Always validate URL inputs to restrict allowed schemes. Check that URLs explicitly start with `http://` or `https://` before fetching them with standard libraries like `urllib`.
-## 2026-07-03 - Prevent SSRF via URL Scheme Validation
-**Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
-**Learning:** External URL fetching with `urllib.request.urlopen` (like API endpoints passed via environment variables) can accept schemes like `file://` implicitly, which could allow arbitrary file reading or internal network scanning if the environment is misconfigured or manipulated.
-**Prevention:** Always validate that URLs explicitly start with `http://` or `https://` before using them in standard library requests. Append  to suppress linter warnings only after verifying the input is validated.
