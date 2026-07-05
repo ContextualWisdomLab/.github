@@ -2280,7 +2280,14 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/deepseek/deepseek-v3-0324 github-models/openai/o3 github-models/deepseek/deepseek-r1 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/mistral-ai/mistral-medium-2505 github-models/openai/gpt-5-nano github-models/deepseek/deepseek-r1-0528 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
+          # Ordered by GitHub Models quota allowance, largest first, so the
+          # highest-throughput models review before the rate-starved flagships.
+          # gpt-5/o3 are "Reasoning" tier (8-12 req/day) — putting them first
+          # (as before) stalled every review until the step timed out, because
+          # a rate-limited/hung flagship never fell back. Non-reasoning "Low"
+          # tier (deepseek-v3, mistral, llama-4: 150-450 req/day) and mini
+          # reasoning models go first; gpt-5 stays last as a quality fallback.
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/openai/o3 github-models/openai/gpt-5"
           OPENCODE_MODEL_ATTEMPTS: "5"
           OPENCODE_RUN_TIMEOUT_SECONDS: "20400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
