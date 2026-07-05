@@ -14,6 +14,20 @@ record_review_model() {
 normalize_opencode_output() {
 	local output_file="$1"
 
+	# Strip terminal escape sequences in place first, so the pool validates the
+	# exact bytes the publish step re-validates (it ANSI-strips with the same
+	# regex before running the normalizer). Without this the pool could accept a
+	# model whose raw output passes but whose ANSI-stripped form the publish step
+	# rejects, ending the run in failure instead of falling through to the next
+	# model in the pool.
+	local stripped
+	stripped="$(mktemp)"
+	if perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$output_file" >"$stripped" 2>/dev/null; then
+		mv "$stripped" "$output_file"
+	else
+		rm -f "$stripped"
+	fi
+
 	if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_normalize_output.py" \
 		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file"; then
 		bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" \
