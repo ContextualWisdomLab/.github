@@ -6,7 +6,7 @@ name: OSV-Scanner PR
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, master, develop]
 
 permissions:
   # Upload SARIF to Security > Code Scanning. See github/codeql-action#2117.
