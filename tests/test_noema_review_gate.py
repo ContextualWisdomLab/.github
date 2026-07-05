@@ -60,6 +60,12 @@ def test_scrub_sensitive_data():
     assert noema.scrub_sensitive_data("password: xyz") == "password: ***"
 
 
+def test_scrub_sensitive_data_authorization_headers():
+    assert noema.scrub_sensitive_data("Authorization: Basic dXNlcjpwYXNz") == "Authorization: Basic ***"
+    assert noema.scrub_sensitive_data("Proxy-Authorization: Basic dXNlcjpwYXNz") == "Proxy-Authorization: Basic ***"
+    assert noema.scrub_sensitive_data("authorization: bearer xyz") == "authorization: bearer ***"
+
+
 def test_split_repo_and_graphql(monkeypatch):
     with pytest.raises(ValueError):
         noema.split_repo("owner")
