@@ -277,9 +277,11 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
     if not api_url or not api_key:
         print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
         return None
+    api_url_lower = api_url.lower()
+    if not (api_url_lower.startswith("http://") or api_url_lower.startswith("https://")):
+        raise ValueError("NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities")
+
     parsed = urllib.parse.urlparse(api_url)
-    if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
@@ -298,9 +300,6 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
                 continue
             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
                 raise ValueError("URL cannot target internal IP addresses")
-
-    if not (api_url.startswith("http://") or api_url.startswith("https://")):
-        raise ValueError(f"NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities, got: {api_url}")
 
     prompt = {
         "role": "user",

@@ -26,3 +26,7 @@
 **Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
 **Learning:** External URL fetching with `urllib.request.urlopen` (like API endpoints passed via environment variables) can accept schemes like `file://` implicitly, which could allow arbitrary file reading or internal network scanning if the environment is misconfigured or manipulated.
 **Prevention:** Always validate that URLs explicitly start with `http://` or `https://` before using them in standard library requests. Append  to suppress linter warnings only after verifying the input is validated.
+## 2026-07-06 - Prevent Information Disclosure in URL Validation Errors
+**Vulnerability:** Information Disclosure / Secret Leakage
+**Learning:** When validating URLs (e.g., preventing SSRF by checking for `http://` or `https://`), including the original input URL in the raised exception message (`got: {api_url}`) can inadvertently leak sensitive information, such as API keys or internal domain structures, into CI logs if the environment variable was misconfigured or manipulated.
+**Prevention:** Never reflect sensitive input values (like URLs or tokens) in security validation error messages. Provide a clear, static message indicating why the validation failed without echoing the untrusted input.

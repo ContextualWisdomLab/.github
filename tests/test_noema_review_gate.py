@@ -206,7 +206,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
-    with pytest.raises(ValueError, match="must start with http:// or https://"):
+    with pytest.raises(ValueError, match="^NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities$"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
@@ -240,7 +240,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
 
     # Test invalid scheme (and no original URL in error)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
-    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+    with pytest.raises(ValueError, match="^NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities$"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     # Test localhost rejection
