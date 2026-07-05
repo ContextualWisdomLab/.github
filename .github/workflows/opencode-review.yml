@@ -2290,8 +2290,15 @@ jobs:
           # stay last: first-placing them stalled every review until timeout
           # because a rate-limited/hung flagship never fell back.
           OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
-          OPENCODE_MODEL_ATTEMPTS: "5"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "20400"
+          # One attempt per model, then fall through to the next model. Retrying
+          # the SAME model 5x let a rate-limited/hung leader consume the whole
+          # step, so the pool never reached a healthy fallback model.
+          OPENCODE_MODEL_ATTEMPTS: "1"
+          # 90 min per model — generous for a deep tool-using review, but bounded
+          # so a rate-limited model yields to the next one instead of eating the
+          # 350-min step. (20400s = 340min gave one model the entire budget with
+          # no fallback; 600s was too short for a proper review.)
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
