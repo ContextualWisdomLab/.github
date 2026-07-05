@@ -2282,8 +2282,15 @@ jobs:
           NO_COLOR: "1"
           OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-chat github-models/openai/o3 github-models/mistral-ai/mistral-medium-2505 github-models/openai/gpt-5-nano github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
           OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          # Each model gets a generous slice of the 285-min step budget so a
+          # tool-using model can do a real, deep review (inspect source, run
+          # CodeGraph/web/sandbox checks, dispatch subagents) instead of being
+          # cut off at 600s. ~90 min/model still leaves room for the pool to
+          # fall through to ~3 candidates within the step for resilience.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "240"
+          # Keep 0 (no separate retry deadline): the pool runs until the step's
+          # timeout-minutes, i.e. it waits the maximum available time.
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"

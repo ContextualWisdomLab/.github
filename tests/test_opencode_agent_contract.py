@@ -300,8 +300,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/meta/llama-4-scout-17b-16e-instruct"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
-    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "240"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert "while :" in model_pool_runner
