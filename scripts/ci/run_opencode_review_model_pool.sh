@@ -14,28 +14,30 @@ record_review_model() {
 normalize_opencode_output() {
 	local output_file="$1"
 
-	# Strip terminal escape sequences in place first, so the pool validates the
-	# exact bytes the publish step re-validates (it ANSI-strips with the same
-	# regex before running the normalizer). Without this the pool could accept a
-	# model whose raw output passes but whose ANSI-stripped form the publish step
-	# rejects, ending the run in failure instead of falling through to the next
-	# model in the pool.
-	local stripped
-	stripped="$(mktemp)"
-	if perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$output_file" >"$stripped" 2>/dev/null; then
-		mv "$stripped" "$output_file"
-	else
-		rm -f "$stripped"
-	fi
+	# Validate a throwaway copy, never the file itself. The publish step runs
+	# opencode_review_normalize_output.py on the model output, and that script
+	# REWRITES its input in place (it is not idempotent). If the pool normalized
+	# output_file directly, the publish step would normalize the already-rewritten
+	# content a second time and fail with "Selected successful OpenCode output did
+	# not include a valid control conclusion", ending the run instead of falling
+	# through to the next model. Mirror the publish step exactly — ANSI-strip a
+	# copy, then normalize — so the pool only records success for output the
+	# publish step will accept, and leave output_file pristine for the publish
+	# step to normalize itself.
+	local probe rc
+	probe="$(mktemp)"
+	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$output_file" >"$probe" 2>/dev/null || cp "$output_file" "$probe"
 
 	if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_normalize_output.py" \
-		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file"; then
+		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe"; then
 		bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" \
-			"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file" >/dev/null
-		return $?
+			"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe" >/dev/null
+		rc=$?
+	else
+		rc=1
 	fi
-
-	return 1
+	rm -f "$probe"
+	return "$rc"
 }
 
 backoff_sleep() {
