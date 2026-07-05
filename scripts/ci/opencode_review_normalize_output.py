@@ -843,16 +843,17 @@ def valid_control(
     }
 
 
-def extract_dicts(obj: Any) -> list[Any]:
+def extract_dicts(obj: Any, results: list[Any] | None = None) -> list[Any]:
     """Recursively extract all dictionaries from a JSON-like object."""
-    results = []
+    if results is None:
+        results = []
     if isinstance(obj, dict):
         results.append(obj)
         for v in obj.values():
-            results.extend(extract_dicts(v))
+            extract_dicts(v, results)
     elif isinstance(obj, list):
         for item in obj:
-            results.extend(extract_dicts(item))
+            extract_dicts(item, results)
     return results
 
 
