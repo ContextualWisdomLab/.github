@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from typing import Any
@@ -274,6 +277,27 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
     if not api_url or not api_key:
         print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
         return None
+    parsed = urllib.parse.urlparse(api_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("URL scheme must be http or https")
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("URL must have a valid hostname")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+        raise ValueError("URL cannot target localhost")
+    try:
+        addrinfo = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        pass
+    else:
+        for result in addrinfo:
+            ip_str = result[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                raise ValueError("URL cannot target internal IP addresses")
 
     prompt = {
         "role": "user",
