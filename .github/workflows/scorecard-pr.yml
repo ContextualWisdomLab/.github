@@ -13,7 +13,7 @@ name: Scorecard PR
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, master, develop]
 
 permissions:
   contents: read
