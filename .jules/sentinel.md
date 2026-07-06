@@ -26,3 +26,7 @@
 **Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
 **Learning:** External URL fetching with `urllib.request.urlopen` (like API endpoints passed via environment variables) can accept schemes like `file://` implicitly, which could allow arbitrary file reading or internal network scanning if the environment is misconfigured or manipulated.
 **Prevention:** Always validate that URLs explicitly start with `http://` or `https://` before using them in standard library requests. Append  to suppress linter warnings only after verifying the input is validated.
+## 2026-07-06 - Scrub Errors from Secondary Subprocess Wrapper
+**Vulnerability:** Information Disclosure / Secret Leakage
+**Learning:** We previously patched the main PR execution script to scrub sensitive tokens from `gh` command failure logs. However, the secondary `pr_review_autofix_context.py` script was missed. When its `run_json` method failed to execute a `gh` command, it threw a `RuntimeError` with the raw, unscrubbed `completed.stderr`, risking leakage of repository tokens or secrets on GitHub Actions runners if a sub-command fails.
+**Prevention:** Always ensure standard error handling functions (like `run_json`) in every script apply uniform secret scrubbing to command output strings before they are raised into exception traceback formats.

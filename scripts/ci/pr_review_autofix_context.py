@@ -17,6 +17,28 @@ REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
+# ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
+# Impact: Improves string processing performance in error reporting.
+SENSITIVE_DATA_SCRUB_PATTERNS = (
+    (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b'), '***'),
+    (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
+    (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
+    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
+)
+
+def scrub_sensitive_data(text: str | None) -> str | None:
+    """Mask sensitive tokens in text to prevent secret leakage."""
+    if not text:
+        return text
+    for pattern, repl in SENSITIVE_DATA_SCRUB_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
+
 def run_json(args: list[str]) -> Any:
     """Run gh and decode JSON."""
     completed = subprocess.run(
@@ -28,7 +50,8 @@ def run_json(args: list[str]) -> Any:
         shell=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip())
+        scrubbed_stderr = scrub_sensitive_data(completed.stderr.strip())
+        raise RuntimeError(f"Command failed ({completed.returncode}): gh\n{scrubbed_stderr}")
     return json.loads(completed.stdout or "null")
 
 
