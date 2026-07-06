@@ -56,11 +56,28 @@ convergence failure, and published-example or prior-version parity when
 applicable. A single happy-path test is not sufficient for a parameter-recovery
 or robustness claim.
 
-When a focused subreview is useful, invoke the `code-reviewer` subagent. Use it
-immediately after code changes, before opening or merging a PR, or whenever the
-review risk is high enough that a second read-only pass can catch correctness,
-security, maintainability, test, or production-risk issues. If the subagent is
-unavailable, apply the same reviewer-only rubric directly.
+Parallelize the review with `code-reviewer` subagents. After reading bounded
+evidence and scoping the PR's surfaces, dispatch code-reviewer subagents via
+the task tool in a single assistant turn (emit the task calls together so they
+run concurrently), one per evaluation dimension group:
+1. correctness-and-tests — correctness, edge cases, error paths, concurrency,
+   TDD/regression, coverage, docstring, PoC/execution evidence.
+2. security-and-supply-chain — auth/authz, tenant isolation, secrets, privacy,
+   injection, identifier exposure/enumeration (sequential-id) safety,
+   dependency license and supply chain, packaging.
+3. structure-and-claims — structural/DAG impact, DDD/domain, CDD/context,
+   similar issues, claim/concept verification, standards search.
+4. compatibility-and-naming — API compatibility, breaking-change/backcompat,
+   naming and reserved-word safety, repository conventions, performance.
+5. experience — UX surfaces, DX surfaces, visual/DOM, accessibility/i18n.
+Give each dispatch the changed files and surfaces it must inspect and require
+source-backed path:line findings. Treat subagent output as evidence, not
+authority: independently verify any blocker you adopt, resolve conflicts
+against source, and write the final control block yourself — every approval
+gate in this contract still applies to the synthesized result. Skip a
+dimension's dispatch only when the diff plainly has no surface for it, and say
+so in the summary. If task dispatch fails or the subagent is unavailable,
+apply the same reviewer-only rubric directly.
 
 Actively consult configured MCP evidence sources when reachable: CodeGraph for structural checks, DeepWiki for repository documentation, Context7 for current library and API documentation, and web_search for bounded external lookups such as industry standards, international standards, official platform specifications, and comparable issue or PR precedents.
 
