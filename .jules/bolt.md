@@ -28,3 +28,6 @@
 ## 2026-07-02 - Credential Masking Security Hole in Subprocess Environments
 **Learning:** Found a critical missing credential masking pattern in `scripts/ci/noema_review_gate.py`'s `scrub_sensitive_data` which didn't mask `Authorization: Basic` or `Proxy-Authorization: Basic` tokens unlike its analogous helper in `scripts/ci/pr_review_merge_scheduler.py`. This leaves exception messages and logs vulnerable to exposing sensitive credentials when HTTP operations fail.
 **Action:** When implementing credential masking functions that sanitize tracebacks and log messages, ensure the masking scope includes all relevant headers, particularly `Authorization` and `Proxy-Authorization`. Ensure parity across masking helpers across CI scripts to prevent blind spots.
+## 2026-07-06 - Avoid redundant full-string regex scans
+**Learning:** Found a micro-optimization opportunity in `scripts/ci/opencode_review_normalize_output.py`. The `label_section` function was fully scanning the review text for all verification labels, doing redundant O(N) work to find the closest boundary.
+**Action:** When finding the closest forward boundary using regex in a string, restrict the search using `pattern.search(text, start)` and track the closest match rather than collecting all match indices and then finding the minimum. This significantly improves performance on long strings.
