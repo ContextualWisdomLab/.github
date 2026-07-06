@@ -101,6 +101,11 @@ assert_reasoning_effort_for_candidate() {
 
 is_context_overflow_failure() {
 	local opencode_json_file="$1"
+	local exit_code="${2:-}"
+
+	if [ "$exit_code" = "124" ]; then
+		return 1
+	fi
 
 	[ -s "$opencode_json_file" ] || return 1
 	grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file"
@@ -132,7 +137,7 @@ run_one_model_attempt() {
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
-		if is_context_overflow_failure "$opencode_json_file"; then
+		if is_context_overflow_failure "$opencode_json_file" "$opencode_status"; then
 			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
@@ -143,7 +148,7 @@ run_one_model_attempt() {
 	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
 		cat "$opencode_json_file"
-		if is_context_overflow_failure "$opencode_json_file"; then
+		if is_context_overflow_failure "$opencode_json_file" "$opencode_status"; then
 			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
