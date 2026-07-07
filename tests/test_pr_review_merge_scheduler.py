@@ -301,6 +301,29 @@ def test_gh_graphql_retries_transient_gateway_errors(monkeypatch):
     assert sleeps == [1, 2]
 
 
+def test_gh_graphql_retries_transient_http2_stream_cancel(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(args, stdin=None):
+        calls.append((args, stdin))
+        if len(calls) == 1:
+            raise RuntimeError(
+                "Command failed (1): gh api graphql\n"
+                "stream error: stream ID 1; CANCEL; received from peer"
+            )
+        return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
+
+    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
+    assert len(calls) == 2
+    assert sleeps == [1]
+
+
 def test_gh_graphql_does_not_retry_non_transient_errors(monkeypatch):
     calls = []
 
