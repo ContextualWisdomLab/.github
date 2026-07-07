@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, develop, master]
   pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   schedule:
     # Weekly scan on protected branches (Mondays at 03:00 UTC).
     - cron: '0 3 * * 1'
@@ -39,10 +40,10 @@ concurrency:
     github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' &&
     format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
     github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
-  # cancel-in-progress deliberately disabled: an attacker could force-push
-  # a benign commit to cancel an in-progress scan of a malicious commit. The
-  # head SHA in PR groups prevents stale scans from serializing newer evidence.
-  cancel-in-progress: false
+  # cancel-in-progress stays disabled for normal PR updates: an attacker could
+  # force-push a benign commit to cancel an in-progress scan of a malicious
+  # commit. Closed PR events only cancel older runs for the same PR/head group.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
 permissions:
   actions: read
@@ -52,7 +53,14 @@ permissions:
   statuses: write
 
 jobs:
+  cancel-closed-pr-runs:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   strix:
+    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
     timeout-minutes: 120
     runs-on: ubuntu-latest
     env:
