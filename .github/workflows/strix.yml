@@ -13,11 +13,6 @@ on:
         description: Optional pull request number for trusted PR-scope evidence
         required: false
         type: string
-      target_repository:
-        description: Optional repository that owns the pull request, in owner/name form
-        required: false
-        default: ""
-        type: string
       pr_base_sha:
         description: Optional pull request base SHA for trusted PR-scope evidence
         required: false
@@ -34,7 +29,7 @@ on:
 
 concurrency:
   group: >-
-    strix-${{ github.event.inputs.target_repository || github.repository }}-${{ github.event_name == 'pull_request_target' &&
+    strix-${{ github.repository }}-${{ github.event_name == 'pull_request_target' &&
     format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
     github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' &&
     format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
@@ -47,9 +42,7 @@ concurrency:
 permissions:
   actions: read
   contents: read
-  id-token: write
   models: read
-  statuses: write
 
 jobs:
   strix:
@@ -65,151 +58,15 @@ jobs:
           disable-file-monitoring: true
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.13"
 
-      - name: Resolve trusted Strix source ref
-        id: trusted_source
+      - name: Materialize trusted workspace
         env:
-          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
-          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
-        run: |
-          set -euo pipefail
-          python3 <<'PY' >>"$GITHUB_OUTPUT"
-          import json
-          import os
-          import re
-          import sys
-
-          try:
-              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
-              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
-          except json.JSONDecodeError as exc:
-              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
-              raise SystemExit(1)
-
-          trusted_repository = str(
-              job_context.get("workflow_repository") or "ContextualWisdomLab/.github"
-          ).strip()
-          trusted_ref = str(
-              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
-          ).strip()
-          workflow_ref = str(
-              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
-          ).strip()
-
-          if not trusted_ref:
-              trusted_ref = "main"
-              prefix = "ContextualWisdomLab/.github/.github/workflows/strix.yml@"
-              if workflow_ref.startswith(prefix):
-                  trusted_ref = workflow_ref.split("@", 1)[1]
-
-          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", trusted_repository):
-              print("::error::Trusted workflow repository resolved to an invalid name.", file=sys.stderr)
-              raise SystemExit(1)
-          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
-              print("::error::Trusted workflow ref resolved to an invalid value.", file=sys.stderr)
-              raise SystemExit(1)
-
-          print(f"repository={trusted_repository}")
-          print(f"ref={trusted_ref}")
-          PY
-
-      - name: Checkout trusted Strix source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ steps.trusted_source.outputs.repository }}
-          fetch-depth: 1
-          persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
-          path: trusted-strix-source
-
-      - name: Export trusted Strix source paths
-        run: |
-          set -euo pipefail
-          trusted_strix_source="$GITHUB_WORKSPACE/trusted-strix-source"
-          test -f "$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
-          test -f "$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
-          test -f "$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"
-          {
-            echo "TRUSTED_STRIX_SOURCE=$trusted_strix_source"
-            echo "TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
-            echo "TRUSTED_STRIX_GATE_TEST=$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
-            echo "TRUSTED_STRIX_REQUIRED_SMOKE=$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"
-          } >> "$GITHUB_ENV"
-
-      - name: Exchange OpenCode app token for target repository reads
-        id: target_app_token
-        env:
-          OIDC_AUDIENCE: opencode-github-action
-          OPENCODE_API_BASE_URL: https://api.opencode.ai
-        run: |
-          set -euo pipefail
-
-          mark_unavailable() {
-            echo "available=false" >>"$GITHUB_OUTPUT"
-          }
-
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
-          fi
-
-          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="&"
-          case "$request_url" in
-            *\?*) ;;
-            *) separator="?" ;;
-          esac
-
-          if ! oidc_response="$(
-            curl -fsS \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-          )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
-          if [ -z "$oidc_token" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          if ! token_response="$(
-            curl -fsS \
-              -X POST \
-              -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-          )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
-            echo "OpenCode app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Materialize target workspace
-        env:
-          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          TARGET_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.inputs.pr_base_sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TRUSTED_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
         run: |
           set -euo pipefail
           trusted_workspace="$RUNNER_TEMP/trusted-workspace"
@@ -217,17 +74,19 @@ jobs:
           git init -q "$trusted_workspace"
           gh auth setup-git
           git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
-          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$TARGET_WORKSPACE_SHA"
-          git -C "$trusted_workspace" checkout --detach --quiet "$TARGET_WORKSPACE_SHA"
-          git -C "$trusted_workspace" cat-file -e "$TARGET_WORKSPACE_SHA^{commit}"
+          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$TRUSTED_WORKSPACE_SHA"
+          git -C "$trusted_workspace" checkout --detach --quiet "$TRUSTED_WORKSPACE_SHA"
+          git -C "$trusted_workspace" cat-file -e "$TRUSTED_WORKSPACE_SHA^{commit}"
           {
             echo "TRUSTED_WORKSPACE=$trusted_workspace"
+            echo "TRUSTED_STRIX_GATE=$trusted_workspace/scripts/ci/strix_quick_gate.sh"
+            echo "TRUSTED_STRIX_GATE_TEST=$trusted_workspace/scripts/ci/test_strix_quick_gate.sh"
           } >> "$GITHUB_ENV"
 
       - name: Fetch pull request head for trusted scan
         if: github.event_name == 'pull_request_target' || github.event.inputs.pr_number != ''
         env:
-          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.inputs.pr_number }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
@@ -284,32 +143,13 @@ jobs:
           echo "::error::PR head ref did not resolve to expected commit $PR_HEAD_SHA after retries." >&2
           exit 1
 
-      - name: Self-test Strix required workflow contract
-        timeout-minutes: 2
-        working-directory: trusted-strix-source
+      - name: Self-test Strix gate script
+        timeout-minutes: 10
+        working-directory: ${{ runner.temp }}/trusted-workspace
         run: |
           set -euo pipefail
-          printf 'Running bounded Strix required-workflow smoke test.\n'
-          bash "$TRUSTED_STRIX_REQUIRED_SMOKE"
-
-      - name: Materialize central Strix dependency lock from PR head
-        if: >-
-          github.event_name == 'pull_request_target'
-          && github.repository == 'ContextualWisdomLab/.github'
-          && github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/.github'
-          && github.event.pull_request.head.repo.full_name == 'ContextualWisdomLab/.github'
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::PR head SHA must be a 40-character git SHA."
-            exit 1
-          fi
-          if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt" 2>/dev/null; then
-            git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt" > "$TRUSTED_STRIX_SOURCE/requirements-strix-ci-hashes.txt"
-            printf 'Materialized central Strix dependency lock from same-repository PR head.\n'
-          fi
+          printf 'Running Strix gate self-test with a 10-minute step timeout.\n'
+          bash "$TRUSTED_STRIX_GATE_TEST"
 
       - name: Gate Strix secrets
         id: gate
@@ -368,13 +208,13 @@ jobs:
 
       - name: Set up Python
         if: steps.gate.outputs.enabled == 'true'
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.13"
 
       - name: Install Strix
         if: steps.gate.outputs.enabled == 'true'
-        working-directory: trusted-strix-source
+        working-directory: ${{ runner.temp }}/trusted-workspace
         run: |
           python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
 
@@ -523,7 +363,6 @@ jobs:
         working-directory: ${{ runner.temp }}/trusted-workspace
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
-          STRIX_REPO_ROOT: ${{ runner.temp }}/trusted-workspace
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
           STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == 'vertex_ai' && 'vertex_ai' || 'openai' }}
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
@@ -539,11 +378,11 @@ jobs:
           VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION || 'us-central1' }}
           STRIX_TARGET_PATH: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && '__PR_SCOPE__' || './' }}
           STRIX_SOURCE_DIRS: ". backend frontend"
-          STRIX_REASONING_EFFORT: high
+          STRIX_REASONING_EFFORT: low
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/gpt-5-chat github_models/openai/o3 github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-r1' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528' || '' }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -601,136 +440,17 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-      - name: Publish same-head manual Strix status
-        if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
-        env:
-          PRIMARY_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          FALLBACK_STATUS_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
-          PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
-          STRIX_RESULT: ${{ job.status }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::PR head SHA must be a 40-character git SHA."
-            exit 1
-          fi
-
-          case "$STRIX_RESULT" in
-            success)
-              state="success"
-              description="Manual workflow_dispatch Strix evidence passed"
-              ;;
-            failure|cancelled|skipped)
-              state="failure"
-              description="Manual workflow_dispatch Strix evidence failed"
-              ;;
-            *)
-              state="error"
-              description="Manual workflow_dispatch Strix evidence inconclusive"
-              ;;
-          esac
-
-          post_strix_status() {
-            token="$1"
-            if [ -z "$token" ]; then
-              return 1
-            fi
-            GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
-              -f state="$state" \
-              -f context="strix" \
-              -f description="$description" \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          }
-
-          if post_strix_status "$PRIMARY_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "$FALLBACK_STATUS_TOKEN"; then
-            exit 0
-          fi
-          echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
-
   publish-manual-pr-evidence-status:
     name: publish-manual-pr-evidence-status
     needs: strix
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       statuses: write
     steps:
-      - name: Exchange OpenCode app token for target repository status
-        id: target_app_token
-        env:
-          OIDC_AUDIENCE: opencode-github-action
-          OPENCODE_API_BASE_URL: https://api.opencode.ai
-        run: |
-          set -euo pipefail
-
-          mark_unavailable() {
-            echo "available=false" >>"$GITHUB_OUTPUT"
-          }
-
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
-          fi
-
-          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="&"
-          case "$request_url" in
-            *\?*) ;;
-            *) separator="?" ;;
-          esac
-
-          if ! oidc_response="$(
-            curl -fsS \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-          )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
-          if [ -z "$oidc_token" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          if ! token_response="$(
-            curl -fsS \
-              -X POST \
-              -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-          )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
-            echo "OpenCode app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
-
       - name: Publish same-head manual Strix status
         env:
-          PRIMARY_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          FALLBACK_STATUS_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
+          GH_TOKEN: ${{ github.token }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ needs.strix.result }}
         run: |
@@ -755,22 +475,8 @@ jobs:
               ;;
           esac
 
-          post_strix_status() {
-            token="$1"
-            if [ -z "$token" ]; then
-              return 1
-            fi
-            GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
-              -f state="$state" \
-              -f context="strix" \
-              -f description="$description" \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          }
-
-          if post_strix_status "$PRIMARY_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "$FALLBACK_STATUS_TOKEN"; then
-            exit 0
-          fi
-          echo "::warning::Could not publish manual Strix status from follow-up job; scan job publishes the authoritative status when target credentials are available."
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
+            -f state="$state" \
+            -f context="strix" \
+            -f description="$description" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

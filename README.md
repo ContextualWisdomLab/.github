@@ -19,20 +19,18 @@ review is approved, no current-head failed check is present, and GitHub reports
 the PR as behind. After that update, the new head must pass OpenCode, Strix,
 required checks, and review-thread gates again before auto-merge or
 `--match-head-commit` merge can proceed.
-Branch updates and merges run through the central scheduler mutation credential:
-`PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, the exchanged OpenCode GitHub
-App token, or finally the target workflow token. The scheduler reports the
-credential class in its decision output. The OpenCode review job does not widen
-its own `pull_request_target` job token to repository-write permission; its
-immediate post-approval scheduler follow-up uses only an explicit merge token or
-the OpenCode app token, otherwise it leaves the separate scheduler required
-workflow and schedule authoritative.
+Branch updates run through the workflow `GITHUB_TOKEN`, so GitHub records those
+mechanical updates as `github-actions[bot]` rather than an OpenCode app token or
+a personal token. That path uses the pull-request branch update API and should
+only need `pull-requests: write`; it does not justify widening repository
+`contents` permission. Merge or auto-merge is a separate mutation. When a repo
+wants GitHub Actions to perform the merge itself, that repo needs an explicit
+scheduler-job `contents: write` policy exception and should expect Scorecard or
+token-permission policy review to notice it.
 That `update_branch` path is deliberately not used for `DIRTY` or
 `CONFLICTING` PRs: GitHub cannot synthesize a safe conflict resolution for the
 author, so the review must give the author a repair path instead of pretending
-the bot can fix it. A current-head approved PR may still keep or queue native
-GitHub auto-merge while the conflict is repaired; queued auto-merge is a wait
-state, not evidence that the conflict is solved.
+the bot can fix it.
 When GitHub reports `DIRTY` or `CONFLICTING`, the scheduler does not pretend to
 fix the branch. It blocks the PR with repair guidance: merge or rebase the
 latest base branch into the PR branch, resolve conflict markers in that PR
@@ -41,67 +39,23 @@ include a compact command block covering `gh pr checkout`, `git fetch`, merge or
 rebase, `git status --short`, resolved-file staging, normal push, and
 `--force-with-lease` only for rebased branches.
 
-Strix, OpenCode, and the scheduler are sourced from the central
-`ContextualWisdomLab/.github` workflows rather than copied into each repository.
-Required-workflow runs execute in the target repository context, so mechanical
-branch updates, stale-thread resolution, and merges use the configured central
-mutation credential while the trusted implementation still comes from the
-central repository. The scheduler dispatches same-head Strix evidence first,
-then dispatches OpenCode for the same PR head when review evidence is missing or
-stale.
-This avoids running PR-head review, CodeGraph, coverage, or PoC code as an
-unbounded local workflow copy.
-Scheduled review-feedback autofix is also centralized. The
-`PR Review Fix Scheduler` dispatches the central `PR Review Autofix` worker in
-`ContextualWisdomLab/.github` and passes the target repository, PR number, base
-SHA, head ref, and head SHA as explicit inputs. The worker mutates only
-same-repository PR heads, rechecks the live head before checkout and before
-push, and commits as `github-actions[bot]` only when a conservative OpenCode
-autofix produces a validated diff. A repository-local autofix worker remains an
-explicit compatibility override through `--autofix-repository`; it is no longer
-the default contract.
+OpenCode review execution is `workflow_dispatch`-only. The scheduler dispatches
+same-head Strix evidence first, then dispatches OpenCode for the same PR head.
+This avoids running PR-head review, CodeGraph, coverage, or PoC code from a
+privileged `pull_request_target` OpenCode workflow.
 Strix keeps `cancel-in-progress: false` so old evidence is not cancelled by a
 force-push, but PR-scoped concurrency includes the head SHA so an obsolete scan
 does not serialize newer current-head evidence.
 
 OpenCode approval is evidence-gated. Before approval, the review summary must
 name changed files, CodeGraph or structural MCP evidence, a Change Flow DAG,
-passing supported test-suite evidence, configured docstring-gate evidence or advisory docstring status, and a concrete
+100% test coverage evidence, 100% docstring coverage evidence, and a concrete
 PoC/execution result. It must also split `Developer experience:` from
 `User experience:` so maintainability/review/CI friction is not confused with
 product, documentation, review-comment, or status-check reader outcomes. The PoC
 can be a temporary scratch repro, focused test, lint, security check,
 performance probe, or UI verification command, but it must be actually run and
-cited. Execution evidence must be sandboxed in the CI workspace or an isolated
-temporary directory, with a credential-scrubbed environment by default and no
-persistent mutation outside test caches or scratch files. When repo-native
-verification legitimately needs network access or GitHub Secrets, pass only the
-specific environment variable names required and record why they were needed.
-The central helper is
-`python3 scripts/ci/sandboxed_verify.py --repo-root <reviewed worktree> --
-<verification command>`; reviews should cite its `SANDBOXED_VERIFY_RESULT` line
-when the helper is used. Use `--network required`, `--allow-env NAME`, and
-`--evidence-note "why"` only for repository-required verification. This helper
-does not replace the existing bash, task, webfetch, websearch, lsp, CodeGraph,
-DeepWiki, Context7, or web_search review policy. Scratch PoC files are not
-committed.
-For web applications with both backend and frontend surfaces, the preferred
-execution proof is the central E2E helper:
-`python3 scripts/ci/sandboxed_web_e2e.py --repo-root <reviewed worktree>
---backend-cmd <backend command> --frontend-cmd <frontend command> --e2e-cmd
-<e2e command>`. Reviews should include readiness URLs when the repository
-defines them and cite `SANDBOXED_WEB_E2E_RESULT`. If a repo lacks an executable
-backend, frontend, E2E, or readiness contract, the review must name the missing
-contract instead of presenting a partial run as full E2E evidence.
-OpenCode bounded evidence also includes a `Review execution contracts` section
-that discovers runtime matrices, package manifests, test, coverage, docstring,
-E2E, lint, security, Docker, and unpackaged-source gaps before the agent chooses
-commands.
-The configured `code-reviewer` subagent is reviewer-only: it may read, grep,
-glob, and run safe local verification commands, but it must not edit files,
-stage changes, commit, push, install dependencies, mutate branches, or touch
-production state. Blocking findings must be source-backed, severity-labeled,
-impactful, remediable, and include suggested verification.
+cited. Scratch PoC files are not committed.
 
 Failed GitHub Checks are not reviewed as URL lists. OpenCode must explain the
 failed check name, failing step, source-backed file and line when available,
