@@ -685,6 +685,206 @@ emit_strix_cancelled_without_log_finding() {
 	printf -- '- Suggested edit: preserve `%s:%s` with `cancel-in-progress: false`, cancel only superseded non-current-head runs when needed, and rerun current-head Strix until logs exist.\n\n' "$path" "$line"
 }
 
+extract_supply_chain_records() {
+	# Parse the failed-check EVIDENCE for supply-chain scanner results
+	# (osv-scanner, trivy-fs, dependency-review) and emit one TSV record per
+	# distinct vulnerability. Supply-chain findings are source-backed because the
+	# scanners name the exact vulnerable package, its manifest file, the
+	# CVE/GHSA advisory id, and the fixed version. Two evidence shapes are
+	# recognized inside a supply-chain failed-check block:
+	#
+	#   1. Canonical structured line (emitted by the failed-check evidence
+	#      collector after it normalizes osv/trivy/dependency-review SARIF and
+	#      dependency-review summaries):
+	#        - Supply-chain vulnerability: id=CVE-2023-32681 severity=HIGH \
+	#          package=requests installed=2.19.0 fixed=2.31.0 manifest=requirements.txt
+	#   2. A Trivy filesystem findings table logged to the job log, grouped by a
+	#      manifest header such as "requirements.txt (pip)".
+	#
+	# TSV columns: manifest, package, installed, fixed, id, severity, evidence, label, line_hint
+	local source_file="$1"
+
+	perl -CS -ne '
+		BEGIN { our (%seen, $in_block, $manifest, $label); $in_block = 0; }
+		sub trim { my ($s) = @_; $s =~ s/^\s+//; $s =~ s/\s+$//; return $s; }
+		sub is_manifest {
+			my ($p) = @_;
+			my $base = $p; $base =~ s#.*/##;
+			return 1 if $base =~ /^(Cargo\.(lock|toml)|uv\.lock|poetry\.lock|Pipfile(\.lock)?|pyproject\.toml|package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|go\.(mod|sum)|Gemfile(\.lock)?|composer(\.lock|\.json)|Package\.resolved|Package\.swift|mix\.lock|pubspec\.(yaml|lock)|gradle\.lockfile|conda-lock\.yml)$/i;
+			return 1 if $base =~ /^requirements[\w.-]*\.(txt|in)$/i;
+			return 0;
+		}
+		sub emit {
+			my ($m,$p,$inst,$fix,$id,$sev,$ev,$lab,$hint) = @_;
+			return unless length $id && length $p && length $m;
+			$hint = "" unless defined $hint && $hint =~ /^[0-9]+$/ && $hint > 0;
+			my $key = lc("$m|$p|$id");
+			return if $seen{$key}++;
+			for my $f ($m,$p,$inst,$fix,$id,$sev,$ev,$lab,$hint) { $f //= ""; $f =~ s/\t/ /g; }
+			print join("\t", $m,$p,$inst,$fix,$id,$sev,$ev,$lab,$hint), "\n";
+		}
+		my $line = $_;
+		$line =~ s/\r//g;
+		$line =~ s/\x1b\[[0-9;?]*[A-Za-z]//g;
+		if ($line =~ /^## Failed check:\s*(.+?)\s*$/) {
+			$label = $1;
+			$in_block = ($label =~ /osv|trivy|dependency[ _-]?review/i) ? 1 : 0;
+			$manifest = "";
+			next;
+		}
+		# A new non-supply-chain section header ends any manifest context.
+		next unless $in_block;
+		my $clean = trim($line);
+
+		# Shape 1: canonical structured supply-chain line (order-independent).
+		if ($clean =~ /Supply-chain vulnerability:/i) {
+			my %kv;
+			while ($clean =~ /(\w+)=([^\s|]+)/g) { $kv{lc $1} = $2; }
+			my $id = $kv{id} // $kv{vuln} // $kv{cve} // $kv{ghsa} // "";
+			my $pkg = $kv{package} // $kv{pkg} // $kv{library} // "";
+			my $man = $kv{manifest} // $kv{file} // $kv{path} // "";
+			my $inst = $kv{installed} // $kv{version} // "";
+			my $fix = $kv{fixed} // $kv{patched} // "";
+			my $sev = uc($kv{severity} // "HIGH");
+			my $hint = $kv{line} // "";
+			emit($man,$pkg,$inst,$fix,$id,$sev,$clean,$label,$hint);
+			next;
+		}
+
+		# Track a Trivy manifest header such as "requirements.txt (pip)".
+		if ($clean =~ m{^([\w./\-]+?)\s+\(([\w.\-]+)\)\s*$}) {
+			$manifest = $1 if is_manifest($1);
+			next;
+		}
+
+		# Shape 2: Trivy findings table row. Cells are separated by the box
+		# drawing bar; the vulnerability id occupies its own cell.
+		if ($clean =~ /[\x{2502}|]/ &&
+			$clean =~ /(CVE-\d{4}-\d{3,}|GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})/i) {
+			my @cells = map { trim($_) } split /[\x{2502}|]/, $clean;
+			@cells = grep { length } @cells;
+			my ($idx) = grep {
+				$cells[$_] =~ /^(CVE-\d{4}-\d{3,}|GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})$/i
+			} 0 .. $#cells;
+			next unless defined $idx;
+			my $id = $cells[$idx];
+			my $pkg = ($idx >= 1) ? $cells[$idx - 1] : "";
+			my $man = $manifest;
+			for my $c (@cells) { if (is_manifest($c)) { $man = $c; last; } }
+			my $sev = "HIGH";
+			my @after = @cells[$idx + 1 .. $#cells];
+			for my $c (@after) { if ($c =~ /^(CRITICAL|HIGH|MEDIUM|LOW)$/i) { $sev = uc $c; last; } }
+			my @vers = grep { /^v?\d[\w.\-+]*$/ } @after;
+			my $inst = @vers ? $vers[0] : "";
+			my $fix = (@vers > 1) ? $vers[1] : "";
+			emit($man,$pkg,$inst,$fix,$id,$sev,$clean,$label,"");
+			next;
+		}
+	' <"$source_file"
+}
+
+emit_supply_chain_findings() {
+	local evidence_file="$1"
+	local records_file
+	local manifest package installed fixed vuln_id severity evidence_line check_label line_hint
+	local resolved base found matches best line pin_line_text
+	local source suggested_line
+
+	records_file="$(mktemp)"
+	tmp_files+=("$records_file")
+	extract_supply_chain_records "$evidence_file" >"$records_file"
+	if [ ! -s "$records_file" ]; then
+		return 0
+	fi
+
+	while IFS=$'\t' read -r manifest package installed fixed vuln_id severity evidence_line check_label line_hint; do
+		if [ -z "$vuln_id" ] || [ -z "$package" ] || [ -z "$manifest" ]; then
+			continue
+		fi
+
+		case "$(printf '%s' "$check_label" | tr '[:upper:]' '[:lower:]')" in
+			*trivy*) source="trivy" ;;
+			*osv*) source="osv-scanner" ;;
+			*dependency*) source="dependency-review" ;;
+			*) source="supply-chain scanner" ;;
+		esac
+
+		# Resolve the manifest under the checked-out repository root. The scanner
+		# names a repo-relative path; if that path is absent (path was reported
+		# relative to a scan subdirectory) fall back to the basename.
+		resolved="$manifest"
+		if [ ! -f "${REPO_ROOT%/}/$resolved" ]; then
+			base="${manifest##*/}"
+			found="$(cd "${REPO_ROOT%/}" 2>/dev/null && git ls-files -- "**/$base" "$base" 2>/dev/null | head -n 1 || true)"
+			if [ -z "$found" ]; then
+				found="$(cd "${REPO_ROOT%/}" 2>/dev/null && find . -name "$base" -not -path '*/.git/*' 2>/dev/null | sed 's#^\./##' | head -n 1 || true)"
+			fi
+			if [ -n "$found" ]; then
+				resolved="$found"
+			fi
+		fi
+
+		# Locate the exact manifest line that pins the vulnerable package. Never
+		# emit line 0; default to line 1 while still citing the scanner evidence.
+		line="1"
+		pin_line_text=""
+		if [ -f "${REPO_ROOT%/}/$resolved" ]; then
+			matches="$(grep -niF -- "$package" "${REPO_ROOT%/}/$resolved" 2>/dev/null || true)"
+			if [ -n "$matches" ] && [ -n "$installed" ]; then
+				best="$(printf '%s\n' "$matches" | grep -F -- "$installed" | head -n 1 || true)"
+			else
+				best=""
+			fi
+			if [ -z "$best" ]; then
+				best="$(printf '%s\n' "$matches" | head -n 1 || true)"
+			fi
+			if [ -n "$best" ]; then
+				line="${best%%:*}"
+				pin_line_text="${best#*:}"
+			elif [[ "$line_hint" =~ ^[0-9]+$ ]] && [ "$line_hint" -ge 1 ]; then
+				# Package name was not grep-locatable in the manifest (common for
+				# transitive lockfile entries); trust the scanner-provided line
+				# from the SARIF location instead of falling back to line 1.
+				line="$line_hint"
+			fi
+		elif [[ "$line_hint" =~ ^[0-9]+$ ]] && [ "$line_hint" -ge 1 ]; then
+			line="$line_hint"
+		fi
+		if ! [[ "$line" =~ ^[0-9]+$ ]] || [ "$line" -lt 1 ]; then
+			line="1"
+		fi
+
+		# Build a GitHub-suggestion-ready diff when the pin line is a simple
+		# version pin that contains the installed version literally.
+		suggested_line=""
+		if [ -n "$pin_line_text" ] && [ -n "$installed" ] && [ -n "$fixed" ] &&
+			printf '%s' "$pin_line_text" | grep -Fq -- "$installed"; then
+			suggested_line="$(INSTALLED="$installed" FIXED="$fixed" perl -pe 's/\Q$ENV{INSTALLED}\E/$ENV{FIXED}/g' <<<"$pin_line_text")"
+			if [ "$suggested_line" = "$pin_line_text" ]; then
+				suggested_line=""
+			fi
+		fi
+
+		finding_index=$((finding_index + 1))
+		printf '### %s. %s %s:%s - Supply-chain vulnerability %s in %s\n' "$finding_index" "${severity:-HIGH}" "$resolved" "$line" "$vuln_id" "$package"
+		printf -- '- Problem: The failed check `%s` reported a supply-chain vulnerability: `%s` affects `%s` %s. Scanner evidence: `%s`.\n' "$check_label" "$vuln_id" "$package" "${installed:-(version reported by scanner)}" "$evidence_line"
+		printf -- '- Root cause: `%s:%s` pins `%s` at %s, which the %s scan flags as vulnerable under `%s` (severity %s). This is a supply-chain/dependency vulnerability, not a scanner infrastructure failure, so it must be fixed in the manifest.\n' "$resolved" "$line" "$package" "${installed:-the affected version}" "$source" "$vuln_id" "${severity:-HIGH}"
+		if [ -n "$fixed" ]; then
+			printf -- '- Fix: bump `%s` from %s to %s in `%s:%s`, regenerate the lockfile if applicable, then rerun the failed `%s` scan.\n' "$package" "${installed:-the affected version}" "$fixed" "$resolved" "$line" "$check_label"
+		else
+			printf -- '- Fix: upgrade `%s` in `%s:%s` to the first release that resolves `%s` (no fixed version was reported in the evidence; consult the advisory), regenerate the lockfile if applicable, then rerun the failed `%s` scan.\n' "$package" "$resolved" "$line" "$vuln_id" "$check_label"
+		fi
+		printf -- '- Regression test: after bumping, rerun the %s scan (osv-scanner / trivy-fs / dependency-review) on the PR head and confirm `%s` for `%s` no longer appears; keep the non-vulnerable version pinned so the advisory cannot regress.\n' "$source" "$vuln_id" "$package"
+		if [ -n "$suggested_line" ]; then
+			printf -- '- Suggested edit: apply this GitHub suggestion on `%s:%s`:\n\n```suggestion\n%s\n```\n\n' "$resolved" "$line" "$suggested_line"
+		elif [ -n "$fixed" ]; then
+			printf -- '- Suggested edit: update `%s:%s` so `%s` requires `%s` or later.\n\n' "$resolved" "$line" "$package" "$fixed"
+		else
+			printf -- '- Suggested edit: update `%s:%s` so `%s` requires the first non-vulnerable release for `%s`.\n\n' "$resolved" "$line" "$package" "$vuln_id"
+		fi
+	done <"$records_file"
+}
+
 strix_evidence_file="$(mktemp)"
 tmp_files+=("$strix_evidence_file")
 extract_strix_failed_check_block "$EVIDENCE_FILE" "$strix_evidence_file"
@@ -710,6 +910,7 @@ emit_known_missing_string_finding \
 
 emit_github_billing_lock_finding
 emit_pytest_failure_findings "$EVIDENCE_FILE"
+emit_supply_chain_findings "$EVIDENCE_FILE"
 emit_cancelled_check_findings "$EVIDENCE_FILE"
 emit_strix_report_findings "$strix_evidence_file"
 emit_strix_provider_failure_finding "$strix_evidence_file"
