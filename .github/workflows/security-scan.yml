@@ -29,8 +29,7 @@ name: Security Scan
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main, master, develop]
-
+  
 concurrency:
   group: security-scan-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
