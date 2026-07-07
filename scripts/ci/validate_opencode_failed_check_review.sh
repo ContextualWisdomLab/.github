@@ -212,27 +212,39 @@ location_re = re.compile(
     r"(?:Code\s+)?Locations?(?:\s+[0-9]+)?\s*:\s*(.+?:[0-9]+(?:-[0-9]+)?)",
     re.IGNORECASE,
 )
+pipe_prefix_re = re.compile(r"^.*?│\s*")
+pipe_suffix_re = re.compile(r"\s*│.*$")
+timestamp_prefix_re = re.compile(r"^.*?[0-9]Z\s+")
+whitespace_re = re.compile(r"\s+")
+new_field_re = re.compile(
+    r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b",
+    re.IGNORECASE,
+)
+box_char_re = re.compile(r"^[╭╰─]+$")
+window_model_re = re.compile(
+    r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)",
+    re.IGNORECASE,
+)
+title_field_re = re.compile(r"^Title:\s+(.+)", re.IGNORECASE)
+severity_field_re = re.compile(r"^Severity:\s+(CRITICAL|HIGH|MEDIUM|LOW|NONE)\b", re.IGNORECASE)
+endpoint_field_re = re.compile(r"^Endpoint:\s+(.+)", re.IGNORECASE)
+method_field_re = re.compile(r"^Method:\s+(.+)", re.IGNORECASE)
+target_field_re = re.compile(r"^Target:\s+(.+)", re.IGNORECASE)
 
 
 def clean(raw_line: str) -> str:
     line = ansi_re.sub("", raw_line).replace("\r", "")
     if "│" in line:
-        line = re.sub(r"^.*?│\s*", "", line)
-        line = re.sub(r"\s*│.*$", "", line)
+        line = pipe_prefix_re.sub("", line)
+        line = pipe_suffix_re.sub("", line)
     else:
-        line = re.sub(r"^.*?[0-9]Z\s+", "", line)
-    line = re.sub(r"\s+", " ", line).strip()
+        line = timestamp_prefix_re.sub("", line)
+    line = whitespace_re.sub(" ", line).strip()
     return line
 
 
 def starts_new_field(line: str) -> bool:
-    return bool(
-        re.match(
-            r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b",
-            line,
-            re.IGNORECASE,
-        )
-    )
+    return bool(new_field_re.match(line))
 
 
 class ReportParser:
@@ -271,11 +283,7 @@ class ReportParser:
         self.finish_report()
         self.in_window = True
         self.window_model = ""
-        match = re.search(
-            r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)",
-            line,
-            re.IGNORECASE,
-        )
+        match = window_model_re.search(line)
         if match:
             self.window_model = match.group(1)
             self.current_model = match.group(1)
@@ -296,7 +304,7 @@ class ReportParser:
             return False
         if not line:
             self.continuation = ""
-        elif not starts_new_field(line) and not re.match(r"^[╭╰─]+$", line) and line.lower() != "vulnerability report":
+        elif not starts_new_field(line) and not box_char_re.match(line) and line.lower() != "vulnerability report":
             if self.continuation == "title":
                 self.title = f"{self.title} {line}".strip()
             elif self.continuation == "endpoint":
@@ -309,28 +317,28 @@ class ReportParser:
         return False
 
     def _parse_field(self, line: str) -> None:
-        field_match = re.match(r"^Title:\s+(.+)", line, re.IGNORECASE)
+        field_match = title_field_re.match(line)
         if field_match:
             self.finish_report()
             self.title = field_match.group(1)
             self.report_model = self.window_model
             self.continuation = "title"
             return
-        field_match = re.match(r"^Severity:\s+(CRITICAL|HIGH|MEDIUM|LOW|NONE)\b", line, re.IGNORECASE)
+        field_match = severity_field_re.match(line)
         if field_match:
             self.severity = field_match.group(1).upper()
             return
-        field_match = re.match(r"^Endpoint:\s+(.+)", line, re.IGNORECASE)
+        field_match = endpoint_field_re.match(line)
         if field_match:
             self.endpoint = field_match.group(1)
             self.continuation = "endpoint"
             return
-        field_match = re.match(r"^Method:\s+(.+)", line, re.IGNORECASE)
+        field_match = method_field_re.match(line)
         if field_match:
             self.method = field_match.group(1)
             self.continuation = ""
             return
-        field_match = re.match(r"^Target:\s+(.+)", line, re.IGNORECASE)
+        field_match = target_field_re.match(line)
         if field_match:
             self.target = field_match.group(1)
             self.continuation = "target"

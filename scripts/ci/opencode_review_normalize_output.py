@@ -228,6 +228,7 @@ HANGUL_RE = re.compile(r"[가-힣]")
 PREFERRED_REVIEW_LANGUAGE_RE = re.compile(
     r"Preferred review language:\s*`?([A-Za-z]+)`?", re.IGNORECASE
 )
+LIST_MARKER_RE = re.compile(r"^[-*+]\s+")
 
 
 def admits_missing_structural_review(reason: str, summary: str) -> bool:
@@ -530,7 +531,7 @@ def changed_files_from_evidence(text: str) -> list[str]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        line = re.sub(r"^[-*+]\s+", "", line)
+        line = LIST_MARKER_RE.sub("", line)
         parts = line.split("\t")
         path = parts[-1].strip()
         if not path or path.startswith("["):
