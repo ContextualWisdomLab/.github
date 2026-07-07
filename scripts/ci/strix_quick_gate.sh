@@ -3402,9 +3402,9 @@ is_model_retryable_error() {
 	fi
 
 	if is_timeout_error; then
-		if provider_signal_fail_closed_enabled; then
-			return 1
-		fi
+		# Process and provider timeouts are not clean evidence, but they are
+		# recoverable across distinct fallback models. Strict provider-signal
+		# mode still fails closed after fallback exhaustion or partial reports.
 		return 0
 	fi
 

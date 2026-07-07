@@ -1,0 +1,66 @@
+# Auto-closes pull requests that have commits but no net change vs. their base
+# (GitHub shows "No files changed / +0 -0"). The org's bot authors sometimes
+# open such empty PRs; this closes them so humans do not have to.
+#
+# Runs per repo as a central required org workflow. pull_request_target gives a
+# write-scoped token (needed to close) without checking out untrusted PR code,
+# so there is no code-execution risk — the job only reads PR metadata and closes.
+# Drafts are left alone.
+name: Close Empty PR
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+
+concurrency:
+  group: close-empty-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
+  close-empty:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close PR when it has no net changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # GitHub computes the diff asynchronously; poll briefly for a settled
+          # changed_files count before deciding (null while still computing).
+          changed=""
+          draft="false"
+          for _ in 1 2 3 4 5 6; do
+            payload="$(gh api "repos/${REPO}/pulls/${PR}")"
+            changed="$(jq -r '.changed_files // ""' <<<"$payload")"
+            draft="$(jq -r '.draft // false' <<<"$payload")"
+            [ -n "$changed" ] && break
+            sleep 10
+          done
+          echo "PR #${PR} changed_files=${changed:-unknown} draft=${draft}"
+
+          if [ "$draft" = "true" ]; then
+            echo "Draft PR — leaving it open."
+            exit 0
+          fi
+          if [ "$changed" = "0" ]; then
+            gh pr comment "${PR}" --repo "${REPO}" \
+              --body "자동 정리: base 대비 실제 변경(diff)이 0건이라 이 PR을 닫습니다. 변경을 추가한 뒤 reopen하세요." || true
+            gh pr close "${PR}" --repo "${REPO}"
+            echo "Closed empty PR #${PR}."
+          else
+            echo "PR has ${changed} changed file(s); leaving it open."
+          fi

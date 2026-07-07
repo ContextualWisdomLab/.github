@@ -1,0 +1,168 @@
+# Central bundled security gate for every ContextualWisdomLab repo.
+#
+# This is a REQUIRED org workflow (see the "CWL Central required workflows"
+# ruleset). It bundles the supply-chain / vulnerability / posture scanners into
+# one gate so they pass or fail as a unit:
+#
+#   osv-scan          HARD  diff-scoped — fails on NEW vulns the PR introduces
+#   dependency-review HARD  diff-scoped — fails on vulnerable/denied deps the PR adds
+#   trivy-fs          HARD  repo-wide   — fails on FIXABLE CRITICAL/HIGH findings
+#   scorecard         SOFT  repo posture — uploaded for visibility, never blocks
+#
+# Gating is by the JOB result (a failed job fails this required workflow ->
+# merge blocked), NOT by the code_scanning ruleset rule. The code_scanning rule
+# stays CodeQL-only on purpose: requiring multiple code-scanning TOOLS there is
+# unsatisfiable because default-setup CodeQL uploads to refs/pull/N/head while
+# pull_request workflows upload to refs/pull/N/merge, so no single ref ever holds
+# all tools. Bundling at the workflow/check level is ref-independent.
+#
+# NOTE on dependency-review: dependency graph can be unavailable on some repos.
+# Treat that as "not enforceable here" instead of making the required workflow
+# unsatisfiable; keep high-severity dependency findings hard-failing where the
+# API is supported.
+#
+# NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
+# CRITICAL/HIGH finding blocks every PR in that repo until it is fixed. Flip its
+# `exit-code` to "0" to make Trivy visibility-only if that is too strict.
+name: Security Scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+    branches: [main, master, develop]
+
+concurrency:
+  group: security-scan-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
+  osv-scan:
+    if: github.event.action != 'closed'
+    # ponytail: reuse upstream diff-scoped PR scanner instead of hand-rolling it
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      fail-on-vuln: true
+
+  dependency-review:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Check dependency review support
+        id: dependency_review_support
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          response_file="$(mktemp)"
+          status="$(
+            curl -fsS -o "$response_file" -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" \
+              || true
+          )"
+
+          if [ "$status" = "200" ]; then
+            echo "supported=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
+            echo "::warning::Dependency review is unavailable for ${REPOSITORY}; skipping dependency-review hard gate."
+            echo "supported=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Dependency review support check failed with HTTP ${status}."
+          cat "$response_file"
+          exit 1
+      - name: Dependency review
+        if: steps.dependency_review_support.outputs.supported == 'true'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  trivy-fs:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "1"
+      - name: Upload Trivy SARIF to code scanning
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-fs
+
+  scorecard:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    # SOFT: posture findings are unrelated to the PR diff, so never block merge.
+    continue-on-error: true
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: false
+      - name: Upload Scorecard SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: results.sarif
+          category: scorecard

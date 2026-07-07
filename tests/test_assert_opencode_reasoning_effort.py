@@ -66,6 +66,13 @@ def test_validate_candidate_reports_missing_and_unqualified_models():
     ]
 
 
+def test_validate_candidate_skips_unknown_non_reasoning_provider_fallbacks():
+    """Unknown provider fallbacks pass when no reasoning-effort support is known."""
+    config = {"provider": {"github-models": {"models": {}}}}
+
+    assert guard.validate_candidate(config, "vertex_ai/fallback-one") == []
+
+
 def test_validate_candidate_reports_each_missing_high_effort_field():
     """Reasoning-capable models must opt into high effort in every required field."""
     config = {

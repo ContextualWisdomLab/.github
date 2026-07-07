@@ -78,6 +78,27 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_models
     assert set(candidate_models).issubset(set(models))
+    assert candidate_models[:3] == [
+        "openai/o4-mini",
+        "openai/o3-mini",
+        "openai/gpt-5-mini",
+    ]
+    assert {
+        "openai/gpt-5-chat",
+        "openai/gpt-5-mini",
+        "openai/gpt-5-nano",
+        "openai/o3",
+        "openai/o3-mini",
+        "openai/o4-mini",
+        "deepseek/deepseek-r1-0528",
+        "deepseek/deepseek-r1",
+        "deepseek/deepseek-v3-0324",
+        "mistral-ai/mistral-medium-2505",
+        "meta/llama-4-maverick-17b-128e-instruct-fp8",
+        "meta/llama-4-scout-17b-16e-instruct",
+    }.issubset(set(candidate_models))
+    for model_name in candidate_models:
+        assert f'"{model_name}": {{' in workflow
 
     def is_reasoning_capable(model_name: str) -> bool:
         return (
@@ -97,6 +118,35 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
             assert model_config.get("reasoning") is not True, model_name
             assert "reasoningEffort" not in model_config.get("options", {}), model_name
             assert "variants" not in model_config, model_name
+
+
+def test_opencode_manual_dispatch_canonical_ref_overrides_workflow_ref():
+    """Allow PR-head workflow bootstrap when the required workflow is pinned to main."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+
+    assert workflow.count('if [ -n "$INPUT_CANONICAL_REF" ]; then') == 2
+    assert workflow.count('trusted_ref="$INPUT_CANONICAL_REF"') == 2
+    assert workflow.count('trusted_ref="${WORKFLOW_REF##*@}"') == 2
+    assert 'trusted_ref="${INPUT_CANONICAL_REF:-main}"' not in workflow
+
+
+def test_opencode_runtime_pin_supports_reasoning_options():
+    """Keep OpenCode runtime new enough to apply model-level reasoning settings."""
+    review_workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+    autofix_workflow = Path(".github/workflows/pr-review-autofix.yml").read_text(
+        encoding="utf-8"
+    )
+
+    for workflow in (review_workflow, autofix_workflow):
+        assert 'OPENCODE_VERSION: "1.17.13"' in workflow
+        assert (
+            "OPENCODE_SHA256: "
+            "157afa289d1a8d9372de0ce19ac726119b937a1f6b201808d46f06e4e59bb348"
+            in workflow
+        )
+        assert 'OPENCODE_VERSION: "1.16.0"' not in workflow
 
 
 def test_code_reviewer_prompt_preserves_review_only_policy():
@@ -201,31 +251,72 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "--config \"$OPENCODE_REVIEW_WORKDIR/opencode.jsonc\"" in workflow
     assert 'timeout --kill-after=15s "${export_timeout_seconds}s" opencode export' in model_pool_runner
     assert "session export did not complete within %ss" in model_pool_runner
-    assert "Read and follow the complete review contract" in model_pool_runner
-    assert "compact launcher as a reduced review policy" in model_pool_runner
+    assert "Follow the complete review contract" in model_pool_runner
+    assert "packet-first entry point" in model_pool_runner
+    assert "Current-head evidence packet" in model_pool_runner
+    assert "not a generic model-exhaustion message" in model_pool_runner
     assert "is_context_overflow_failure" in model_pool_runner
     assert "tokens_limit_reached" in model_pool_runner
     assert "skipping remaining attempts for this model" in model_pool_runner
     assert "approve_low_risk_review_fallback_after_model_exhaustion" not in workflow
     assert "changed_file_is_low_risk_review_fallback" not in workflow
+    assert "approve_central_review_process_fallback" not in workflow
+    assert "opencode.jsonc | \\" in workflow
+    assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
+    assert "tests/test_opencode_agent_contract.py | \\" in workflow
+    assert "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py" in workflow
+    assert "ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml" in workflow
+    assert "ContextualWisdomLab/appguardrail:tests/test_org_security_failure_collector.py" in workflow
+    assert "appguardrail org-security failure collector" in workflow
+    assert 'max_changed_count=3' in workflow
+    assert "changed_count\" -gt \"$max_changed_count\"" in workflow
+    assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
+    assert workflow.index("Detect central review-process scope") < workflow.index(
+        "Initialize CodeGraph index for OpenCode"
+    )
+    assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
+    assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
+    assert "model pool was intentionally skipped" not in workflow
+    assert "deterministic fallback" not in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
+    assert re.search(r"opencode-review-target:[\s\S]{0,240}timeout-minutes: 360", workflow)
     assert 'timeout-minutes: 75' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 20", workflow)
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "81"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
-    assert 'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' in workflow
+    assert (
+        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini '
+        "github-models/openai/o3-mini "
+        "github-models/openai/gpt-5-mini "
+        "github-models/openai/gpt-5-nano "
+        'github-models/openai/gpt-5-chat '
+        "github-models/deepseek/deepseek-r1-0528 "
+        "github-models/deepseek/deepseek-r1 "
+        "github-models/deepseek/deepseek-v3-0324 "
+        "github-models/mistral-ai/mistral-medium-2505 "
+        "github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 "
+        "github-models/meta/llama-4-scout-17b-16e-instruct "
+        "github-models/openai/o3 "
+        'github-models/openai/gpt-5"'
+    ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "240"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "360"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "300"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "4200"' in workflow
+    assert "while :" in model_pool_runner
+    assert "OpenCode model pool has no configured model candidates." in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
+    assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
+    assert 'record_review_status "exhausted"' not in model_pool_runner
+    assert "retry budget exhausted" not in model_pool_runner
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"', workflow)
     assert not re.search(r"--slurp\s*\\\n\s*--jq", workflow)
@@ -387,4 +478,4 @@ def test_opencode_review_thread_jq_filters_preserve_bash_single_quotes():
     )
 
     assert 'gsub("`"; "\'")' not in workflow
-    assert workflow.count('gsub("`"; "&apos;")') == 2
+    assert workflow.count('gsub("`"; "&apos;")') == 4

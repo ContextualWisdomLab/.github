@@ -408,6 +408,27 @@ gh api graphql \
 		| @tsv
 	' >"$manual_success_check_runs"
 
+env HEAD_SHA="$HEAD_SHA" gh run list \
+	--repo "$GH_REPOSITORY" \
+	--workflow strix.yml \
+	--commit "$HEAD_SHA" \
+	--limit 200 \
+	--json databaseId,workflowName,status,conclusion,url,event,headSha \
+	--jq '
+		.[]
+		| select((.event // "") == "workflow_dispatch")
+		| select((.headSha // "") == env.HEAD_SHA)
+		| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
+		| select((.status // "") == "completed")
+		| select((.conclusion // "" | ascii_downcase) == "success")
+		| [
+			"strix",
+			(.url // ""),
+			"Manual workflow_dispatch Strix evidence passed"
+		]
+		| @tsv
+	' >>"$manual_success_check_runs" || true
+
 	env HEAD_SHA="$HEAD_SHA" gh run list \
 		--repo "$GH_REPOSITORY" \
 		--commit "$HEAD_SHA" \

@@ -182,8 +182,8 @@ jobs:
 
       - name: Install OpenCode CLI
         env:
-          OPENCODE_VERSION: "1.16.0"
-          OPENCODE_SHA256: a741c43e737b2033f5e7ee151b162341e441034d6a64b172272a3f3a3729e87d
+          OPENCODE_VERSION: "1.17.13"
+          OPENCODE_SHA256: 157afa289d1a8d9372de0ce19ac726119b937a1f6b201808d46f06e4e59bb348
         run: |
           set -euo pipefail
           archive="${RUNNER_TEMP}/opencode-linux-x64.tar.gz"

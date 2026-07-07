@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from typing import Any
@@ -33,18 +36,25 @@ FAILED_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQU
 RUNNING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING", "EXPECTED"}
 MAX_DIFF_CHARS = 60000
 
+# ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
+# Impact: Improves string processing performance in error reporting.
+SENSITIVE_DATA_SCRUB_PATTERNS = (
+    (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b'), '***'),
+    (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
+    (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
+    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
+)
 
 def scrub_sensitive_data(text: str | None) -> str | None:
     """Mask sensitive tokens in text to prevent secret leakage."""
     if not text:
         return text
-    text = re.sub(r'(?i)(bearer\s+)[^\s"\'\\]+', r'\1***', text)
-    text = re.sub(r'(?i)(token\s+)[^\s"\'\\]+', r'\1***', text)
-    text = re.sub(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b', '***', text)
-    text = re.sub(r'\b(sk-[A-Za-z0-9_-]+)', '***', text)
-    text = re.sub(r'\b(xox[baprs]-[A-Za-z0-9-]+)', '***', text)
-    text = re.sub(r'\b(AKIA[0-9A-Z]{16})', '***', text)
-    text = re.sub(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?', r'\1***', text)
+    for pattern, repl in SENSITIVE_DATA_SCRUB_PATTERNS:
+        text = pattern.sub(repl, text)
     return text
 
 
@@ -267,6 +277,30 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
     if not api_url or not api_key:
         print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
         return None
+    parsed = urllib.parse.urlparse(api_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("URL scheme must be http or https")
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("URL must have a valid hostname")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+        raise ValueError("URL cannot target localhost")
+    try:
+        addrinfo = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        pass
+    else:
+        for result in addrinfo:
+            ip_str = result[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                raise ValueError("URL cannot target internal IP addresses")
+
+    if not (api_url.startswith("http://") or api_url.startswith("https://")):
+        raise ValueError(f"NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities, got: {api_url}")
 
     prompt = {
         "role": "user",
@@ -304,7 +338,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
