@@ -49,3 +49,13 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
 
     assert "central-pr-review-fix-scheduler-" in workflow
     assert "cancel-in-progress: true" in workflow
+
+
+def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> None:
+    workflow = workflow_text("security-scan.yml")
+
+    assert "id: dependency_review_support" in workflow
+    assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
+    assert '"$status" = "403"' in workflow
+    assert '"$status" = "404"' in workflow
+    assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow

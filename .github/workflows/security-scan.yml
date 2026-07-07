@@ -16,6 +16,11 @@
 # pull_request workflows upload to refs/pull/N/merge, so no single ref ever holds
 # all tools. Bundling at the workflow/check level is ref-independent.
 #
+# NOTE on dependency-review: dependency graph can be unavailable on some repos.
+# Treat that as "not enforceable here" instead of making the required workflow
+# unsatisfiable; keep high-severity dependency findings hard-failing where the
+# API is supported.
+#
 # NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
 # CRITICAL/HIGH finding blocks every PR in that repo until it is fixed. Flip its
 # `exit-code` to "0" to make Trivy visibility-only if that is too strict.
@@ -49,12 +54,49 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: Check dependency review support
+        id: dependency_review_support
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          response_file="$(mktemp)"
+          status="$(
+            curl -fsS -o "$response_file" -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" \
+              || true
+          )"
+
+          if [ "$status" = "200" ]; then
+            echo "supported=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
+            echo "::warning::Dependency review is unavailable for ${REPOSITORY}; skipping dependency-review hard gate."
+            echo "supported=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Dependency review support check failed with HTTP ${status}."
+          cat "$response_file"
+          exit 1
       - name: Dependency review
+        if: steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
