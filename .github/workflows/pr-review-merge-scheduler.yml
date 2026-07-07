@@ -125,7 +125,7 @@ concurrency:
     github.event_name == 'workflow_dispatch' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.run_id ||
     github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
   cancel-closed-pr-runs:
