@@ -57,6 +57,25 @@ SAFE_ENV_ALLOWLIST = (
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SENSITIVE_DATA_SCRUB_PATTERNS = (
+    (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b'), '***'),
+    (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
+    (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
+    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
+)
+
+
+def scrub_sensitive_data(text: str | None) -> str | None:
+    """Mask sensitive tokens in text to prevent secret leakage."""
+    if not text:
+        return text
+    for pattern, repl in SENSITIVE_DATA_SCRUB_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -219,13 +238,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_command(args.command, copied_repo, env, args.timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(scrub_sensitive_data(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(scrub_sensitive_data(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
-            stdout = timeout_output_text(exc.stdout)
-            stderr = timeout_output_text(exc.stderr)
+            stdout = scrub_sensitive_data(timeout_output_text(exc.stdout))
+            stderr = scrub_sensitive_data(timeout_output_text(exc.stderr))
             if stdout:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:

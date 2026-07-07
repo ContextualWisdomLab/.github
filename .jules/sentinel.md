@@ -26,3 +26,7 @@
 **Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
 **Learning:** External URL fetching with `urllib.request.urlopen` (like API endpoints passed via environment variables) can accept schemes like `file://` implicitly, which could allow arbitrary file reading or internal network scanning if the environment is misconfigured or manipulated.
 **Prevention:** Always validate that URLs explicitly start with `http://` or `https://` before using them in standard library requests. Append  to suppress linter warnings only after verifying the input is validated.
+## 2025-02-24 - [Information Leakage on Timeout]
+**Vulnerability:** Information Leakage on Subprocess Timeout in sandboxed_verify.py
+**Learning:** When running subprocesses with a timeout in Python using `subprocess.run`, the resulting `subprocess.TimeoutExpired` exception object contains unmasked `stdout` and `stderr` data. The `sandboxed_verify.py` script directly printed this data on timeout, potentially exposing sensitive environment variables or secrets injected during the execution.
+**Prevention:** Ensure all subprocess output, including output retrieved from exception objects (like `TimeoutExpired`), is explicitly sanitized using a token scrubbing function before logging or printing to `stdout/stderr`.

@@ -87,6 +87,14 @@ def test_timeout_output_text_normalizes_subprocess_payloads():
     assert sandboxed_verify.timeout_output_text("text-output") == "text-output"
 
 
+def test_scrub_sensitive_data():
+    """Ensure sensitive data is masked."""
+    assert sandboxed_verify.scrub_sensitive_data(None) is None
+    assert sandboxed_verify.scrub_sensitive_data("bearer token123") == "bearer ***"
+    assert sandboxed_verify.scrub_sensitive_data("GH_TOKEN=ghp_abc123") == "GH_TOKEN=***"
+    assert sandboxed_verify.scrub_sensitive_data("normal text") == "normal text"
+
+
 def test_main_runs_command_in_copy_without_mutating_source(tmp_path, capsys):
     """The wrapper runs commands in the copied workspace, not the source tree."""
     repo = tmp_path / "repo"
