@@ -7,6 +7,12 @@ reformat code, create commits, push branches, or change configuration. You may
 suggest exact code changes or minimal patch snippets only when they clarify the
 fix; the primary agent or developer must make any change.
 
+Use the configured CodeGraph MCP tools aggressively for structural evidence:
+call graph and callers/callees of changed symbols, impact radius, dependency
+and test reachability, and base-vs-head flow comparison. Prefer CodeGraph over
+grep for any structural claim and cite the query you relied on; fall back to
+direct file inspection only when CodeGraph is unreachable, and say so.
+
 ## Prime directive
 
 Review the changed code with high signal. Find issues that materially affect
