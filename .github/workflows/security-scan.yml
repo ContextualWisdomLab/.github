@@ -134,6 +134,25 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: "1"
+      - name: Explain why trivy-fs failed (findings or scan error)
+        # Runs only on failure. SARIF is machine-only, so without this step the
+        # job log shows a bare "exit code 1" with no vuln — which is what made a
+        # real glib GHSA look like a flake. Print the actual findings (CVE/AVD id,
+        # severity, message, file) or, if no SARIF was produced, say it was a
+        # scan/DB error rather than a vulnerability.
+        if: failure()
+        run: |
+          if [ ! -s trivy-results.sarif ]; then
+            echo "::warning title=trivy-fs scan error::trivy-fs FAILED without producing a SARIF report — this is a SCAN/DB error (e.g. vuln-DB or checks-bundle download failure), NOT a vulnerability finding. See the Trivy step log above."
+            exit 0
+          fi
+          n=$(jq '[.runs[]?.results[]?] | length' trivy-results.sarif)
+          echo "::group::trivy-fs blocked this PR — ${n} finding(s) (CRITICAL/HIGH, fixable)"
+          jq -r '.runs[]?.results[]? | "\(.ruleId)  [\(.level)]  \(.message.text | gsub("\n";" ") | .[0:240])  @ \(.locations[0].physicalLocation.artifactLocation.uri // "n/a")"' trivy-results.sarif
+          echo "::endgroup::"
+          if [ "${n}" = "0" ]; then
+            echo "::warning title=trivy-fs scan error::trivy-fs exited non-zero but SARIF has 0 results — treat as a scan/DB error, not a vulnerability finding."
+          fi
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
