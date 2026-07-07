@@ -31,6 +31,38 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "cancel-in-progress: true" in workflow
 
 
+def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
+    workflows = (
+        "close-empty-pr.yml",
+        "codeql-pr.yml",
+        "noema-review.yml",
+        "opencode-review.yml",
+        "osv-scanner-pr.yml",
+        "pr-review-merge-scheduler.yml",
+        "scorecard-pr.yml",
+        "security-scan.yml",
+        "strix.yml",
+    )
+
+    for filename in workflows:
+        workflow = workflow_text(filename)
+
+        assert "closed" in workflow
+        assert "cancel-closed-pr-runs:" in workflow
+        assert (
+            'PR closed; this run only cancels older runs through workflow concurrency.'
+            in workflow
+        )
+        assert "github.event.action != 'closed'" in workflow
+
+    strix = workflow_text("strix.yml")
+
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' && "
+        "github.event.action == 'closed' }}"
+    ) in strix
+
+
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
     for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
         workflow = workflow_text(filename)

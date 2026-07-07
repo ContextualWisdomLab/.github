@@ -7,6 +7,7 @@ name: CodeQL PR
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
     branches: [main, master, develop]
 
 concurrency:
@@ -17,8 +18,15 @@ permissions:
   contents: read
 
 jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   detect-languages:
     name: Detect CodeQL languages
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
@@ -92,7 +100,7 @@ jobs:
   analyze-merge:
     name: CodeQL merge preview (${{ matrix.language }})
     needs: detect-languages
-    if: github.event.pull_request.merge_commit_sha != ''
+    if: github.event.action != 'closed' && github.event.pull_request.merge_commit_sha != ''
     runs-on: ubuntu-latest
     permissions:
       actions: read
