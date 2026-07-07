@@ -8,6 +8,10 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+concurrency:
+  group: osv-scanner-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   # Upload SARIF to Security > Code Scanning. See github/codeql-action#2117.
   actions: read
