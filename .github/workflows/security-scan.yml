@@ -125,6 +125,12 @@ jobs:
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
+          # Pin the Trivy BINARY version (the action otherwise floats to its
+          # bundled default, currently v0.70.0). Without this, CI severities are
+          # non-deterministic and disagree with local repro — e.g. v0.70.0 rated
+          # glib GHSA-wrw7-89jp-8q8g HIGH (blocking) while current Trivy rates it
+          # CVSS-medium. Matches bandscope's own trivy.yml pin.
+          version: v0.71.2
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
