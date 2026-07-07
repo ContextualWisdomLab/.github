@@ -57,6 +57,23 @@ jobs:
       security-events: write
     with:
       fail-on-vuln: true
+      # RELIABILITY: point Maven transitive (parent-POM) resolution at Google's
+      # byte-identical Maven Central mirror instead of repo.maven.apache.org.
+      # osv-scanner resolves parent POMs (e.g. spring-boot-starter-parent) over
+      # its own HTTP client (osv-scalibr pomxmlnet -> defaultRegistry.URL); the
+      # canonical Central host intermittently returns HTTP 429, which failed this
+      # required gate on APPROVED Maven PRs with "No issues found" (a network
+      # flake, not a real vuln). The mirror serves the same maven2 layout and the
+      # same bytes, so coverage is unchanged -- this ONLY swaps the default
+      # registry host. Repos' own pom.xml <repositories> are still added on top
+      # (scalibr AddRegistry), and transitive scanning stays fully enabled (no
+      # --no-resolve). Caching ~/.m2 or a settings.xml <mirror> would NOT help:
+      # osv-scanner never reads ~/.m2/repository and parses settings.xml only for
+      # <servers> auth, not <mirrors>. --maven-registry is the only effective lever.
+      scan-args: |-
+        --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+        -r
+        ./
 
   dependency-review:
     if: github.event.action != 'closed'
