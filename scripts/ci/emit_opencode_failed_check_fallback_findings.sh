@@ -687,8 +687,10 @@ emit_strix_cancelled_without_log_finding() {
 
 extract_supply_chain_records() {
 	# Parse the failed-check EVIDENCE for supply-chain scanner results
-	# (osv-scanner, trivy-fs, dependency-review) and emit one TSV record per
-	# distinct vulnerability. Supply-chain findings are source-backed because the
+	# (osv-scanner, trivy-fs, dependency-review) and emit one record per
+	# distinct vulnerability. Fields are joined with the ASCII Unit Separator
+	# (\x1f), not a tab, so empty interior fields (e.g. a missing installed or
+	# fixed version) survive read-back without shifting later columns. Supply-chain findings are source-backed because the
 	# scanners name the exact vulnerable package, its manifest file, the
 	# CVE/GHSA advisory id, and the fixed version. Two evidence shapes are
 	# recognized inside a supply-chain failed-check block:
@@ -701,7 +703,7 @@ extract_supply_chain_records() {
 	#   2. A Trivy filesystem findings table logged to the job log, grouped by a
 	#      manifest header such as "requirements.txt (pip)".
 	#
-	# TSV columns: manifest, package, installed, fixed, id, severity, evidence, label, line_hint
+	# Record columns (\x1f-separated): manifest, package, installed, fixed, id, severity, evidence, label, line_hint
 	local source_file="$1"
 
 	perl -CS -ne '
@@ -720,8 +722,8 @@ extract_supply_chain_records() {
 			$hint = "" unless defined $hint && $hint =~ /^[0-9]+$/ && $hint > 0;
 			my $key = lc("$m|$p|$id");
 			return if $seen{$key}++;
-			for my $f ($m,$p,$inst,$fix,$id,$sev,$ev,$lab,$hint) { $f //= ""; $f =~ s/\t/ /g; }
-			print join("\t", $m,$p,$inst,$fix,$id,$sev,$ev,$lab,$hint), "\n";
+			for my $f ($m,$p,$inst,$fix,$id,$sev,$ev,$lab,$hint) { $f //= ""; $f =~ s/[\x1f\r\n]/ /g; }
+			print join("\x1f", $m,$p,$inst,$fix,$id,$sev,$ev,$lab,$hint), "\n";
 		}
 		my $line = $_;
 		$line =~ s/\r//g;
@@ -797,7 +799,12 @@ emit_supply_chain_findings() {
 		return 0
 	fi
 
-	while IFS=$'\t' read -r manifest package installed fixed vuln_id severity evidence_line check_label line_hint; do
+	# Records are joined with the ASCII Unit Separator (\x1f), NOT a tab. Tab is an
+	# IFS-whitespace character, so `read` would collapse consecutive tabs and shift
+	# every column left whenever an interior field (e.g. installed or fixed) is
+	# empty. \x1f is not IFS-whitespace, so empty interior fields are preserved
+	# positionally and each value lands in its correct column.
+	while IFS=$'\x1f' read -r manifest package installed fixed vuln_id severity evidence_line check_label line_hint; do
 		if [ -z "$vuln_id" ] || [ -z "$package" ] || [ -z "$manifest" ]; then
 			continue
 		fi
@@ -869,10 +876,15 @@ emit_supply_chain_findings() {
 		printf '### %s. %s %s:%s - Supply-chain vulnerability %s in %s\n' "$finding_index" "${severity:-HIGH}" "$resolved" "$line" "$vuln_id" "$package"
 		printf -- '- Problem: The failed check `%s` reported a supply-chain vulnerability: `%s` affects `%s` %s. Scanner evidence: `%s`.\n' "$check_label" "$vuln_id" "$package" "${installed:-(version reported by scanner)}" "$evidence_line"
 		printf -- '- Root cause: `%s:%s` pins `%s` at %s, which the %s scan flags as vulnerable under `%s` (severity %s). This is a supply-chain/dependency vulnerability, not a scanner infrastructure failure, so it must be fixed in the manifest.\n' "$resolved" "$line" "$package" "${installed:-the affected version}" "$source" "$vuln_id" "${severity:-HIGH}"
-		if [ -n "$fixed" ]; then
-			printf -- '- Fix: bump `%s` from %s to %s in `%s:%s`, regenerate the lockfile if applicable, then rerun the failed `%s` scan.\n' "$package" "${installed:-the affected version}" "$fixed" "$resolved" "$line" "$check_label"
+		# The upgrade target must always be a version (or an instruction), never a
+		# CVE/GHSA id. Phrase the fix around which of installed/fixed we actually
+		# have so a missing version never produces a broken sentence.
+		if [ -n "$fixed" ] && [ -n "$installed" ]; then
+			printf -- '- Fix: bump `%s` from %s to %s in `%s:%s`, regenerate the lockfile if applicable, then rerun the failed `%s` scan.\n' "$package" "$installed" "$fixed" "$resolved" "$line" "$check_label"
+		elif [ -n "$fixed" ]; then
+			printf -- '- Fix: upgrade `%s` to %s in `%s:%s`, regenerate the lockfile if applicable, then rerun the failed `%s` scan.\n' "$package" "$fixed" "$resolved" "$line" "$check_label"
 		else
-			printf -- '- Fix: upgrade `%s` in `%s:%s` to the first release that resolves `%s` (no fixed version was reported in the evidence; consult the advisory), regenerate the lockfile if applicable, then rerun the failed `%s` scan.\n' "$package" "$resolved" "$line" "$vuln_id" "$check_label"
+			printf -- '- Fix: no fixed version is available upstream for `%s` %s; remove or replace the dependency, or pin to a patched fork, in `%s:%s`, then rerun the failed `%s` scan.\n' "$package" "${installed:-(version reported by scanner)}" "$resolved" "$line" "$check_label"
 		fi
 		printf -- '- Regression test: after bumping, rerun the %s scan (osv-scanner / trivy-fs / dependency-review) on the PR head and confirm `%s` for `%s` no longer appears; keep the non-vulnerable version pinned so the advisory cannot regress.\n' "$source" "$vuln_id" "$package"
 		if [ -n "$suggested_line" ]; then

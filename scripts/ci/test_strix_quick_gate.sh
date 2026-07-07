@@ -2093,6 +2093,82 @@ EOF
 	rm -rf "$tmp_dir"
 }
 
+assert_opencode_failed_check_fallback_preserves_empty_supply_chain_columns() {
+	# Regression for the record-delimiter bug: the internal per-vulnerability
+	# record was joined with a TAB and read back with `IFS=$'\t'`. Tab is an
+	# IFS-whitespace character, so `read` collapsed consecutive tabs and any empty
+	# interior field (missing installed OR missing fixed) shifted every later
+	# column left by one — producing garbled findings such as a severity word in
+	# the advisory-id slot and a CVE id in the version slot. The collector appends
+	# installed=/fixed= only when present, so both are common real inputs.
+	local tmp_dir
+	local fixture_repo
+	local evidence_file
+	local output_file
+	local stderr_file
+	tmp_dir="$(mktemp -d)"
+	fixture_repo="$tmp_dir/repo"
+	evidence_file="$tmp_dir/failed-check-evidence.md"
+	output_file="$tmp_dir/fallback.md"
+	stderr_file="$tmp_dir/fallback.err"
+	mkdir -p "$fixture_repo"
+
+	cat >"$fixture_repo/requirements.txt" <<'EOF'
+flask==2.0.1
+requests==2.19.0
+EOF
+
+	# Record 1: installed is MISSING (osv/trivy SARIF alert with no installed
+	# version). Record 2: fixed is MISSING (no-fix advisory). Both interior gaps
+	# used to collapse and shift columns.
+	cat >"$evidence_file" <<'EOF'
+# Failed GitHub Check Evidence
+
+- PR: #77
+- Head SHA: `abc123def456abc123def456abc123def456abcd`
+- Repository: `ContextualWisdomLab/clearfolio`
+
+## Failed check: OSV-Scanner/osv-scan
+
+- Type: `check_run`
+- Conclusion: `FAILURE`
+- Details URL: https://github.com/ContextualWisdomLab/clearfolio/actions/runs/28863381355
+
+### Supply-chain vulnerability findings
+
+- Supply-chain vulnerability: id=CVE-2020-0001 severity=CRITICAL package=flask fixed=2.0.2 manifest=requirements.txt
+- Supply-chain vulnerability: id=GHSA-aaaa-bbbb-cccc severity=HIGH package=requests installed=2.19.0 manifest=requirements.txt
+EOF
+
+	bash "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" \
+		"$evidence_file" "$fixture_repo" >"$output_file" 2>"$stderr_file"
+
+	# Record 1 (installed missing): the advisory id must be the CVE (NOT the
+	# severity word), the package must be flask, and the fix target must be the
+	# fixed VERSION (2.0.2), never the CVE id in the version slot.
+	assert_file_contains "$output_file" "Supply-chain vulnerability CVE-2020-0001 in flask" "empty installed keeps the advisory id in the title, not the severity word"
+	assert_file_not_contains "$output_file" "Supply-chain vulnerability CRITICAL in flask" "empty installed does not shift the severity word into the advisory-id slot"
+	assert_file_contains "$output_file" "upgrade \`flask\` to 2.0.2" "empty installed still names the concrete fixed version as the upgrade target"
+	assert_file_not_contains "$output_file" "to CVE-2020-0001" "the CVE id never appears in the upgrade/version slot"
+
+	# Record 2 (fixed missing): the advisory id must be the GHSA (NOT the severity
+	# word), installed must be the real version, and the fix must say no upstream
+	# fix is available — never 'bump ... to <GHSA id>'.
+	assert_file_contains "$output_file" "Supply-chain vulnerability GHSA-aaaa-bbbb-cccc in requests" "empty fixed keeps the advisory id in the title, not the severity word"
+	assert_file_contains "$output_file" "no fixed version is available upstream for \`requests\` 2.19.0" "empty fixed produces a sensible no-fix instruction with the real installed version"
+	assert_file_not_contains "$output_file" "to GHSA-aaaa-bbbb-cccc" "the GHSA id never appears in the upgrade/version slot"
+	assert_file_not_contains "$output_file" "from GHSA-aaaa-bbbb-cccc" "the GHSA id never appears in the from-version slot"
+
+	# Columns are not shifted: severity lands in the severity slot for both.
+	assert_file_contains "$output_file" "CRITICAL requirements.txt" "record 1 severity stays in the severity column"
+	assert_file_contains "$output_file" "HIGH requirements.txt" "record 2 severity stays in the severity column"
+
+	# Line numbers stay positive (never 0), even with empty interior fields.
+	assert_file_not_contains "$output_file" ":0 - Supply-chain" "empty interior fields never produce a line-zero finding"
+
+	rm -rf "$tmp_dir"
+}
+
 assert_opencode_failed_check_fallback_rejects_url_only_supply_chain() {
 	local tmp_dir
 	local fixture_repo
@@ -7347,6 +7423,8 @@ assert_opencode_failed_check_fallback_emits_each_strix_report
 assert_opencode_failed_check_fallback_explains_pytest_and_cancelled_checks
 
 assert_opencode_failed_check_fallback_maps_supply_chain_vulnerabilities
+
+assert_opencode_failed_check_fallback_preserves_empty_supply_chain_columns
 
 assert_opencode_failed_check_fallback_rejects_url_only_supply_chain
 
