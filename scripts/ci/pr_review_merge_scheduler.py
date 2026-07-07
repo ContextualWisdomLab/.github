@@ -552,8 +552,10 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "i/o timeout",
     "server error",
     "service unavailable",
+    "stream error",
     "temporary failure",
     "timeout",
+    "received from peer",
 )
 
 
