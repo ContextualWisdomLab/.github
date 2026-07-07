@@ -2720,7 +2720,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--review-dispatch-limit",
         type=int,
-        default=int(os.environ.get("REVIEW_DISPATCH_LIMIT", "-1")),
+        default=int(os.environ.get("REVIEW_DISPATCH_LIMIT", "1")),
         help="Maximum OpenCode/Strix review dispatch actions per scheduler run; -1 means unlimited",
     )
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)
