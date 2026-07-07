@@ -129,7 +129,14 @@ concurrency:
 
 jobs:
   scan-pr-queue:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled'
+    # workflow_dispatch review runs do not reliably carry pull_requests metadata.
+    # Without this guard, one completed central review can wake a repo-wide scan.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (
+        github.event.workflow_run.conclusion != 'cancelled' &&
+        github.event.workflow_run.pull_requests[0].number
+      )
     runs-on: ubuntu-latest
     permissions:
       actions: write
