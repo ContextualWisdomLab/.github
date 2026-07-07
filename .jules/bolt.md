@@ -28,6 +28,3 @@
 ## 2026-07-02 - Credential Masking Security Hole in Subprocess Environments
 **Learning:** Found a critical missing credential masking pattern in `scripts/ci/noema_review_gate.py`'s `scrub_sensitive_data` which didn't mask `Authorization: Basic` or `Proxy-Authorization: Basic` tokens unlike its analogous helper in `scripts/ci/pr_review_merge_scheduler.py`. This leaves exception messages and logs vulnerable to exposing sensitive credentials when HTTP operations fail.
 **Action:** When implementing credential masking functions that sanitize tracebacks and log messages, ensure the masking scope includes all relevant headers, particularly `Authorization` and `Proxy-Authorization`. Ensure parity across masking helpers across CI scripts to prevent blind spots.
-## 2026-07-06 - Avoid recursive list allocations in JSON extraction
-**Learning:** In recursive tree-walking functions like `extract_dicts`, using `results.extend()` on the results of recursive calls allocates many intermediate lists, leading to unnecessary memory overhead and slower execution times, especially on deeply nested JSON objects.
-**Action:** Optimize recursive collection functions by passing a single mutable list instance (e.g. `results`) down through the call stack and using `list.append()` or `list.extend()` to mutate it in-place rather than concatenating returned lists.

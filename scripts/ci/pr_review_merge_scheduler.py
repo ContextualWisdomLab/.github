@@ -109,13 +109,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
 OPEN_PRS_PAGE_SIZE = 25
-# Must exceed the opencode-review job timeout (360 min) plus typical runner-queue
-# wait. QUEUED counts as running and the age clock starts at check creation, so a
-# 45-minute threshold marked every queued/long review "stale" and re-dispatched
-# it; each re-dispatch went to the back of the runner queue and itself went
-# stale, multiplying load until the org queue saturated. 420 only recovers
-# genuinely zombie checks that outlive any legitimate run.
-DEFAULT_STALE_OPENCODE_MINUTES = 420
+DEFAULT_STALE_OPENCODE_MINUTES = 45
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
@@ -1566,24 +1560,7 @@ def inspect_pr(
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
     if base_ref != base_branch:
-        # Stacked/cascade PR (base is another feature branch). Org required
-        # workflows are only injected for default-branch-target PRs, so these
-        # PRs never receive an OpenCode review on their own — dispatch one here.
-        # Merge automation stays default-branch-only; rulesets do not gate
-        # feature-branch merges.
-        opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
-        if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
-            dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
-            return Decision(
-                number,
-                "review_dispatch",
-                f"stacked PR onto {base_ref}; OpenCode review dispatched",
-            )
-        return Decision(
-            number,
-            "skip",
-            f"stacked PR onto {base_ref}; OpenCode review {opencode_state}",
-        )
+        return Decision(number, "skip", f"base branch is {base_ref}; expected {base_branch}")
 
     outdated_cleanup_count = resolve_outdated_review_threads(pr, dry_run=dry_run)
 

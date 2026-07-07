@@ -1545,12 +1545,7 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(isDraft=True)).action == "skip"
-    stacked = inspect(make_pr(baseRefName="develop"))
-    assert stacked.action == "review_dispatch"
-    assert stacked.reason == "stacked PR onto develop; OpenCode review dispatched"
-    stacked_no_dispatch = inspect(make_pr(baseRefName="develop"), trigger_reviews=False)
-    assert stacked_no_dispatch.action == "skip"
-    assert stacked_no_dispatch.reason == "stacked PR onto develop; OpenCode review absent"
+    assert inspect(make_pr(baseRefName="develop")).reason == "base branch is develop; expected main"
     external_head = inspect(make_pr(headRepository={"nameWithOwner": "fork/repo"}, isCrossRepository=True))
     assert external_head.action == "security_dispatch"
     conflict = inspect(

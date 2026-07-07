@@ -472,4 +472,4 @@ def test_opencode_review_thread_jq_filters_preserve_bash_single_quotes():
     )
 
     assert 'gsub("`"; "\'")' not in workflow
-    assert workflow.count('gsub("`"; "&apos;")') == 4
+    assert workflow.count('gsub("`"; "&apos;")') == 2

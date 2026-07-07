@@ -53,7 +53,7 @@ on:
       stale_opencode_minutes:
         description: Redispatch OpenCode Review when an in-progress OpenCode check is older than this many minutes
         required: false
-        default: "420"
+        default: "45"
         type: string
       project_flow:
         description: Project flow, usually github-flow or git-flow
@@ -113,7 +113,7 @@ on:
       stale_opencode_minutes:
         description: Redispatch OpenCode Review when an in-progress OpenCode check is older than this many minutes
         required: false
-        default: "420"
+        default: "45"
 
 concurrency:
   group: >-
@@ -149,7 +149,7 @@ jobs:
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
       UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.update_branches == true }}
-      STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '420' }}
+      STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '45' }}
     steps:
       - name: Exchange OpenCode app token for scheduler mutations
         id: scheduler_app_token
