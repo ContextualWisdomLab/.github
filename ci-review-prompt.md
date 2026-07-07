@@ -71,7 +71,11 @@ run concurrently), one per evaluation dimension group:
    naming and reserved-word safety, repository conventions, performance.
 5. experience — UX surfaces, DX surfaces, visual/DOM, accessibility/i18n.
 Give each dispatch the changed files and surfaces it must inspect and require
-source-backed path:line findings. Treat subagent output as evidence, not
+source-backed path:line findings. Require every dispatched subagent to use the
+configured CodeGraph MCP tools for its structural questions — callers/callees,
+impact radius, dependency and test reachability, base-vs-head flow — before it
+concludes, and to cite the CodeGraph query it relied on; grep-only structural
+claims are not sufficient when CodeGraph is reachable. Treat subagent output as evidence, not
 authority: independently verify any blocker you adopt, resolve conflicts
 against source, and write the final control block yourself — every approval
 gate in this contract still applies to the synthesized result. Skip a
