@@ -36,3 +36,16 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
         workflow = workflow_text(filename)
 
         assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
+
+
+def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert "github.event.workflow_run.pull_requests[0].number" in workflow
+
+
+def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
+    workflow = workflow_text("pr-review-fix-scheduler.yml")
+
+    assert "central-pr-review-fix-scheduler-" in workflow
+    assert "cancel-in-progress: true" in workflow
