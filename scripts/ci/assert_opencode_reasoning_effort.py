@@ -47,11 +47,15 @@ def validate_candidate(config: dict[str, Any], candidate: str) -> list[str]:
     except ValueError as exc:
         return [str(exc)]
 
-    if not config_for_model:
+    if not config_for_model and (
+        provider == "github-models" or is_known_reasoning_capable(model_name)
+    ):
         return [
             f"OpenCode candidate {candidate} is not defined in opencode.jsonc "
             f"under provider {provider}."
         ]
+    if not config_for_model:
+        return []
 
     configured_reasoning = config_for_model.get("reasoning") is True
     should_require_effort = configured_reasoning or is_known_reasoning_capable(model_name)

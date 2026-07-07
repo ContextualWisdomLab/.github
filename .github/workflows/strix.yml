@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, develop, master]
   pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   schedule:
     # Weekly scan on protected branches (Mondays at 03:00 UTC).
     - cron: '0 3 * * 1'
@@ -39,10 +40,10 @@ concurrency:
     github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' &&
     format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
     github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
-  # cancel-in-progress deliberately disabled: an attacker could force-push
-  # a benign commit to cancel an in-progress scan of a malicious commit. The
-  # head SHA in PR groups prevents stale scans from serializing newer evidence.
-  cancel-in-progress: false
+  # cancel-in-progress stays disabled for normal PR updates: an attacker could
+  # force-push a benign commit to cancel an in-progress scan of a malicious
+  # commit. Closed PR events only cancel older runs for the same PR/head group.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
 permissions:
   actions: read
@@ -52,7 +53,14 @@ permissions:
   statuses: write
 
 jobs:
+  cancel-closed-pr-runs:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   strix:
+    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
     timeout-minutes: 120
     runs-on: ubuntu-latest
     env:
@@ -258,6 +266,7 @@ jobs:
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
             fi
             if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" 2>/dev/null; then
+              mkdir -p "$TRUSTED_WORKSPACE/scripts/ci"
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"
             fi
             git -C "$TRUSTED_WORKSPACE" update-ref "refs/remotes/pull/${PR_NUMBER}/head" "$PR_HEAD_SHA"
@@ -272,6 +281,7 @@ jobs:
                 git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
               fi
               if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" 2>/dev/null; then
+                mkdir -p "$TRUSTED_WORKSPACE/scripts/ci"
                 git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"
               fi
               exit 0
@@ -604,8 +614,10 @@ jobs:
       - name: Publish same-head manual Strix status
         if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
         env:
-          PRIMARY_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          FALLBACK_STATUS_TOKEN: ${{ github.token }}
+          TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
+          OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ job.status }}
@@ -632,21 +644,43 @@ jobs:
           esac
 
           post_strix_status() {
-            token="$1"
+            token_label="$1"
+            token="$2"
             if [ -z "$token" ]; then
               return 1
             fi
-            GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
+            status_response="$(mktemp)"
+            status_error="$(mktemp)"
+            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
               -f state="$state" \
               -f context="strix" \
               -f description="$description" \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              >"$status_response" 2>"$status_error"; then
+              rm -f "$status_response" "$status_error"
+              echo "Published manual Strix status to ${TARGET_REPOSITORY}@${PR_HEAD_SHA} using ${token_label}."
+              return 0
+            fi
+            error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
+            rm -f "$status_response" "$status_error"
+            if [ -n "$error_summary" ]; then
+              echo "::notice::Manual Strix status publish using ${token_label} did not succeed: ${error_summary}"
+            else
+              echo "::notice::Manual Strix status publish using ${token_label} did not succeed."
+            fi
+            return 1
           }
 
-          if post_strix_status "$PRIMARY_STATUS_TOKEN"; then
+          if post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
             exit 0
           fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "$FALLBACK_STATUS_TOKEN"; then
+          if post_strix_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
@@ -728,8 +762,10 @@ jobs:
 
       - name: Publish same-head manual Strix status
         env:
-          PRIMARY_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          FALLBACK_STATUS_TOKEN: ${{ github.token }}
+          TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
+          OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ needs.strix.result }}
@@ -756,21 +792,43 @@ jobs:
           esac
 
           post_strix_status() {
-            token="$1"
+            token_label="$1"
+            token="$2"
             if [ -z "$token" ]; then
               return 1
             fi
-            GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
+            status_response="$(mktemp)"
+            status_error="$(mktemp)"
+            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
               -f state="$state" \
               -f context="strix" \
               -f description="$description" \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              >"$status_response" 2>"$status_error"; then
+              rm -f "$status_response" "$status_error"
+              echo "Published manual Strix status to ${TARGET_REPOSITORY}@${PR_HEAD_SHA} using ${token_label}."
+              return 0
+            fi
+            error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
+            rm -f "$status_response" "$status_error"
+            if [ -n "$error_summary" ]; then
+              echo "::notice::Manual Strix status publish using ${token_label} did not succeed: ${error_summary}"
+            else
+              echo "::notice::Manual Strix status publish using ${token_label} did not succeed."
+            fi
+            return 1
           }
 
-          if post_strix_status "$PRIMARY_STATUS_TOKEN"; then
+          if post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
             exit 0
           fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "$FALLBACK_STATUS_TOKEN"; then
+          if post_strix_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           echo "::warning::Could not publish manual Strix status from follow-up job; scan job publishes the authoritative status when target credentials are available."
