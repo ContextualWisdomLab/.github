@@ -2335,7 +2335,16 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 350
+        # Fail fast on a hung/rate-limited model pool. The pool script
+        # (run_opencode_review_model_pool.sh) loops over the model candidates
+        # indefinitely, relying on THIS step timeout as its only wall-clock
+        # bound (OPENCODE_TOTAL_RETRY_BUDGET_SECONDS is intentionally 0). At 350
+        # the step burned the whole multi-hour job budget and hard-failed with
+        # "timed out after 350 minutes", never producing a pass/fail and
+        # blocking merges org-wide. A healthy lead model emits a full review
+        # well within this window, so 30 min preserves a real review + limited
+        # fallback while capping a pathological hang at minutes, not hours.
+        timeout-minutes: 30
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2357,10 +2366,11 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 min per model — generous for a deep tool-using review, but bounded
-          # so a rate-limited model yields to the next one instead of eating the
-          # 350-min step. (20400s = 340min gave one model the entire budget with
-          # no fallback; 600s was too short for a proper review.)
+          # Per-model upper bound for a deep tool-using review. The step's
+          # fail-fast timeout-minutes (30) supersedes this when a model hangs, so
+          # a rate-limited model can no longer eat a multi-hour step budget.
+          # (600s was too short for a proper review; the step cap now provides
+          # the hard wall-clock bound instead of a 340min single-model budget.)
           OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"
