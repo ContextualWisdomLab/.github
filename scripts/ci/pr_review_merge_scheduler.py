@@ -552,8 +552,10 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "i/o timeout",
     "server error",
     "service unavailable",
+    "stream error",
     "temporary failure",
     "timeout",
+    "received from peer",
 )
 
 
@@ -1566,7 +1568,24 @@ def inspect_pr(
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
     if base_ref != base_branch:
-        return Decision(number, "skip", f"base branch is {base_ref}; expected {base_branch}")
+        # Stacked/cascade PR (base is another feature branch). Org required
+        # workflows are only injected for default-branch-target PRs, so these
+        # PRs never receive an OpenCode review on their own — dispatch one here.
+        # Merge automation stays default-branch-only; rulesets do not gate
+        # feature-branch merges.
+        opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+        if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
+            dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            return Decision(
+                number,
+                "review_dispatch",
+                f"stacked PR onto {base_ref}; OpenCode review dispatched",
+            )
+        return Decision(
+            number,
+            "skip",
+            f"stacked PR onto {base_ref}; OpenCode review {opencode_state}",
+        )
 
     outdated_cleanup_count = resolve_outdated_review_threads(pr, dry_run=dry_run)
 
@@ -2703,7 +2722,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--review-dispatch-limit",
         type=int,
-        default=int(os.environ.get("REVIEW_DISPATCH_LIMIT", "-1")),
+        default=int(os.environ.get("REVIEW_DISPATCH_LIMIT", "1")),
         help="Maximum OpenCode/Strix review dispatch actions per scheduler run; -1 means unlimited",
     )
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)

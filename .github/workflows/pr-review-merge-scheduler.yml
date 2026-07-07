@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop, master]
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, auto_merge_enabled]
+    types: [opened, synchronize, reopened, ready_for_review, auto_merge_enabled, closed]
   workflow_run:
     workflows: ["Required OpenCode Review", "Strix Security Scan"]
     types: [completed]
@@ -33,7 +33,7 @@ on:
       review_dispatch_limit:
         description: Maximum OpenCode/Strix review dispatch actions per scheduler run
         required: false
-        default: "-1"
+        default: "1"
         type: string
       enable_auto_merge:
         description: Enable auto-merge for current-head approved PRs
@@ -95,7 +95,7 @@ on:
       review_dispatch_limit:
         description: Maximum OpenCode/Strix review dispatch actions per scheduler run
         required: false
-        default: "-1"
+        default: "1"
       enable_auto_merge:
         description: Enable auto-merge for current-head approved PRs
         required: false
@@ -125,10 +125,30 @@ concurrency:
     github.event_name == 'workflow_dispatch' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.run_id ||
     github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
+  cancel-closed-pr-runs:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   scan-pr-queue:
+    # workflow_dispatch review runs do not reliably carry pull_requests metadata.
+    # Without this guard, one completed central review can wake a repo-wide scan.
+    if: >-
+      (
+        github.event_name != 'pull_request_target' ||
+        github.event.action != 'closed'
+      ) &&
+      (
+        github.event_name != 'workflow_run' ||
+        (
+          github.event.workflow_run.conclusion != 'cancelled' &&
+          github.event.workflow_run.pull_requests[0].number
+        )
+      )
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -145,7 +165,7 @@ jobs:
       PROJECT_FLOW_INPUT: ${{ inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || inputs.trigger_reviews == true }}
-      REVIEW_DISPATCH_LIMIT_INPUT: ${{ inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '' }}
+      REVIEW_DISPATCH_LIMIT_INPUT: ${{ inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
       UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.update_branches == true }}

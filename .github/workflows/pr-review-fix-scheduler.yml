@@ -88,7 +88,7 @@ on:
 
 concurrency:
   group: central-pr-review-fix-scheduler-${{ inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   dispatch-review-fixes:

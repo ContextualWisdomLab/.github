@@ -10,14 +10,25 @@ name: Close Empty PR
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+
+concurrency:
+  group: close-empty-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   pull-requests: write
   contents: read
 
 jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   close-empty:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - name: Close PR when it has no net changes
