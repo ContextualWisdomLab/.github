@@ -10,3 +10,6 @@
 ## 2026-06-25 - Avoid N+1 API blocking in PR checks
 **Learning:** In backend processing scripts, synchronous iterations calling an external service, such as fetching `restMergeableState` per PR, cause N+1 API bottlenecks and stall pipeline execution linearly. This matters for PR schedulers handling multiple PRs.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` for independent network calls in a loop, and bound `max_workers` to avoid API rate limits.
+## 2024-05-20 - N+1 API blocking in Python REST API scripts
+**Learning:** In backend processing scripts, synchronous iterations calling an external service, such as fetching REST API PR node details inside a loop, cause N+1 API bottlenecks and stall pipeline execution linearly.
+**Action:** Use `concurrent.futures.ThreadPoolExecutor` combined with `executor.map` for independent network calls in a loop, bounding `max_workers` to avoid API rate limits, while preserving the array return order.
