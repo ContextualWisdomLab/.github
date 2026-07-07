@@ -28,6 +28,7 @@ name: Security Scan
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
     branches: [main, master, develop]
 
 concurrency:
@@ -40,7 +41,14 @@ permissions:
   security-events: write
 
 jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   osv-scan:
+    if: github.event.action != 'closed'
     # ponytail: reuse upstream diff-scoped PR scanner instead of hand-rolling it
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     permissions:
@@ -51,6 +59,7 @@ jobs:
       fail-on-vuln: true
 
   dependency-review:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -103,6 +112,7 @@ jobs:
           comment-summary-in-pr: on-failure
 
   trivy-fs:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -132,6 +142,7 @@ jobs:
           category: trivy-fs
 
   scorecard:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
