@@ -297,6 +297,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "github-models/mistral-ai/mistral-medium-2505 "
         "github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 "
         "github-models/meta/llama-4-scout-17b-16e-instruct "
+        "openai/gpt-5-mini "
+        "openai/o4-mini "
         "github-models/openai/o3 "
         'github-models/openai/gpt-5"'
     ) in workflow
