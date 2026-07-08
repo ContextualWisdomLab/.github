@@ -99,10 +99,19 @@ assert_reasoning_effort_for_candidate() {
 		"$model_candidate"
 }
 
+is_transient_rate_limit() {
+	local opencode_json_file="$1"
+	[ -s "$opencode_json_file" ] || return 1
+	grep -Fq 'Too many requests. For more on scraping GitHub' "$opencode_json_file"
+}
+
 is_context_overflow_failure() {
 	local opencode_json_file="$1"
 
 	[ -s "$opencode_json_file" ] || return 1
+	if is_transient_rate_limit "$opencode_json_file"; then
+		return 1
+	fi
 	grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file"
 }
 
@@ -132,6 +141,10 @@ run_one_model_attempt() {
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
+		if is_transient_rate_limit "$opencode_json_file"; then
+			printf 'OpenCode %s attempt %s/%s hit a transient rate limit; treating as retryable.\n' "$model_candidate" "$attempt" "$attempts"
+			return 3
+		fi
 		if is_context_overflow_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
@@ -230,6 +243,9 @@ main() {
 				fi
 				if [ "$run_status" -eq 2 ]; then
 					break
+				fi
+				if [ "$run_status" -eq 3 ] && [ "$attempt" -ge "$attempts" ]; then
+					attempts=$((attempts + 1))
 				fi
 				retry_sleep="$(backoff_sleep "$attempt")"
 				if [ "$deadline" -gt 0 ] && [ $((SECONDS + retry_sleep)) -gt "$deadline" ]; then

@@ -28,3 +28,7 @@
 ## 2026-07-02 - Credential Masking Security Hole in Subprocess Environments
 **Learning:** Found a critical missing credential masking pattern in `scripts/ci/noema_review_gate.py`'s `scrub_sensitive_data` which didn't mask `Authorization: Basic` or `Proxy-Authorization: Basic` tokens unlike its analogous helper in `scripts/ci/pr_review_merge_scheduler.py`. This leaves exception messages and logs vulnerable to exposing sensitive credentials when HTTP operations fail.
 **Action:** When implementing credential masking functions that sanitize tracebacks and log messages, ensure the masking scope includes all relevant headers, particularly `Authorization` and `Proxy-Authorization`. Ensure parity across masking helpers across CI scripts to prevent blind spots.
+
+## 2025-02-24 - Transient Rate Limit Overflows
+**Bottleneck:** CI LLM Model Pool script failed to distinguish rate limits from context overflows, causing it to incorrectly abort and skip to the next model, leading to job-level timeouts.
+**Pattern:** Always explicitly identify transient rate limit strings (e.g. 'Too many requests. For more on scraping GitHub') and allow dynamic retry limit expansion within exponential backoff loops rather than silently giving up and failing over to the next candidate model.
