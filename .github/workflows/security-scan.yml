@@ -124,6 +124,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Trivy filesystem scan
+        id: trivy_scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
@@ -134,6 +135,32 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: "1"
+      # The scan above emits SARIF only, so when it exits non-zero the job log
+      # shows no reason. Render the produced SARIF as a human-readable table so a
+      # person reading the run log sees the exact package/CVE/misconfig + fixed
+      # version that failed the gate (no re-scan; reuses trivy-results.sarif).
+      - name: Report Trivy findings (reason this gate failed)
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        run: |
+          set -uo pipefail
+          echo "::group::Trivy CRITICAL/HIGH findings (reason this gate failed)"
+          if command -v trivy >/dev/null 2>&1 && trivy convert --format table trivy-results.sarif; then
+            :
+          else
+            echo "trivy convert unavailable; parsing trivy-results.sarif via jq:"
+            jq -r '
+              .runs[]? as $run
+              | ($run.tool.driver.rules // []) as $rules
+              | $run.results[]?
+              | . as $r
+              | ($rules[] | select(.id == $r.ruleId) | .properties."security-severity") as $sev
+              | "- [" + ($r.level // "warning") + "] " + ($r.ruleId // "?")
+                + (if $sev then " security-severity=" + $sev else "" end)
+                + " " + (($r.locations[0].physicalLocation.artifactLocation.uri) // "")
+                + ": " + (($r.message.text // "") | split("\n")[0])
+            ' trivy-results.sarif || echo "could not parse trivy-results.sarif"
+          fi
+          echo "::endgroup::"
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
