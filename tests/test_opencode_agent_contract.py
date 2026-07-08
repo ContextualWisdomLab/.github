@@ -283,7 +283,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
-    assert re.search(r"opencode-review-target:[\s\S]{0,240}timeout-minutes: 360", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]{0,360}timeout-minutes: 360", workflow)
     assert 'timeout-minutes: 75' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "81"' in workflow
@@ -418,7 +418,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "steps.scheduler_app_token.outputs.token" in workflow
     assert "SCHEDULER_READ_TOKEN: ${{ github.token }}" in workflow
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
-    assert 'default: "-1"' in workflow
+    assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
 
 
