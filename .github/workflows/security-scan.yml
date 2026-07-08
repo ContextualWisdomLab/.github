@@ -22,8 +22,11 @@
 # API is supported.
 #
 # NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
-# CRITICAL/HIGH finding blocks every PR in that repo until it is fixed. Flip its
-# `exit-code` to "0" to make Trivy visibility-only if that is too strict.
+# CRITICAL/HIGH finding blocks every PR in that repo until it is fixed. The scan
+# writes SARIF only; the "Report Trivy findings and gate" step then prints each
+# finding to the run log and fails the job, so the cause is always visible (a
+# bare "exit code 1" with no reason is never enough). To make Trivy
+# visibility-only, drop that gate step (or `exit 0` inside it).
 name: Security Scan
 
 on:
@@ -123,6 +126,10 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      # Scan writes SARIF only (exit-code 0 here). The gate step below reads that
+      # SARIF and fails the job WITH the specific finding printed to the run log,
+      # so a human never sees a bare "exit code 1" with no reason. format:sarif
+      # otherwise sends every finding to a file and prints nothing to the log.
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
@@ -133,13 +140,47 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-results.sarif
-          exit-code: "1"
+          exit-code: "0"
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
+      # HARD gate + reason logging: print each FIXABLE CRITICAL/HIGH finding
+      # (rule, severity, path:line, message) and fail if any exist. Keeps the
+      # same blocking behavior as exit-code:1 but makes the cause visible.
+      - name: Report Trivy findings and gate
+        if: always()
+        env:
+          SARIF: trivy-results.sarif
+        run: |
+          set -euo pipefail
+          if [ ! -f "$SARIF" ]; then
+            echo "::error::Trivy did not produce $SARIF; the scan step failed before writing results. See the 'Trivy filesystem scan' step log above for the underlying error."
+            exit 1
+          fi
+          count="$(jq '[.runs[].results[]?] | length' "$SARIF")"
+          if [ "$count" -eq 0 ]; then
+            echo "trivy-fs: no FIXABLE CRITICAL/HIGH vuln/secret/misconfig findings."
+            exit 0
+          fi
+          echo "::error::trivy-fs found ${count} FIXABLE CRITICAL/HIGH finding(s). Each is listed below; fix the package/secret/misconfig or scope a justified suppression in the repo's trivy.yaml / .trivyignore.yaml."
+          jq -r '
+            .runs[] as $run
+            | ($run.tool.driver.rules // []) as $rules
+            | $run.results[]?
+            | . as $res
+            | ($rules[] | select(.id == $res.ruleId)) as $rule
+            | ($res.locations[0].physicalLocation // {}) as $loc
+            | "::group::[" + ($res.ruleId // "unknown")
+              + "] " + (($rule.properties.tags // []) | map(select(. == "CRITICAL" or . == "HIGH")) | join(",") | if . == "" then "" else . + " " end)
+              + (($loc.artifactLocation.uri) // "n/a")
+              + ((if $loc.region.startLine then ":" + ($loc.region.startLine | tostring) else "" end))
+              + "\n" + (($res.message.text // "") | gsub("\n"; "\n  "))
+              + "\n::endgroup::"
+          ' "$SARIF"
+          exit 1
 
   scorecard:
     if: github.event.action != 'closed'
