@@ -1,0 +1,5 @@
+# Runtime dependencies for the agentic Noema review gate (scripts/ci/noema_review_gate.py).
+# Pydantic-AI (MIT) drives the second-reviewer agent; the OpenAI extra provides the
+# OpenAI-compatible chat client used against the configured NOEMA_LLM_* endpoint.
+# All transitive licenses are permissive (MIT / Apache-2.0 / BSD); no GPL/AGPL.
+pydantic-ai-slim[openai]==2.6.0

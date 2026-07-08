@@ -161,6 +161,11 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
+      - name: Install Noema review agent dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --no-input -r requirements-noema-review.txt
+
       - name: Run Noema LLM review and submit verdict
         env:
           GH_TOKEN: ${{ steps.noema_app_token.outputs.token }}
@@ -168,6 +173,8 @@ jobs:
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
           NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || '' }}
+          NOEMA_CODEGRAPH_INDEX_PATH: ${{ vars.NOEMA_CODEGRAPH_INDEX_PATH || '' }}
+          NOEMA_TOOL_MAX_FILE_CHARS: ${{ vars.NOEMA_TOOL_MAX_FILE_CHARS || '' }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then

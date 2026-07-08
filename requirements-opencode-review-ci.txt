@@ -2,3 +2,4 @@ coverage==7.14.3
 interrogate==1.7.0
 pytest==9.1.1
 uv==0.11.25
+pydantic-ai-slim[openai]==2.6.0

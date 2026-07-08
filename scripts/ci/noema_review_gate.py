@@ -12,9 +12,15 @@ import socket
 import subprocess
 import sys
 import urllib.parse
-import urllib.request
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.models import Model
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 
 PRIMARY_REVIEW_AUTHORS = {
@@ -35,6 +41,18 @@ IGNORED_RUNNING_CHECKS = {
 FAILED_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 RUNNING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING", "EXPECTED"}
 MAX_DIFF_CHARS = 60000
+DEFAULT_TOOL_FILE_CHARS = 200000
+
+NOEMA_SYSTEM_PROMPT = (
+    "You are Noema, an independent, complementary pull request reviewer for ContextualWisdomLab. "
+    "A primary reviewer (OpenCode) has already approved the current head against the bounded diff, "
+    "so restating diff-visible issues adds no value. Differentiate by investigating impact radius and "
+    "cross-file correctness with your read-only tools: fetch full file contents when a diff is truncated "
+    "or its cross-file behavior is unclear, read prior review threads to avoid repeating resolved feedback, "
+    "and query the CodeGraph index for caller/impact context when it is available. Return request_changes "
+    "only for concrete, blocking issues on the current head; otherwise approve, or comment for non-blocking "
+    "observations."
+)
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -269,14 +287,81 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return json.loads(stripped[start : end + 1])
 
 
-def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: bool) -> dict[str, Any] | None:
-    """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
-    api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
-    api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
-    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
-    if not api_url or not api_key:
-        print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
-        return None
+@dataclass(frozen=True)
+class NoemaSettings:
+    """Immutable Noema configuration resolved from the KV/settings source."""
+
+    llm_api_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "noema-default"
+    review_token_source: str = "NOEMA_REVIEW_TOKEN"
+    codegraph_index_path: str = ""
+    max_tool_file_chars: int = DEFAULT_TOOL_FILE_CHARS
+
+
+def _settings_snapshot(env: Mapping[str, str] | None) -> Mapping[str, str]:
+    """Return the raw settings snapshot from an explicit source, a KV export, or the process boundary."""
+    if env is not None:
+        return env
+    raw = os.environ.get("NOEMA_SETTINGS_JSON", "").strip()
+    if raw:
+        loaded = json.loads(raw)
+        return {str(key): str(value) for key, value in loaded.items()}
+    return os.environ
+
+
+def load_settings(env: Mapping[str, str] | None = None) -> NoemaSettings:
+    """Load Noema settings from the KV/settings source instead of scattered os.getenv reads."""
+    snapshot = _settings_snapshot(env)
+
+    def _get(key: str) -> str:
+        """Return a trimmed string value from the settings snapshot for a single key."""
+        return str(snapshot.get(key, "") or "").strip()
+
+    raw_max = _get("NOEMA_TOOL_MAX_FILE_CHARS")
+    try:
+        max_tool_file_chars = int(raw_max) if raw_max else DEFAULT_TOOL_FILE_CHARS
+    except ValueError:
+        max_tool_file_chars = DEFAULT_TOOL_FILE_CHARS
+    return NoemaSettings(
+        llm_api_url=_get("NOEMA_LLM_API_URL"),
+        llm_api_key=_get("NOEMA_LLM_API_KEY"),
+        llm_model=_get("NOEMA_LLM_MODEL") or "noema-default",
+        review_token_source=_get("NOEMA_REVIEW_TOKEN_SOURCE") or "NOEMA_REVIEW_TOKEN",
+        codegraph_index_path=_get("NOEMA_CODEGRAPH_INDEX_PATH"),
+        max_tool_file_chars=max_tool_file_chars,
+    )
+
+
+class ReviewFinding(BaseModel):
+    """A single Noema finding matching the historical {severity,file,line,message} shape."""
+
+    severity: Literal["high", "medium", "low"] = "low"
+    file: str = "unknown"
+    line: int | None = None
+    message: str = ""
+
+
+class ReviewVerdict(BaseModel):
+    """Structured Noema verdict matching the historical {decision,summary,findings[]} schema."""
+
+    decision: Literal["approve", "request_changes", "comment"]
+    summary: str = ""
+    findings: list[ReviewFinding] = Field(default_factory=list)
+
+
+@dataclass
+class ReviewDeps:
+    """Read-only dependencies exposed to Noema agent tools for a single PR review."""
+
+    repo: str
+    number: int
+    head_sha: str
+    settings: NoemaSettings
+
+
+def validate_llm_endpoint(api_url: str) -> None:
+    """Validate the configured LLM endpoint URL to prevent SSRF to internal targets."""
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme.lower() not in {"http", "https"}:
         raise ValueError("URL scheme must be http or https")
@@ -288,65 +373,162 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
     try:
         addrinfo = socket.getaddrinfo(hostname, None)
     except socket.gaierror:
-        pass
-    else:
-        for result in addrinfo:
-            ip_str = result[4][0]
-            try:
-                ip = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-                raise ValueError("URL cannot target internal IP addresses")
+        return
+    for result in addrinfo:
+        ip_str = result[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            raise ValueError("URL cannot target internal IP addresses")
 
-    if not (api_url.startswith("http://") or api_url.startswith("https://")):
-        raise ValueError(f"NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities, got: {api_url}")
 
-    prompt = {
-        "role": "user",
-        "content": "\n".join(
-            [
-                "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
-                "Review the PR diff for correctness, security, maintainability, and behavioral regressions.",
-                "Return only JSON with this shape:",
-                '{"decision":"approve|request_changes|comment","summary":"...","findings":[{"severity":"high|medium|low","file":"path","line":1,"message":"..."}]}',
-                "Use request_changes only for blocking, concrete issues. Use approve when no blocking issue is found.",
-                f"Repository: {repo}",
-                f"PR: #{number}",
-                f"Title: {pr.get('title') or ''}",
-                f"Head SHA: {pr.get('headRefOid') or ''}",
-                f"Diff truncated: {truncated}",
-                "Diff:",
-                diff,
-            ]
-        ),
-    }
-    payload = {
-        "model": model,
-        "temperature": 0,
-        "messages": [
-            {"role": "system", "content": "Return strict JSON only. Do not include markdown."},
-            prompt,
-        ],
-    }
-    request = urllib.request.Request(
-        api_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "authorization": f"Bearer {api_key}",
-            "content-type": "application/json",
-        },
-        method="POST",
+def derive_openai_base_url(api_url: str) -> str:
+    """Derive an OpenAI-compatible base URL from the configured chat-completions endpoint."""
+    trimmed = api_url.strip().rstrip("/")
+    suffix = "/chat/completions"
+    if trimmed.endswith(suffix):
+        trimmed = trimmed[: -len(suffix)]
+    return trimmed or api_url.strip()
+
+
+def _tool_error(prefix: str, exc: Exception) -> str:
+    """Return a scrubbed, agent-visible error string for a failed read-only tool call."""
+    return f"error: {prefix}: {scrub_sensitive_data(str(exc)) or 'command failed'}"
+
+
+def tool_fetch_changed_file(deps: ReviewDeps, path: str) -> str:
+    """Return the full current-head contents of a changed file beyond the diff truncation."""
+    clean = path.strip()
+    if not clean or clean.startswith("/") or ".." in clean.split("/"):
+        return f"error: refusing to fetch unsafe path {path!r}"
+    quoted = urllib.parse.quote(clean)
+    args = ["gh", "api", f"repos/{deps.repo}/contents/{quoted}", "-H", "Accept: application/vnd.github.raw"]
+    if deps.head_sha:
+        args.extend(["-f", f"ref={deps.head_sha}"])
+    try:
+        content = run(args)
+    except RuntimeError as exc:
+        return _tool_error(f"unable to fetch {clean}", exc)
+    limit = deps.settings.max_tool_file_chars
+    if len(content) > limit:
+        content = content[:limit] + "\n...[truncated]..."
+    return content
+
+
+def tool_fetch_review_threads(deps: ReviewDeps) -> str:
+    """Return prior inline review comments so Noema complements rather than repeats them."""
+    try:
+        raw = run(["gh", "api", f"repos/{deps.repo}/pulls/{deps.number}/comments", "--paginate"])
+    except RuntimeError as exc:
+        return _tool_error("unable to fetch review threads", exc)
+    try:
+        comments = json.loads(raw) if raw.strip() else []
+    except json.JSONDecodeError:
+        return "error: review thread response was not valid JSON"
+    lines: list[str] = []
+    for comment in comments[:50]:
+        if not isinstance(comment, dict):
+            continue
+        author = ((comment.get("user") or {}).get("login")) or "unknown"
+        comment_path = comment.get("path") or "unknown"
+        comment_line = comment.get("line") or comment.get("original_line")
+        body = str(comment.get("body") or "").strip().replace("\n", " ")
+        location = f"{comment_path}:{comment_line}" if comment_line else str(comment_path)
+        lines.append(f"- {author} @ {location}: {body}")
+    return "\n".join(lines) if lines else "No prior inline review comments."
+
+
+def tool_query_codegraph(deps: ReviewDeps, query: str) -> str:
+    """Query the target repo CodeGraph index for caller/impact context when configured."""
+    index = deps.settings.codegraph_index_path.strip()
+    if not index:
+        return "CodeGraph index is not configured; impact-radius lookups are unavailable."
+    cleaned = query.strip()
+    if not cleaned:
+        return "error: codegraph query was empty"
+    try:
+        return run(["codegraph", "explore", "-p", index, cleaned])
+    except RuntimeError as exc:
+        return _tool_error("codegraph query failed", exc)
+
+
+def build_review_prompt(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: bool) -> str:
+    """Build the initial Noema review instruction referencing the bounded diff and available tools."""
+    return "\n".join(
+        [
+            f"Repository: {repo}",
+            f"PR: #{number}",
+            f"Title: {pr.get('title') or ''}",
+            f"Head SHA: {pr.get('headRefOid') or ''}",
+            f"Diff truncated at {MAX_DIFF_CHARS} chars: {truncated}",
+            "Investigate impact radius and cross-file correctness using your read-only tools before deciding.",
+            "Diff:",
+            diff,
+        ]
     )
-    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
-    data = json.loads(raw)
-    content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-    verdict = extract_json_object(content)
-    decision = str(verdict.get("decision") or "").strip().lower()
-    if decision not in {"approve", "request_changes", "comment"}:
-        raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
-    return verdict
+
+
+def build_review_model(settings: NoemaSettings) -> Model:
+    """Construct an OpenAI-compatible chat model from validated Noema settings."""
+    provider = OpenAIProvider(base_url=derive_openai_base_url(settings.llm_api_url), api_key=settings.llm_api_key)
+    return OpenAIChatModel(settings.llm_model, provider=provider)
+
+
+def build_review_agent(settings: NoemaSettings, model: Model | None = None) -> Agent[ReviewDeps, ReviewVerdict]:
+    """Build the Noema Pydantic-AI review agent with read-only PR inspection tools."""
+    agent: Agent[ReviewDeps, ReviewVerdict] = Agent(
+        model or build_review_model(settings),
+        output_type=ReviewVerdict,
+        deps_type=ReviewDeps,
+        system_prompt=NOEMA_SYSTEM_PROMPT,
+        retries=2,
+    )
+
+    @agent.tool
+    def fetch_changed_file(ctx: RunContext[ReviewDeps], path: str) -> str:
+        """Return the full current-head contents of a changed file (beyond the diff truncation)."""
+        return tool_fetch_changed_file(ctx.deps, path)
+
+    @agent.tool
+    def fetch_review_threads(ctx: RunContext[ReviewDeps]) -> str:
+        """Return prior inline review comments so Noema avoids duplicating resolved feedback."""
+        return tool_fetch_review_threads(ctx.deps)
+
+    @agent.tool
+    def query_codegraph(ctx: RunContext[ReviewDeps], query: str) -> str:
+        """Query the target repo CodeGraph index for caller/impact context (if configured)."""
+        return tool_query_codegraph(ctx.deps, query)
+
+    return agent
+
+
+def call_llm(
+    repo: str,
+    number: int,
+    pr: dict[str, Any],
+    diff: str,
+    truncated: bool,
+    *,
+    settings: NoemaSettings | None = None,
+    agent: Agent[ReviewDeps, ReviewVerdict] | None = None,
+) -> dict[str, Any] | None:
+    """Run the Noema Pydantic-AI review agent and return a {decision,summary,findings} verdict."""
+    resolved = settings if settings is not None else load_settings()
+    if not resolved.llm_api_url or not resolved.llm_api_key:
+        print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
+        return None
+    validate_llm_endpoint(resolved.llm_api_url)
+    review_agent = agent if agent is not None else build_review_agent(resolved)
+    deps = ReviewDeps(
+        repo=repo,
+        number=number,
+        head_sha=str(pr.get("headRefOid") or ""),
+        settings=resolved,
+    )
+    result = review_agent.run_sync(build_review_prompt(repo, number, pr, diff, truncated), deps=deps)
+    return result.output.model_dump()
 
 
 def format_findings(findings: Any) -> list[str]:
@@ -367,12 +549,19 @@ def format_findings(findings: Any) -> list[str]:
     return lines
 
 
-def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdict: dict[str, Any]) -> None:
+def submit_review(
+    repo: str,
+    number: int,
+    pr: dict[str, Any],
+    actor: str,
+    verdict: dict[str, Any],
+    settings: NoemaSettings | None = None,
+) -> None:
     """Submit the Noema review verdict to the pull request."""
     head_sha = str(pr.get("headRefOid") or "")
     decision = str(verdict.get("decision") or "comment").lower()
     event = "APPROVE" if decision == "approve" else "REQUEST_CHANGES" if decision == "request_changes" else "COMMENT"
-    source = os.environ.get("NOEMA_REVIEW_TOKEN_SOURCE") or "NOEMA_REVIEW_TOKEN"
+    source = (settings if settings is not None else load_settings()).review_token_source
     summary = str(verdict.get("summary") or "Noema completed an independent LLM review.").strip()
     findings = format_findings(verdict.get("findings"))
     body = "\n".join(
@@ -436,10 +625,11 @@ def inspect_and_review(repo: str, number: int) -> int:
             print(f"- {blocker}")
         return 0
     diff, truncated = fetch_diff(repo, number)
-    verdict = call_llm(repo, number, pr, diff, truncated)
+    settings = load_settings()
+    verdict = call_llm(repo, number, pr, diff, truncated, settings=settings)
     if verdict is None:
         return 0
-    submit_review(repo, number, pr, actor, verdict)
+    submit_review(repo, number, pr, actor, verdict, settings=settings)
     return 0
 
 
