@@ -614,27 +614,21 @@ jobs:
 
       # Best-effort source-side emission of per-finding security issues into the
       # ContextualWisdomLab/appguardrail tracker. This step must never change the
-      # Strix pass/fail gate: the mint and emit steps both continue-on-error, and
-      # the emitter itself is internally best-effort (always exits 0). When the
-      # GitHub App is not yet provisioned (STRIX_ISSUE_APP_ID/PRIVATE_KEY unset)
-      # the emitter runs in DRY-RUN and only logs the intended issue operations.
-      # See docs/strix-appguardrail-issues.md for the required App and secrets.
-      - name: Mint appguardrail issue app token
-        id: strix_issue_token
-        if: ${{ always() && steps.gate.outputs.enabled == 'true' && secrets.STRIX_ISSUE_APP_ID != '' && secrets.STRIX_ISSUE_APP_PRIVATE_KEY != '' }}
-        continue-on-error: true
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
-        with:
-          app-id: ${{ secrets.STRIX_ISSUE_APP_ID }}
-          private-key: ${{ secrets.STRIX_ISSUE_APP_PRIVATE_KEY }}
-          owner: ContextualWisdomLab
-          repositories: appguardrail
-
+      # Strix pass/fail gate: it is continue-on-error and the emitter itself is
+      # internally best-effort (always exits 0).
+      #
+      # Auth reuses the EXISTING OpenCode GitHub App token that this job already
+      # OIDC-exchanges for cross-repo reads/status (steps.target_app_token) -- no
+      # new GitHub App and no new org secrets are provisioned. If that token is
+      # unavailable (OIDC exchange failed) or lacks Issues: write on appguardrail,
+      # the emitter degrades to DRY-RUN / swallows the write and only logs the
+      # intended issue operations. See docs/strix-appguardrail-issues.md for the
+      # one-time OpenCode App permission/installation step this emitter relies on.
       - name: Emit per-finding Strix issues to appguardrail
         if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
         continue-on-error: true
         env:
-          STRIX_ISSUE_APP_TOKEN: ${{ steps.strix_issue_token.outputs.token || '' }}
+          STRIX_ISSUE_APP_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           SOURCE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           SOURCE_PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.inputs.pr_number }}
           SOURCE_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.inputs.pr_head_sha || github.sha }}

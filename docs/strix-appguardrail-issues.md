@@ -17,7 +17,7 @@ also never worked because its GitHub App identity was never provisioned.
 | ---- | ---- |
 | `scripts/ci/strix_emit_appguardrail_issues.py` | Parses reports, plans and applies issue operations. Pure parsing/planning + a thin `gh api` client. |
 | `tests/test_strix_emit_appguardrail_issues.py` | Unit tests: parsing, dedup hashing, op planning, close-on-fix set difference, incomplete-scan guard, dry-run and live execution. |
-| `.github/workflows/strix.yml` (final steps) | Mints the App token and runs the emitter after the scan/gate, best-effort. |
+| `.github/workflows/strix.yml` (final steps) | Runs the emitter after the scan/gate, best-effort, reusing the OpenCode App token the job already OIDC-exchanges. |
 
 ## How it works
 
@@ -76,39 +76,49 @@ so the safe behaviour is the default.
 
 ### Authentication and DRY-RUN
 
-The emitter needs a GitHub App installation token with **Issues: write** on
-`appguardrail` (the org `github.token` cannot create issues cross-repo). The
-workflow mints one with `actions/create-github-app-token` and passes it via the
-`STRIX_ISSUE_APP_TOKEN` environment variable.
+The emitter needs a token with **Issues: write** on `appguardrail` (the org
+`github.token` cannot create issues cross-repo). Instead of provisioning a new
+GitHub App, the workflow **reuses the OpenCode GitHub App token it already
+obtains** — the same token minted by the `Exchange OpenCode app token for target
+repository reads` step (`steps.target_app_token`), which the job already uses for
+cross-repo reads and status writes. That token is exchanged over OIDC
+(`POST https://api.opencode.ai/exchange_github_app_token`) with **no stored
+secret** and passed to the emitter via the `STRIX_ISSUE_APP_TOKEN` environment
+variable. **No new GitHub App and no new org secrets are created.**
 
-If that variable is empty — because the App/secrets are not provisioned, or the
-mint step failed — the emitter runs in **DRY-RUN**: it parses, plans, and logs
-every intended create/update/close operation, mutates nothing, and exits 0. The
-Strix gate result is never affected. `--dry-run` forces this for local use and
-tests. Anything resembling a token is redacted from log output.
+If that variable is empty — because the OIDC exchange was unavailable — the
+emitter runs in **DRY-RUN**: it parses, plans, and logs every intended
+create/update/close operation, mutates nothing, and exits 0. If the token is
+present but lacks Issues: write on `appguardrail`, the emitter degrades the same
+way: a failed issue *list* read plans in DRY-RUN, and any individual write that
+is rejected is logged as a warning and swallowed. Either way the Strix gate
+result is never affected. `--dry-run` forces DRY-RUN for local use and tests, and
+anything resembling a token is redacted from log output.
 
-## Provisioning (manual, one-time)
+## One-time enablement (manual, tiny — no new App or secret)
 
-The emitter is dormant (DRY-RUN) until a human provisions the GitHub App and
-secrets. Do this once:
+The emitter reuses the **existing** OpenCode GitHub App, so there is nothing to
+provision. It writes real issues as soon as that App can write issues to
+`appguardrail`. Verify the two conditions below once; each is a couple of clicks
+and neither creates a new App or secret:
 
-1. **Create a GitHub App** in the `ContextualWisdomLab` org (Settings → Developer
-   settings → GitHub Apps → New GitHub App). Suggested name:
-   `strix-issue-emitter`.
-   - **Repository permissions → Issues: Read and write.** (No other permissions
-     are required.)
-   - No webhook needed; uncheck "Active".
-2. **Install the App** on the org, scoped at minimum to the `appguardrail`
-   repository (Install App → select `appguardrail`, or all repositories).
-3. **Generate a private key** for the App (Private keys → Generate). Download the
-   `.pem`.
-4. **Set two secrets** at the organization level (or on the `.github` repo) so
-   the required Strix workflow can read them:
-   - `STRIX_ISSUE_APP_ID` — the App's numeric App ID.
-   - `STRIX_ISSUE_APP_PRIVATE_KEY` — the full contents of the downloaded `.pem`.
+1. **Grant the OpenCode App `Issues: Read and write`.**
+   `github.com/organizations/ContextualWisdomLab/settings/apps` → open the
+   **OpenCode** app → **Permissions & events** → **Repository permissions** →
+   set **Issues** to **Read and write** → **Save changes**. (If the App is owned
+   by OpenCode rather than the org, this permission is already part of the
+   `opencode-github-action` App and no action is needed; an org-owned install
+   just needs the permission accepted.)
+2. **Ensure the App is installed on `appguardrail`.**
+   `github.com/organizations/ContextualWisdomLab/settings/installations` → open
+   the **OpenCode** installation → **Repository access** → confirm **appguardrail**
+   is included (either **All repositories** or **Only select repositories** with
+   `appguardrail` checked) → **Save**. If a permission change from step 1 is
+   pending, an org owner accepts it on this same screen.
 
-Once both secrets exist, the next Strix run mints a token and begins emitting
-real issues. No code change is required to switch out of DRY-RUN.
+Until both hold, the emitter stays in DRY-RUN and only logs intended operations —
+the Strix gate is unaffected. No code change or redeploy is needed to switch out
+of DRY-RUN; the next scan after the App can write issues begins emitting for real.
 
 ## Retiring the old collector (do this after this lands)
 
