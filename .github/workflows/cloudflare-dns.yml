@@ -1,0 +1,74 @@
+# Cloudflare DNS as code (curl + jq, no Terraform).
+#
+# Reconciles infra/cloudflare/zones.json against the Cloudflare account:
+#   - ensures each declared zone exists (creates via POST /zones in apply mode)
+#   - upserts the declared DNS records (no destructive deletes unless prune=true)
+#   - prints each zone's Cloudflare nameservers + status so they can be set at
+#     Namecheap (registrar) to delegate the domain to Cloudflare.
+#
+# Auth comes from org GitHub Secrets (scope=ALL): the token never leaves Actions.
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+#
+# Default is DRY-RUN. Set input mode=apply to actually write.
+name: Cloudflare DNS
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run (default, no writes) or apply (create zones + records)"
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - apply
+      prune:
+        description: "Delete Cloudflare records not present in zones.json (destructive)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "infra/cloudflare/zones.json"
+      - "infra/cloudflare/reconcile.sh"
+      - ".github/workflows/cloudflare-dns.yml"
+  # Same-repo PRs that touch the config get an automatic dry-run (secrets are
+  # available to same-repo PRs; forks get none, so this stays safe). This also
+  # lets the config be validated — and nameservers/status captured — before merge.
+  pull_request:
+    paths:
+      - "infra/cloudflare/zones.json"
+      - "infra/cloudflare/reconcile.sh"
+      - ".github/workflows/cloudflare-dns.yml"
+
+# push- and pull_request-triggered runs are always dry-run (safe by default);
+# only an explicit workflow_dispatch with mode=apply is allowed to write.
+concurrency:
+  group: cloudflare-dns-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    name: Reconcile zones (${{ github.event.inputs.mode || 'dry-run' }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconcile Cloudflare DNS
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_MODE: ${{ github.event.inputs.mode || 'dry-run' }}
+          CF_PRUNE: ${{ github.event.inputs.prune || 'false' }}
+          CF_CONFIG: infra/cloudflare/zones.json
+        run: |
+          set -euo pipefail
+          if [ -z "${CF_API_TOKEN}" ] || [ -z "${CF_ACCOUNT_ID}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets are not available to this run."
+            exit 1
+          fi
+          bash infra/cloudflare/reconcile.sh
