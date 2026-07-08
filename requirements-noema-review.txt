@@ -3,3 +3,10 @@
 # OpenAI-compatible chat client used against the configured NOEMA_LLM_* endpoint.
 # All transitive licenses are permissive (MIT / Apache-2.0 / BSD); no GPL/AGPL.
 pydantic-ai-slim[openai]==2.6.0
+# Pin patched transitive deps. uv/pip resolve these to safe versions
+# (requests==2.34.2, tqdm==4.68.4), but osv-scanner's lockfile-free resolver
+# otherwise selects the oldest satisfying versions (requests 2.9.2 / tqdm 4.9.0)
+# and reports their historical CVEs. Pinning to the real resolved versions keeps
+# the audit truthful without weakening the gate.
+requests==2.34.2
+tqdm==4.68.4

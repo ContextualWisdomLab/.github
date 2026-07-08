@@ -3,3 +3,8 @@ interrogate==1.7.0
 pytest==9.1.1
 uv==0.11.25
 pydantic-ai-slim[openai]==2.6.0
+# Pin patched transitive deps of pydantic-ai-slim[openai] so osv-scanner's
+# lockfile-free resolver cannot select ancient vulnerable requests/tqdm; these
+# match the versions uv/pip actually resolve.
+requests==2.34.2
+tqdm==4.68.4
