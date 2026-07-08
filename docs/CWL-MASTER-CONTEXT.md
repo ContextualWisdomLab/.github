@@ -78,3 +78,97 @@ GitHub **Project #1** is the shared source of truth. Structure: real **Issues** 
 
 ---
 *Keep this current. Update Project #1 as the live tracker; this file is the narrative brief a fresh agent reads to reconstruct the whole picture.*
+
+## Inter-component architecture (UML)
+
+Component / interaction diagram of how the ecosystem connects. `naruon` is the platform core; à-la-carte plugins + verticals attach; `contextual-orchestrator` is the LLM plane; `keyverse` is auth; `wardnet` is the edge + AI SOC.
+
+```mermaid
+flowchart TB
+  P1["👤 P1 — data / AI System Architect (org lead)"]
+  P2["👤 P2 — Digital-Trust musician (killer demo)"]
+
+  subgraph EDGE["Edge & security"]
+    WARD["wardnet — WAF / IDS / AI SOC / LB / APIM"]
+  end
+  subgraph IDENT["Identity (passwordless)"]
+    KEY["keyverse — IdP: OIDC/OAuth2.1/FIDO2/SCIM/SAML/LDAP (Keycloak)"]
+    ADFS[("feelanet-adfs / external ADFS · LDAP")]
+  end
+
+  subgraph PLATFORM["naruon PLATFORM"]
+    NAR["naruon — email/PIM + KG (content_graph + project_graph)"]
+    CONN["connector — self-hosted Email/CalDAV/WebDAV/CardDAV proxy"]
+  end
+
+  subgraph LLM["LLM plane"]
+    ORCH["contextual-orchestrator — cost/routing/LB gateway"]
+    BATCH["pg-llm-batch — batch engine (Rust pg_tiktoken)"]
+    UP[("upstream LLM providers")]
+    FM["fast-mlsirm — LLM-as-Judge calibration (aFIPC/kaefa)"]
+  end
+
+  subgraph DATA["Knowledge / data"]
+    SDP["semantic-data-portal — ontology/catalog plane"]
+    NEWS["newsdom-api — PDF → DOM"]
+    PG[("Postgres + pgvector + Apache AGE")]
+  end
+
+  subgraph PLUGINS["À-la-carte plugins & verticals (opt-in)"]
+    INK["inkspan — Markdown/HTML editor (+base64, OFL fonts)"]
+    CLR["clearfolio — document viewer"]
+    ERD["pg-erd-cloud — ERD tool"]
+    SCOPE["scopeweave — issues / WBS / ITSM"]
+    CODEC["codec-carver — STT / audio→minutes (+voiceprint)"]
+    BAND["bandscope — musicians' rehearsal vertical"]
+    NOEMA["noema — agent runtime + quarantine sandbox"]
+  end
+
+  subgraph INFRA["Infra / governance"]
+    CF[("Cloudflare — Pages/Workers/DNS")]
+    GH[(".github — governance + Project #1")]
+  end
+
+  P1 --> WARD
+  P2 --> WARD
+  WARD --> NAR
+  P1 -. "auth" .-> KEY
+  P2 -. "auth" .-> KEY
+  NAR -. "authn/z (OIDC)" .-> KEY
+  KEY -. "federates in" .-> ADFS
+
+  CONN -->|"ingest mail/cal/files"| NAR
+  NEWS -->|"PDF DOM"| NAR
+  NAR --> PG
+  NAR --> SDP
+  SDP --> PG
+
+  NAR -->|"LLM: extract / embed / reason"| ORCH
+  NOEMA --> ORCH
+  WARD -->|"SOC: LLM reasoning on evidence"| ORCH
+  ORCH --> UP
+  ORCH -->|"batch routing"| BATCH
+  BATCH --> PG
+  FM -. "calibrates judge outputs" .-> ORCH
+
+  NAR --> INK
+  NAR --> CLR
+  NAR --> ERD
+  NAR -->|"extracted issues → manage"| SCOPE
+  CODEC -->|"diarize + minutes"| NAR
+  NAR --> NOEMA
+  WARD -->|"quarantine detonation"| NOEMA
+  BAND -->|"musicians also use email"| NAR
+  BAND -. "rehearsal app" .-> P2
+
+  NAR -. "OpenTelemetry" .-> GH
+  CONN -. "OpenTelemetry" .-> GH
+  NAR --> CF
+
+  classDef core fill:#1f6feb,stroke:#0b3d91,color:#fff;
+  classDef plane fill:#6e40c9,stroke:#3d1f7a,color:#fff;
+  class NAR core;
+  class ORCH,KEY,WARD plane;
+```
+
+**Reading it:** users hit `wardnet` (edge/SOC) → `naruon` (platform); everything authenticates via `keyverse` (which federates external ADFS/LDAP). `naruon` ingests via the `connector` + `newsdom-api`, builds the KG in Postgres, uses `semantic-data-portal` for the ontology plane, and routes ALL LLM work through `contextual-orchestrator` (which load-balances upstreams and routes batch to `pg-llm-batch`). `noema` is the shared agent runtime + quarantine sandbox (used by naruon, the GitHub review agent, and wardnet's AI SOC). Plugins/verticals (`inkspan`, `clearfolio`, `pg-erd-cloud`, `scopeweave`, `codec-carver`, `bandscope`) attach à-la-carte; `fast-mlsirm` calibrates LLM-as-Judge quality. Hosting = Cloudflare; governance + Project #1 live in `.github`.
