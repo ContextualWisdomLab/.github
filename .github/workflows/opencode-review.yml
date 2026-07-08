@@ -175,6 +175,14 @@ jobs:
       - name: Install Python coverage measurement tools
         run: python3 -m pip install --disable-pip-version-check -r requirements-opencode-review-ci.txt
 
+      - name: Cache R coverage tooling library
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ${{ runner.temp }}/R-library
+          key: r-coverage-lib-${{ runner.os }}-covr-testthat-v1
+          restore-keys: |
+            r-coverage-lib-${{ runner.os }}-
+
       - name: Measure test and docstring evidence
         id: measure
         env:
@@ -583,7 +591,7 @@ jobs:
             export R_LIBS_USER="${RUNNER_TEMP}/R-library"
             mkdir -p "$R_LIBS_USER"
             run_and_capture "R coverage tooling (covr/testthat)" \
-              bash -c 'Rscript -e '\''repos <- "https://cloud.r-project.org"; lib <- Sys.getenv("R_LIBS_USER"); install_deps <- c("Depends", "Imports", "LinkingTo"); dir.create(lib, recursive = TRUE, showWarnings = FALSE); .libPaths(c(lib, .libPaths())); required <- c("covr", "testthat"); if (file.exists("DESCRIPTION")) { desc <- read.dcf("DESCRIPTION")[1, , drop = FALSE]; fields <- intersect(c("Depends", "Imports", "LinkingTo", "Suggests"), colnames(desc)); values <- as.character(desc[, fields, drop = TRUE]); values <- values[!is.na(values)]; package_deps <- trimws(gsub("\\s*\\([^)]*\\)", "", unlist(strsplit(paste(values, collapse = ","), ","), use.names = FALSE))); package_deps <- setdiff(package_deps[nzchar(package_deps)], "R"); required <- unique(c(required, package_deps)); }; for (pkg in required) if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, repos = repos, lib = lib, dependencies = install_deps); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("R coverage tooling packages unavailable after install: ", paste(missing, collapse = ", "))'\'' || { echo "R coverage tooling install unavailable in coverage runner; deferring to required peer R CMD check evidence."; exit 0; }'
+              bash -c 'Rscript -e '\''codename <- tryCatch({ os <- readLines("/etc/os-release", warn = FALSE); v <- grep("^VERSION_CODENAME=", os, value = TRUE); if (length(v)) sub("^VERSION_CODENAME=", "", v[1]) else "" }, error = function(e) ""); repos <- if (nzchar(codename)) sprintf("https://packagemanager.posit.co/cran/__linux__/%s/latest", codename) else "https://packagemanager.posit.co/cran/latest"; options(HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(), paste(getRversion(), R.version$platform, R.version$arch, R.version$os))); message("R package repository: ", repos, " (binary packages via Posit Public Package Manager)"); lib <- Sys.getenv("R_LIBS_USER"); install_deps <- c("Depends", "Imports", "LinkingTo"); dir.create(lib, recursive = TRUE, showWarnings = FALSE); .libPaths(c(lib, .libPaths())); required <- c("covr", "testthat"); if (file.exists("DESCRIPTION")) { desc <- read.dcf("DESCRIPTION")[1, , drop = FALSE]; fields <- intersect(c("Depends", "Imports", "LinkingTo", "Suggests"), colnames(desc)); values <- as.character(desc[, fields, drop = TRUE]); values <- values[!is.na(values)]; package_deps <- trimws(gsub("\\s*\\([^)]*\\)", "", unlist(strsplit(paste(values, collapse = ","), ","), use.names = FALSE))); package_deps <- setdiff(package_deps[nzchar(package_deps)], "R"); required <- unique(c(required, package_deps)); }; for (pkg in required) if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, repos = repos, lib = lib, dependencies = install_deps); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("R coverage tooling packages unavailable after install from ", repos, ": ", paste(missing, collapse = ", "))'\'' || { echo "R coverage tooling install did not complete (see log above for the repository used and any install error); deferring to required peer R CMD check evidence."; exit 0; }'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
                 run_and_capture "R package testthat suite" \
