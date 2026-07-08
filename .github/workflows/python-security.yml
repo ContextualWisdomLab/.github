@@ -1,0 +1,175 @@
+# Central Python security gate for every ContextualWisdomLab repo.
+#
+# Fills a governance gap left when duplicate LOCAL workflows were removed in
+# favour of the central required workflows: the central Security Scan bundle
+# covers supply-chain (osv / dependency-review / trivy) and posture (scorecard),
+# but NOT Python source SAST (bandit) or the Python dependency audit
+# (pip-audit) that some repos ran locally (naruon, bandscope,
+# xtrmLLMBatchPython, contextual-orchestrator).
+#
+#   bandit    Python SAST   -> SARIF uploaded under category "bandit"
+#   pip-audit dep audit     -> HARD gate by job result (like osv/trivy)
+#
+# Both jobs are CONDITIONAL on the repo actually containing Python, so
+# non-Python repos are a no-op. Gating is by the JOB result, ref-independent,
+# exactly like the trivy-fs / osv-scan jobs in security-scan.yml. The SARIF is
+# uploaded under a DISTINCT category ("bandit"); it is NOT added to the
+# code_scanning ruleset rule, which stays CodeQL-only on purpose (requiring
+# multiple tools in that rule is unsatisfiable across PR head/merge refs), so
+# it does not affect auto-merge.
+#
+# High sensitivity: bandit fails on MEDIUM+ severity & MEDIUM+ confidence;
+# pip-audit fails on any known vulnerability.
+name: Python Security
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+    branches: [main, master, develop]
+  push:
+    branches: [main, master, develop]
+  # Periodic full-repo coverage so non-PR drift is caught (the removed local
+  # workflows ran on push + schedule).
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  group: python-security-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
+  detect-python:
+    name: Detect Python
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    outputs:
+      has_python: ${{ steps.detect.outputs.has_python }}
+      has_manifest: ${{ steps.detect.outputs.has_manifest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Detect Python sources and dependency manifests
+        id: detect
+        run: |
+          set -euo pipefail
+          has_python=false
+          if find . -type f -name '*.py' -not -path './.git/*' | head -1 | grep -q .; then
+            has_python=true
+          fi
+          has_manifest=false
+          if find . -type f \
+              \( -name 'requirements*.txt' -o -name 'pyproject.toml' \
+                 -o -name 'pylock.*.toml' \) \
+              -not -path './.git/*' | head -1 | grep -q .; then
+            has_manifest=true
+          fi
+          echo "has_python=${has_python}" >> "$GITHUB_OUTPUT"
+          echo "has_manifest=${has_manifest}" >> "$GITHUB_OUTPUT"
+
+  bandit:
+    name: Bandit (Python SAST)
+    needs: detect-python
+    if: github.event.action != 'closed' && needs.detect-python.outputs.has_python == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.12"
+      - name: Install bandit
+        run: python -m pip install --require-hashes=false "bandit==1.9.4"
+      - name: Run bandit (SARIF)
+        id: bandit
+        run: |
+          set +e
+          bandit --recursive . \
+            --severity-level medium \
+            --confidence-level medium \
+            --exclude ./.git,./.github,./node_modules,./.venv,./venv,./tests,./test \
+            --format sarif \
+            --output bandit-results.sarif
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+      - name: Upload Bandit SARIF to code scanning
+        if: always() && hashFiles('bandit-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+      - name: Enforce bandit gate (fail on MEDIUM+ findings)
+        if: steps.bandit.outputs.rc != '0'
+        run: |
+          echo "::error::Bandit found MEDIUM+ severity/confidence issues. See the 'bandit' code scanning category."
+          exit 1
+
+  pip-audit:
+    name: pip-audit (Python dependency audit)
+    needs: detect-python
+    if: github.event.action != 'closed' && needs.detect-python.outputs.has_manifest == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: python -m pip install "pip-audit==2.9.0"
+      - name: Run pip-audit (hard gate on any known vulnerability)
+        run: |
+          set -euo pipefail
+          status=0
+
+          # Audit every discovered requirements file.
+          while IFS= read -r req; do
+            echo "::group::pip-audit -r ${req}"
+            pip-audit --strict --desc -r "${req}" || status=1
+            echo "::endgroup::"
+          done < <(find . -type f -name 'requirements*.txt' -not -path './.git/*')
+
+          # Audit the project itself when a PEP 621 / lock manifest exists.
+          if find . -maxdepth 2 -type f \
+              \( -name 'pyproject.toml' -o -name 'pylock.*.toml' \) \
+              -not -path './.git/*' | head -1 | grep -q .; then
+            echo "::group::pip-audit . (project manifest)"
+            pip-audit --strict --desc . || status=1
+            echo "::endgroup::"
+          fi
+
+          if [ "${status}" != "0" ]; then
+            echo "::error::pip-audit reported known-vulnerable Python dependencies."
+            exit 1
+          fi
