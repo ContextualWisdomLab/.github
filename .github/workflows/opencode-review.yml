@@ -613,6 +613,38 @@ jobs:
             fi
           }
 
+          ensure_rust_gpu_adapter() {
+            # Provide a CPU software Vulkan adapter (Mesa lavapipe) so wgpu-based
+            # GPGPU code paths execute — and are therefore coverable — on the
+            # GPU-less coverage runner. This mirrors how wgpu's own CI exercises
+            # compute shaders headlessly. Best-effort: if provisioning fails the
+            # coverage command still runs and reports any uncovered GPU lines
+            # exactly as before, so Rust repositories without GPU code are
+            # unaffected and no gate is weakened.
+            if ! ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
+              run_and_capture "Software Vulkan adapter (Mesa lavapipe) for GPGPU coverage" \
+                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools || true'
+            fi
+            if ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
+              lvp_icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1)"
+              export VK_ICD_FILENAMES="$lvp_icd"
+              export VK_DRIVER_FILES="$lvp_icd"
+              export WGPU_BACKEND=vulkan
+              export LIBGL_ALWAYS_SOFTWARE=1
+              append "### Rust GPGPU coverage adapter"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: using Mesa lavapipe software Vulkan adapter at \`${lvp_icd}\` so wgpu GPGPU code paths are exercised on the GPU-less runner."
+              append ""
+            else
+              append "### Rust GPGPU coverage adapter"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: no software Vulkan adapter available; wgpu GPU code paths cannot be exercised on this runner and remain the caller's coverage responsibility."
+              append ""
+            fi
+          }
+
           ensure_rust_toolchain() {
             if ! command -v cargo >/dev/null 2>&1; then
               run_and_capture "Rust toolchain install (rustup minimal)" \
@@ -623,6 +655,7 @@ jobs:
             if command -v cargo >/dev/null 2>&1 && ! cargo llvm-cov --version >/dev/null 2>&1; then
               run_and_capture "Rust coverage tooling (cargo-llvm-cov)" cargo install cargo-llvm-cov --locked
             fi
+            ensure_rust_gpu_adapter
           }
 
           run_rust_test_coverage() {
