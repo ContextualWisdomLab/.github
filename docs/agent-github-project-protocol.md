@@ -69,3 +69,11 @@ Add the PR/issue as its own item with `item-add`, or reference the item in the P
 
 ## Why (not a static mirror)
 Other agents CAN read the Project directly via `gh`/GraphQL — so the right move is a shared operating convention on the LIVE project, not a static markdown copy that goes stale. This file is the convention; the data lives in Project #1.
+
+## Cross-repo references (BINDING)
+
+When referencing an issue or PR that lives in ANOTHER repository, ALWAYS use a linkable form so GitHub creates a real cross-reference (and it shows in the target's timeline):
+- `owner/repo#num` — e.g. `ContextualWisdomLab/naruon#974`
+- or a full URL — e.g. `https://github.com/ContextualWisdomLab/naruon/pull/974`
+
+NEVER write plain text like `naruon PR #974` — it does NOT link and breaks traceability. A bare `#num` only links within the SAME repo. This applies to issue/PR bodies, comments, commit messages, and Project item bodies. (Same-repo references may use `#num`.)
