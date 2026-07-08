@@ -28,3 +28,6 @@
 ## 2026-07-02 - Credential Masking Security Hole in Subprocess Environments
 **Learning:** Found a critical missing credential masking pattern in `scripts/ci/noema_review_gate.py`'s `scrub_sensitive_data` which didn't mask `Authorization: Basic` or `Proxy-Authorization: Basic` tokens unlike its analogous helper in `scripts/ci/pr_review_merge_scheduler.py`. This leaves exception messages and logs vulnerable to exposing sensitive credentials when HTTP operations fail.
 **Action:** When implementing credential masking functions that sanitize tracebacks and log messages, ensure the masking scope includes all relevant headers, particularly `Authorization` and `Proxy-Authorization`. Ensure parity across masking helpers across CI scripts to prevent blind spots.
+## 2026-07-08 - Pre-compile Regex Patterns for Parsing Functions
+**Learning:** Found an anti-pattern where regex replacements were compiled inside the loop by calling `re.sub(pattern, ...)` dynamically within string manipulation functions like `clean` and `starts_new_field` during CI log processing in bash-embedded inline Python.
+**Action:** When a Python script performs intensive text parsing across multiple lines, pre-compile all regexes globally via `re.compile` and apply them via the `.sub` and `.match` methods to skip compilation overhead.

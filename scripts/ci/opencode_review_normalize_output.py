@@ -92,6 +92,9 @@ CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
     r"|(?<![A-Za-z0-9_])(?:Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
 )
 
+# ⚡ Bolt: Pre-compile regex for deep scanning loops
+BULLET_PREFIX_PATTERN = re.compile(r"^[-*+]\s+")
+
 APPROVAL_VERIFICATION_LABELS = (
     "approval sufficiency:",
     "verification posture:",
@@ -530,7 +533,7 @@ def changed_files_from_evidence(text: str) -> list[str]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        line = re.sub(r"^[-*+]\s+", "", line)
+        line = BULLET_PREFIX_PATTERN.sub("", line)
         parts = line.split("\t")
         path = parts[-1].strip()
         if not path or path.startswith("["):

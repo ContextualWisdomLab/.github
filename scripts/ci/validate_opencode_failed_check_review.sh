@@ -213,26 +213,30 @@ location_re = re.compile(
     re.IGNORECASE,
 )
 
+# ⚡ Bolt: Pre-compile regexes used in tight parsing loops
+clean_pipe_start_re = re.compile(r"^.*?│\s*")
+clean_pipe_end_re = re.compile(r"\s*│.*$")
+clean_timestamp_re = re.compile(r"^.*?[0-9]Z\s+")
+clean_spaces_re = re.compile(r"\s+")
+new_field_re = re.compile(
+    r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b",
+    re.IGNORECASE,
+)
+
 
 def clean(raw_line: str) -> str:
     line = ansi_re.sub("", raw_line).replace("\r", "")
     if "│" in line:
-        line = re.sub(r"^.*?│\s*", "", line)
-        line = re.sub(r"\s*│.*$", "", line)
+        line = clean_pipe_start_re.sub("", line)
+        line = clean_pipe_end_re.sub("", line)
     else:
-        line = re.sub(r"^.*?[0-9]Z\s+", "", line)
-    line = re.sub(r"\s+", " ", line).strip()
+        line = clean_timestamp_re.sub("", line)
+    line = clean_spaces_re.sub(" ", line).strip()
     return line
 
 
 def starts_new_field(line: str) -> bool:
-    return bool(
-        re.match(
-            r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b",
-            line,
-            re.IGNORECASE,
-        )
-    )
+    return bool(new_field_re.match(line))
 
 
 class ReportParser:
