@@ -280,7 +280,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
-    assert re.search(r"opencode-review-target:[\s\S]{0,240}timeout-minutes: 360", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]{0,400}timeout-minutes: 360", workflow)
     assert 'timeout-minutes: 75' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "81"' in workflow
@@ -309,8 +309,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
-    assert 'record_review_status "exhausted"' not in model_pool_runner
+    # Model-pool / daily-quota exhaustion is a retryable state, not a verdict: the
+    # runner records an explicit "exhausted" status (consumed by the scheduler to
+    # re-dispatch) via a dedicated helper that clears the model and never approves.
+    assert "record_review_exhausted()" in model_pool_runner
+    assert 'record_review_status "exhausted"' in model_pool_runner
     assert "retry budget exhausted" not in model_pool_runner
+    exhausted_helper = model_pool_runner.split("record_review_exhausted()", 1)[1].split("}", 1)[0]
+    assert "approve" not in exhausted_helper
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"', workflow)
     assert not re.search(r"--slurp\s*\\\n\s*--jq", workflow)
@@ -412,7 +418,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "steps.scheduler_app_token.outputs.token" in workflow
     assert "SCHEDULER_READ_TOKEN: ${{ github.token }}" in workflow
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
-    assert 'default: "-1"' in workflow
+    assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
 
 
