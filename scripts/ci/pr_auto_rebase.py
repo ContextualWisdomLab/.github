@@ -34,7 +34,11 @@ under a limited Models budget, so this scheduler is deliberately conservative:
 * Fork guard: cross-repository (fork) heads are skipped because the scheduler
   credential cannot push to them.
 * Idempotent: a clean rebase leaves the branch up to date, so the next run skips
-  it; a conflicted rebase is labeled once and skipped on subsequent passes.
+  it; a conflicted rebase is labeled ``needs-manual-rebase`` once and, while it
+  stays DIRTY, is skipped on subsequent passes WITHOUT consuming a rate-limit
+  slot -- so a backlog of old conflicted PRs never starves newer rebasable ones.
+  If a labeled PR is later no longer DIRTY (a base change resolved the conflict),
+  the stale label is removed and the rebase proceeds.
 * ``--dry-run`` prints the plan (including the rate-limit cap) without any git or
   GitHub mutation.
 """
@@ -78,6 +82,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only via package imp
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OPEN_PRS_PAGE_SIZE = 25
+LABELS_PAGE_SIZE = 50
 DEFAULT_MAX_PER_RUN = 10
 DEFAULT_HUMAN_WINDOW_MINUTES = 30
 MANUAL_REBASE_LABEL = "needs-manual-rebase"
@@ -102,7 +107,7 @@ KNOWN_BOT_LOGINS = {
 }
 
 OPEN_PRS_QUERY = """\
-query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
+query($owner: String!, $name: String!, $pageSize: Int!, $labelPageSize: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequests(first: $pageSize, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: ASC}) {
       pageInfo { hasNextPage endCursor }
@@ -118,6 +123,7 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
         headRefOid
         isCrossRepository
         maintainerCanModify
+        labels(first: $labelPageSize) { nodes { name } }
         headRepository { nameWithOwner }
         commits(last: 1) {
           nodes {
@@ -152,7 +158,12 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
     cursor: str | None = None
     while len(prs) < max_prs:
         page_size = min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
-        fields: dict[str, str | int] = {"owner": owner, "name": name, "pageSize": page_size}
+        fields: dict[str, str | int] = {
+            "owner": owner,
+            "name": name,
+            "pageSize": page_size,
+            "labelPageSize": LABELS_PAGE_SIZE,
+        }
         if cursor:
             fields["cursor"] = cursor
         payload = gh_graphql(OPEN_PRS_QUERY, **fields)
@@ -187,6 +198,12 @@ def is_clean(pr: dict[str, Any]) -> bool:
 def same_repository_head(repo: str, pr: dict[str, Any]) -> bool:
     """Return whether the PR head branch lives in the scanned repository."""
     return ((pr.get("headRepository") or {}).get("nameWithOwner") or "") == repo
+
+
+def has_manual_rebase_label(pr: dict[str, Any]) -> bool:
+    """Return whether the PR already carries the manual-rebase label."""
+    nodes = ((pr.get("labels") or {}).get("nodes") or [])
+    return any((node or {}).get("name") == MANUAL_REBASE_LABEL for node in nodes)
 
 
 def last_commit(pr: dict[str, Any]) -> dict[str, Any]:
@@ -249,6 +266,12 @@ def candidate_skip_reason(
         return f"already mergeable and up to date (merge state {merge_state(pr) or 'CLEAN'}); nothing to rebase"
     if not (is_behind_base(pr) or is_dirty(pr)):
         return f"not behind base and not dirty (merge state {merge_state(pr) or 'UNKNOWN'})"
+    if has_manual_rebase_label(pr) and is_dirty(pr):
+        return (
+            f"already labeled {MANUAL_REBASE_LABEL} and still dirty "
+            f"(merge state {merge_state(pr) or 'DIRTY'}); awaiting manual rebase so it does not "
+            "re-consume a rate-limit slot"
+        )
     if head_commit_by_recent_human(pr, now=now, window_minutes=human_window_minutes):
         login = ((last_commit(pr).get("author") or {}).get("user") or {}).get("login") or "human"
         return (
@@ -395,6 +418,26 @@ def add_manual_rebase_label(repo: str, number: int, *, dry_run: bool) -> None:
     )
 
 
+def remove_manual_rebase_label(repo: str, number: int, *, dry_run: bool) -> None:
+    """Remove a stale manual-rebase label from a PR that is no longer dirty."""
+    if dry_run:
+        return
+    try:
+        run(
+            [
+                "gh",
+                "api",
+                "-X",
+                "DELETE",
+                f"repos/{repo}/issues/{number}/labels/{MANUAL_REBASE_LABEL}",
+            ]
+        )
+    except RuntimeError as exc:
+        # A 404 means the label was already removed (e.g. by a human); tolerate it.
+        if "404" not in str(exc) and "not found" not in str(exc).lower():
+            raise
+
+
 def conflict_comment_exists(repo: str, number: int) -> bool:
     """Return whether a manual-rebase hand-off comment already exists on the PR."""
     pages = run(
@@ -468,6 +511,14 @@ def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
     base_ref = validate_git_ref(pr["baseRefName"])
     expected_head_sha = validate_git_sha(pr["headRefOid"])
     token = scheduler_token()
+    # A candidate reaching this point that still carries the manual-rebase label
+    # is no longer dirty (labeled-and-dirty PRs are skipped upstream): its
+    # conflict was resolved by a later base change, so clear the stale label and
+    # let the rebase proceed instead of leaving it permanently blocked.
+    stale_label_notes: tuple[str, ...] = ()
+    if has_manual_rebase_label(pr):
+        remove_manual_rebase_label(repo, number, dry_run=dry_run)
+        stale_label_notes = (f"removed stale {MANUAL_REBASE_LABEL} label (no longer dirty)",)
     with tempfile.TemporaryDirectory(prefix="pr-auto-rebase-") as workdir:
         fetch_pr_refs(workdir, repo, head_ref, base_ref, token=token)
         if not try_rebase(workdir, base_ref):
@@ -476,14 +527,14 @@ def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
                 number,
                 "labeled",
                 f"rebase onto {base_ref} conflicts; aborted and left branch unchanged",
-                notes,
+                stale_label_notes + notes,
             )
         push_force_with_lease(workdir, repo, head_ref, expected_head_sha, token=token)
     return Decision(
         number,
         "rebased",
         f"clean rebase onto {base_ref}; force-pushed head with lease",
-        (f"previous head {expected_head_sha[:12]}",),
+        stale_label_notes + (f"previous head {expected_head_sha[:12]}",),
     )
 
 

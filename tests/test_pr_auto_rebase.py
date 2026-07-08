@@ -24,11 +24,18 @@ def make_pr(**overrides):
         "headRefOid": "a" * 40,
         "isCrossRepository": False,
         "maintainerCanModify": False,
+        "labels": {"nodes": []},
         "headRepository": {"nameWithOwner": "owner/repo"},
         "commits": {"nodes": [{"commit": {"committedDate": "2026-07-01T00:00:00Z", **BOT_COMMIT}}]},
     }
     value.update(overrides)
     return value
+
+
+def with_manual_label(**overrides):
+    """Return a PR payload already carrying the needs-manual-rebase label."""
+    overrides.setdefault("labels", {"nodes": [{"name": rebase.MANUAL_REBASE_LABEL}]})
+    return make_pr(**overrides)
 
 
 def skip_reason(pr, *, base_branch="main", human_window_minutes=30):
@@ -111,6 +118,27 @@ def test_zero_human_window_disables_guard():
     assert skip_reason(pr, human_window_minutes=0) is None
 
 
+def test_has_manual_rebase_label_detects_label():
+    """The label predicate matches only the manual-rebase label."""
+    assert rebase.has_manual_rebase_label(with_manual_label())
+    assert not rebase.has_manual_rebase_label(make_pr())
+    assert not rebase.has_manual_rebase_label(make_pr(labels={"nodes": [{"name": "other"}]}))
+
+
+def test_labeled_dirty_pr_is_skipped_without_consuming_slot():
+    """A still-DIRTY PR already labeled needs-manual-rebase is skipped, not re-processed."""
+    reason = skip_reason(with_manual_label(mergeStateStatus="DIRTY"))
+    assert rebase.MANUAL_REBASE_LABEL in reason
+    assert "rate-limit slot" in reason
+    # CONFLICTING is the other dirty state and is skipped too.
+    assert rebase.MANUAL_REBASE_LABEL in skip_reason(with_manual_label(mergeStateStatus="CONFLICTING"))
+
+
+def test_labeled_but_no_longer_dirty_is_a_candidate():
+    """A previously-labeled PR that is only BEHIND (conflict resolved) is a candidate again."""
+    assert skip_reason(with_manual_label(mergeStateStatus="BEHIND")) is None
+
+
 def test_commit_author_bot_detection():
     """Bot detection covers known logins, ``[bot]`` suffixes, and humans."""
     assert rebase.commit_author_is_bot(BOT_COMMIT)
@@ -164,6 +192,45 @@ def test_perform_rebase_conflict_labels_without_push(monkeypatch):
     assert decision.action == "labeled"
     assert labeled == [("owner/repo", 1, "main", False)]
     assert "posted hand-off comment" in decision.notes
+
+
+def test_perform_rebase_removes_stale_label_then_rebases(monkeypatch):
+    """A labeled PR that is no longer dirty has the stale label removed, then rebases."""
+    removed = []
+    monkeypatch.setattr(rebase, "scheduler_token", lambda: "tok")
+    monkeypatch.setattr(rebase, "fetch_pr_refs", lambda *a, **k: None)
+    monkeypatch.setattr(rebase, "try_rebase", lambda workdir, base_ref: True)
+    monkeypatch.setattr(rebase, "push_force_with_lease", lambda *a, **k: None)
+    monkeypatch.setattr(
+        rebase,
+        "remove_manual_rebase_label",
+        lambda repo, number, dry_run: removed.append((repo, number, dry_run)),
+    )
+
+    decision = rebase.perform_rebase("owner/repo", with_manual_label(mergeStateStatus="BEHIND"), dry_run=False)
+
+    assert removed == [("owner/repo", 1, False)]
+    assert decision.action == "rebased"
+    assert any("removed stale" in note for note in decision.notes)
+
+
+def test_remove_manual_rebase_label_delete_and_tolerance(monkeypatch):
+    """Removing the label DELETEs the endpoint, tolerates 404, and reraises other errors."""
+    monkeypatch.setattr(rebase, "run", lambda argv: pytest.fail("dry-run must not call gh"))
+    rebase.remove_manual_rebase_label("owner/repo", 1, dry_run=True)
+
+    captured = {}
+    monkeypatch.setattr(rebase, "run", lambda argv: captured.setdefault("argv", argv) or "")
+    rebase.remove_manual_rebase_label("owner/repo", 7, dry_run=False)
+    assert captured["argv"][:4] == ["gh", "api", "-X", "DELETE"]
+    assert captured["argv"][4] == f"repos/owner/repo/issues/7/labels/{rebase.MANUAL_REBASE_LABEL}"
+
+    monkeypatch.setattr(rebase, "run", lambda argv: (_ for _ in ()).throw(RuntimeError("HTTP 404: Not Found")))
+    rebase.remove_manual_rebase_label("owner/repo", 7, dry_run=False)  # tolerated
+
+    monkeypatch.setattr(rebase, "run", lambda argv: (_ for _ in ()).throw(RuntimeError("HTTP 500: boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        rebase.remove_manual_rebase_label("owner/repo", 7, dry_run=False)
 
 
 def test_label_conflicted_pr_creates_label_and_comments_once(monkeypatch):
@@ -235,6 +302,33 @@ def test_process_queue_rate_limits_oldest_first(monkeypatch, capsys):
     assert payload["counts"]["skip"] == 1
     skipped = [d for d in payload["decisions"] if d["action"] == "skip"]
     assert skipped[0]["pr"] == 3 and "rate limit" in skipped[0]["reason"]
+
+
+def test_process_queue_labeled_dirty_pr_does_not_starve_newer(monkeypatch, capsys):
+    """A labeled, still-DIRTY old PR is skipped and does not consume the rate-limit slot."""
+    prs = [
+        with_manual_label(number=1, mergeStateStatus="DIRTY"),  # old, conflicted, already labeled
+        make_pr(number=2),  # newer, genuinely rebasable
+    ]
+    monkeypatch.setattr(rebase, "fetch_open_prs", lambda repo, max_prs: prs)
+    performed = []
+    monkeypatch.setattr(
+        rebase,
+        "perform_rebase",
+        lambda repo, pr, dry_run: performed.append(pr["number"])
+        or rebase.Decision(pr["number"], "rebased", "ok"),
+    )
+
+    args = rebase.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--max-per-run", "1"])
+    assert rebase.process_queue(args) == 0
+
+    # PR #1 never reaches git work; the single slot goes to the newer PR #2.
+    assert performed == [2]
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    actions = {d["pr"]: d["action"] for d in payload["decisions"]}
+    assert actions == {1: "skip", 2: "rebased"}
+    skip = next(d for d in payload["decisions"] if d["pr"] == 1)
+    assert rebase.MANUAL_REBASE_LABEL in skip["reason"]
 
 
 def test_process_queue_dry_run_plans_without_mutation(monkeypatch, capsys):
