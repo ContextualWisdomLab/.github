@@ -523,6 +523,7 @@ jobs:
           echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
 
       - name: Run Strix (quick)
+        id: run_strix
         if: steps.gate.outputs.enabled == 'true'
         timeout-minutes: 30
         # Security invariant for pull_request_target: execute only from the
@@ -610,6 +611,61 @@ jobs:
           path: strix_runs/
           if-no-files-found: error
           retention-days: 5
+
+      # Best-effort source-side emission of per-finding security issues into the
+      # ContextualWisdomLab/appguardrail tracker. This step must never change the
+      # Strix pass/fail gate: the mint and emit steps both continue-on-error, and
+      # the emitter itself is internally best-effort (always exits 0). When the
+      # GitHub App is not yet provisioned (STRIX_ISSUE_APP_ID/PRIVATE_KEY unset)
+      # the emitter runs in DRY-RUN and only logs the intended issue operations.
+      # See docs/strix-appguardrail-issues.md for the required App and secrets.
+      - name: Mint appguardrail issue app token
+        id: strix_issue_token
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' && secrets.STRIX_ISSUE_APP_ID != '' && secrets.STRIX_ISSUE_APP_PRIVATE_KEY != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        with:
+          app-id: ${{ secrets.STRIX_ISSUE_APP_ID }}
+          private-key: ${{ secrets.STRIX_ISSUE_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: appguardrail
+
+      - name: Emit per-finding Strix issues to appguardrail
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
+        continue-on-error: true
+        env:
+          STRIX_ISSUE_APP_TOKEN: ${{ steps.strix_issue_token.outputs.token || '' }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          SOURCE_PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.inputs.pr_number }}
+          SOURCE_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.inputs.pr_head_sha || github.sha }}
+          # Close-on-fix runs only when the scan completed cleanly (gate passed).
+          # A failed or skipped Strix step leaves this false so a partial or
+          # infra-broken scan never closes issues.
+          STRIX_SCAN_COMPLETE: ${{ steps.run_strix.outcome == 'success' && 'true' || 'false' }}
+          STRIX_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          emitter="$TRUSTED_STRIX_SOURCE/scripts/ci/strix_emit_appguardrail_issues.py"
+          if [ ! -f "$emitter" ]; then
+            echo "::notice::Strix issue emitter not present in trusted source; skipping."
+            exit 0
+          fi
+          set -- \
+            --run-dir "$GITHUB_WORKSPACE/strix_runs" \
+            --source-repo "$SOURCE_REPOSITORY" \
+            --issues-repo "ContextualWisdomLab/appguardrail" \
+            --run-url "$STRIX_RUN_URL"
+          if [ -n "${SOURCE_PR_NUMBER:-}" ]; then
+            set -- "$@" --pr-number "$SOURCE_PR_NUMBER"
+          fi
+          if [ -n "${SOURCE_HEAD_SHA:-}" ]; then
+            set -- "$@" --head-sha "$SOURCE_HEAD_SHA"
+          fi
+          if [ "${STRIX_SCAN_COMPLETE:-false}" = "true" ]; then
+            set -- "$@" --scan-complete
+          fi
+          # Never fail the Strix gate on issue-emission problems.
+          python3 "$emitter" "$@" || echo "::warning::Strix issue emission encountered an error; continuing."
 
       - name: Publish same-head manual Strix status
         if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
