@@ -2927,3 +2927,195 @@ def test_run_masks_secrets_in_args():
     err_msg = str(exc_info.value)
     assert "ghp_abcdef1234567890abcdef1234567890abcdef" not in err_msg
     assert "***" in err_msg
+
+
+def exhaustion_review(
+    commit="head",
+    submitted_at="2020-01-01T00:00:00Z",
+    login="opencode-agent",
+    head_sha=None,
+    marker=True,
+):
+    body = (
+        f"{sched.OPENCODE_EXHAUSTION_MARKER}\n\nmodel pool/quota exhausted"
+        if marker
+        else "OpenCode found no blocking issues"
+    )
+    if head_sha:
+        body += f"\n\nHead SHA: `{head_sha}`"
+    return {
+        "state": "COMMENTED",
+        "author": {"login": login},
+        "submittedAt": submitted_at,
+        "commit": {"oid": commit},
+        "body": body,
+    }
+
+
+def test_is_opencode_exhaustion_review_matches_marker_and_known_authors():
+    assert sched.is_opencode_exhaustion_review(exhaustion_review()) is True
+    assert sched.is_opencode_exhaustion_review(exhaustion_review(login="github-actions[bot]")) is True
+    assert sched.is_opencode_exhaustion_review(exhaustion_review(marker=False)) is False
+    assert sched.is_opencode_exhaustion_review(exhaustion_review(login="random-user")) is False
+
+
+def test_current_head_exhaustion_reviews_filters_marker_and_current_head():
+    pr = make_pr(
+        reviews={
+            "nodes": [
+                exhaustion_review(),
+                exhaustion_review(marker=False),
+                exhaustion_review(commit="old-head"),
+            ]
+        }
+    )
+    markers = sched.current_head_exhaustion_reviews(pr)
+    assert len(markers) == 1
+    assert sched.OPENCODE_EXHAUSTION_MARKER in markers[0]["body"]
+
+
+def test_opencode_exhaustion_retry_plan_classifies_all_states():
+    now = datetime(2026, 6, 25, 10, 0, tzinfo=timezone.utc)
+
+    none_plan = sched.opencode_exhaustion_retry_plan(
+        make_pr(), min_interval_minutes=45, max_retries_per_day=6, now=now
+    )
+    assert none_plan.kind == "none"
+    assert none_plan.attempts == 0
+
+    capped = sched.opencode_exhaustion_retry_plan(
+        make_pr(
+            reviews={
+                "nodes": [
+                    exhaustion_review(submitted_at="2026-06-25T08:00:00Z"),
+                    exhaustion_review(submitted_at="2026-06-25T09:00:00Z"),
+                ]
+            }
+        ),
+        min_interval_minutes=45,
+        max_retries_per_day=2,
+        now=now,
+    )
+    assert capped.kind == "capped"
+    assert capped.attempts == 2
+    assert "daily retry cap" in capped.reason
+
+    wait = sched.opencode_exhaustion_retry_plan(
+        make_pr(reviews={"nodes": [exhaustion_review(submitted_at="2026-06-25T09:50:00Z")]}),
+        min_interval_minutes=45,
+        max_retries_per_day=6,
+        now=now,
+    )
+    assert wait.kind == "wait"
+    assert wait.attempts == 1
+    assert "waiting" in wait.reason
+
+    retry = sched.opencode_exhaustion_retry_plan(
+        make_pr(reviews={"nodes": [exhaustion_review(submitted_at="2026-06-25T07:00:00Z")]}),
+        min_interval_minutes=45,
+        max_retries_per_day=6,
+        now=now,
+    )
+    assert retry.kind == "retry"
+    assert retry.attempts == 1
+    assert "re-dispatching" in retry.reason
+
+    unlimited = sched.opencode_exhaustion_retry_plan(
+        make_pr(
+            reviews={
+                "nodes": [
+                    exhaustion_review(submitted_at="2026-06-25T09:00:00Z"),
+                    exhaustion_review(submitted_at="2026-06-25T09:30:00Z"),
+                ]
+            }
+        ),
+        min_interval_minutes=0,
+        max_retries_per_day=-1,
+        now=now,
+    )
+    assert unlimited.kind == "retry"
+    assert unlimited.attempts == 2
+
+    undated = sched.opencode_exhaustion_retry_plan(
+        make_pr(reviews={"nodes": [exhaustion_review(submitted_at=None)]}),
+        min_interval_minutes=45,
+        max_retries_per_day=6,
+        now=now,
+    )
+    assert undated.kind == "retry"
+    assert undated.attempts == 0
+
+
+def test_inspect_pr_redispatches_exhausted_review_after_backoff(monkeypatch, capsys):
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+    pr = make_pr(reviews={"nodes": [exhaustion_review(submitted_at="2020-01-01T00:00:00Z")]})
+    decision = inspect(pr)
+    assert decision.action == "review_dispatch"
+    assert "re-dispatching after backoff" in decision.reason
+    assert dispatched == [1]
+    assert "opencode-exhaustion-retry" in capsys.readouterr().err
+
+
+def test_inspect_pr_exhausted_review_respects_trigger_and_dispatch_limits():
+    pr = make_pr(reviews={"nodes": [exhaustion_review(submitted_at="2020-01-01T00:00:00Z")]})
+    disabled = inspect(pr, trigger_reviews=False)
+    assert disabled.action == "wait"
+    assert "review dispatch disabled" in disabled.reason
+    limited = inspect(pr, review_dispatch_allowed=False)
+    assert limited.action == "wait"
+    assert "review dispatch limit reached" in limited.reason
+
+
+def test_inspect_pr_exhausted_review_waits_and_caps(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "opencode_exhaustion_retry_plan",
+        lambda pr, **kwargs: sched.ExhaustionRetryPlan("wait", "quota refresh pending", 1),
+    )
+    waited = inspect(make_pr())
+    assert waited.action == "wait"
+    assert waited.reason == "quota refresh pending"
+
+    monkeypatch.setattr(
+        sched,
+        "opencode_exhaustion_retry_plan",
+        lambda pr, **kwargs: sched.ExhaustionRetryPlan("capped", "daily cap reached", 6),
+    )
+    capped = inspect(make_pr())
+    assert capped.action == "wait"
+    assert capped.reason == "daily cap reached"
+
+
+def test_main_threads_exhaustion_retry_args(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [make_pr()])
+
+    def fake_inspect(repo, pr, **kwargs):
+        captured.update(kwargs)
+        return sched.Decision(pr["number"], "wait", "ok")
+
+    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
+    rc = sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "flow",
+            "--pr-number",
+            "1",
+            "--exhausted-retry-min-minutes",
+            "10",
+            "--exhausted-max-retries-per-day",
+            "3",
+        ]
+    )
+    assert rc == 0
+    assert captured["exhausted_retry_min_minutes"] == 10
+    assert captured["exhausted_max_retries_per_day"] == 3

@@ -11,6 +11,16 @@ record_review_model() {
 	printf 'review_model=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
 
+# Report a transient model-pool / daily-quota exhaustion distinctly from a
+# genuine review failure or a configuration error. The scheduler keys on the
+# 'exhausted' status (surfaced as a retryable marker) to re-dispatch the review
+# after the quota window refreshes instead of leaving the PR blocked. This never
+# approves and never fabricates a verdict.
+record_review_exhausted() {
+	record_review_model ""
+	record_review_status "exhausted"
+}
+
 normalize_opencode_output() {
 	local output_file="$1"
 
@@ -169,7 +179,7 @@ run_one_model_attempt() {
 
 main() {
 	local attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
-	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle
+	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
@@ -202,8 +212,8 @@ main() {
 			for attempt in $(seq 1 "$attempts"); do
 				now="$SECONDS"
 				if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then
-					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$attempts"
-					record_review_model ""
+					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s; model pool/quota exhausted.\n' "$model_candidate" "$attempt" "$attempts"
+					record_review_exhausted
 					exit 1
 				fi
 				remaining="$original_run_timeout"
@@ -247,10 +257,16 @@ main() {
 		if [ "$deadline" -gt 0 ] && [ $((SECONDS + cycle_sleep)) -gt "$deadline" ]; then
 			cycle_sleep=$((deadline - SECONDS))
 			if [ "$cycle_sleep" -le 0 ]; then
-				printf 'OpenCode model pool retry deadline elapsed after cycle %s.\n' "$cycle"
-				record_review_model ""
+				printf 'OpenCode model pool retry deadline elapsed after cycle %s; model pool/quota exhausted.\n' "$cycle"
+				record_review_exhausted
 				exit 1
 			fi
+		fi
+		max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
+		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
+			printf 'OpenCode model pool reached the bounded cycle cap of %s without a valid control conclusion; model pool/quota exhausted.\n' "$max_cycles"
+			record_review_exhausted
+			exit 1
 		fi
 		printf 'Restarting OpenCode model pool after %ss.\n' "$cycle_sleep"
 		sleep "$cycle_sleep"

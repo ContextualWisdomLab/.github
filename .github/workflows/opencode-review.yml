@@ -2449,6 +2449,47 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
+      - name: Signal OpenCode review model-pool exhaustion
+        # When the GitHub Models model pool / daily quota is exhausted, the review
+        # cannot reach a verdict. Post a COMMENT review (never an APPROVE or
+        # REQUEST_CHANGES) carrying a machine-readable retryable marker plus the
+        # head SHA, so the PR Review Merge Scheduler recognizes a transient,
+        # retryable state and re-dispatches after quota refresh instead of leaving
+        # the PR permanently blocked. This does not approve and does not weaken the
+        # gate for genuine failures; it only marks the run as retryable.
+        if: >-
+          always()
+          && steps.opencode_review_model_pool.outputs.review_status == 'exhausted'
+        env:
+          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HEAD_SHA:-}" ] || [ -z "${PR_NUMBER:-}" ]; then
+            echo "OpenCode exhaustion marker skipped: missing PR number or head SHA." >&2
+            exit 0
+          fi
+          marker_body="$(
+            printf '%s\n\n' '<!-- opencode-review-exhausted -->'
+            printf '%s\n\n' 'OpenCode Review could not complete because the GitHub Models model pool / daily quota was exhausted for this run.'
+            printf '%s\n\n' 'This is a transient capacity signal, not a review verdict: no approval and no change request were issued. The PR Review Merge Scheduler will re-dispatch this review after the paid quota window refreshes.'
+            printf 'Head SHA: `%s`\n' "$HEAD_SHA"
+          )"
+          gh_error_file="$(mktemp)"
+          trap 'rm -f "$gh_error_file"' EXIT
+          if ! gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+            -f "commit_id=${HEAD_SHA}" \
+            -f "event=COMMENT" \
+            -f "body=${marker_body}" >/dev/null 2>"$gh_error_file"; then
+            echo "OpenCode could not publish the exhaustion marker review; continuing without side effect." >&2
+            if [ -s "$gh_error_file" ]; then
+              sed 's/^/gh: /' "$gh_error_file" >&2 || true
+            fi
+          fi
+
       - name: Publish bounded OpenCode review comment
         if: >-
           always()

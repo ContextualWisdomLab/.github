@@ -14,7 +14,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -150,6 +150,22 @@ DETERMINISTIC_APPROVAL_MARKERS = (
     "deterministic fallback approval",
     "did not emit a usable current-head control block",
 )
+# Sentinel the opencode-review workflow posts as a COMMENT review (never an
+# APPROVE/REQUEST_CHANGES verdict) when the GitHub Models model pool / daily
+# quota is exhausted for a run. It marks a transient, retryable capacity state
+# so the scheduler re-dispatches after quota refresh instead of leaving the PR
+# permanently blocked on a pool-exhausted review.
+OPENCODE_EXHAUSTION_MARKER = "<!-- opencode-review-exhausted -->"
+# The exhaustion marker may be published by the OpenCode app identity or by the
+# workflow's fallback GITHUB_TOKEN identity; accept either, but still require the
+# unique sentinel and current-head match so a real verdict is never mistaken for
+# an exhaustion signal.
+EXHAUSTION_REVIEW_AUTHORS = {"opencode-agent", "opencode-agent[bot]", "github-actions[bot]"}
+# Respect the scarce paid quota: wait for a refresh window before retrying an
+# exhausted review, and cap retries within a rolling day so a stuck PR cannot
+# hammer the pool.
+DEFAULT_EXHAUSTED_RETRY_MIN_MINUTES = 45
+DEFAULT_EXHAUSTED_MAX_RETRIES_PER_DAY = 6
 
 
 @dataclass
@@ -1056,6 +1072,94 @@ def is_deterministic_fallback_approval(review: dict[str, Any]) -> bool:
     return any(marker in body for marker in DETERMINISTIC_APPROVAL_MARKERS)
 
 
+def is_opencode_exhaustion_review(review: dict[str, Any]) -> bool:
+    """Return whether a review is an OpenCode model-pool exhaustion marker."""
+    if OPENCODE_EXHAUSTION_MARKER not in (review.get("body") or ""):
+        return False
+    return review_author_login(review) in EXHAUSTION_REVIEW_AUTHORS
+
+
+def current_head_exhaustion_reviews(pr: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return current-head OpenCode exhaustion marker reviews for this PR head."""
+    markers: list[dict[str, Any]] = []
+    for review in (pr.get("reviews") or {}).get("nodes") or []:
+        if not is_opencode_exhaustion_review(review):
+            continue
+        if not review_matches_current_head(review, pr):
+            continue
+        markers.append(review)
+    return markers
+
+
+@dataclass
+class ExhaustionRetryPlan:
+    """Bounded retry plan derived from current-head OpenCode exhaustion markers."""
+
+    kind: str
+    reason: str
+    attempts: int
+
+
+def opencode_exhaustion_retry_plan(
+    pr: dict[str, Any],
+    *,
+    min_interval_minutes: int,
+    max_retries_per_day: int,
+    now: datetime | None = None,
+) -> ExhaustionRetryPlan:
+    """Classify current-head exhaustion markers into none/retry/wait/capped."""
+    now = now or datetime.now(timezone.utc)
+    markers = current_head_exhaustion_reviews(pr)
+    if not markers:
+        return ExhaustionRetryPlan("none", "", 0)
+    timestamps = sorted(
+        stamp
+        for stamp in (parse_github_datetime(marker.get("submittedAt")) for marker in markers)
+        if stamp is not None
+    )
+    day_start = now - timedelta(days=1)
+    attempts = sum(1 for stamp in timestamps if stamp >= day_start)
+    if max_retries_per_day >= 0 and attempts >= max_retries_per_day:
+        return ExhaustionRetryPlan(
+            "capped",
+            (
+                "OpenCode review model pool exhausted; reached the daily retry cap of "
+                f"{max_retries_per_day} within the last 24h; waiting for the quota window to reset"
+            ),
+            attempts,
+        )
+    if timestamps and min_interval_minutes > 0:
+        idle_minutes = (now - timestamps[-1]).total_seconds() / 60
+        if idle_minutes < min_interval_minutes:
+            wait_more = max(1, int(min_interval_minutes - idle_minutes))
+            return ExhaustionRetryPlan(
+                "wait",
+                (
+                    "OpenCode review model pool exhausted; last retry was "
+                    f"{int(idle_minutes)} minute(s) ago; waiting ~{wait_more} more minute(s) "
+                    "for the paid quota to refresh before re-dispatching"
+                ),
+                attempts,
+            )
+    return ExhaustionRetryPlan(
+        "retry",
+        (
+            "OpenCode review model pool was exhausted (transient quota signal, not a review "
+            f"verdict); re-dispatching after backoff ({attempts} prior retry attempt(s) in 24h)"
+        ),
+        attempts,
+    )
+
+
+def log_exhaustion_retry(number: int, plan: ExhaustionRetryPlan) -> None:
+    """Emit a structured stderr log line for an OpenCode exhaustion retry decision."""
+    print(
+        "opencode-exhaustion-retry "
+        f"pr=#{number} decision={plan.kind} attempts={plan.attempts} reason={plan.reason!r}",
+        file=sys.stderr,
+    )
+
+
 def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
     """Return whether OpenCode's latest current-head review has the target state."""
     target_state = state.upper()
@@ -1560,6 +1664,8 @@ def inspect_pr(
     base_branch: str,
     merge_mode: str = "direct_or_auto",
     stale_opencode_minutes: int = DEFAULT_STALE_OPENCODE_MINUTES,
+    exhausted_retry_min_minutes: int = DEFAULT_EXHAUSTED_RETRY_MIN_MINUTES,
+    exhausted_max_retries_per_day: int = DEFAULT_EXHAUSTED_MAX_RETRIES_PER_DAY,
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
@@ -1859,6 +1965,28 @@ def inspect_pr(
             "review_dispatch",
             f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; same-head OpenCode re-dispatched",
         )
+
+    exhaustion_plan = opencode_exhaustion_retry_plan(
+        pr,
+        min_interval_minutes=exhausted_retry_min_minutes,
+        max_retries_per_day=exhausted_max_retries_per_day,
+    )
+    if exhaustion_plan.kind != "none":
+        log_exhaustion_retry(number, exhaustion_plan)
+        if exhaustion_plan.kind in {"capped", "wait"}:
+            return decide("wait", exhaustion_plan.reason)
+        if not trigger_reviews:
+            return decide(
+                "wait",
+                "OpenCode review model pool exhausted; review dispatch disabled for this run",
+            )
+        if not review_dispatch_allowed:
+            return decide(
+                "wait",
+                "OpenCode review model pool exhausted; review dispatch limit reached",
+            )
+        dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        return decide("review_dispatch", exhaustion_plan.reason)
 
     if trigger_reviews:
         strix_state = strix_evidence_state(pr)
@@ -2739,6 +2867,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=int,
         default=int(os.environ.get("STALE_OPENCODE_MINUTES", str(DEFAULT_STALE_OPENCODE_MINUTES))),
     )
+    parser.add_argument(
+        "--exhausted-retry-min-minutes",
+        type=int,
+        default=int(
+            os.environ.get(
+                "EXHAUSTED_RETRY_MIN_MINUTES", str(DEFAULT_EXHAUSTED_RETRY_MIN_MINUTES)
+            )
+        ),
+        help="Minimum minutes to wait after an exhausted OpenCode review before re-dispatching",
+    )
+    parser.add_argument(
+        "--exhausted-max-retries-per-day",
+        type=int,
+        default=int(
+            os.environ.get(
+                "EXHAUSTED_MAX_RETRIES_PER_DAY", str(DEFAULT_EXHAUSTED_MAX_RETRIES_PER_DAY)
+            )
+        ),
+        help="Maximum OpenCode exhausted-review re-dispatches per rolling 24h; -1 means unlimited",
+    )
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -2780,6 +2928,8 @@ def main(argv: list[str]) -> int:
                 security_workflow=args.security_workflow,
                 base_branch=args.base_branch,
                 stale_opencode_minutes=args.stale_opencode_minutes,
+                exhausted_retry_min_minutes=args.exhausted_retry_min_minutes,
+                exhausted_max_retries_per_day=args.exhausted_max_retries_per_day,
             )
         except RuntimeError as exc:
             decision = Decision(
