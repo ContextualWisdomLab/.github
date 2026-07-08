@@ -92,12 +92,13 @@ concurrency:
   # commit. Closed PR events only cancel older runs for the same PR/head group.
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
+# Scorecard Token-Permissions (alert #43): keep the workflow-level token
+# read-only and grant the id-token/statuses writes only on the job that needs
+# them (the strix scan job below and the publish-manual-pr-evidence-status job).
 permissions:
   actions: read
   contents: read
-  id-token: write
   models: read
-  statuses: write
 
 jobs:
   cancel-closed-pr-runs:
@@ -117,6 +118,15 @@ jobs:
     # the time. Fail-closed: hitting the cap fails the run, never passes it.
     timeout-minutes: 60
     runs-on: ubuntu-latest
+    # Least-privilege token scoped to this job (Scorecard alert #43): the scan
+    # exchanges an OIDC token (id-token) and posts a commit status
+    # (statuses:write); all other scopes stay read-only.
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      models: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
