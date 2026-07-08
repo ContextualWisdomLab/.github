@@ -9,7 +9,11 @@ against issues in ``ContextualWisdomLab/appguardrail``:
 * one open issue per distinct finding (deduplicated by a stable content hash),
 * body refreshed on every run, a comment added only when severity or location
   changed,
-* close-on-fix for issues whose finding disappeared from a *complete* scan.
+* close-on-fix for issues whose finding disappeared — but only from a *complete
+  full-repo* scan. A PR-scoped scan (``--scope pr``) inspects just the PR's
+  changed files, so an absent finding means "outside this PR", never "fixed";
+  such scans create/update/reopen findings but never close, preventing a clean
+  PR from wiping out every open finding in files it never touched.
 
 When the GitHub App token is absent the module runs in DRY-RUN: every intended
 create/update/close operation is logged and nothing is mutated, so the Strix job
@@ -37,6 +41,12 @@ from typing import Any
 
 DEFAULT_ISSUES_REPO = "ContextualWisdomLab/appguardrail"
 DEFAULT_TOKEN_ENV = "STRIX_ISSUE_APP_TOKEN"
+# Scan scope values. Only a FULL-repo scan sees every finding, so only a full
+# scan may conclude that an absent finding is fixed and close its issue. A
+# PR-scoped scan only inspects the PR's changed files, so a finding's absence
+# means "not in this PR" — never "fixed" — and must not close anything.
+SCOPE_FULL = "full"
+SCOPE_PR = "pr"
 FINDING_MARKER_PREFIX = "<!-- strix-finding:"
 SEVERITY_MARKER_PREFIX = "<!-- strix-severity:"
 LOCATION_MARKER_PREFIX = "<!-- strix-location:"
@@ -468,6 +478,20 @@ class EmitContext:
     head_sha: str = ""
     run_url: str = ""
     scan_complete: bool = False
+    # Scan scope: SCOPE_FULL only for full-repo push/schedule runs. Defaults to
+    # SCOPE_PR (the safe value) so any unset/unknown scope disables close-on-fix.
+    scan_scope: str = SCOPE_PR
+
+    @property
+    def close_on_fix_enabled(self) -> bool:
+        """Return whether close-on-fix may run for this scan.
+
+        Both guards must hold: the scan finished cleanly (``scan_complete``) and
+        it covered the whole repository (``scan_scope == SCOPE_FULL``). A
+        PR-scoped or unknown-scope scan only inspects the PR's changed files, so
+        a finding's absence never proves it was fixed and must not close issues.
+        """
+        return self.scan_complete and self.scan_scope == SCOPE_FULL
 
 
 def plan_operations(
@@ -479,8 +503,10 @@ def plan_operations(
 
     ``existing_issues`` are the issues already present in the tracker for this
     source repo scope (any state). Pure function: performs no I/O so the
-    reconciliation logic — including the close-on-fix set difference and the
-    incomplete-scan guard — is directly testable.
+    reconciliation logic — including the close-on-fix set difference and both
+    the incomplete-scan and PR-scope guards — is directly testable. Close-on-fix
+    runs only when ``context.close_on_fix_enabled`` (clean full-repo scan); a
+    PR-scoped scan creates/updates/reopens findings but never closes.
     """
     by_hash: dict[str, dict[str, Any]] = {}
     for issue in existing_issues:
@@ -546,7 +572,7 @@ def plan_operations(
                 )
             )
 
-    if context.scan_complete:
+    if context.close_on_fix_enabled:
         for issue in existing_issues:
             if str(issue.get("state") or "").lower() != "open":
                 continue
@@ -706,6 +732,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Set only when the scan finished cleanly; required to enable close-on-fix.",
     )
+    parser.add_argument(
+        "--scope",
+        choices=(SCOPE_FULL, SCOPE_PR),
+        default=SCOPE_PR,
+        help=(
+            "Scan scope: 'full' for a whole-repo push/schedule scan (enables "
+            "close-on-fix), 'pr' for a PR-scoped scan of changed files only "
+            "(never closes issues). Defaults to the safe 'pr' value."
+        ),
+    )
     parser.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="Env var holding the GitHub App token.")
     parser.add_argument("--dry-run", action="store_true", help="Plan and log operations without mutating GitHub.")
     return parser
@@ -721,12 +757,18 @@ def run(argv: Sequence[str] | None = None) -> int:
         head_sha=str(args.head_sha or ""),
         run_url=str(args.run_url or ""),
         scan_complete=bool(args.scan_complete),
+        scan_scope=args.scope,
     )
 
     findings = parse_run_dir(Path(args.run_dir), context.source_repo)
     print(f"Parsed {len(findings)} distinct Strix finding(s) from {args.run_dir}.")
     if not context.scan_complete:
         print("Scan not marked complete: close-on-fix is disabled for this run.")
+    elif context.scan_scope != SCOPE_FULL:
+        print(
+            f"Scan scope is '{context.scan_scope}' (PR-scoped): close-on-fix is disabled; "
+            "absent findings are treated as out-of-scope, not fixed."
+        )
 
     token = os.environ.get(args.token_env, "").strip()
     dry_run = bool(args.dry_run) or not token
@@ -748,7 +790,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             dry_run = True
             client = None
 
-    if not findings and not (context.scan_complete and existing_issues):
+    if not findings and not (context.close_on_fix_enabled and existing_issues):
         print("No findings and nothing to reconcile; exiting.")
         return 0
 

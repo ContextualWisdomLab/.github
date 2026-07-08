@@ -81,13 +81,18 @@ def write_run(tmp_path: Path, reports: dict[str, str], run_name: str = "run-1") 
 
 
 def make_context(**overrides) -> emit.EmitContext:
-    """Build an EmitContext with sensible test defaults."""
+    """Build an EmitContext with sensible test defaults.
+
+    Defaults to a full-repo scan (``scan_scope=SCOPE_FULL``) so close-on-fix
+    reconciliation is exercised; override ``scan_scope`` to model a PR-scoped run.
+    """
     values = {
         "source_repo": SOURCE_REPO,
         "pr_number": "42",
         "head_sha": "a" * 40,
         "run_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/1",
         "scan_complete": True,
+        "scan_scope": emit.SCOPE_FULL,
     }
     values.update(overrides)
     return emit.EmitContext(**values)
@@ -305,23 +310,62 @@ def test_plan_reopens_closed_issue_when_finding_returns():
     assert "reopen" in ops[0].reason
 
 
-def test_close_on_fix_closes_missing_open_issue_when_scan_complete():
-    """An open issue absent from a complete scan is closed."""
+def test_close_on_fix_closes_missing_open_issue_only_for_full_scope():
+    """An open issue absent from a complete FULL-repo scan is closed.
+
+    Close-on-fix is safe only for a whole-repo scan, which sees every finding;
+    this test pins that a clean full scan closes the stale issue.
+    """
     current = emit.parse_finding_markdown(SQLI_REPORT, SOURCE_REPO)
     stale = existing_issue_for(XSS_REPORT, number=9)  # not in current run
     live = existing_issue_for(SQLI_REPORT, number=7)
-    ops = emit.plan_operations([current], [live, stale], make_context(scan_complete=True))
+    context = make_context(scan_complete=True, scan_scope=emit.SCOPE_FULL)
+    ops = emit.plan_operations([current], [live, stale], context)
     close_ops = [op for op in ops if op.action == "close"]
     assert len(close_ops) == 1
     assert close_ops[0].issue_number == 9
     assert ("a" * 40) in close_ops[0].comment
 
 
-def test_incomplete_scan_never_closes():
-    """The close-on-fix guard: an incomplete scan closes nothing."""
+def test_pr_scoped_complete_scan_closes_nothing():
+    """The scope guard: a completed PR-scoped scan never closes issues.
+
+    A PR-scoped scan only inspects the PR's changed files, so a finding's
+    absence means "outside this PR", not "fixed". Neither a zero-finding clean
+    PR nor a subset scan may close still-valid open issues in untouched files.
+    """
+    stale = existing_issue_for(XSS_REPORT, number=9)
+    live = existing_issue_for(SQLI_REPORT, number=7)
+    # Zero findings (a clean PR): must not close every open Strix issue.
+    zero_ops = emit.plan_operations(
+        [], [live, stale], make_context(scan_complete=True, scan_scope=emit.SCOPE_PR)
+    )
+    assert all(op.action != "close" for op in zero_ops)
+    # A subset scan that only re-reports one finding must not close the other.
+    current = emit.parse_finding_markdown(SQLI_REPORT, SOURCE_REPO)
+    subset_ops = emit.plan_operations(
+        [current], [live, stale], make_context(scan_complete=True, scan_scope=emit.SCOPE_PR)
+    )
+    assert all(op.action != "close" for op in subset_ops)
+
+
+def test_unknown_scope_complete_scan_closes_nothing():
+    """An unknown/unset scope is treated as unsafe: close-on-fix stays off."""
     current = emit.parse_finding_markdown(SQLI_REPORT, SOURCE_REPO)
     stale = existing_issue_for(XSS_REPORT, number=9)
-    ops = emit.plan_operations([current], [stale], make_context(scan_complete=False))
+    context = make_context(scan_complete=True, scan_scope="unknown")
+    assert context.close_on_fix_enabled is False
+    ops = emit.plan_operations([current], [stale], context)
+    assert all(op.action != "close" for op in ops)
+
+
+def test_incomplete_scan_never_closes():
+    """The close-on-fix guard: an incomplete scan closes nothing even at full scope."""
+    current = emit.parse_finding_markdown(SQLI_REPORT, SOURCE_REPO)
+    stale = existing_issue_for(XSS_REPORT, number=9)
+    context = make_context(scan_complete=False, scan_scope=emit.SCOPE_FULL)
+    assert context.close_on_fix_enabled is False
+    ops = emit.plan_operations([current], [stale], context)
     assert all(op.action != "close" for op in ops)
 
 
@@ -624,6 +668,37 @@ def test_run_live_applies_plan(tmp_path, monkeypatch, capsys):
     assert len(client.created) == 1
     assert "create=1" in out
     assert "dry-run" not in out
+
+
+def test_run_full_scope_closes_stale_issue(tmp_path, monkeypatch, capsys):
+    """A full-repo scan (--scope full) reconciles and closes stale issues via the CLI."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    monkeypatch.setenv(emit.DEFAULT_TOKEN_ENV, "gho_" + "t" * 30)
+    stale = existing_issue_for(XSS_REPORT, number=9)
+    client = FakeClient(existing=[stale])
+    monkeypatch.setattr(emit, "GitHubIssueClient", lambda repo, token: client)
+    code = emit.run(
+        ["--run-dir", str(runs), "--source-repo", SOURCE_REPO, "--scan-complete", "--scope", "full"]
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert client.closed == [9]
+    assert "close=1" in out
+
+
+def test_run_pr_scope_never_closes_stale_issue(tmp_path, monkeypatch, capsys):
+    """A completed PR-scoped scan (default --scope pr) closes nothing via the CLI."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    monkeypatch.setenv(emit.DEFAULT_TOKEN_ENV, "gho_" + "t" * 30)
+    stale = existing_issue_for(XSS_REPORT, number=9)
+    client = FakeClient(existing=[stale])
+    monkeypatch.setattr(emit, "GitHubIssueClient", lambda repo, token: client)
+    code = emit.run(["--run-dir", str(runs), "--source-repo", SOURCE_REPO, "--scan-complete"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert client.closed == []
+    assert "close=0" in out
+    assert "PR-scoped" in out
 
 
 def test_run_degrades_to_dry_run_when_read_fails(tmp_path, monkeypatch, capsys):

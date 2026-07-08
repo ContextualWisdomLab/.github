@@ -642,6 +642,15 @@ jobs:
           # A failed or skipped Strix step leaves this false so a partial or
           # infra-broken scan never closes issues.
           STRIX_SCAN_COMPLETE: ${{ steps.run_strix.outcome == 'success' && 'true' || 'false' }}
+          # Scan scope mirrors the PR-scoping decision used by the Run Strix step
+          # (STRIX_DISABLE_PR_SCOPING / IS_PR_EVIDENCE_RUN / __PR_SCOPE__): PR
+          # events and workflow_dispatch with a pr_number scan only the PR's
+          # changed files, so their scope is 'pr' and close-on-fix MUST NOT run
+          # (an absent finding just means "outside this PR", not "fixed"). The
+          # push/schedule full-repo path scans everything, so its scope is 'full'
+          # and close-on-fix is allowed. Absence of this signal defaults to 'pr'
+          # (safe) in the emitter.
+          STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && 'pr' || 'full' }}
           STRIX_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -650,11 +659,17 @@ jobs:
             echo "::notice::Strix issue emitter not present in trusted source; skipping."
             exit 0
           fi
+          # Default to the safe 'pr' scope: close-on-fix only runs on a full scan.
+          scan_scope="${STRIX_SCAN_SCOPE:-pr}"
+          if [ "$scan_scope" != "full" ]; then
+            scan_scope="pr"
+          fi
           set -- \
             --run-dir "$GITHUB_WORKSPACE/strix_runs" \
             --source-repo "$SOURCE_REPOSITORY" \
             --issues-repo "ContextualWisdomLab/appguardrail" \
-            --run-url "$STRIX_RUN_URL"
+            --run-url "$STRIX_RUN_URL" \
+            --scope "$scan_scope"
           if [ -n "${SOURCE_PR_NUMBER:-}" ]; then
             set -- "$@" --pr-number "$SOURCE_PR_NUMBER"
           fi
