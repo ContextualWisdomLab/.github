@@ -102,12 +102,10 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
     """Start a service command in its own process group."""
     log_path = logs_dir / f"{label}.log"
     log_file = log_path.open("w", encoding="utf-8")
-    process = subprocess.Popen(  # nosec B602 - command must run in a shell by definition
-        command,
+    process = subprocess.Popen(
+        ["/bin/bash", "-lc", command],
         cwd=cwd,
         env=env,
-        shell=True,
-        executable="/bin/bash",
         text=True,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -139,12 +137,10 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
 
 def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
     """Run a shell command and capture its output."""
-    return subprocess.run(  # nosec B602 - command must run in a shell by definition
-        command,
+    return subprocess.run(
+        ["/bin/bash", "-lc", command],
         cwd=cwd,
         env=env,
-        shell=True,
-        executable="/bin/bash",
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
