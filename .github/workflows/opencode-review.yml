@@ -2357,13 +2357,24 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 min per model — generous for a deep tool-using review, but bounded
-          # so a rate-limited model yields to the next one instead of eating the
-          # 350-min step. (20400s = 340min gave one model the entire budget with
-          # no fallback; 600s was too short for a proper review.)
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # 30 min per model — ample for a deep tool-using review (5x the 600s
+          # that was too short), but low enough that the 3-4 front-loaded mini
+          # models can each hang/rate-limit and STILL leave budget to reach a
+          # healthy high-quota fallback (deepseek/mistral/llama, candidates
+          # #6-11) inside the 350-min step. At 90 min/model the pool burned
+          # ~270 min on the first 3 hanging models (each killed at exit 124)
+          # and never reached any fallback, so every review timed out red on
+          # PRs of every size (a one-file docs PR failed identically). At 30
+          # min/model the full 13-candidate list is traversable within budget.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "1800"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"
+          # Clean internal deadline 10 min under the 350-min step timeout. The
+          # pool caps each per-model run at min(run_timeout, deadline-now) and
+          # exits with an explicit "retry deadline elapsed" reason + recorded
+          # review_status when the budget is spent, instead of being hard-killed
+          # by GitHub's opaque "##[error] timed out after 350 minutes" with no
+          # recorded status. Keeps every failure's cause visible in the log.
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "20400"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
