@@ -1,0 +1,205 @@
+name: PR Auto Rebase Scheduler
+
+# CI-cost tradeoff and guards
+# ---------------------------
+# Rebasing a PR rewrites its head, which re-triggers every head-driven required
+# workflow (OpenCode Review, Strix, security-scan). Those runs are expensive
+# under a limited Models budget, so this scheduler runs on a MODEST cron (every
+# few hours, not every few minutes) and is bounded by the script's guards:
+#   * AUTO_REBASE_MAX_PER_RUN caps rebases per run (rate limit vs. re-run storms).
+#   * AUTO_REBASE_HUMAN_WINDOW_MINUTES skips branches a human just pushed to.
+#   * clean/up-to-date PRs and fork heads are never touched.
+#   * a conflicting rebase is aborted and labeled instead of force-pushed.
+# See scripts/ci/pr_auto_rebase.py for the full rationale.
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Print planned rebases without mutating branches
+        required: false
+        default: false
+        type: boolean
+      max_prs:
+        description: Maximum open PRs to inspect
+        required: false
+        default: "100"
+        type: string
+      max_per_run:
+        description: Maximum PRs to rebase per run (rate limit against CI re-run storms)
+        required: false
+        default: "10"
+        type: string
+      human_window_minutes:
+        description: Skip branches whose newest commit is a human commit within this many minutes
+        required: false
+        default: "30"
+        type: string
+      target_repository:
+        description: Repository to scan, in owner/name form; defaults to the caller repository
+        required: false
+        default: ""
+        type: string
+      base_branch:
+        description: Base branch to scan; defaults to the caller repository default branch
+        required: false
+        default: ""
+        type: string
+      canonical_ref:
+        description: Ref of ContextualWisdomLab/.github to use for scheduler code
+        required: false
+        default: "main"
+        type: string
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print planned rebases without mutating branches
+        required: false
+        default: false
+        type: boolean
+      max_prs:
+        description: Maximum open PRs to inspect
+        required: false
+        default: "100"
+      max_per_run:
+        description: Maximum PRs to rebase per run (rate limit against CI re-run storms)
+        required: false
+        default: "10"
+      human_window_minutes:
+        description: Skip branches whose newest commit is a human commit within this many minutes
+        required: false
+        default: "30"
+      target_repository:
+        description: Repository to scan, in owner/name form; defaults to AUTO_REBASE_TARGET_REPOSITORY or this repository
+        required: false
+        default: ""
+      base_branch:
+        description: Base branch to scan; defaults to AUTO_REBASE_BASE_BRANCH or this repository default branch
+        required: false
+        default: ""
+  schedule:
+    # Every 3 hours (offset off the hour). Deliberately NOT every few minutes:
+    # each rebase re-triggers expensive required checks, so runs are bounded.
+    - cron: "17 */3 * * *"
+
+concurrency:
+  # One auto-rebase pass per repository at a time. Do not cancel an in-flight
+  # run: a cancelled run could interrupt a force-push mid-flight.
+  group: central-pr-auto-rebase-${{ inputs.target_repository || vars.AUTO_REBASE_TARGET_REPOSITORY || github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  auto-rebase:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # force-push rebased PR head branches
+      pull-requests: write   # read PR queue and manage labels
+      issues: write          # create/add the needs-manual-rebase label and hand-off comment
+      id-token: write        # exchange the OpenCode GitHub App token via OIDC
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TARGET_REPOSITORY: ${{ inputs.target_repository || vars.AUTO_REBASE_TARGET_REPOSITORY || github.repository }}
+      DEFAULT_BRANCH: ${{ inputs.base_branch || vars.AUTO_REBASE_BASE_BRANCH || github.event.repository.default_branch }}
+      DRY_RUN: ${{ inputs.dry_run == true }}
+      MAX_PRS: ${{ inputs.max_prs || '100' }}
+      AUTO_REBASE_MAX_PER_RUN: ${{ inputs.max_per_run || vars.AUTO_REBASE_MAX_PER_RUN || '10' }}
+      AUTO_REBASE_HUMAN_WINDOW_MINUTES: ${{ inputs.human_window_minutes || vars.AUTO_REBASE_HUMAN_WINDOW_MINUTES || '30' }}
+      CANONICAL_REF: ${{ inputs.canonical_ref || 'main' }}
+    steps:
+      - name: Exchange OpenCode app token for cross-repo git writes
+        id: scheduler_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Checkout canonical scheduler
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ env.CANONICAL_REF }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Self-test auto-rebase scheduler contract
+        run: python3 scripts/ci/pr_auto_rebase.py --self-test
+
+      - name: Auto-rebase cleanly-rebasable PRs
+        env:
+          # Prefer a dedicated PR-write token, then the OpenCode app token, then
+          # the workflow token. The chosen credential is used both for the GitHub
+          # API and for the git force-push (via x-access-token), so it must be
+          # able to write PR head branches in TARGET_REPOSITORY.
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          args=(
+            --repo "$TARGET_REPOSITORY"
+            --base-branch "$DEFAULT_BRANCH"
+            --max-prs "$MAX_PRS"
+            --max-per-run "$AUTO_REBASE_MAX_PER_RUN"
+            --human-window-minutes "$AUTO_REBASE_HUMAN_WINDOW_MINUTES"
+          )
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 scripts/ci/pr_auto_rebase.py "${args[@]}"
