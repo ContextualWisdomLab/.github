@@ -3,8 +3,55 @@ name: Strix Security Scan
 on:
   push:
     branches: [main, develop, master]
+    # Skip scans for changes that touch ONLY non-executable documentation and
+    # image assets. A change whose entire diff is these paths has no source,
+    # build, config, or workflow logic for a code security scanner to analyze,
+    # so skipping it loses no coverage while freeing shared runner capacity.
+    # Conservative by design: only file EXTENSIONS/paths that can never contain
+    # executable logic are listed (no source, no *.txt, no *.svg, no CODEOWNERS,
+    # no build scripts). A diff touching even one non-listed file still scans.
+    # The weekly full-tree schedule below re-scans protected branches with no
+    # path filter, backstopping every path.
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.markdown'
+      - '**/*.rst'
+      - '**/*.png'
+      - '**/*.jpg'
+      - '**/*.jpeg'
+      - '**/*.gif'
+      - '**/*.webp'
+      - '**/*.bmp'
+      - '**/*.ico'
+      - 'LICENSE'
+      - 'LICENSE.*'
+      - 'COPYING'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
+    # Same conservative doc/image-only skip for PR scans. GitHub evaluates these
+    # path filters against the PR's full base..head diff, so a PR is skipped only
+    # when EVERY changed file is a non-executable doc/image asset; any code,
+    # config, build, or workflow change still triggers the scan. The head.sha
+    # concurrency design (below) is unchanged. For PRs the merge scheduler
+    # manages, same-head Strix evidence is still forced at merge time via
+    # workflow_dispatch (which paths-ignore does not affect), so merged code
+    # never loses evidence.
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.markdown'
+      - '**/*.rst'
+      - '**/*.png'
+      - '**/*.jpg'
+      - '**/*.jpeg'
+      - '**/*.gif'
+      - '**/*.webp'
+      - '**/*.bmp'
+      - '**/*.ico'
+      - 'LICENSE'
+      - 'LICENSE.*'
+      - 'COPYING'
+      - '.github/ISSUE_TEMPLATE/**'
   schedule:
     # Weekly scan on protected branches (Mondays at 03:00 UTC).
     - cron: '0 3 * * 1'
@@ -61,7 +108,14 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
-    timeout-minutes: 120
+    # The scan itself is hard-bounded to 30 min (the "Run Strix (quick)" step
+    # has timeout-minutes: 30 and exports STRIX_TOTAL_TIMEOUT_SECONDS=1800), and
+    # every other step is quick or self-bounded (self-test is 2 min). A healthy
+    # run finishes well under 50 min. The 120 cap only ever bit HUNG runs (e.g.
+    # a network stall in pip/git with no per-step timeout); 60 min still clears
+    # the realistic worst case with margin while freeing a stuck runner in half
+    # the time. Fail-closed: hitting the cap fails the run, never passes it.
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
