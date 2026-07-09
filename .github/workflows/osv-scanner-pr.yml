@@ -29,7 +29,12 @@ jobs:
   osv-scan:
     if: github.event.action != 'closed'
     # ponytail: use upstream reusable PR workflow, don't hand-roll the diff scan
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    # Pinned to v2.3.8 + 1 commit (3a7550f) which gates the JSON job outputs
+    # behind the new `export-results` input (default false). v2.3.8 dumped the
+    # full old/new osv-scanner JSON into job outputs unconditionally, tripping
+    # GitHub's 1,048,576-byte job-outputs cap and failing the run. Same nested
+    # action pins as v2.3.8; only the Export step is now conditional.
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@3a7550f43ba5b58905a821ce3a0ed24c4858b3f4 # v2.3.8 + export-results gate
     permissions:
       actions: read
       contents: read
