@@ -59,16 +59,23 @@ jobs:
           import json
           import pathlib
 
-          PR_DELEGATED_RULE_IDS = {"SASTID", "VulnerabilitiesID"}
+          PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}
+          PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}
+          PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS
 
           sarif_path = pathlib.Path("results.sarif")
           sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
-          delegated = 0
+          hard_gate_delegated = 0
+          governance_delegated = 0
           for run in sarif.get("runs", []):
               kept = []
               for result in run.get("results", []):
-                  if result.get("ruleId") in PR_DELEGATED_RULE_IDS:
-                      delegated += 1
+                  rule_id = result.get("ruleId")
+                  if rule_id in PR_DELEGATED_RULE_IDS:
+                      if rule_id in PR_HARD_GATE_RULE_IDS:
+                          hard_gate_delegated += 1
+                      if rule_id in PR_GOVERNANCE_RULE_IDS:
+                          governance_delegated += 1
                       continue
                   kept.append(result)
               run["results"] = kept
@@ -77,8 +84,13 @@ jobs:
           filtered_path.replace(sarif_path)
           print(
               "Delegated "
-              f"{delegated} PR-only Scorecard SAST/vulnerability finding(s) to "
+              f"{hard_gate_delegated} PR-only Scorecard SAST/vulnerability finding(s) to "
               "CodeQL, OSV, Trivy, and dependency-review hard gates."
+          )
+          print(
+              "Delegated "
+              f"{governance_delegated} PR-only Scorecard fuzzing posture finding(s) "
+              "to default-branch governance tracking."
           )
           PY
 

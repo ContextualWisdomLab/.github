@@ -94,29 +94,37 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
-      - name: Checkout pull request merge ref for coverage measurement
-        if: github.event_name == 'pull_request_target'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ github.event.pull_request.base.repo.full_name }}
-          fetch-depth: 0
-          persist-credentials: false
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
-          path: pr-head
-
-      - name: Checkout requested pull request merge ref for coverage measurement
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ github.event.inputs.target_repository || github.repository }}
-          fetch-depth: 0
-          persist-credentials: false
-          token: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          ref: refs/pull/${{ github.event.inputs.pr_number }}/merge
-          path: pr-head
+      - name: Materialize pull request merge tree for coverage measurement
+        env:
+          GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && (secrets.OPENCODE_APPROVE_TOKEN || github.token) || github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+        run: |
+          set -euo pipefail
+          fetch_dir="${RUNNER_TEMP}/opencode-coverage-fetch"
+          rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
+          git init "$fetch_dir"
+          git -C "$fetch_dir" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
+          git -C "$fetch_dir" \
+            -c http."${GITHUB_SERVER_URL}/".extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"
+          git -C "$fetch_dir" checkout --detach "$PR_BASE_SHA"
+          git -C "$fetch_dir" config user.name "github-actions[bot]"
+          git -C "$fetch_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git -C "$fetch_dir" merge --no-ff --no-edit "$PR_HEAD_SHA"; then
+            echo "::error::Coverage merge tree could not be materialized for base ${PR_BASE_SHA} and head ${PR_HEAD_SHA}; resolve merge conflicts or rerun after GitHub can synthesize the PR merge commit."
+            exit 1
+          fi
+          mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
+          mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
+          git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
       - name: Install Python coverage measurement tools
-        run: python3 -m pip install --disable-pip-version-check -r requirements-opencode-review-ci.txt
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
       - name: Measure test and docstring evidence
         id: measure
@@ -227,7 +235,7 @@ jobs:
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
-                python3 -m pip install --disable-pip-version-check -r requirements.txt
+                uv run --with-requirements requirements.txt python -c 'import sys; print("requirements resolved with", sys.executable)'
             fi
 
             while IFS= read -r project_dir; do
@@ -245,11 +253,11 @@ jobs:
                 fi
                 if [ -f "${project_dir}/requirements.txt" ]; then
                   run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
-                    uv pip install --project "$project_dir" -r "${project_dir}/requirements.txt"
+                    bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
                 fi
               elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
                 run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check -r requirements.txt' bash "$project_dir"
+                  bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
           }
@@ -308,14 +316,14 @@ jobs:
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
+                  bash -c 'PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest && uv run --with coverage coverage report --show-missing'
               elif python3 -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else

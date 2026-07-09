@@ -119,13 +119,17 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
     for filename in ("scorecard-pr.yml", "security-scan.yml"):
         workflow = workflow_text(filename)
 
-        assert 'PR_DELEGATED_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+        assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+        assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
+        assert "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS" in workflow
         assert "Delegated " in workflow
         assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
+        assert "default-branch governance tracking" in workflow
 
     default_branch_scorecard = workflow_text("scorecard-analysis.yml")
 
     assert "PR_DELEGATED_RULE_IDS" not in default_branch_scorecard
+    assert "FuzzingID" not in default_branch_scorecard
     assert "VulnerabilitiesID" not in default_branch_scorecard
 
 
