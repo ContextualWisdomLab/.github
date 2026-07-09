@@ -568,7 +568,35 @@ jobs:
             fi
           }
 
+          rust_coverage_manifests() {
+            if [ -f Cargo.toml ]; then
+              printf '%s\n' Cargo.toml
+              return 0
+            fi
+            changed_files_for_coverage \
+              | while IFS= read -r changed_path; do
+                  case "$changed_path" in
+                    Cargo.toml|Cargo.lock|*.rs) ;;
+                    *) continue ;;
+                  esac
+                  candidate_dir="$(dirname "$changed_path")"
+                  while [ "$candidate_dir" != "." ] && [ "$candidate_dir" != "/" ]; do
+                    if [ -f "${candidate_dir}/Cargo.toml" ]; then
+                      printf '%s\n' "${candidate_dir}/Cargo.toml"
+                      break
+                    fi
+                    next_dir="$(dirname "$candidate_dir")"
+                    if [ "$next_dir" = "$candidate_dir" ]; then
+                      break
+                    fi
+                    candidate_dir="$next_dir"
+                  done
+                done \
+              | sort -u
+          }
+
           run_rust_test_coverage() {
+            local manifests
             ensure_rust_toolchain
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust test coverage"
@@ -578,17 +606,27 @@ jobs:
               append "- Fix: make the Rust toolchain available, then run \`cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines\`."
               append ""
               failures=$((failures + 1))
-            elif [ -f Cargo.toml ]; then
-              run_and_capture "Rust coverage with missing-line report" \
-                cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
             else
-              append "### Rust test coverage"
-              append ""
-              append "- Result: FAIL"
-              append "- Reason: Rust files changed, but no root Cargo.toml was found."
-              append "- Fix: add or point to the Cargo workspace manifest and run cargo coverage from that workspace."
-              append ""
-              failures=$((failures + 1))
+              manifests="$(rust_coverage_manifests)"
+              if [ -n "$manifests" ]; then
+                while IFS= read -r manifest; do
+                  if [ "$manifest" = "Cargo.toml" ]; then
+                    run_and_capture "Rust coverage with missing-line report (${manifest})" \
+                      cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
+                  else
+                    run_and_capture "Rust coverage with missing-line report (${manifest})" \
+                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines 100 --show-missing-lines
+                  fi
+                done <<<"$manifests"
+              else
+                append "### Rust test coverage"
+                append ""
+                append "- Result: FAIL"
+                append "- Reason: Rust files changed, but no Cargo.toml was found at the repo root or above the changed Rust files."
+                append "- Fix: add a Cargo workspace/package manifest near the Rust files or point the repository coverage command at the nested manifest."
+                append ""
+                failures=$((failures + 1))
+              fi
             fi
           }
 
