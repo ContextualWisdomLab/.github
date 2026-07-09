@@ -24,6 +24,13 @@
 # NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
 # CRITICAL/HIGH finding blocks every PR in that repo until it is fixed. Flip its
 # `exit-code` to "0" to make Trivy visibility-only if that is too strict.
+#
+# NOTE on osv-scan: the hard gate intentionally disables transitive dependency
+# resolution. The upstream OSV PR workflow otherwise reaches public package
+# registries while diffing old/new revisions; Maven Central HTTP 429 responses
+# then fail unrelated PRs even when the reporter finds no vulnerabilities. Direct
+# manifest vulnerabilities still fail through fail-on-vuln, while dependency
+# review covers diff-scoped dependency graph findings.
 name: Security Scan
 
 on:
@@ -55,6 +62,10 @@ jobs:
       contents: read
       security-events: write
     with:
+      scan-args: |-
+        --no-resolve
+        -r
+        ./
       fail-on-vuln: true
 
   dependency-review:

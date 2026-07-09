@@ -34,6 +34,13 @@ jobs:
       contents: read
       security-events: write
     with:
+      # Keep the PR code-scanning upload deterministic: direct manifest
+      # vulnerabilities are uploaded, but public registry rate limits cannot
+      # make the required upload check fail before SARIF reaches GitHub.
+      scan-args: |-
+        --no-resolve
+        -r
+        ./
       # Merge gating is done by the org code_scanning ruleset rule
       # (medium_or_higher), not by failing this check. Keep the check green
       # so it only supplies the analysis; the ruleset decides blocking.

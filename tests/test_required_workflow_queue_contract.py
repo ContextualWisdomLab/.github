@@ -93,6 +93,16 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
+def test_osv_pr_workflows_do_not_depend_on_remote_registry_resolution() -> None:
+    """Keep OSV checks from failing unrelated PRs on Maven/npm registry 429s."""
+    for filename in ("osv-scanner-pr.yml", "security-scan.yml"):
+        workflow = workflow_text(filename)
+
+        assert "--no-resolve" in workflow
+        assert "fail-on-vuln:" in workflow
+        assert "public registry rate limits" in workflow or "Maven Central HTTP 429" in workflow
+
+
 def test_scorecard_sarif_filters_only_required_upload_permission_noise() -> None:
     """Scorecard uploads should not re-open alerts for their own SARIF permission."""
     for filename in ("scorecard-pr.yml", "scorecard-analysis.yml", "security-scan.yml"):
