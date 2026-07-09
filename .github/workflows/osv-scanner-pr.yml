@@ -39,13 +39,3 @@ jobs:
       # (medium_or_higher), not by failing this check. Keep the check green
       # so it only supplies the analysis; the ruleset decides blocking.
       fail-on-vuln: false
-      # RELIABILITY: resolve Maven parent POMs through Google's byte-identical
-      # Maven Central mirror instead of repo.maven.apache.org, which
-      # intermittently 429s during transitive resolution (e.g.
-      # spring-boot-starter-parent). Same maven2 layout, same bytes -> no
-      # coverage loss; transitive scanning stays fully enabled. See
-      # security-scan.yml for the full rationale.
-      scan-args: |-
-        --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-        -r
-        ./
