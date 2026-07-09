@@ -812,6 +812,21 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "pull review with fallback review token"' "opencode approval explains fallback review publication failures"
 	assert_file_contains "$workflow_file" 'gh_error_is_rate_limited()' "opencode approval detects rate-limited publication failures"
 	assert_file_contains "$workflow_file" '[ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"' "opencode approval only soft-fails rate-limited approve publication failures"
+	local approval_step
+	local helper_line
+	local approve_call_line
+	approval_step="$(
+		awk '
+			/^[[:space:]]*- name: Approve PR if OpenCode review passed/ { in_step = 1 }
+			in_step { print }
+			in_step && /^[[:space:]]*- name: Run merge scheduler after approval/ { exit }
+		' "$workflow_file"
+	)"
+	helper_line="$(grep -nF 'gh_error_is_rate_limited()' <<<"$approval_step" | head -n 1 | cut -d: -f1 || true)"
+	approve_call_line="$(grep -nF '[ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"' <<<"$approval_step" | head -n 1 | cut -d: -f1 || true)"
+	if [ -z "$helper_line" ] || [ -z "$approve_call_line" ] || [ "$helper_line" -ge "$approve_call_line" ]; then
+		record_failure "opencode approval step must define gh_error_is_rate_limited before create_pull_review uses it"
+	fi
 	assert_file_contains "$workflow_file" 'OpenCode could not publish the APPROVE pull review for head %s because the GitHub API rate limit was exceeded' "opencode approval keeps successful gate results for rate-limited approval review publication"
 	assert_file_contains "$workflow_file" 'OpenCode could not publish the pull review for head %s, so the review state was not changed.' "opencode approval fails when review publication fails"
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "review overview comment"' "opencode approval soft-fails permission-denied overview publication"

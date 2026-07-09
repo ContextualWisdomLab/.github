@@ -2808,6 +2808,12 @@ jobs:
             fi
           }
 
+          gh_error_is_rate_limited() {
+            local error_file="$1"
+            [ -s "$error_file" ] || return 1
+            grep -Eiq '(API rate limit exceeded|rate limit exceeded|secondary rate limit)' "$error_file"
+          }
+
                     emit_change_flow_mermaid_graph() {
                       local merge_state="${1:-UNKNOWN}"
                       local changed_files_file surfaces_file idx next_node
