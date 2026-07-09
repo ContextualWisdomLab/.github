@@ -31,7 +31,7 @@ on:
         default: true
         type: boolean
       review_dispatch_limit:
-        description: Maximum OpenCode/Strix review dispatch actions per scheduler run
+        description: OpenCode/Strix review dispatch budget per scheduler run (-1 dispatches every eligible current-head review)
         required: false
         default: "1"
         type: string
@@ -93,7 +93,7 @@ on:
         default: true
         type: boolean
       review_dispatch_limit:
-        description: Maximum OpenCode/Strix review dispatch actions per scheduler run
+        description: OpenCode/Strix review dispatch budget per scheduler run (-1 dispatches every eligible current-head review)
         required: false
         default: "1"
       enable_auto_merge:
@@ -126,6 +126,13 @@ concurrency:
     github.event_name == 'workflow_dispatch' && github.run_id ||
     github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'workflow_dispatch' }}
+
+# Scorecard Token-Permissions (alert #9): declare a least-privilege default at
+# the workflow level. The scan-pr-queue job that actually needs write access
+# declares its own elevated permissions block; every other job (and the default
+# token) stays read-only.
+permissions:
+  contents: read
 
 jobs:
   cancel-closed-pr-runs:
