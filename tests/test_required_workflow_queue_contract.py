@@ -114,6 +114,21 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "--output=new-results.json" in workflow
 
 
+def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
+    """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
+    for filename in ("scorecard-pr.yml", "security-scan.yml"):
+        workflow = workflow_text(filename)
+
+        assert 'PR_DELEGATED_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+        assert "Delegated " in workflow
+        assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
+
+    default_branch_scorecard = workflow_text("scorecard-analysis.yml")
+
+    assert "PR_DELEGATED_RULE_IDS" not in default_branch_scorecard
+    assert "VulnerabilitiesID" not in default_branch_scorecard
+
+
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Print Trivy findings that failed the gate\n"
