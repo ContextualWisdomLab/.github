@@ -619,7 +619,21 @@ jobs:
               tag_suffix="$(printf '%s' "$dockerfile" | tr '[:upper:]' '[:lower:]' | tr '/.' '--' | tr -cd '[:alnum:]-' | cut -c1-80)"
               image_tag="opencode-review-${PR_HEAD_SHA:-head}-${tag_suffix}"
               run_and_capture "Docker build (${dockerfile})" \
-                docker build --pull=false -f "$dockerfile" -t "$image_tag" "$docker_context"
+                bash -c '
+                  set -euo pipefail
+                  dockerfile="$1"
+                  image_tag="$2"
+                  docker_context="$3"
+                  if docker build --pull=false -f "$dockerfile" -t "$image_tag" "$docker_context"; then
+                    exit 0
+                  fi
+                  if [ "$docker_context" != "." ]; then
+                    echo "Docker build failed with context ${docker_context}; retrying with repository root context so nested Dockerfiles that COPY repo-root paths can provide actionable evidence."
+                    docker build --pull=false -f "$dockerfile" -t "$image_tag" .
+                  fi
+                  echo "Docker build failed with repository root context; no fallback context remains."
+                  exit 1
+                ' bash "$dockerfile" "$image_tag" "$docker_context"
             done <"$changed_dockerfiles"
             if has_changed_tracked_files 'docker-compose.yml' 'docker-compose.yaml' 'compose.yml' 'compose.yaml'; then
               for compose_file in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
