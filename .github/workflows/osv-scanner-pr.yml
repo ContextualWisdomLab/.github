@@ -14,10 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  # Upload SARIF to Security > Code Scanning. See github/codeql-action#2117.
+  # Scorecard Token-Permissions (alert #41): keep the workflow-level token
+  # read-only. SARIF upload needs security-events:write, but the osv-scan job
+  # below already grants it at job scope, so it is redundant (and over-broad)
+  # here.
   actions: read
   contents: read
-  security-events: write
 
 jobs:
   cancel-closed-pr-runs:

@@ -1,3 +1,6 @@
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -91,3 +94,62 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert '"$status" = "403"' in workflow
     assert '"$status" = "404"' in workflow
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+
+
+def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Print Trivy findings that failed the gate\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+
+    (tmp_path / "trivy-results.sarif").write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {
+                        "tool": {
+                            "driver": {
+                                "rules": [
+                                    {
+                                        "id": "CVE-TEST",
+                                        "properties": {"security-severity": "9.8"},
+                                    }
+                                ]
+                            }
+                        },
+                        "results": [
+                            {
+                                "ruleId": "CVE-TEST",
+                                "message": {
+                                    "text": "Artifact: app\nSeverity: HIGH\nMessage: vulnerable package"
+                                },
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "requirements.txt"},
+                                            "region": {"startLine": 7},
+                                        }
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
+    assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
+    assert "vulnerable package" in result.stdout

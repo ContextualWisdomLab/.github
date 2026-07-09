@@ -35,10 +35,13 @@ concurrency:
   group: security-scan-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Scorecard Token-Permissions (alert #42): workflow-level token stays
+# read-only. Every job that uploads SARIF (osv-scan, trivy-fs, scorecard)
+# already declares security-events:write at job scope, so granting it here as
+# well is redundant and over-broad.
 permissions:
   actions: read
   contents: read
-  security-events: write
 
 jobs:
   cancel-closed-pr-runs:
@@ -134,6 +137,47 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: "1"
+      - name: Print Trivy findings that failed the gate
+        # SARIF-only output otherwise leaves failures as just "exit code 1".
+        if: failure() && hashFiles('trivy-results.sarif') != ''
+        shell: python3 {0}
+        run: |
+          import json, pathlib
+
+          sarif = json.loads(pathlib.Path("trivy-results.sarif").read_text(encoding="utf-8"))
+          findings = []
+          for run in sarif.get("runs", []):
+              rules = {r["id"]: r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
+              for result in run.get("results", []):
+                  rule = rules.get(result.get("ruleId", ""), {})
+                  severity = rule.get("properties", {}).get("security-severity", "?")
+                  lines = (result.get("message", {}).get("text") or "").strip().splitlines()
+                  fields = {}
+                  for entry in lines:
+                      key, sep, value = entry.partition(":")
+                      if sep:
+                          fields[key.strip().lower()] = value.strip()
+                  if fields.get("severity"):
+                      severity = f"{fields['severity']} (security-severity={severity})"
+                  message = fields.get("message") or (lines[0] if lines else result.get("ruleId", ""))
+                  locations = result.get("locations", [])
+                  if locations:
+                      phys = locations[0].get("physicalLocation", {})
+                      uri = phys.get("artifactLocation", {}).get("uri", "?")
+                      line = phys.get("region", {}).get("startLine", "?")
+                      where = f"{uri}:{line}"
+                  else:
+                      where = "-"
+                  findings.append((severity, result.get("ruleId", "?"), where, message))
+
+          if not findings:
+              print("Trivy failed but produced no SARIF results.")
+          else:
+              print(f"Trivy filesystem scan reported {len(findings)} finding(s):")
+              for severity, rule_id, where, message in findings:
+                  print(f"  [{severity}] {rule_id} {where} - {message}")
+              print("")
+              print("Remediate each finding at the shared base branch so open PRs inherit the fix.")
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2

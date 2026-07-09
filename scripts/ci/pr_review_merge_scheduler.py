@@ -1939,6 +1939,12 @@ def markdown_cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", "<br>")
 
 
+def markdown_code_span(value: object) -> str:
+    """Escape a value for a compact Markdown inline code span."""
+    escaped = str(value).replace("`", "\\`")
+    return f"`{escaped}`"
+
+
 def write_actions_summary(
     decisions: list[Decision],
     *,
@@ -2065,7 +2071,7 @@ def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
                 [
                     "",
                     "Changed files to inspect first:",
-                    *(f"- `{path.replace('`', '\\`')}`" for path in changed_files),
+                    *(f"- {markdown_code_span(path)}" for path in changed_files),
                 ]
             )
     return lines

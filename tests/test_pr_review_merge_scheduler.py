@@ -1382,7 +1382,13 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
         make_pr(
             number=7,
             headRefName="feature|x",
-            files={"nodes": [{"path": "scripts/ci/pr_review_merge_scheduler.py"}, {"path": "tests/test_pr_review_merge_scheduler.py"}]},
+            files={
+                "nodes": [
+                    {"path": "scripts/ci/pr_review_merge_scheduler.py"},
+                    {"path": "tests/test_pr_review_merge_scheduler.py"},
+                    {"path": "docs/has`tick.md"},
+                ]
+            },
         ),
         "DIRTY",
     )
@@ -1443,6 +1449,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][0]["guidance"]["changed_files_to_inspect"] == [
         "scripts/ci/pr_review_merge_scheduler.py",
         "tests/test_pr_review_merge_scheduler.py",
+        "docs/has`tick.md",
     ]
     assert "update-branch cannot choose" in payload["decisions"][0]["guidance"]["automation_limit"]
     assert "gh pr checkout 7" in payload["decisions"][0]["guidance"]["commands"]
@@ -1483,6 +1490,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "Changed files to inspect first:" in summary
     assert "- `scripts/ci/pr_review_merge_scheduler.py`" in summary
     assert "- `tests/test_pr_review_merge_scheduler.py`" in summary
+    assert "- `docs/has\\`tick.md`" in summary
     assert "git push --force-with-lease" in summary
     assert "### Branch update requests" in summary
     assert "Requested `update-branch` for PR #8 with `workflow GITHUB_TOKEN`" in summary
