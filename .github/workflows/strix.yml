@@ -32,8 +32,9 @@ on:
     # Same conservative doc/image-only skip for PR scans. GitHub evaluates these
     # path filters against the PR's full base..head diff, so a PR is skipped only
     # when EVERY changed file is a non-executable doc/image asset; any code,
-    # config, build, or workflow change still triggers the scan. The head.sha
-    # concurrency design (below) is unchanged. For PRs the merge scheduler
+    # config, build, or workflow change still triggers the scan. Concurrency is
+    # PR-number based, so newer heads cancel superseded scans and keep queue
+    # capacity focused on current-head evidence. For PRs the merge scheduler
     # manages, same-head Strix evidence is still forced at merge time via
     # workflow_dispatch (which paths-ignore does not affect), so merged code
     # never loses evidence.
@@ -82,15 +83,10 @@ on:
 
 concurrency:
   group: >-
-    strix-${{ github.event.inputs.target_repository || github.repository }}-${{ github.event_name == 'pull_request_target' &&
-    format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
-    github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' &&
-    format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
+    strix-${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}-${{
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
-  # cancel-in-progress stays disabled for normal PR updates: an attacker could
-  # force-push a benign commit to cancel an in-progress scan of a malicious
-  # commit. Closed PR events only cancel older runs for the same PR/head group.
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
+  cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and grant the id-token/statuses writes only on the job that needs
