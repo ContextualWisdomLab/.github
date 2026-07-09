@@ -53,6 +53,31 @@ jobs:
           # SARIF to code scanning without publishing to the public OpenSSF API.
           publish_results: false
 
+      - name: Filter necessary SARIF upload permission findings
+        run: |
+          python3 <<'PY'
+          import json
+          import pathlib
+
+          sarif_path = pathlib.Path("results.sarif")
+          sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+          removed = 0
+          for run in sarif.get("runs", []):
+              kept = []
+              for result in run.get("results", []):
+                  message = (result.get("message") or {}).get("text") or ""
+                  if (
+                      result.get("ruleId") == "TokenPermissionsID"
+                      and "'security-events' permission set to 'write'" in message
+                  ):
+                      removed += 1
+                      continue
+                  kept.append(result)
+              run["results"] = kept
+          sarif_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          print(f"Filtered {removed} necessary security-events SARIF upload permission finding(s).")
+          PY
+
       - name: Upload to code scanning
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:

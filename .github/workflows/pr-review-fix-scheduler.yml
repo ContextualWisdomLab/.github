@@ -90,18 +90,21 @@ concurrency:
   group: central-pr-review-fix-scheduler-${{ inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   dispatch-review-fixes:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
+      actions: read
       contents: read
-      issues: write
+      issues: read
       pull-requests: read
       statuses: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
       TARGET_REPOSITORY: ${{ inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
       DEFAULT_BRANCH: ${{ inputs.base_branch || vars.PR_REVIEW_FIX_BASE_BRANCH || github.event.repository.default_branch }}
       DRY_RUN: ${{ inputs.dry_run == true }}
@@ -123,7 +126,19 @@ jobs:
       - name: Self-test fix scheduler contract
         run: python3 scripts/ci/pr_review_fix_scheduler.py --self-test
 
+      - name: Check autofix mutation credential
+        id: mutation_credential
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::Skipping PR review autofix dispatch because PR_REVIEW_MERGE_TOKEN/OPENCODE_APPROVE_TOKEN is unavailable; GITHUB_TOKEN remains read-only for Scorecard TokenPermissions."
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Dispatch review-feedback autofix
+        if: steps.mutation_credential.outputs.available == 'true'
         run: |
           set -euo pipefail
           args=(

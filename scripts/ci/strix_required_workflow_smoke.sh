@@ -65,7 +65,7 @@ assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE"' "Strix workfl
 assert_file_contains "$workflow_file" "Self-test Strix required workflow contract" "Strix workflow uses bounded required-path smoke test"
 assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_REQUIRED_SMOKE"' "Strix workflow executes bounded smoke test"
 assert_file_contains "$workflow_file" "timeout-minutes: 2" "Strix required-path smoke test has a short timeout"
-assert_file_contains "$workflow_file" 'statuses: write' "Strix workflow can publish manual PR evidence status"
+assert_file_not_contains "$workflow_file" 'statuses: write' "Strix workflow keeps GITHUB_TOKEN status permissions read-only"
 assert_file_contains "$workflow_file" 'context="strix"' "Strix workflow publishes the strix commit status context"
 assert_file_not_contains "$workflow_file" 'repository: ${{ github.repository }}' "Strix workflow must not checkout target repository with actions/checkout in privileged context"
 assert_file_not_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE_TEST"' "Strix required path must not execute the full long-form gate harness"

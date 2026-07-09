@@ -117,17 +117,23 @@ jobs:
           path: pr-head
 
       - name: Install Python coverage measurement tools
-        run: python3 -m pip install --disable-pip-version-check -r requirements-opencode-review-ci.txt
+        run: python3 -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
       - name: Measure test and docstring evidence
         id: measure
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
         run: |
           set -euo pipefail
           cd "$COVERAGE_SOURCE_WORKDIR"
+
+          if git rev-parse --verify --quiet HEAD^1 >/dev/null \
+            && git rev-parse --verify --quiet HEAD^2 >/dev/null; then
+            PR_BASE_SHA="$(git rev-parse HEAD^1)"
+            PR_HEAD_SHA="$(git rev-parse HEAD^2)"
+            export PR_BASE_SHA PR_HEAD_SHA
+            printf 'Coverage merge-ref parents: base=%s head=%s\n' "$PR_BASE_SHA" "$PR_HEAD_SHA"
+          fi
 
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
           failures=0
@@ -228,7 +234,7 @@ jobs:
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
-                python3 -m pip install --disable-pip-version-check -r requirements.txt
+                python3 "$GITHUB_WORKSPACE/scripts/ci/install_python_requirements_for_coverage.py" requirements.txt
             fi
 
             while IFS= read -r project_dir; do
@@ -250,7 +256,7 @@ jobs:
                 fi
               elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
                 run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check -r requirements.txt' bash "$project_dir"
+                  bash -c 'cd "$1" && python3 "$2/scripts/ci/install_python_requirements_for_coverage.py" requirements.txt' bash "$project_dir" "$GITHUB_WORKSPACE"
               fi
             done < <(tracked_python_projects_with_tests)
           }
@@ -309,14 +315,14 @@ jobs:
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check --require-hashes -r "$2/requirements-opencode-review-ci-hashes.txt" >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir" "$GITHUB_WORKSPACE"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
+                  bash -c 'python3 -m pip install --disable-pip-version-check --require-hashes -r "$1/requirements-opencode-review-ci-hashes.txt" >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing' bash "$GITHUB_WORKSPACE"
               elif python3 -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -893,45 +899,60 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Materialize pull request head for OpenCode review data
+      - name: Materialize pull request merge ref for OpenCode review data
+        id: materialize_pr_source
         env:
           GH_TOKEN: ${{ steps.review_read_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.inputs.pr_base_ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          INPUT_PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha || '' }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
         run: |
           set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::PR number is required to materialize OpenCode review data."
+            exit 1
+          fi
           gh auth setup-git
           git remote remove pr-source 2>/dev/null || true
           git remote add pr-source "$GITHUB_SERVER_URL/$GH_REPOSITORY.git"
-          git fetch --no-tags pr-source \
-            "+refs/heads/${PR_BASE_REF}:refs/remotes/pr-source/${PR_BASE_REF}"
-          if ! git cat-file -e "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1; then
-            git fetch --no-tags pr-source "$PR_BASE_SHA"
+          merge_ref="refs/remotes/pr-source/pull/${PR_NUMBER}/merge"
+          for pr_merge_fetch_attempt in 1 2 3 4 5 6; do
+            git fetch --no-tags --prune pr-source "+refs/pull/${PR_NUMBER}/merge:${merge_ref}"
+            merge_sha="$(git rev-parse "$merge_ref")"
+            base_sha="$(git rev-parse "${merge_sha}^1")"
+            head_sha="$(git rev-parse "${merge_sha}^2")"
+            if [ -z "${INPUT_PR_HEAD_SHA:-}" ] || [ "$head_sha" = "$INPUT_PR_HEAD_SHA" ]; then
+              break
+            fi
+            if [ "$pr_merge_fetch_attempt" -lt 6 ]; then
+              echo "Fetched PR merge head $head_sha, expected $INPUT_PR_HEAD_SHA; retrying after propagation delay." >&2
+              sleep 10
+            fi
+          done
+          if [ -n "${INPUT_PR_HEAD_SHA:-}" ] && [ "$head_sha" != "$INPUT_PR_HEAD_SHA" ]; then
+            echo "::error::PR merge ref head $head_sha did not match requested head $INPUT_PR_HEAD_SHA."
+            exit 1
           fi
-          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
-            git fetch --no-tags pr-source "$PR_HEAD_SHA" || true
+          if ! git cat-file -e "${merge_sha}^{commit}" >/dev/null 2>&1 \
+            || ! git cat-file -e "${base_sha}^{commit}" >/dev/null 2>&1 \
+            || ! git cat-file -e "${head_sha}^{commit}" >/dev/null 2>&1; then
+            echo "::error::Materialized PR merge ref did not expose expected merge/base/head commits."
+            exit 1
           fi
-          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
-            for pr_head_fetch_attempt in 1 2 3 4 5 6; do
-              git fetch --no-tags --prune pr-source "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr-source/pull/${PR_NUMBER}/head"
-              fetched_head_sha="$(git rev-parse "refs/remotes/pr-source/pull/${PR_NUMBER}/head")"
-              if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
-                break
-              fi
-              if [ "$pr_head_fetch_attempt" -lt 6 ]; then
-                echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; retrying after propagation delay." >&2
-                sleep 10
-              fi
-            done
-          fi
-          git cat-file -e "${PR_BASE_SHA}^{commit}"
-          git cat-file -e "${PR_HEAD_SHA}^{commit}"
+          {
+            echo "merge_sha=$merge_sha"
+            echo "base_sha=$base_sha"
+            echo "head_sha=$head_sha"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo "OPENCODE_MERGE_SHA=$merge_sha"
+            echo "OPENCODE_BASE_SHA=$base_sha"
+            echo "OPENCODE_HEAD_SHA=$head_sha"
+          } >>"$GITHUB_ENV"
+          printf 'Materialized PR merge ref %s with base=%s head=%s\n' "$merge_sha" "$base_sha" "$head_sha"
           rm -rf "$OPENCODE_SOURCE_WORKDIR"
-          git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
+          git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$merge_sha"
           git -C "$OPENCODE_SOURCE_WORKDIR" status --short
 
       - name: Configure git identity for OpenCode action
@@ -1047,9 +1068,9 @@ jobs:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          PR_BASE_SHA: ${{ steps.materialize_pr_source.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
+          HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -2312,9 +2333,9 @@ jobs:
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          PR_BASE_SHA: ${{ steps.materialize_pr_source.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
+          HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -2396,7 +2417,7 @@ jobs:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
@@ -2411,8 +2432,8 @@ jobs:
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           # The publish gate re-runs source-backed validation against PR-head data.
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          PR_BASE_SHA: ${{ steps.materialize_pr_source.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
         run: |
           set -euo pipefail
 
@@ -2684,7 +2705,7 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
@@ -2693,8 +2714,8 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT: ${{ steps.central_review_process_fallback_scope.outputs.changed_count || '0' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          PR_BASE_SHA: ${{ steps.materialize_pr_source.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.materialize_pr_source.outputs.head_sha }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "81"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
@@ -4996,10 +5017,10 @@ jobs:
       - name: Run merge scheduler after approval
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
-          SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || '' }}
+          SCHEDULER_ACTIONS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || '' }}
           SCHEDULER_READ_TOKEN: ${{ github.token }}
-          SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'missing' }}
+          SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'missing' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.inputs.pr_base_ref || '' }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number || '' }}

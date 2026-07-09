@@ -97,7 +97,6 @@ permissions:
   contents: read
   id-token: write
   models: read
-  statuses: write
 
 jobs:
   cancel-closed-pr-runs:
@@ -671,7 +670,6 @@ jobs:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ job.status }}
@@ -734,9 +732,6 @@ jobs:
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
             exit 0
           fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
-            exit 0
-          fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
 
   publish-manual-pr-evidence-status:
@@ -746,7 +741,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      statuses: write
     steps:
       - name: Exchange OpenCode app token for target repository status
         id: target_app_token
@@ -819,7 +813,6 @@ jobs:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ needs.strix.result }}
@@ -880,9 +873,6 @@ jobs:
             exit 0
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           echo "::warning::Could not publish manual Strix status from follow-up job; scan job publishes the authoritative status when target credentials are available."
