@@ -57,23 +57,6 @@ jobs:
       security-events: write
     with:
       fail-on-vuln: true
-      # RELIABILITY: point Maven transitive (parent-POM) resolution at Google's
-      # byte-identical Maven Central mirror instead of repo.maven.apache.org.
-      # osv-scanner resolves parent POMs (e.g. spring-boot-starter-parent) over
-      # its own HTTP client (osv-scalibr pomxmlnet -> defaultRegistry.URL); the
-      # canonical Central host intermittently returns HTTP 429, which failed this
-      # required gate on APPROVED Maven PRs with "No issues found" (a network
-      # flake, not a real vuln). The mirror serves the same maven2 layout and the
-      # same bytes, so coverage is unchanged -- this ONLY swaps the default
-      # registry host. Repos' own pom.xml <repositories> are still added on top
-      # (scalibr AddRegistry), and transitive scanning stays fully enabled (no
-      # --no-resolve). Caching ~/.m2 or a settings.xml <mirror> would NOT help:
-      # osv-scanner never reads ~/.m2/repository and parses settings.xml only for
-      # <servers> auth, not <mirrors>. --maven-registry is the only effective lever.
-      scan-args: |-
-        --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-        -r
-        ./
 
   dependency-review:
     if: github.event.action != 'closed'
@@ -151,10 +134,6 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: "1"
-          # Without this, trivy-action rebuilds the SARIF scan with ALL
-          # severities and exit-code applies to any LOW/MEDIUM finding,
-          # contradicting the documented CRITICAL/HIGH-only gate above.
-          limit-severities-for-sarif: true
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2

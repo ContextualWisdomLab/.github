@@ -279,7 +279,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         return None
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https")
+        raise ValueError("URL must start with http:// or https://")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
@@ -299,7 +299,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
                 raise ValueError("URL cannot target internal IP addresses")
 
-    if not (api_url.startswith("http://") or api_url.startswith("https://")):
+    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
         raise ValueError(f"NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities, got: {api_url}")
 
     prompt = {
@@ -338,6 +338,8 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         },
         method="POST",
     )
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("URL scheme http or https required")
     with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
