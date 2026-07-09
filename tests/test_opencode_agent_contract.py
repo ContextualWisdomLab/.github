@@ -319,9 +319,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/openai/gpt-5"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "2400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "900"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2700"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert "while :" in model_pool_runner

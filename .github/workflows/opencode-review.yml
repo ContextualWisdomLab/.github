@@ -2413,15 +2413,14 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 40 min per model — generous for a deep tool-using review, but bounded
-          # so a rate-limited model yields to the next one instead of eating the
-          # 350-min step. (20400s = 340min gave one model the entire budget with
-          # no fallback; 600s was too short for a proper review.)
-          OPENCODE_RUN_TIMEOUT_SECONDS: "2400"
+          # 15 min per model — enough for a bounded review attempt, but short
+          # enough that a hung provider yields to the next candidate before it
+          # freezes the review queue.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           # Bound provider/model-pool outages before the 350-min job timeout. A
           # zero budget disables the script deadline and caused org-wide hangs.
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "7200"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2700"
           OPENCODE_POOL_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
