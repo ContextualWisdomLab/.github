@@ -52,14 +52,78 @@ jobs:
 
   osv-scan:
     if: github.event.action != 'closed'
-    # ponytail: reuse upstream diff-scoped PR scanner instead of hand-rolling it
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
       security-events: write
-    with:
-      fail-on-vuln: true
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan base with OSV
+        id: osv_base
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=old-results.json
+            -r
+            ./
+      - name: Checkout head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          clean: false
+          persist-credentials: false
+      - name: Scan head with OSV
+        id: osv_head
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=new-results.json
+            -r
+            ./
+      - name: Require OSV scan output
+        run: |
+          set -euo pipefail
+          test -s old-results.json
+          test -s new-results.json
+      - name: Report PR-introduced OSV findings
+        uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --output=results.sarif
+            --old=old-results.json
+            --new=new-results.json
+            --gh-annotations=true
+            --fail-on-vuln=true
+      - name: Upload OSV SARIF to code scanning
+        if: always() && hashFiles('results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: results.sarif
+          category: osv-scanner
+      - name: Upload OSV debug artifacts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v6.0.0
+        with:
+          name: osv-scan-debug
+          path: |
+            old-results.json
+            new-results.json
+            results.sarif
+          if-no-files-found: ignore
+          retention-days: 5
 
   dependency-review:
     if: github.event.action != 'closed'
