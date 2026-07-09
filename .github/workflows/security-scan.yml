@@ -91,29 +91,63 @@ jobs:
 
           api_url="${GITHUB_API_URL:-https://api.github.com}"
           response_file="$(mktemp)"
-          status="$(
-            curl -fsS -o "$response_file" -w '%{http_code}' \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" \
-              || true
-          )"
+          trap 'rm -f "$response_file"' EXIT
+          max_attempts=3
+          sleep_seconds=10
 
-          if [ "$status" = "200" ]; then
-            echo "supported=true" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
+          for attempt in $(seq 1 "$max_attempts"); do
+            : >"$response_file"
+            status="$(
+              curl -sS -o "$response_file" -w '%{http_code}' \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" \
+                || true
+            )"
 
-          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
-            echo "::warning::Dependency review is unavailable for ${REPOSITORY}; skipping dependency-review hard gate."
-            echo "supported=false" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
+            if [ "$status" = "200" ]; then
+              echo "supported=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
 
-          echo "::error::Dependency review support check failed with HTTP ${status}."
-          cat "$response_file"
-          exit 1
+            if [ "$status" = "403" ] || [ "$status" = "404" ]; then
+              echo "::warning::Dependency review is unavailable for ${REPOSITORY}; skipping dependency-review hard gate."
+              echo "supported=false" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "$status" = "000" ] || [ "$status" = "429" ] || [ "${status#5}" != "$status" ]; then
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                echo "::warning::Dependency review support check attempt ${attempt}/${max_attempts} returned HTTP ${status}; retrying in ${sleep_seconds}s."
+                if [ -s "$response_file" ]; then
+                  echo "Dependency review support response body:"
+                  cat "$response_file"
+                fi
+                sleep "$sleep_seconds"
+                continue
+              fi
+
+              echo "::warning::Dependency review API is temporarily unavailable for ${REPOSITORY} after ${max_attempts} attempts (last HTTP ${status}); skipping dependency-review hard gate. OSV and Trivy remain active; rerun once GitHub dependency graph recovers."
+              if [ -s "$response_file" ]; then
+                echo "Dependency review support response body:"
+                cat "$response_file"
+              else
+                echo "Dependency review support response body was empty."
+              fi
+              echo "supported=false" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "::error::Dependency review support check failed with non-retryable HTTP ${status}."
+            if [ -s "$response_file" ]; then
+              echo "Dependency review support response body:"
+              cat "$response_file"
+            else
+              echo "Dependency review support response body was empty."
+            fi
+            exit 1
+          done
       - name: Dependency review
         if: steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
