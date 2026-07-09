@@ -79,9 +79,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidate_models
     assert set(candidate_models).issubset(set(models))
     assert candidate_models[:3] == [
+        "deepseek/deepseek-v3-0324",
         "openai/o4-mini",
         "openai/o3-mini",
-        "openai/gpt-5-mini",
     ]
     assert {
         "openai/gpt-5-chat",
@@ -128,6 +128,32 @@ def test_opencode_manual_dispatch_canonical_ref_overrides_workflow_ref():
     assert workflow.count('trusted_ref="$INPUT_CANONICAL_REF"') == 2
     assert workflow.count('trusted_ref="${WORKFLOW_REF##*@}"') == 2
     assert 'trusted_ref="${INPUT_CANONICAL_REF:-main}"' not in workflow
+
+
+def test_opencode_target_coverage_checkout_uses_merge_ref_without_secret_token():
+    """Keep pull_request_target coverage checkout away from PR-head secrets."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    start = workflow.index(
+        "      - name: Checkout pull request merge ref for coverage measurement\n"
+    )
+    end = workflow.index("\n      - name:", start + 1)
+    step = workflow[start:end]
+
+    assert "if: github.event_name == 'pull_request_target'" in step
+    assert "repository: ${{ github.event.pull_request.base.repo.full_name }}" in step
+    assert "ref: refs/pull/${{ github.event.pull_request.number }}/merge" in step
+    assert "persist-credentials: false" in step
+    assert "token:" not in step
+    assert "secrets." not in step
+    assert "github.event.pull_request.head.sha" not in step
+
+    manual_start = workflow.index(
+        "      - name: Checkout requested pull request merge ref for coverage measurement\n"
+    )
+    manual_end = workflow.index("\n      - name:", manual_start + 1)
+    manual_step = workflow[manual_start:manual_end]
+    assert "if: github.event_name == 'workflow_dispatch'" in manual_step
+    assert "token: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}" in manual_step
 
 
 def test_opencode_runtime_pin_supports_reasoning_options():
@@ -280,20 +306,20 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
-    assert re.search(r"opencode-review-target:[\s\S]{0,240}timeout-minutes: 360", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]{0,520}timeout-minutes: 360", workflow)
     assert 'timeout-minutes: 75' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "81"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "github-models/openai/o4-mini "
         "github-models/openai/o3-mini "
         "github-models/openai/gpt-5-mini "
         "github-models/openai/gpt-5-nano "
         'github-models/openai/gpt-5-chat '
         "github-models/deepseek/deepseek-r1-0528 "
         "github-models/deepseek/deepseek-r1 "
-        "github-models/deepseek/deepseek-v3-0324 "
         "github-models/mistral-ai/mistral-medium-2505 "
         "github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 "
         "github-models/meta/llama-4-scout-17b-16e-instruct "
@@ -303,7 +329,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert "while :" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
@@ -412,7 +438,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "steps.scheduler_app_token.outputs.token" in workflow
     assert "SCHEDULER_READ_TOKEN: ${{ github.token }}" in workflow
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
-    assert 'default: "-1"' in workflow
+    assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
 
 

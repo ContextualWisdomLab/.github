@@ -38,7 +38,6 @@ concurrency:
 permissions:
   actions: read
   contents: read
-  security-events: write
 
 jobs:
   cancel-closed-pr-runs:

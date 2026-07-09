@@ -63,7 +63,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     outputs:
       coverage_summary: ${{ steps.measure.outputs.coverage_summary }}
     env:
@@ -96,80 +95,25 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
-      - name: Exchange OpenCode app token for target repository coverage reads
-        id: coverage_app_token
-        env:
-          OIDC_AUDIENCE: opencode-github-action
-          OPENCODE_API_BASE_URL: https://api.opencode.ai
-        run: |
-          set -euo pipefail
-
-          mark_unavailable() {
-            echo "available=false" >>"$GITHUB_OUTPUT"
-          }
-
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
-          fi
-
-          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="&"
-          case "$request_url" in
-            *\?*) ;;
-            *) separator="?" ;;
-          esac
-
-          if ! oidc_response="$(
-            curl -fsS \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-          )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
-          if [ -z "$oidc_token" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          if ! token_response="$(
-            curl -fsS \
-              -X POST \
-              -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-          )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
-            echo "OpenCode app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Checkout pull request head for coverage measurement
+      - name: Checkout pull request merge ref for coverage measurement
+        if: github.event_name == 'pull_request_target'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
           fetch-depth: 0
           persist-credentials: false
-          token: ${{ steps.coverage_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          path: pr-head
+
+      - name: Checkout requested pull request merge ref for coverage measurement
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.inputs.target_repository || github.repository }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          ref: refs/pull/${{ github.event.inputs.pr_number }}/merge
           path: pr-head
 
       - name: Install Python coverage measurement tools
@@ -844,15 +788,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
-      actions: write
+      actions: read
       checks: read
       id-token: write
-      contents: write
+      contents: read
       models: read
       statuses: read
       deployments: read
       pull-requests: write
-      issues: read
+      issues: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -2343,16 +2287,11 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # Ordered contract-reliability first, then quota, with the rate-starved
-          # flagships last. The mini reasoning models (o4-mini, o3-mini, gpt-5-
-          # mini/nano/chat) reliably emit the strict review contract — every
-          # required label and only source-backed findings — so they lead. The
-          # high-quota non-reasoning models (deepseek-v3, mistral, llama-4) emit
-          # bare or hallucinated reviews the publish/approve gates reject, so
-          # they are fallbacks only. gpt-5/o3 ("Reasoning" tier, 8-12 req/day)
-          # stay last: first-placing them stalled every review until timeout
-          # because a rate-limited/hung flagship never fell back.
-          OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
+          # Lead with the observed high-success GitHub Models DeepSeek V3 path,
+          # then fall back through reasoning-capable OpenAI models and broader
+          # catalog coverage. The rate-starved flagships stay late so a blocked
+          # call does not consume the queue before reachable fallbacks run.
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -2363,7 +2302,7 @@ jobs:
           # no fallback; 600s was too short for a proper review.)
           OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review

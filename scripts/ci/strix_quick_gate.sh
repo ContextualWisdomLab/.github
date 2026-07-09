@@ -1877,10 +1877,11 @@ vulnerability_record_intersects_changed_file() {
 		echo "ERROR: unable to create temporary diff file for changed-line evaluation." >&2
 		return 1
 	}
-	trap 'rm -f -- "$diff_output_file"' RETURN
-	printf '%s' "$diff_output" >"$diff_output_file"
 	local intersects_rc
-	if python3 - "$diff_output_file" "$start_line" "$end_line" <<'PY'
+	if (
+		trap 'rm -f -- "$diff_output_file"' EXIT
+		printf '%s' "$diff_output" >"$diff_output_file"
+		python3 - "$diff_output_file" "$start_line" "$end_line" <<'PY'
 import re
 import sys
 
@@ -1903,13 +1904,12 @@ with open(diff_output_path, "r", encoding="utf-8") as handle:
             raise SystemExit(0)
 raise SystemExit(1)
 PY
+	)
 	then
 		intersects_rc=0
 	else
 		intersects_rc=$?
 	fi
-	rm -f -- "$diff_output_file"
-	trap - RETURN
 	return "$intersects_rc"
 }
 
