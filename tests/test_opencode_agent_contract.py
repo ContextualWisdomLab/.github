@@ -282,6 +282,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "is_context_overflow_failure" in model_pool_runner
     assert "tokens_limit_reached" in model_pool_runner
     assert "skipping remaining attempts for this model" in model_pool_runner
+    assert "using %ss run timeout with %ss retry budget remaining" in model_pool_runner
+    assert "timed out after %ss; falling through within the remaining retry budget" in model_pool_runner
     assert "approve_low_risk_review_fallback_after_model_exhaustion" not in workflow
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_central_review_process_fallback" not in workflow
@@ -339,6 +341,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
+    assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert 'record_review_status "exhausted"' not in model_pool_runner
     assert "retry budget exhausted" not in model_pool_runner
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
