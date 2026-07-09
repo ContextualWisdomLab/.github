@@ -1351,10 +1351,10 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
-def active_workflow_runs(repo: str) -> list[dict[str, Any]]:
-    """Return queued and in-progress workflow runs for a repository."""
+def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
+    """Return active workflow runs for a repository."""
     runs: list[dict[str, Any]] = []
-    for status in ("queued", "in_progress"):
+    for status in statuses:
         payload = json.loads(
             run_github_actions(
                 [
@@ -1379,13 +1379,19 @@ def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
     return any(pr.get("number") == pr_number for pr in run_data.get("pull_requests") or [])
 
 
-def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list[str]:
-    """Return active OpenCode run ids for older heads of the same pull request."""
+def stale_pr_run_ids(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    workflow: str | None = None,
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> list[str]:
+    """Return active run ids for older heads of the same pull request."""
     head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
     stale: list[str] = []
-    for run_data in active_workflow_runs(repo):
-        if run_data.get("name") != workflow:
+    for run_data in active_workflow_runs(repo, statuses):
+        if workflow is not None and run_data.get("name") != workflow:
             continue
         if str(run_data.get("head_sha") or "").lower() == head:
             continue
@@ -1397,14 +1403,15 @@ def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list
     return stale
 
 
-def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
-    if dry_run:
-        return []
-    require_github_actions_control_actor("force-cancel-stale-opencode-review")
-    run_ids = stale_opencode_run_ids(repo, workflow, pr)
+def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list[str]:
+    """Return active OpenCode run ids for older heads of the same pull request."""
+    return stale_pr_run_ids(repo, pr, workflow=workflow)
+
+
+def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
+    """Force-cancel workflow runs by id."""
     if not run_ids:
-        return []
+        return
     if len(run_ids) <= 1:  # pragma: no cover
         for run_id in run_ids:  # pragma: no cover
             run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"])  # pragma: no cover
@@ -1415,6 +1422,25 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
                 lambda run_id: run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"]),
                 run_ids
             ))
+
+
+def cancel_stale_pr_queued_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel queued runs for older heads of the same PR."""
+    if dry_run:
+        return []
+    require_github_actions_control_actor("force-cancel-stale-pr-queued-runs")
+    run_ids = stale_pr_run_ids(repo, pr, statuses=("queued",))
+    force_cancel_workflow_runs(repo, run_ids)
+    return run_ids
+
+
+def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
+    if dry_run:
+        return []
+    require_github_actions_control_actor("force-cancel-stale-opencode-review")
+    run_ids = stale_opencode_run_ids(repo, workflow, pr)
+    force_cancel_workflow_runs(repo, run_ids)
     return run_ids
 
 
@@ -1567,6 +1593,7 @@ def inspect_pr(
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
+    cancel_stale_pr_queued_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these
