@@ -354,7 +354,7 @@ def test_opencode_approval_gate_shell_is_parseable():
         pytest.skip("bash is unavailable")
 
     workflow_lines = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8").splitlines()
-    name_index = workflow_lines.index("      - name: Approve PR if OpenCode review passed")
+    name_index = workflow_lines.index("      - name: Publish OpenCode review outcome")
     run_index = next(
         index
         for index in range(name_index + 1, len(workflow_lines))
@@ -450,6 +450,26 @@ def test_opencode_pending_peer_checks_hold_approval_without_failing_required_wor
         in workflow
     )
     assert "build_waiting_for_checks_body" not in workflow
+
+
+def test_opencode_model_pool_failure_stops_without_review_state_change():
+    """A continue-on-error model-pool failure must not approve by accident."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}"
+        in workflow
+    )
+    assert 'opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"' in workflow
+    assert re.search(
+        r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,420}'
+        r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
+        r"stop_without_review_after_model_unavailable\s+fi",
+        workflow,
+    )
+    assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
 
 
 def test_opencode_review_body_printf_blocks_close_on_separate_line():
