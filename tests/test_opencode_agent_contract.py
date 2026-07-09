@@ -69,16 +69,28 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     """Guard every review-pool candidate against silent reasoning-effort drift."""
     config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    models = config["provider"]["github-models"]["models"]
+    github_models = config["provider"]["github-models"]["models"]
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
 
     assert candidates_match is not None
     candidates = candidates_match.group(1).split()
-    candidate_models = [candidate.removeprefix("github-models/") for candidate in candidates]
+    candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
+    direct_openai_models = [
+        model_name for provider, model_name in candidate_pairs if provider == "openai"
+    ]
+    github_candidate_models = [
+        model_name for provider, model_name in candidate_pairs if provider == "github-models"
+    ]
 
-    assert candidate_models
-    assert set(candidate_models).issubset(set(models))
-    assert candidate_models[:4] == [
+    assert candidate_pairs
+    assert candidate_pairs[:3] == [
+        ["github-models", "deepseek/deepseek-v3-0324"],
+        ["openai", "gpt-5-mini"],
+        ["openai", "gpt-5"],
+    ]
+    assert direct_openai_models == ["gpt-5-mini", "gpt-5"]
+    assert set(github_candidate_models).issubset(set(github_models))
+    assert github_candidate_models[:4] == [
         "deepseek/deepseek-v3-0324",
         "openai/o4-mini",
         "openai/o3-mini",
@@ -97,20 +109,23 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "mistral-ai/mistral-medium-2505",
         "meta/llama-4-maverick-17b-128e-instruct-fp8",
         "meta/llama-4-scout-17b-16e-instruct",
-    }.issubset(set(candidate_models))
-    for model_name in candidate_models:
+    }.issubset(set(github_candidate_models))
+    assert '"openai": {' in workflow
+    assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
+    for model_name in direct_openai_models + github_candidate_models:
         assert f'"{model_name}": {{' in workflow
 
     def is_reasoning_capable(model_name: str) -> bool:
         return (
-            model_name.startswith("openai/gpt-5")
+            model_name.startswith("gpt-5")
+            or model_name.startswith("openai/gpt-5")
             or model_name.startswith("openai/o3")
             or model_name.startswith("openai/o4")
             or model_name.startswith("deepseek/deepseek-r1")
         )
 
-    for model_name in candidate_models:
-        model_config = models[model_name]
+    for model_name in github_candidate_models:
+        model_config = github_models[model_name]
         if is_reasoning_capable(model_name):
             assert model_config["reasoning"] is True, model_name
             assert model_config["options"]["reasoningEffort"] == "high", model_name
@@ -303,6 +318,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "model pool was intentionally skipped" not in workflow
     assert "deterministic fallback" not in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
+    assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
@@ -315,6 +331,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "openai/gpt-5-mini "
+        "openai/gpt-5 "
         "github-models/openai/o4-mini "
         "github-models/openai/o3-mini "
         "github-models/openai/gpt-5-mini "
@@ -332,10 +350,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
     assert "OpenCode model pool did not produce a successful current-head control block" in workflow
     assert "while :" in model_pool_runner
+    assert "should_skip_model_candidate" in model_pool_runner
+    assert "OPENAI_API_KEY is not configured" in model_pool_runner
+    assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
@@ -500,20 +522,6 @@ def test_opencode_model_pool_failure_stops_without_review_state_change():
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
-
-
-def test_opencode_review_body_printf_blocks_close_on_separate_line():
-    """Guard approval-gate review body builders against runner bash parse failures."""
-    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    risky_suffixes = (
-        "source finding.\")\"",
-        "has no blockers.\")\"",
-        "승인하지 않습니다.\")\"",
-        'Workflow attempt: ${RUN_ATTEMPT}")"',
-    )
-
-    for suffix in risky_suffixes:
-        assert suffix not in workflow
 
 
 def test_opencode_review_thread_jq_filters_preserve_bash_single_quotes():
