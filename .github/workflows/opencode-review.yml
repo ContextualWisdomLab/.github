@@ -3603,7 +3603,7 @@ jobs:
               "scripts/ci/test_strix_quick_gate.sh"
             emit_known_missing_string_finding \
               "MODEL: github-models/deepseek/deepseek-r1-0528" \
-              "OpenCode review must start with DeepSeek R1" \
+              "OpenCode review config must keep the DeepSeek R1 session default" \
               ".github/workflows/opencode-review.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
 
