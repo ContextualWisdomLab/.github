@@ -34,10 +34,9 @@ on:
 
 concurrency:
   group: >-
-    opencode-review-${{ github.event_name }}-${{
+    opencode-review-${{
     github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
-    github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event.inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
@@ -63,7 +62,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     outputs:
       coverage_summary: ${{ steps.measure.outputs.coverage_summary }}
     env:
@@ -96,84 +94,37 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
-      - name: Exchange OpenCode app token for target repository coverage reads
-        id: coverage_app_token
+      - name: Materialize pull request merge tree for coverage measurement
         env:
-          OIDC_AUDIENCE: opencode-github-action
-          OPENCODE_API_BASE_URL: https://api.opencode.ai
+          GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && (secrets.OPENCODE_APPROVE_TOKEN || github.token) || github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
         run: |
           set -euo pipefail
-
-          mark_unavailable() {
-            echo "available=false" >>"$GITHUB_OUTPUT"
-          }
-
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
+          fetch_dir="${RUNNER_TEMP}/opencode-coverage-fetch"
+          rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
+          git init "$fetch_dir"
+          git -C "$fetch_dir" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
+          git -C "$fetch_dir" \
+            -c http."${GITHUB_SERVER_URL}/".extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"
+          git -C "$fetch_dir" checkout --detach "$PR_BASE_SHA"
+          git -C "$fetch_dir" config user.name "github-actions[bot]"
+          git -C "$fetch_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git -C "$fetch_dir" merge --no-ff --no-edit "$PR_HEAD_SHA"; then
+            echo "::error::Coverage merge tree could not be materialized for base ${PR_BASE_SHA} and head ${PR_HEAD_SHA}; resolve merge conflicts or rerun after GitHub can synthesize the PR merge commit."
+            exit 1
           fi
-
-          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="&"
-          case "$request_url" in
-            *\?*) ;;
-            *) separator="?" ;;
-          esac
-
-          if ! oidc_response="$(
-            curl -fsS \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-          )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
-          if [ -z "$oidc_token" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          if ! token_response="$(
-            curl -fsS \
-              -X POST \
-              -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-          )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
-            echo "OpenCode app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Checkout pull request head for coverage measurement
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          fetch-depth: 0
-          persist-credentials: false
-          token: ${{ steps.coverage_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          path: pr-head
+          mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
+          mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
+          git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
       - name: Install Python coverage measurement tools
-        run: python3 -m pip install --disable-pip-version-check -r requirements-opencode-review-ci.txt
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
       - name: Measure test and docstring evidence
         id: measure
@@ -284,7 +235,7 @@ jobs:
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
-                python3 -m pip install --disable-pip-version-check -r requirements.txt
+                uv run --with-requirements requirements.txt python -c 'import sys; print("requirements resolved with", sys.executable)'
             fi
 
             while IFS= read -r project_dir; do
@@ -302,11 +253,11 @@ jobs:
                 fi
                 if [ -f "${project_dir}/requirements.txt" ]; then
                   run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
-                    uv pip install --project "$project_dir" -r "${project_dir}/requirements.txt"
+                    bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
                 fi
               elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
                 run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check -r requirements.txt' bash "$project_dir"
+                  bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
           }
@@ -365,14 +316,14 @@ jobs:
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
+                  bash -c 'PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest && uv run --with coverage coverage report --show-missing'
               elif python3 -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -625,7 +576,35 @@ jobs:
             fi
           }
 
+          rust_coverage_manifests() {
+            if [ -f Cargo.toml ]; then
+              printf '%s\n' Cargo.toml
+              return 0
+            fi
+            changed_files_for_coverage \
+              | while IFS= read -r changed_path; do
+                  case "$changed_path" in
+                    Cargo.toml|Cargo.lock|*.rs) ;;
+                    *) continue ;;
+                  esac
+                  candidate_dir="$(dirname "$changed_path")"
+                  while [ "$candidate_dir" != "." ] && [ "$candidate_dir" != "/" ]; do
+                    if [ -f "${candidate_dir}/Cargo.toml" ]; then
+                      printf '%s\n' "${candidate_dir}/Cargo.toml"
+                      break
+                    fi
+                    next_dir="$(dirname "$candidate_dir")"
+                    if [ "$next_dir" = "$candidate_dir" ]; then
+                      break
+                    fi
+                    candidate_dir="$next_dir"
+                  done
+                done \
+              | sort -u
+          }
+
           run_rust_test_coverage() {
+            local manifests
             ensure_rust_toolchain
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust test coverage"
@@ -635,17 +614,27 @@ jobs:
               append "- Fix: make the Rust toolchain available, then run \`cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines\`."
               append ""
               failures=$((failures + 1))
-            elif [ -f Cargo.toml ]; then
-              run_and_capture "Rust coverage with missing-line report" \
-                cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
             else
-              append "### Rust test coverage"
-              append ""
-              append "- Result: FAIL"
-              append "- Reason: Rust files changed, but no root Cargo.toml was found."
-              append "- Fix: add or point to the Cargo workspace manifest and run cargo coverage from that workspace."
-              append ""
-              failures=$((failures + 1))
+              manifests="$(rust_coverage_manifests)"
+              if [ -n "$manifests" ]; then
+                while IFS= read -r manifest; do
+                  if [ "$manifest" = "Cargo.toml" ]; then
+                    run_and_capture "Rust coverage with missing-line report (${manifest})" \
+                      cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
+                  else
+                    run_and_capture "Rust coverage with missing-line report (${manifest})" \
+                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines 100 --show-missing-lines
+                  fi
+                done <<<"$manifests"
+              else
+                append "### Rust test coverage"
+                append ""
+                append "- Result: FAIL"
+                append "- Reason: Rust files changed, but no Cargo.toml was found at the repo root or above the changed Rust files."
+                append "- Fix: add a Cargo workspace/package manifest near the Rust files or point the repository coverage command at the nested manifest."
+                append ""
+                failures=$((failures + 1))
+              fi
             fi
           }
 
@@ -676,7 +665,21 @@ jobs:
               tag_suffix="$(printf '%s' "$dockerfile" | tr '[:upper:]' '[:lower:]' | tr '/.' '--' | tr -cd '[:alnum:]-' | cut -c1-80)"
               image_tag="opencode-review-${PR_HEAD_SHA:-head}-${tag_suffix}"
               run_and_capture "Docker build (${dockerfile})" \
-                docker build --pull=false -f "$dockerfile" -t "$image_tag" "$docker_context"
+                bash -c '
+                  set -euo pipefail
+                  dockerfile="$1"
+                  image_tag="$2"
+                  docker_context="$3"
+                  if docker build --pull=false -f "$dockerfile" -t "$image_tag" "$docker_context"; then
+                    exit 0
+                  fi
+                  if [ "$docker_context" != "." ]; then
+                    echo "Docker build failed with context ${docker_context}; retrying with repository root context so nested Dockerfiles that COPY repo-root paths can provide actionable evidence."
+                    docker build --pull=false -f "$dockerfile" -t "$image_tag" .
+                  fi
+                  echo "Docker build failed with repository root context; no fallback context remains."
+                  exit 1
+                ' bash "$dockerfile" "$image_tag" "$docker_context"
             done <"$changed_dockerfiles"
             if has_changed_tracked_files 'docker-compose.yml' 'docker-compose.yaml' 'compose.yml' 'compose.yaml'; then
               for compose_file in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
@@ -845,15 +848,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
-      actions: write
+      actions: read
       checks: read
       id-token: write
-      contents: write
+      contents: read
       models: read
       statuses: read
       deployments: read
       pull-requests: write
-      issues: read
+      issues: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -1758,6 +1761,11 @@ jobs:
           cross-file compatibility, repository conventions, and regression risk. Compare repository-local DX/UX patterns before judging a change: preserve helpful automation, review, setup, documentation, and product-flow patterns from sibling repositories, and flag patterns that add noise, false failures, misleading status, repeated waiting, or URL-only diagnostics. For schema, migration,
           database, API, workflow, security, or compliance changes, compare against nearby implementation,
           code conventions, reserved words, naming rules, object naming, and applicable standards before approving.
+          Implementation completeness is mandatory: inspect changed runtime code and connected call sites for
+          placeholder bodies (`pass`, `...`, `NotImplementedError`), TODO-only branches, fake or constant
+          returns, and unimplemented interface adapters. Distinguish typing.Protocol, abc abstractmethod,
+          overload, and Pydantic Field(...) declarations from executable implementation gaps before requesting
+          changes or approving.
           For database/API/config/code objects, prefer repository convention but flag ambiguous single-word names
           such as id, name, type, value, data, user, order, group, or key when a two-word snake_case,
           camelCase, PascalCase, or local-equivalent name would prevent reserved-word, ORM, serialization,
@@ -1771,8 +1779,8 @@ jobs:
           Approval sufficiency:, Verification posture:, Linter/static:, TDD/regression:, Coverage:,
           Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:,
           Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:,
-          Performance:, Developer experience:, User experience:, Visual/DOM:, Accessibility/i18n:,
-          Supply-chain/license:, Packaging:, Security/privacy:.
+          Implementation completeness:, Performance:, Developer experience:, User experience:, Visual/DOM:,
+          Accessibility/i18n:, Supply-chain/license:, Packaging:, Security/privacy:.
           Review contract reminders: perform a general-purpose and meticulous review; actively consult
           CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs,
           and web_search for bounded external lookups. Bounded evidence is available in
@@ -1817,6 +1825,7 @@ jobs:
           Exact gate phrases: when result is APPROVE the JSON findings value must be exactly [].
           Exact gate phrases: never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files.
           Exact gate phrases: Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix, string-only change, no verification needed, or no tests needed.
+          Exact gate phrases: Implementation completeness is mandatory: distinguish Protocol/abstract/type-declaration placeholders from executable implementation gaps.
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
@@ -1905,6 +1914,11 @@ jobs:
           skewed, boundary, degenerate, deterministic-seed, numerical-tolerance, convergence-failure, and
           published-example/prior-version parity cases before approving.
           Do not approve when only one happy-path test supports a parameter-recovery or robustness claim.
+          Implementation completeness is mandatory: inspect changed runtime code and connected call sites for
+          placeholder bodies (`pass`, `...`, `NotImplementedError`), TODO-only branches, fake or constant
+          returns, and unimplemented interface adapters. Distinguish typing.Protocol, abc abstractmethod,
+          overload, and Pydantic Field(...) declarations from executable implementation gaps before requesting
+          changes or approving.
           If host tooling is missing, use Docker, Docker Compose, a devcontainer, Nix, or a temporary
           package-install sandbox to run the augmented verification. Do not spend the session listing every changed path before reviewing;
           inspect the highest-risk evidence first and always return a final control block instead of a progress
@@ -1916,8 +1930,8 @@ jobs:
           Approval sufficiency:, Verification posture:, Linter/static:, TDD/regression:, Coverage:,
           Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:,
           Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:,
-          Performance:, Developer experience:, User experience:, Visual/DOM:, Accessibility/i18n:,
-          Supply-chain/license:, Packaging:, Security/privacy:.
+          Implementation completeness:, Performance:, Developer experience:, User experience:, Visual/DOM:,
+          Accessibility/i18n:, Supply-chain/license:, Packaging:, Security/privacy:.
           Review contract reminders: perform a general-purpose and meticulous review; actively consult
           CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs,
           and web_search for bounded external lookups. Bounded evidence is available in
@@ -1962,6 +1976,7 @@ jobs:
           Exact gate phrases: when result is APPROVE the JSON findings value must be exactly [].
           Exact gate phrases: never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files.
           Exact gate phrases: Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix, string-only change, no verification needed, or no tests needed.
+          Exact gate phrases: Implementation completeness is mandatory: distinguish Protocol/abstract/type-declaration placeholders from executable implementation gaps.
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
@@ -2381,6 +2396,7 @@ jobs:
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
         timeout-minutes: 350
+        continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2395,32 +2411,27 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # Lead with the NATIVE OpenAI backend (openai/gpt-5-mini, openai/gpt-5
-          # via api.openai.com with the org OPENAI_API_KEY). GitHub Models
-          # rate-limited ("Too many requests") and 4000-token-capped
-          # (413 tokens_limit_reached) EVERY model in the shared pool, so the
-          # reviewer never produced a verdict and every run hung to the 350-min
-          # timeout — a 100% org-wide failure. The native provider is not subject
-          # to those limits, so it can actually complete and approve. The
-          # existing github-models entries stay as fallbacks (tried only if the
-          # native key is missing or the direct call fails).
-          # github-models ordering rationale (unchanged): contract-reliable mini
-          # reasoning models first, high-quota non-reasoning models next, and the
-          # rate-starved github-models flagships (gpt-5/o3, 8-12 req/day) last so
-          # a throttled/hung leader always falls back instead of eating the step.
-          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5-mini openai/gpt-5 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
+          # Ordered by observed successful review completion first, then
+          # contract-reliability and quota. DeepSeek V3 currently has the best
+          # success rate in the org queue, so it leads with enough time to finish
+          # a deep review. Native OpenAI candidates follow as provider-diverse
+          # fallback when OPENAI_API_KEY is available. Compact reasoning models
+          # remain early fallbacks. Rate-starved flagships stay last because
+          # first-placing them stalled previous reviews until timeout instead of
+          # reaching healthier models.
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5-mini openai/gpt-5 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 15 min per model — enough for a bounded review attempt, but short
-          # enough that a hung provider yields to the next candidate before it
-          # freezes the review queue.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
+          # 90 min per model gives deep reviews enough room. The pool budget,
+          # not a short per-model cutoff, prevents stale provider calls from
+          # consuming the whole 360-min job before the publish gate logs why.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          # Bound provider/model-pool outages before the 350-min job timeout. A
-          # zero budget disables the script deadline and caused org-wide hangs.
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2700"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          # Stop after one catalog pass; the long per-model timeout and total
+          # budget provide room for deep reviews without looping to job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
@@ -2777,13 +2788,8 @@ jobs:
             fi
           fi
 
-      - name: Approve PR if OpenCode review passed
-        if: >-
-          always()
-          && (
-            needs.coverage-evidence.result != 'success'
-            || steps.opencode_review_model_pool.outcome == 'success'
-          )
+      - name: Publish OpenCode review outcome
+        if: always()
         timeout-minutes: 75
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
@@ -4798,6 +4804,9 @@ jobs:
 
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
 
+          # The model pool uses continue-on-error so this final step can publish
+          # diagnostics. Do not read model output or change PR review state unless
+          # the pool explicitly emitted a valid current-head control block.
           if [ "$opencode_review_outcome" != "success" ]; then
             stop_without_review_after_model_unavailable
           fi
