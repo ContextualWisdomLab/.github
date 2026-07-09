@@ -299,6 +299,9 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
                 raise ValueError("URL cannot target internal IP addresses")
 
+    if not (api_url.startswith("http://") or api_url.startswith("https://")):
+        raise ValueError(f"NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities, got: {api_url}")
+
     prompt = {
         "role": "user",
         "content": "\n".join(
