@@ -205,15 +205,18 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: false
-      - name: Filter necessary SARIF upload permission findings
+      - name: Filter delegated PR-only Scorecard SARIF findings
         run: |
           python3 <<'PY'
           import json
           import pathlib
 
+          PR_DELEGATED_RULE_IDS = {"SASTID", "VulnerabilitiesID"}
+
           sarif_path = pathlib.Path("results.sarif")
           sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
-          removed = 0
+          upload_permission_noise = 0
+          delegated = 0
           for run in sarif.get("runs", []):
               kept = []
               for result in run.get("results", []):
@@ -222,14 +225,26 @@ jobs:
                       result.get("ruleId") == "TokenPermissionsID"
                       and "'security-events' permission set to 'write'" in message
                   ):
-                      removed += 1
+                      upload_permission_noise += 1
+                      continue
+                  if result.get("ruleId") in PR_DELEGATED_RULE_IDS:
+                      delegated += 1
                       continue
                   kept.append(result)
               run["results"] = kept
           filtered_path = sarif_path.with_name(f"{sarif_path.name}.filtered")
           filtered_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
           filtered_path.replace(sarif_path)
-          print(f"Filtered {removed} necessary security-events SARIF upload permission finding(s).")
+          print(
+              "Filtered "
+              f"{upload_permission_noise} necessary security-events SARIF upload permission "
+              "finding(s)."
+          )
+          print(
+              "Delegated "
+              f"{delegated} PR-only Scorecard SAST/vulnerability finding(s) to "
+              "CodeQL, OSV, Trivy, and dependency-review hard gates."
+          )
           PY
       - name: Upload Scorecard SARIF to code scanning
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2

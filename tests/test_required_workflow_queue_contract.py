@@ -108,15 +108,29 @@ def test_osv_pr_workflows_do_not_depend_on_remote_registry_resolution() -> None:
         assert "public registry rate limits" in workflow or "Maven Central HTTP 429" in workflow
 
 
-def test_scorecard_sarif_filters_only_required_upload_permission_noise() -> None:
+def test_scorecard_sarif_filters_required_upload_permission_noise() -> None:
     """Scorecard uploads should not re-open alerts for their own SARIF permission."""
     for filename in ("scorecard-pr.yml", "scorecard-analysis.yml", "security-scan.yml"):
         workflow = workflow_text(filename)
 
-        assert "Filter necessary SARIF upload permission findings" in workflow
         assert 'result.get("ruleId") == "TokenPermissionsID"' in workflow
         assert '"\'security-events\' permission set to \'write\'" in message' in workflow
-        assert "Filtered {removed} necessary security-events SARIF upload permission finding(s)." in workflow
+        assert "necessary security-events SARIF upload permission" in workflow
+
+
+def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
+    """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
+    for filename in ("scorecard-pr.yml", "security-scan.yml"):
+        workflow = workflow_text(filename)
+
+        assert 'PR_DELEGATED_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+        assert "Delegated " in workflow
+        assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
+
+    default_branch_scorecard = workflow_text("scorecard-analysis.yml")
+
+    assert "PR_DELEGATED_RULE_IDS" not in default_branch_scorecard
+    assert "VulnerabilitiesID" not in default_branch_scorecard
 
 
 def test_repository_declares_fuzzing_surface_for_scorecard() -> None:
