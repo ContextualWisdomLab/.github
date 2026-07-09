@@ -834,6 +834,7 @@ jobs:
     needs: [coverage-evidence]
     if: >-
       always()
+      && needs.coverage-evidence.result != 'cancelled'
       && (
         github.event_name == 'workflow_dispatch'
         || (

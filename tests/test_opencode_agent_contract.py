@@ -291,6 +291,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "model pool was intentionally skipped" not in workflow
     assert "deterministic fallback" not in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
+    assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
