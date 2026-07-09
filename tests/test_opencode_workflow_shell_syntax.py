@@ -40,6 +40,7 @@ def test_opencode_review_run_blocks_are_valid_bash():
         return
 
     for step_name in (
+        "Materialize pull request merge tree for coverage measurement",
         "Prepare bounded OpenCode review evidence",
         "Publish OpenCode review outcome",
     ):
