@@ -2335,7 +2335,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 150
+        timeout-minutes: 330
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2344,24 +2344,23 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # Ordered contract-reliability first, then quota, with the rate-starved
-          # flagships last. The mini reasoning models (o4-mini, o3-mini, gpt-5-
-          # mini/nano/chat) reliably emit the strict review contract — every
-          # required label and only source-backed findings — so they lead. The
-          # high-quota non-reasoning models (deepseek-v3, mistral, llama-4) emit
-          # bare or hallucinated reviews the publish/approve gates reject, so
-          # they are fallbacks only. gpt-5/o3 ("Reasoning" tier, 8-12 req/day)
-          # stay last: first-placing them stalled every review until timeout
-          # because a rate-limited/hung flagship never fell back.
-          OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
+          # Ordered by observed successful review completion first, then
+          # contract-reliability and quota. DeepSeek V3 currently has the best
+          # success rate in the org queue, so it leads with enough time to finish
+          # a deep review. Compact reasoning models remain early fallbacks. The
+          # rate-starved flagships stay last because first-placing them stalled
+          # previous reviews until timeout instead of reaching healthier models.
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 10 min per model keeps stale provider calls from blocking the org queue.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
+          # 90 min per model gives deep reviews enough room. The pool budget,
+          # not a short per-model cutoff, prevents stale provider calls from
+          # consuming the whole 360-min job before the publish gate logs why.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "8400"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review

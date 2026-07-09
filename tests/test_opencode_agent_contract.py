@@ -79,9 +79,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidate_models
     assert set(candidate_models).issubset(set(models))
     assert candidate_models[:3] == [
+        "deepseek/deepseek-v3-0324",
         "openai/o4-mini",
         "openai/o3-mini",
-        "openai/gpt-5-mini",
     ]
     assert {
         "openai/gpt-5-chat",
@@ -282,19 +282,19 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
     assert re.search(r"opencode-review-target:[\s\S]{0,400}timeout-minutes: 360", workflow)
     assert 'timeout-minutes: 75' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,260}timeout-minutes: 150", workflow)
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,260}timeout-minutes: 330", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,320}continue-on-error: true", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "81"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "github-models/openai/o4-mini "
         "github-models/openai/o3-mini "
         "github-models/openai/gpt-5-mini "
         "github-models/openai/gpt-5-nano "
         'github-models/openai/gpt-5-chat '
         "github-models/deepseek/deepseek-r1-0528 "
         "github-models/deepseek/deepseek-r1 "
-        "github-models/deepseek/deepseek-v3-0324 "
         "github-models/mistral-ai/mistral-medium-2505 "
         "github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 "
         "github-models/meta/llama-4-scout-17b-16e-instruct "
@@ -302,9 +302,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/openai/gpt-5"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "8400"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert "while :" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
