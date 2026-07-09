@@ -158,6 +158,8 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "uses: actions/checkout" not in step
     assert "refs/pull/${{ github.event.pull_request.number }}/merge" not in step
     assert "TARGET_REPOSITORY:" in step
+    assert '-c http.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}"' in step
+    assert 'http."${GITHUB_SERVER_URL}/".extraheader' not in step
     assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' in step
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
     assert 'Coverage merge tree could not be materialized' in step
