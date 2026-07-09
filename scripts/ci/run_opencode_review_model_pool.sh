@@ -106,6 +106,23 @@ is_context_overflow_failure() {
 	grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file"
 }
 
+is_direct_openai_candidate() {
+	case "$1" in
+	openai/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+should_skip_model_candidate() {
+	local model_candidate="$1"
+
+	if is_direct_openai_candidate "$model_candidate" && [ -z "${OPENAI_API_KEY:-}" ]; then
+		printf 'Skipping OpenCode %s because OPENAI_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+		return 0
+	fi
+	return 1
+}
+
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -169,12 +186,13 @@ run_one_model_attempt() {
 
 main() {
 	local attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
-	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle
+	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
 	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-900}"
 	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}"
+	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	deadline=0
 	if [ "$budget_seconds" -gt 0 ]; then
 		deadline=$((SECONDS + budget_seconds))
@@ -192,6 +210,9 @@ main() {
 	while :; do
 		printf 'Starting OpenCode model pool cycle %s.\n' "$cycle"
 		for model_candidate in "${model_candidates[@]}"; do
+			if should_skip_model_candidate "$model_candidate"; then
+				continue
+			fi
 			assert_reasoning_effort_for_candidate "$model_candidate"
 			safe_model="${model_candidate//\//-}"
 			prompt_file="${RUNNER_TEMP}/opencode-review-${safe_model}-prompt.md"
@@ -243,6 +264,11 @@ main() {
 		done
 
 		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the GitHub Actions job timeout is reached.\n'
+		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
+			printf 'OpenCode model pool reached configured max cycle count %s without a valid control conclusion.\n' "$max_cycles"
+			record_review_model ""
+			exit 1
+		fi
 		cycle_sleep="${OPENCODE_POOL_CYCLE_SLEEP_SECONDS:-60}"
 		if [ "$deadline" -gt 0 ] && [ $((SECONDS + cycle_sleep)) -gt "$deadline" ]; then
 			cycle_sleep=$((deadline - SECONDS))
