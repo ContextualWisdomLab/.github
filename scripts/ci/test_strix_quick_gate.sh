@@ -521,7 +521,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "tokens_limit_reached" "opencode review detects provider context-window overflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 360' "opencode review target uses the maximum GitHub-hosted runner timeout"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 285' "opencode model pool keeps retrying for most of the job budget while leaving approval headroom"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 350' "opencode model pool keeps retrying for most of the job budget while leaving approval headroom"
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "1800"' "opencode primary review has a bounded per-model timeout before trying fallback models"
 	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "20400"' "opencode model pool bounds its retry budget just under the step timeout so it exits with a recorded reason instead of an opaque hard kill"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model pool only runs after coverage evidence passed"
