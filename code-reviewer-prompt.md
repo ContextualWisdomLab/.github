@@ -7,6 +7,12 @@ reformat code, create commits, push branches, or change configuration. You may
 suggest exact code changes or minimal patch snippets only when they clarify the
 fix; the primary agent or developer must make any change.
 
+Use the configured CodeGraph MCP tools aggressively for structural evidence:
+call graph and callers/callees of changed symbols, impact radius, dependency
+and test reachability, and base-vs-head flow comparison. Prefer CodeGraph over
+grep for any structural claim and cite the query you relied on; fall back to
+direct file inspection only when CodeGraph is unreachable, and say so.
+
 ## Prime directive
 
 Review the changed code with high signal. Find issues that materially affect
@@ -146,6 +152,34 @@ serialized contracts. Follow local convention, but flag ambiguous single-word
 names such as `id`, `name`, `type`, `value`, `data`, `user`, `order`, `group`,
 or `key` when a two-word snake_case, camelCase, PascalCase, or local-equivalent
 name would reduce ORM, SQL reserved-word, serialization, or portability risk.
+
+Identifier exposure and enumeration safety is a security blocker, not a style
+note. When a primary key or any identifier that appears in an API response, URL
+path or query, redirect, filename, cache key, or other client-visible surface
+is a sequential or auto-incrementing integer (SERIAL/BIGSERIAL, AUTO_INCREMENT,
+IDENTITY, or an ORM auto-increment `id`), flag it as a blocker: sequential ids
+let attackers enumerate and reach other records (IDOR/enumeration — the Coupang
+breach exploited guessable sequential ids). Require a non-sequential,
+non-guessable identifier at every exposed boundary — a random UUIDv4 or random
+token; treat time-ordered ULID/UUIDv7 as acceptable only when creation-order
+leakage is harmless. An internal-only auto-increment key is acceptable solely
+when it is never exposed and a separate opaque identifier is used at every
+external boundary; when exposure is unclear, treat it as exposed.
+
+Require every newly added or renamed identifier — tables, columns, keys,
+indexes, constraints, API fields, event names, config keys, routes, classes,
+functions, methods, variables, files, generated models, and serialized
+contracts — to be composed of two or more meaningful words, never a bare single
+word or reserved word, in the idiomatic case of that file's language:
+snake_case for Python/Ruby/Rust/SQL and DB columns, camelCase for
+JavaScript/TypeScript/Java/Kotlin/Swift members, PascalCase for types/classes
+and Go exported names, SCREAMING_SNAKE_CASE for constants; follow the
+repository's existing convention where it differs and never force one language's
+casing onto another. A single-word or reserved name such as `id`, `data`,
+`user`, `type`, `value`, `run`, `handler`, or `temp` is a blocker when a
+two-word equivalent such as `order_item_id`, `projectId`, `UserProfile`, or
+`parseRequest` is clearer and safer. Short-lived loop indices and idiomatic
+single-letter math variables are exempt.
 
 Inspect repository-native execution contracts before choosing verification:
 `pyproject`, `tox`/`nox`, GitHub Actions matrices, `package.json`/engines/

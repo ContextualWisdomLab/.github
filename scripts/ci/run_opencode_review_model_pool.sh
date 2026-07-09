@@ -14,14 +14,30 @@ record_review_model() {
 normalize_opencode_output() {
 	local output_file="$1"
 
-	if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_normalize_output.py" \
-		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file"; then
-		bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" \
-			"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file" >/dev/null
-		return $?
-	fi
+	# Validate a throwaway copy, never the file itself. The publish step runs
+	# opencode_review_normalize_output.py on the model output, and that script
+	# REWRITES its input in place (it is not idempotent). If the pool normalized
+	# output_file directly, the publish step would normalize the already-rewritten
+	# content a second time and fail with "Selected successful OpenCode output did
+	# not include a valid control conclusion", ending the run instead of falling
+	# through to the next model. Mirror the publish step exactly — ANSI-strip a
+	# copy, then normalize — so the pool only records success for output the
+	# publish step will accept, and leave output_file pristine for the publish
+	# step to normalize itself.
+	local probe rc
+	probe="$(mktemp)"
+	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$output_file" >"$probe" 2>/dev/null || cp "$output_file" "$probe"
 
-	return 1
+	if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_normalize_output.py" \
+		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe"; then
+		bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" \
+			"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe" >/dev/null
+		rc=$?
+	else
+		rc=1
+	fi
+	rm -f "$probe"
+	return "$rc"
 }
 
 backoff_sleep() {
