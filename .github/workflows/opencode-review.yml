@@ -1761,6 +1761,11 @@ jobs:
           cross-file compatibility, repository conventions, and regression risk. Compare repository-local DX/UX patterns before judging a change: preserve helpful automation, review, setup, documentation, and product-flow patterns from sibling repositories, and flag patterns that add noise, false failures, misleading status, repeated waiting, or URL-only diagnostics. For schema, migration,
           database, API, workflow, security, or compliance changes, compare against nearby implementation,
           code conventions, reserved words, naming rules, object naming, and applicable standards before approving.
+          Implementation completeness is mandatory: inspect changed runtime code and connected call sites for
+          placeholder bodies (`pass`, `...`, `NotImplementedError`), TODO-only branches, fake or constant
+          returns, and unimplemented interface adapters. Distinguish typing.Protocol, abc abstractmethod,
+          overload, and Pydantic Field(...) declarations from executable implementation gaps before requesting
+          changes or approving.
           For database/API/config/code objects, prefer repository convention but flag ambiguous single-word names
           such as id, name, type, value, data, user, order, group, or key when a two-word snake_case,
           camelCase, PascalCase, or local-equivalent name would prevent reserved-word, ORM, serialization,
@@ -1774,8 +1779,8 @@ jobs:
           Approval sufficiency:, Verification posture:, Linter/static:, TDD/regression:, Coverage:,
           Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:,
           Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:,
-          Performance:, Developer experience:, User experience:, Visual/DOM:, Accessibility/i18n:,
-          Supply-chain/license:, Packaging:, Security/privacy:.
+          Implementation completeness:, Performance:, Developer experience:, User experience:, Visual/DOM:,
+          Accessibility/i18n:, Supply-chain/license:, Packaging:, Security/privacy:.
           Review contract reminders: perform a general-purpose and meticulous review; actively consult
           CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs,
           and web_search for bounded external lookups. Bounded evidence is available in
@@ -1820,6 +1825,7 @@ jobs:
           Exact gate phrases: when result is APPROVE the JSON findings value must be exactly [].
           Exact gate phrases: never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files.
           Exact gate phrases: Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix, string-only change, no verification needed, or no tests needed.
+          Exact gate phrases: Implementation completeness is mandatory: distinguish Protocol/abstract/type-declaration placeholders from executable implementation gaps.
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
@@ -1908,6 +1914,11 @@ jobs:
           skewed, boundary, degenerate, deterministic-seed, numerical-tolerance, convergence-failure, and
           published-example/prior-version parity cases before approving.
           Do not approve when only one happy-path test supports a parameter-recovery or robustness claim.
+          Implementation completeness is mandatory: inspect changed runtime code and connected call sites for
+          placeholder bodies (`pass`, `...`, `NotImplementedError`), TODO-only branches, fake or constant
+          returns, and unimplemented interface adapters. Distinguish typing.Protocol, abc abstractmethod,
+          overload, and Pydantic Field(...) declarations from executable implementation gaps before requesting
+          changes or approving.
           If host tooling is missing, use Docker, Docker Compose, a devcontainer, Nix, or a temporary
           package-install sandbox to run the augmented verification. Do not spend the session listing every changed path before reviewing;
           inspect the highest-risk evidence first and always return a final control block instead of a progress
@@ -1919,8 +1930,8 @@ jobs:
           Approval sufficiency:, Verification posture:, Linter/static:, TDD/regression:, Coverage:,
           Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:,
           Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:,
-          Performance:, Developer experience:, User experience:, Visual/DOM:, Accessibility/i18n:,
-          Supply-chain/license:, Packaging:, Security/privacy:.
+          Implementation completeness:, Performance:, Developer experience:, User experience:, Visual/DOM:,
+          Accessibility/i18n:, Supply-chain/license:, Packaging:, Security/privacy:.
           Review contract reminders: perform a general-purpose and meticulous review; actively consult
           CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs,
           and web_search for bounded external lookups. Bounded evidence is available in
@@ -1965,6 +1976,7 @@ jobs:
           Exact gate phrases: when result is APPROVE the JSON findings value must be exactly [].
           Exact gate phrases: never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files.
           Exact gate phrases: Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix, string-only change, no verification needed, or no tests needed.
+          Exact gate phrases: Implementation completeness is mandatory: distinguish Protocol/abstract/type-declaration placeholders from executable implementation gaps.
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
