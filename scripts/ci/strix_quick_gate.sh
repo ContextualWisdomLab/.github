@@ -1455,6 +1455,7 @@ PY
 
 	copy_required_scope_support_files() {
 		local include_strix_model_utils=0
+		local include_opencode_normalizer=0
 		local changed_file relative_path
 		for changed_file in "$@"; do
 			relative_path="$(normalize_changed_file_path "$changed_file")" || return 2
@@ -1462,11 +1463,17 @@ PY
 			scripts/ci/strix_quick_gate.sh | scripts/ci/test_strix_quick_gate.sh)
 				include_strix_model_utils=1
 				;;
+			fuzz/fuzz_opencode_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
+				include_opencode_normalizer=1
+				;;
 			esac
 		done
 
 		if [ "$include_strix_model_utils" -eq 1 ]; then
 			copy_scope_support_file "scripts/ci/strix_model_utils.sh" || return 2
+		fi
+		if [ "$include_opencode_normalizer" -eq 1 ]; then
+			copy_scope_support_file "scripts/ci/opencode_review_normalize_output.py" || return 2
 		fi
 	}
 
