@@ -95,14 +95,25 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
-      - name: Checkout pull request head for coverage measurement
+      - name: Checkout pull request merge ref for coverage measurement
+        if: github.event_name == 'pull_request_target'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          fetch-depth: 0
+          persist-credentials: false
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          path: pr-head
+
+      - name: Checkout requested pull request merge ref for coverage measurement
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.inputs.target_repository || github.repository }}
           fetch-depth: 0
           persist-credentials: false
           token: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          ref: refs/pull/${{ github.event.inputs.pr_number }}/merge
           path: pr-head
 
       - name: Install Python coverage measurement tools

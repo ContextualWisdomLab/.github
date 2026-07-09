@@ -130,6 +130,32 @@ def test_opencode_manual_dispatch_canonical_ref_overrides_workflow_ref():
     assert 'trusted_ref="${INPUT_CANONICAL_REF:-main}"' not in workflow
 
 
+def test_opencode_target_coverage_checkout_uses_merge_ref_without_secret_token():
+    """Keep pull_request_target coverage checkout away from PR-head secrets."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    start = workflow.index(
+        "      - name: Checkout pull request merge ref for coverage measurement\n"
+    )
+    end = workflow.index("\n      - name:", start + 1)
+    step = workflow[start:end]
+
+    assert "if: github.event_name == 'pull_request_target'" in step
+    assert "repository: ${{ github.event.pull_request.base.repo.full_name }}" in step
+    assert "ref: refs/pull/${{ github.event.pull_request.number }}/merge" in step
+    assert "persist-credentials: false" in step
+    assert "token:" not in step
+    assert "secrets." not in step
+    assert "github.event.pull_request.head.sha" not in step
+
+    manual_start = workflow.index(
+        "      - name: Checkout requested pull request merge ref for coverage measurement\n"
+    )
+    manual_end = workflow.index("\n      - name:", manual_start + 1)
+    manual_step = workflow[manual_start:manual_end]
+    assert "if: github.event_name == 'workflow_dispatch'" in manual_step
+    assert "token: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}" in manual_step
+
+
 def test_opencode_runtime_pin_supports_reasoning_options():
     """Keep OpenCode runtime new enough to apply model-level reasoning settings."""
     review_workflow = Path(".github/workflows/opencode-review.yml").read_text(
