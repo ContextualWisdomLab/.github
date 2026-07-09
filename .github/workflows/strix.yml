@@ -112,7 +112,7 @@ jobs:
     # The scan itself is hard-bounded to 30 min (the "Run Strix (quick)" step
     # has timeout-minutes: 30 and exports STRIX_TOTAL_TIMEOUT_SECONDS=1800), and
     # every other step is quick or self-bounded (self-test is 2 min). A healthy
-    # run finishes well under 50 min. The 120 cap only ever bit HUNG runs (e.g.
+    # run finishes well under 50 min. The 60 cap only ever bites HUNG runs (e.g.
     # a network stall in pip/git with no per-step timeout); 60 min still clears
     # the realistic worst case with margin while freeing a stuck runner in half
     # the time. Fail-closed: hitting the cap fails the run, never passes it.
