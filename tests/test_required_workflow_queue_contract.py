@@ -98,6 +98,22 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
+def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> None:
+    workflow = workflow_text("security-scan.yml")
+
+    assert "id: osv_base" in workflow
+    assert "id: osv_head" in workflow
+    assert "steps.osv_base.outcome == 'failure'" in workflow
+    assert "steps.osv_head.outcome == 'failure'" in workflow
+    assert "Retry base OSV without transitive resolution" in workflow
+    assert "Retry head OSV without transitive resolution" in workflow
+    assert workflow.count("\n            --no-resolve\n") == 2
+    assert workflow.count("Maven Central 429") == 2
+    assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
+    assert "--output=old-results.json" in workflow
+    assert "--output=new-results.json" in workflow
+
+
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Print Trivy findings that failed the gate\n"

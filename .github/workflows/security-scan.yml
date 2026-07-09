@@ -75,6 +75,20 @@ jobs:
             --output=old-results.json
             -r
             ./
+      - name: Explain base OSV resolver fallback
+        if: steps.osv_base.outcome == 'failure'
+        run: |
+          echo "::warning::OSV base scan failed before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+      - name: Retry base OSV without transitive resolution
+        if: steps.osv_base.outcome == 'failure'
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=old-results.json
+            --no-resolve
+            -r
+            ./
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -91,6 +105,20 @@ jobs:
           scan-args: |
             --format=json
             --output=new-results.json
+            -r
+            ./
+      - name: Explain head OSV resolver fallback
+        if: steps.osv_head.outcome == 'failure'
+        run: |
+          echo "::warning::OSV head scan failed before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+      - name: Retry head OSV without transitive resolution
+        if: steps.osv_head.outcome == 'failure'
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=new-results.json
+            --no-resolve
             -r
             ./
       - name: Require OSV scan output
