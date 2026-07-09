@@ -285,9 +285,19 @@ jobs:
                   run_and_capture "Python project dependencies (${project_dir})" \
                     uv sync --project "$project_dir"
                 fi
-                if [ -f "${project_dir}/requirements.txt" ]; then
+                if [ -f "${project_dir}/requirements.txt" ] && [ ! -f "${project_dir}/uv.lock" ]; then
                   run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
                     uv pip install --project "$project_dir" -r "${project_dir}/requirements.txt"
+                elif [ -f "${project_dir}/requirements.txt" ]; then
+                  append "### Python project dependencies (${project_dir}/requirements.txt export)"
+                  append ""
+                  append '```text'
+                  append "Skipped duplicate install: uv.lock already defines the uv-managed project environment."
+                  append "The requirements.txt file is treated as an exported lock artifact for scanners or Docker builds."
+                  append '```'
+                  append ""
+                  append "- Result: PASS"
+                  append ""
                 fi
               elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
                 run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
