@@ -130,30 +130,24 @@ def test_opencode_manual_dispatch_canonical_ref_overrides_workflow_ref():
     assert 'trusted_ref="${INPUT_CANONICAL_REF:-main}"' not in workflow
 
 
-def test_opencode_target_coverage_checkout_uses_merge_ref_without_secret_token():
-    """Keep pull_request_target coverage checkout away from PR-head secrets."""
+def test_opencode_target_coverage_materializes_merge_ref_without_pr_execution():
+    """Keep pull_request_target coverage checkout outside actions/checkout."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     start = workflow.index(
-        "      - name: Checkout pull request merge ref for coverage measurement\n"
+        "      - name: Materialize pull request merge ref for coverage measurement\n"
     )
     end = workflow.index("\n      - name:", start + 1)
     step = workflow[start:end]
 
-    assert "if: github.event_name == 'pull_request_target'" in step
-    assert "repository: ${{ github.event.pull_request.base.repo.full_name }}" in step
-    assert "ref: refs/pull/${{ github.event.pull_request.number }}/merge" in step
-    assert "persist-credentials: false" in step
-    assert "token:" not in step
-    assert "secrets." not in step
+    assert "GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name" in step
+    assert 'git init "$COVERAGE_SOURCE_WORKDIR"' in step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" remote add pr-source "$GITHUB_SERVER_URL/$GH_REPOSITORY.git"' in step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" fetch --no-tags --depth=2 pr-source "+refs/pull/${PR_NUMBER}/merge:${merge_ref}"' in step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" checkout --detach "$merge_sha"' in step
+    assert 'echo "::notice::Coverage source materialized' in step
     assert "github.event.pull_request.head.sha" not in step
-
-    manual_start = workflow.index(
-        "      - name: Checkout requested pull request merge ref for coverage measurement\n"
-    )
-    manual_end = workflow.index("\n      - name:", manual_start + 1)
-    manual_step = workflow[manual_start:manual_end]
-    assert "if: github.event_name == 'workflow_dispatch'" in manual_step
-    assert "token: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}" in manual_step
+    assert "actions/checkout" not in step
+    assert "ref: refs/pull/" not in step
 
 
 def test_opencode_runtime_pin_supports_reasoning_options():

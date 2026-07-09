@@ -95,36 +95,71 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
-      - name: Checkout pull request merge ref for coverage measurement
-        if: github.event_name == 'pull_request_target'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ github.event.pull_request.base.repo.full_name }}
-          fetch-depth: 0
-          persist-credentials: false
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
-          path: pr-head
-
-      - name: Checkout requested pull request merge ref for coverage measurement
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ github.event.inputs.target_repository || github.repository }}
-          fetch-depth: 0
-          persist-credentials: false
-          token: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          ref: refs/pull/${{ github.event.inputs.pr_number }}/merge
-          path: pr-head
+      - name: Materialize pull request merge ref for coverage measurement
+        id: materialize_coverage_source
+        env:
+          GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          INPUT_PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha || '' }}
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::PR number is required to materialize coverage source data."
+            exit 1
+          fi
+          rm -rf "$COVERAGE_SOURCE_WORKDIR"
+          git init "$COVERAGE_SOURCE_WORKDIR"
+          git -C "$COVERAGE_SOURCE_WORKDIR" remote add pr-source "$GITHUB_SERVER_URL/$GH_REPOSITORY.git"
+          gh auth setup-git
+          merge_ref="refs/remotes/pr-source/pull/${PR_NUMBER}/merge"
+          for pr_merge_fetch_attempt in 1 2 3 4 5 6; do
+            git -C "$COVERAGE_SOURCE_WORKDIR" fetch --no-tags --depth=2 pr-source "+refs/pull/${PR_NUMBER}/merge:${merge_ref}"
+            merge_sha="$(git -C "$COVERAGE_SOURCE_WORKDIR" rev-parse "$merge_ref")"
+            base_sha="$(git -C "$COVERAGE_SOURCE_WORKDIR" rev-parse "${merge_sha}^1")"
+            head_sha="$(git -C "$COVERAGE_SOURCE_WORKDIR" rev-parse "${merge_sha}^2")"
+            if [ -z "${INPUT_PR_HEAD_SHA:-}" ] || [ "$head_sha" = "$INPUT_PR_HEAD_SHA" ]; then
+              break
+            fi
+            if [ "$pr_merge_fetch_attempt" -lt 6 ]; then
+              echo "Fetched coverage merge head $head_sha, expected $INPUT_PR_HEAD_SHA; retrying after propagation delay." >&2
+              sleep 10
+            fi
+          done
+          if [ -n "${INPUT_PR_HEAD_SHA:-}" ] && [ "$head_sha" != "$INPUT_PR_HEAD_SHA" ]; then
+            echo "::error::Coverage merge ref head $head_sha did not match requested head $INPUT_PR_HEAD_SHA."
+            exit 1
+          fi
+          if ! git -C "$COVERAGE_SOURCE_WORKDIR" cat-file -e "${merge_sha}^{commit}" >/dev/null 2>&1 \
+            || ! git -C "$COVERAGE_SOURCE_WORKDIR" cat-file -e "${base_sha}^{commit}" >/dev/null 2>&1 \
+            || ! git -C "$COVERAGE_SOURCE_WORKDIR" cat-file -e "${head_sha}^{commit}" >/dev/null 2>&1; then
+            echo "::error::Coverage merge ref did not expose expected merge/base/head commits."
+            exit 1
+          fi
+          git -C "$COVERAGE_SOURCE_WORKDIR" checkout --detach "$merge_sha"
+          {
+            echo "COVERAGE_SOURCE_WORKDIR=$COVERAGE_SOURCE_WORKDIR"
+            echo "PR_MERGE_SHA=$merge_sha"
+            echo "PR_BASE_SHA=$base_sha"
+            echo "PR_HEAD_SHA=$head_sha"
+          } >>"$GITHUB_ENV"
+          {
+            echo "source_workdir=$COVERAGE_SOURCE_WORKDIR"
+            echo "merge_sha=$merge_sha"
+            echo "base_sha=$base_sha"
+            echo "head_sha=$head_sha"
+          } >>"$GITHUB_OUTPUT"
+          echo "::notice::Coverage source materialized for $GH_REPOSITORY#$PR_NUMBER: merge=$merge_sha base=$base_sha head=$head_sha"
 
       - name: Install Python coverage measurement tools
         run: python3 -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
       - name: Measure test and docstring evidence
         id: measure
-        env:
-          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
         run: |
           set -euo pipefail
+          : "${COVERAGE_SOURCE_WORKDIR:?coverage source workdir was not materialized}"
           cd "$COVERAGE_SOURCE_WORKDIR"
 
           if git rev-parse --verify --quiet HEAD^1 >/dev/null \

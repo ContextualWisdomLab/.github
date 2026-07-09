@@ -74,7 +74,9 @@ jobs:
                       continue
                   kept.append(result)
               run["results"] = kept
-          sarif_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          filtered_path = sarif_path.with_name(f"{sarif_path.name}.filtered")
+          filtered_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          filtered_path.replace(sarif_path)
           print(f"Filtered {removed} necessary security-events SARIF upload permission finding(s).")
           PY
 
