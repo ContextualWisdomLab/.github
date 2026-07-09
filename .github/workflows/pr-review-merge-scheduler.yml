@@ -33,7 +33,7 @@ on:
       review_dispatch_limit:
         description: Maximum OpenCode/Strix review dispatch actions per scheduler run
         required: false
-        default: "1"
+        default: "-1"
         type: string
       enable_auto_merge:
         description: Enable auto-merge for current-head approved PRs
@@ -95,7 +95,7 @@ on:
       review_dispatch_limit:
         description: Maximum OpenCode/Strix review dispatch actions per scheduler run
         required: false
-        default: "1"
+        default: "-1"
       enable_auto_merge:
         description: Enable auto-merge for current-head approved PRs
         required: false
