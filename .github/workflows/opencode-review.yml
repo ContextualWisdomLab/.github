@@ -1113,6 +1113,13 @@ jobs:
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"
           FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
+          # Total byte cap on the bounded review context handed to each model so it
+          # fits inside the smallest pool model context window (gpt-5-nano/o4-mini
+          # tier). Individual sections are already bounded (focused hunks 12000,
+          # failed-check 4500, per-file history 20 paths); this caps the aggregate
+          # and preserves the prioritized changed hunks when truncation is needed.
+          OPENCODE_EVIDENCE_MAX_BYTES: "48000"
+          OPENCODE_FOCUSED_HUNKS_FILE: ${{ runner.temp }}/opencode-focused-hunks.diff
         run: |
           set -euo pipefail
           printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
@@ -1667,6 +1674,12 @@ jobs:
                 printf 'Focused hunk extraction failed; inspect the PR head and available changed-file evidence directly.\n' >"$focused_hunks_file"
               fi
               emit_file_prefix "$focused_hunks_file" 12000
+              # Persist the (already 12000-byte bounded) focused hunks so the total
+              # context cap below can re-preserve them if lower-priority evidence
+              # has to be trimmed to fit the smallest pool model context window.
+              if [ -n "${OPENCODE_FOCUSED_HUNKS_FILE:-}" ]; then
+                head -c 12000 "$focused_hunks_file" >"$OPENCODE_FOCUSED_HUNKS_FILE" 2>/dev/null || : >"$OPENCODE_FOCUSED_HUNKS_FILE"
+              fi
               rm -f "$focused_hunks_file"
             else
               printf 'No changed files were available for focused hunk extraction.\n'
@@ -1681,6 +1694,40 @@ jobs:
 
           printf 'Prepared OpenCode evidence file: %s\n' "$OPENCODE_EVIDENCE_FILE"
           wc -c "$OPENCODE_EVIDENCE_FILE"
+
+          # Cap the total review context so it fits the smallest pool model context
+          # window. Over-context was a root cause of the org-wide review hang (each
+          # model exceeded its window, then the pool cycled forever). When the file
+          # is over budget, keep the head (high-signal gates/checks) and re-append
+          # the prioritized focused changed hunks, then log that truncation ran.
+          evidence_max_bytes="${OPENCODE_EVIDENCE_MAX_BYTES:-48000}"
+          evidence_bytes="$(wc -c <"$OPENCODE_EVIDENCE_FILE" | tr -d '[:space:]')"
+          if [ "$evidence_max_bytes" -gt 0 ] && [ "$evidence_bytes" -gt "$evidence_max_bytes" ]; then
+            printf 'OpenCode review context (%s bytes) exceeds cap (%s bytes); truncating to fit the smallest pool model context window while preserving changed hunks.\n' "$evidence_bytes" "$evidence_max_bytes"
+            hunks_reserve=0
+            if [ -n "${OPENCODE_FOCUSED_HUNKS_FILE:-}" ] && [ -s "$OPENCODE_FOCUSED_HUNKS_FILE" ]; then
+              hunks_reserve="$(wc -c <"$OPENCODE_FOCUSED_HUNKS_FILE" | tr -d '[:space:]')"
+            fi
+            head_budget=$((evidence_max_bytes - hunks_reserve - 600))
+            if [ "$head_budget" -lt 4000 ]; then
+              head_budget=4000
+            fi
+            capped_evidence_file="$(mktemp)"
+            head -c "$head_budget" "$OPENCODE_EVIDENCE_FILE" >"$capped_evidence_file"
+            {
+              printf '\n\n[OpenCode review context truncated: original %s bytes exceeded the %s-byte cap. Lower-priority conversation and history evidence above was trimmed to fit the smallest pool model context window. Inspect changed files and focused hunks directly from the PR head checkout; the prioritized focused changed hunks are re-appended below.]\n' "$evidence_bytes" "$evidence_max_bytes"
+              if [ -n "${OPENCODE_FOCUSED_HUNKS_FILE:-}" ] && [ -s "$OPENCODE_FOCUSED_HUNKS_FILE" ]; then
+                printf '\n## Focused changed hunks (context-preserved)\n\n'
+                printf '```diff\n'
+                cat "$OPENCODE_FOCUSED_HUNKS_FILE"
+                printf '\n```\n'
+              fi
+            } >>"$capped_evidence_file"
+            mv "$capped_evidence_file" "$OPENCODE_EVIDENCE_FILE"
+            printf 'OpenCode review context truncated to %s bytes (cap %s).\n' "$(wc -c <"$OPENCODE_EVIDENCE_FILE" | tr -d '[:space:]')" "$evidence_max_bytes"
+          else
+            printf 'OpenCode review context (%s bytes) is within cap (%s bytes); no truncation needed.\n' "$evidence_bytes" "$evidence_max_bytes"
+          fi
 
       - name: Prepare isolated OpenCode review workspace
         env:
@@ -2335,7 +2382,14 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 350
+        # Fail fast and free the runner. The pool is bounded by a short per-model
+        # timeout plus a total retry budget below, so a healthy review returns in
+        # minutes and an over-context/rate-limited/hung pool is abandoned quickly
+        # instead of hanging the org runners for hours. This step timeout is only a
+        # backstop above the OPENCODE_TOTAL_RETRY_BUDGET_SECONDS deadline; it must
+        # never again be the primary stop condition (the old 350-min value let a
+        # single hung/over-context model saturate runners and block every merge).
+        timeout-minutes: 25
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2357,13 +2411,20 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 min per model — generous for a deep tool-using review, but bounded
-          # so a rate-limited model yields to the next one instead of eating the
-          # 350-min step. (20400s = 340min gave one model the entire budget with
-          # no fallback; 600s was too short for a proper review.)
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # Short per-model wall clock (5 min). A model that exceeds its context
+          # window, rate-limits, or hangs is abandoned quickly (exit 124) so the
+          # pool falls through to the next candidate instead of one model eating
+          # the whole step. 5400s (90 min) previously let a single hung/over-
+          # context model consume the entire run and saturate org runners.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "300"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"
+          # Total retry budget across all models/cycles (20 min). With the budget
+          # at 0 the pool set deadline=0 and looped through every model forever
+          # until the 350-min job timeout — the root cause of the org-wide hang.
+          # A real deadline makes the pool fail fast with a clean reason and free
+          # the runner; the auto-retry scheduler (PR #360) re-dispatches later
+          # when the GitHub Models quota refreshes, so coverage is not lost.
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "1200"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review

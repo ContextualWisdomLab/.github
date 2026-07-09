@@ -131,11 +131,17 @@ run_one_model_attempt() {
 	opencode_status=$?
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
-		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
+		# Print a concrete failure reason so the log never shows an opaque hang:
+		# context-exceeded vs per-model timeout vs generic error, and which model.
 		if is_context_overflow_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+			printf 'OpenCode %s attempt %s/%s FAILED reason=context-exceeded (exit %s): review context exceeded the provider context window; skipping remaining attempts for this model and falling back to the next candidate.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
 			return 2
 		fi
+		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
+			printf 'OpenCode %s attempt %s/%s FAILED reason=timeout (exit %s): model did not finish within %ss; abandoning this model and falling back to the next candidate.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status" "$run_timeout_seconds"
+			return 1
+		fi
+		printf 'OpenCode %s attempt %s/%s FAILED reason=error (exit %s): provider/tooling error (e.g. rate-limit or transient API failure); falling back per retry/backoff policy.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
 		return 1
 	fi
 
