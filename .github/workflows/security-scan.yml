@@ -73,6 +73,7 @@ jobs:
           scan-args: |
             --format=json
             --output=old-results.json
+            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             -r
             ./
       - name: Explain base OSV resolver fallback
@@ -105,6 +106,7 @@ jobs:
           scan-args: |
             --format=json
             --output=new-results.json
+            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             -r
             ./
       - name: Explain head OSV resolver fallback
@@ -229,6 +231,10 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: "1"
+          # Without this, trivy-action rebuilds the SARIF scan with ALL
+          # severities and exit-code applies to any LOW/MEDIUM finding,
+          # contradicting the documented CRITICAL/HIGH-only gate above.
+          limit-severities-for-sarif: true
       - name: Print Trivy findings that failed the gate
         # SARIF-only output otherwise leaves failures as just "exit code 1".
         if: failure() && hashFiles('trivy-results.sarif') != ''
