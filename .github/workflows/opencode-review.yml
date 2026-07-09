@@ -2660,7 +2660,7 @@ jobs:
             fi
           fi
 
-      - name: Approve PR if OpenCode review passed
+      - name: Publish OpenCode review outcome
         if: always()
         timeout-minutes: 75
         env:
@@ -4673,6 +4673,9 @@ jobs:
 
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
 
+          # The model pool uses continue-on-error so this final step can publish
+          # diagnostics. Do not read model output or change PR review state unless
+          # the pool explicitly emitted a valid current-head control block.
           if [ "$opencode_review_outcome" != "success" ]; then
             stop_without_review_after_model_unavailable
           fi
