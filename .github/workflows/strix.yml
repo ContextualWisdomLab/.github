@@ -92,12 +92,12 @@ concurrency:
   # commit. Closed PR events only cancel older runs for the same PR/head group.
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
+# Least-privilege top level: read-only. The scan job declares the write
+# scopes it needs (id-token for OIDC token exchange, statuses for commit
+# status, plus actions/models reads); publish-manual-pr-evidence-status
+# declares its own. cancel-closed-pr-runs only inherits contents: read.
 permissions:
-  actions: read
   contents: read
-  id-token: write
-  models: read
-  statuses: write
 
 jobs:
   cancel-closed-pr-runs:
@@ -117,6 +117,12 @@ jobs:
     # the time. Fail-closed: hitting the cap fails the run, never passes it.
     timeout-minutes: 60
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      models: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:

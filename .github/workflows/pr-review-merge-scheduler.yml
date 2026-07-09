@@ -115,6 +115,12 @@ on:
         required: false
         default: "420"
 
+# Least-privilege top level: read-only. scan-pr-queue declares the exact
+# write scopes it needs (actions/contents/pull-requests write, id-token,
+# checks read); cancel-closed-pr-runs only inherits contents: read.
+permissions:
+  contents: read
+
 concurrency:
   group: >-
     central-pr-review-merge-scheduler-${{ github.repository }}-${{

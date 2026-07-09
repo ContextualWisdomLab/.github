@@ -13,11 +13,11 @@ concurrency:
   group: osv-scanner-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Least-privilege top level: read-only. The osv-scan job below declares the
+# security-events: write scope it needs to upload SARIF to code scanning
+# (see github/codeql-action#2117).
 permissions:
-  # Upload SARIF to Security > Code Scanning. See github/codeql-action#2117.
-  actions: read
   contents: read
-  security-events: write
 
 jobs:
   cancel-closed-pr-runs:
