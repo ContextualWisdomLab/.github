@@ -748,6 +748,7 @@ jobs:
                   if [ "$docker_context" != "." ]; then
                     echo "Docker build failed with context ${docker_context}; retrying with repository root context so nested Dockerfiles that COPY repo-root paths can provide actionable evidence."
                     docker build --pull=false -f "$dockerfile" -t "$image_tag" .
+                    exit 0
                   fi
                   echo "Docker build failed with repository root context; no fallback context remains."
                   exit 1
