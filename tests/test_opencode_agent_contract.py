@@ -207,6 +207,18 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     measure_step = workflow[measure_start:measure_end]
     assert "GH_TOKEN" not in measure_step
     assert "secrets." not in measure_step
+    assert "emit_captured_log()" in measure_step
+    assert 'append_command "$@"' in measure_step
+    assert "tail -n 180" in measure_step
+    assert "output truncated: showing first 140 and last 180" in measure_step
+    assert 'sed -n \'1,220p\' "$log_file"' not in measure_step
+    assert "ensure_tauri_frontend_dist()" in measure_step
+    assert "Tauri frontendDist build" in measure_step
+    assert 'npm run build --workspace "$package_name"' in measure_step
+    assert 'ensure_tauri_frontend_dist "$manifest"' in measure_step
+    assert "rust_coverage_fail_under_lines()" in measure_step
+    assert "package.metadata.opencode.coverage.minimum_lines" in measure_step
+    assert '--fail-under-lines "$threshold"' in measure_step
 
 
 def test_opencode_runtime_pin_supports_reasoning_options():
