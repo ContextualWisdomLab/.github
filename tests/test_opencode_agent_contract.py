@@ -149,6 +149,18 @@ def test_opencode_manual_dispatch_canonical_ref_overrides_workflow_ref():
 def test_opencode_target_coverage_materializes_merge_tree_without_checkout_action():
     """Avoid pull_request_target action checkouts of untrusted PR refs."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    assert "required-workflow-bootstrap:" in workflow
+    assert "Required OpenCode workflow run materialized for this PR event." in workflow
+    bootstrap_start = workflow.index("  required-workflow-bootstrap:\n")
+    bootstrap_end = workflow.index("\n  cancel-closed-pr-runs:", bootstrap_start)
+    bootstrap_job = workflow[bootstrap_start:bootstrap_end]
+    assert "\n    if:" not in bootstrap_job
+    assert (
+        "github.event.pull_request.head.repo.full_name == "
+        "github.event.pull_request.base.repo.full_name"
+    ) in workflow
+    assert "github.event.pull_request.head.repo.full_name == github.repository" not in workflow
+
     start = workflow.index(
         "      - name: Materialize pull request merge tree for coverage measurement\n"
     )
@@ -158,10 +170,12 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "uses: actions/checkout" not in step
     assert "refs/pull/${{ github.event.pull_request.number }}/merge" not in step
     assert "TARGET_REPOSITORY:" in step
-    assert "x-access-token:%s" in step
-    assert "AUTHORIZATION: basic ${auth_header}" in step
-    assert "AUTHORIZATION: bearer" not in step
+    assert 'printf \'x-access-token:%s\' "$GH_TOKEN" | base64 | tr -d \'\\n\'' in step
+    assert "echo \"::add-mask::$auth_header\"" in step
+    assert '-c http.extraheader="AUTHORIZATION: basic ${auth_header}"' in step
     assert 'http."${GITHUB_SERVER_URL}/".extraheader' not in step
+    assert 'AUTHORIZATION: bearer ${GH_TOKEN}' not in step
+    assert "AUTHORIZATION: bearer" not in step
     assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' in step
     assert "Coverage fetch could not authenticate" in step
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
@@ -372,6 +386,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"', workflow)
     assert not re.search(r"--slurp\s*\\\n\s*--jq", workflow)
+    assert workflow.count('["opencode-review","coverage-evidence"]') >= 2
     assert "falling back to current-head REST check-runs" in workflow
 
     strix_workflow = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")
