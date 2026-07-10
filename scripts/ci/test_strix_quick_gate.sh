@@ -650,6 +650,17 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "required OpenCode reviews measure coverage instead of approving skipped coverage evidence"
 	assert_file_not_contains "$workflow_file" "Exchange OpenCode app token for target repository coverage reads" "coverage evidence must not expose OIDC to PR-head test execution"
+	local coverage_merge_tree_step
+	coverage_merge_tree_step="$(
+		awk '
+			/^[[:space:]]*- name: Materialize pull request merge tree for coverage measurement/ { in_step = 1 }
+			in_step { print }
+			in_step && /^[[:space:]]*- name:/ && $0 !~ /Materialize pull request merge tree for coverage measurement/ { exit }
+		' "$workflow_file"
+	)"
+	if [[ "$coverage_merge_tree_step" != *'GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}'* ]]; then
+		record_failure "opencode coverage merge-tree fetch must use OPENCODE_APPROVE_TOKEN before github.token for target repository reads"
+	fi
 	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' "coverage evidence fetches exact base and head commits as data"
 	assert_file_contains "$workflow_file" 'merge --no-ff --no-edit "$PR_HEAD_SHA"' "coverage evidence materializes the current pull request merge tree without action checkout"
 	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage evidence logs an actionable merge-tree failure reason"
