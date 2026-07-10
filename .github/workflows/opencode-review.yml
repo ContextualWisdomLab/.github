@@ -3249,6 +3249,8 @@ jobs:
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
+          REVIEW_PUBLISH_RETRY_ATTEMPTS: "6"
+          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "60"
           OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"
           OPENCODE_MODEL_ATTEMPTS: "1"
           OPENCODE_RUN_TIMEOUT_SECONDS: "240"
@@ -3307,6 +3309,52 @@ jobs:
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
             fi
+          }
+
+          gh_error_is_retryable_publication_failure() {
+            local error_file="$1"
+            [ -s "$error_file" ] || return 1
+            grep -Eiq 'API rate limit exceeded|secondary rate limit|You have exceeded a secondary rate limit|abuse detection|Try again later|retry later' "$error_file"
+          }
+
+          review_publish_retry_sleep_seconds() {
+            local token_value="$1" default_sleep="$2"
+            local rate_json remaining reset_epoch now delay
+
+            rate_json="$(env GH_TOKEN="$token_value" gh api rate_limit 2>/dev/null || true)"
+            remaining="$(printf '%s' "$rate_json" | jq -r '.resources.core.remaining // empty' 2>/dev/null || true)"
+            reset_epoch="$(printf '%s' "$rate_json" | jq -r '.resources.core.reset // empty' 2>/dev/null || true)"
+            if [ "$remaining" = "0" ] && [ -n "$reset_epoch" ] && [[ "$reset_epoch" =~ ^[0-9]+$ ]]; then
+              now="$(date +%s)"
+              delay=$((reset_epoch - now + 5))
+              if [ "$delay" -gt 0 ] && [ "$delay" -le 900 ]; then
+                printf '%s\n' "$delay"
+                return 0
+              fi
+            fi
+            printf '%s\n' "$default_sleep"
+          }
+
+          post_pull_review_with_retry() {
+            local token_label="$1" token_value="$2" review_payload_file="$3" error_file="$4"
+            local attempts default_sleep attempt sleep_seconds
+
+            attempts="${REVIEW_PUBLISH_RETRY_ATTEMPTS:-3}"
+            default_sleep="${REVIEW_PUBLISH_RETRY_SLEEP_SECONDS:-30}"
+            attempt=1
+            while :; do
+              : >"$error_file"
+              if env GH_TOKEN="$token_value" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$error_file"; then
+                return 0
+              fi
+              if ! gh_error_is_retryable_publication_failure "$error_file" || [ "$attempt" -ge "$attempts" ]; then
+                return 1
+              fi
+              sleep_seconds="$(review_publish_retry_sleep_seconds "$token_value" "$default_sleep")"
+              printf 'OpenCode pull review publication with %s token hit a retryable GitHub API throttle; retrying attempt %s/%s after %s seconds.\n' "$token_label" "$((attempt + 1))" "$attempts" "$sleep_seconds" >&2
+              sleep "$sleep_seconds"
+              attempt=$((attempt + 1))
+            done
           }
 
                     emit_change_flow_mermaid_graph() {
@@ -3519,11 +3567,10 @@ jobs:
               --arg body "$body" \
               --arg commit_id "$HEAD_SHA" \
               '{event: $event, body: $body, commit_id: $commit_id}' >"$review_payload_file"
-            if ! env GH_TOKEN="$review_write_token" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$gh_error_file"; then
+            if ! post_pull_review_with_retry "primary review" "$review_write_token" "$review_payload_file" "$gh_error_file"; then
               warn_gh_publication_failure "pull review with primary review token" "$gh_error_file"
               if [ -n "${review_write_fallback_token:-}" ]; then
-                : >"$gh_error_file"
-                if env GH_TOKEN="$review_write_fallback_token" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$gh_error_file"; then
+                if post_pull_review_with_retry "fallback review" "$review_write_fallback_token" "$review_payload_file" "$gh_error_file"; then
                   rm -f "$gh_error_file" "$review_payload_file"
                   update_review_overview "$event" "$body"
                   return 0
