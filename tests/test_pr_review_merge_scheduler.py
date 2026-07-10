@@ -1238,6 +1238,45 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     assert f"pr_head_sha={head_sha}" in opencode_call
 
 
+def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: dispatched.append(("strix", workflow)),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(("opencode", workflow)),
+    )
+
+    missing_strix = inspect(make_pr())
+    assert missing_strix.action == "wait"
+    assert "current head has no completed Strix evidence" in missing_strix.reason
+    assert "no cross-repository workflow-dispatch credential" in missing_strix.reason
+
+    strix_complete = inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}))
+    assert strix_complete.action == "wait"
+    assert "current head has completed Strix evidence" in strix_complete.reason
+    assert "OpenCode Review dispatch waits" in strix_complete.reason
+
+    assert dispatched == []
+
+
+def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+
+    monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", "true")
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
     head_sha = "a" * 40
