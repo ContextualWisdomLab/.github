@@ -113,9 +113,25 @@ is_direct_openai_candidate() {
 	esac
 }
 
+is_low_sensitivity_candidate() {
+	case "$1" in
+	openai/*-mini | openai/*-nano | \
+		github-models/openai/*-mini | github-models/openai/*-nano)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 should_skip_model_candidate() {
 	local model_candidate="$1"
 
+	if is_low_sensitivity_candidate "$model_candidate"; then
+		printf 'Skipping OpenCode %s because mini/nano review models are disabled for high-sensitivity security review.\n' "$model_candidate"
+		return 0
+	fi
 	if is_direct_openai_candidate "$model_candidate" && [ -z "${OPENAI_API_KEY:-}" ]; then
 		printf 'Skipping OpenCode %s because OPENAI_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
