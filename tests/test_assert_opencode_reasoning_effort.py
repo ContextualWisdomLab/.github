@@ -159,7 +159,12 @@ def test_module_entrypoint_success(monkeypatch, tmp_path):
         ],
     )
 
+    module = sys.modules.pop("scripts.ci.assert_opencode_reasoning_effort", None)
     with pytest.raises(SystemExit) as exc_info:
-        runpy.run_module("scripts.ci.assert_opencode_reasoning_effort", run_name="__main__")
+        try:
+            runpy.run_module("scripts.ci.assert_opencode_reasoning_effort", run_name="__main__")
+        finally:
+            if module is not None:
+                sys.modules["scripts.ci.assert_opencode_reasoning_effort"] = module
 
     assert exc_info.value.code == 0
