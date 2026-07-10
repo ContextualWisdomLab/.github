@@ -148,8 +148,11 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "steps.osv_head.outcome == 'failure'" in workflow
     assert "Retry base OSV without transitive resolution" in workflow
     assert "Retry head OSV without transitive resolution" in workflow
+    assert workflow.count("timeout-minutes: 8") == 2
+    assert workflow.count("timeout-minutes: 4") == 2
     assert workflow.count("\n            --no-resolve\n") == 2
     assert workflow.count("Maven Central 429") == 2
+    assert workflow.count("failed or timed out before reporter output was trusted") == 2
     assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
     assert "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true" in workflow
     assert "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true" in workflow
@@ -290,6 +293,25 @@ def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
     assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
     assert "vulnerable package" in result.stdout
+
+    (tmp_path / "trivy-results.sarif").write_text(
+        json.dumps({"runs": [{"tool": {"driver": {"rules": []}}, "results": []}]}),
+        encoding="utf-8",
+    )
+
+    zero_result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+    assert zero_result.returncode == 0
+    assert (
+        "Trivy filesystem scan completed with 0 CRITICAL/HIGH/MEDIUM findings"
+        in zero_result.stdout
+    )
+    assert "failed" not in zero_result.stdout.lower()
 
 
 def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
