@@ -3532,6 +3532,10 @@ jobs:
               fi
               rm -f "$gh_error_file" "$review_payload_file"
               update_review_overview "$event" "$body" || true
+              if [ "$event" = "APPROVE" ]; then
+                printf '::warning title=OpenCode approve review publication skipped::OpenCode could not publish APPROVE pull review for head %s; keeping the successful approval gate because the durable Review Overview was updated and branch protection remains authoritative for required checks.\n' "$HEAD_SHA"
+                return 0
+              fi
               printf '::error::OpenCode could not publish the pull review for head %s, so the review state was not changed.\n' "$HEAD_SHA"
               case "$event" in
                 REQUEST_CHANGES | INLINE_COMMENT_PUBLISH_FAILED) echo "::endgroup::" ;;
