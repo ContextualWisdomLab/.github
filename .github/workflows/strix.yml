@@ -84,22 +84,18 @@ on:
 
 concurrency:
   group: >-
-    strix-${{
-    github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
-    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
-    github.repository }}-${{
+    strix-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) ||
-    github.ref }}
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
   # cancel-in-progress stays disabled for normal PR updates and manual evidence
   # runs so current-head Strix evidence leaves logs for review. Closed PR cleanup
   # runs may still cancel the matching PR/head group.
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
-# read-only and grant the id-token/statuses writes only on the job that needs
-# them (the strix scan job below and the publish-manual-pr-evidence-status job).
+# read-only and grant the id-token/statuses writes only on the scan job that
+# needs them. The follow-up publish job uses exchanged app/secret tokens instead.
 permissions:
   actions: read
   contents: read
@@ -131,7 +127,7 @@ jobs:
       contents: read
       id-token: write
       models: read
-      statuses: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -731,6 +727,7 @@ jobs:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ job.status }}
@@ -791,6 +788,9 @@ jobs:
             exit 0
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
