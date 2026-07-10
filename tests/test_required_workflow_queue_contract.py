@@ -166,6 +166,19 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
+def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+    workflow = workflow_text("strix.yml")
+
+    assert "RateLimitError|Too many requests" in workflow
+    assert "LLM warm-up failed" in workflow
+    assert "zero_vulnerabilities_signal" not in workflow
+    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
+    assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
+    assert "before producing a vulnerability report" in workflow
+    assert "genuine findings still fail the check" in workflow
+    assert '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+
+
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
     """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
     for filename in ("scorecard-pr.yml", "security-scan.yml"):
@@ -187,6 +200,11 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
 
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
+    assert "fail-on-severity: moderate" in workflow
+    assert "severity: CRITICAL,HIGH,MEDIUM" in workflow
+    assert 'exit-code: "0"' in workflow
+    assert "Require Trivy SARIF output" in workflow
+
     step = "      - name: Print Trivy findings that failed the gate\n"
     start = workflow.index(step)
     run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
@@ -234,11 +252,11 @@ def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        check=True,
         capture_output=True,
         text=True,
     )
 
+    assert result.returncode == 1
     assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
     assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
     assert "vulnerable package" in result.stdout
