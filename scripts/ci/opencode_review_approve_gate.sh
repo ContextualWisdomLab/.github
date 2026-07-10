@@ -84,23 +84,41 @@ import sys
 from pathlib import Path
 
 
-def fail() -> None:
+def reject(reason: str) -> None:
+    print(f"Reason: {reason}", file=sys.stderr)
     raise SystemExit(1)
+
+
+control_path = Path(sys.argv[1])
+try:
+    control = json.loads(control_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    reject(f"control JSON is invalid: {exc}")
+
+if not isinstance(control, dict):
+    reject("control JSON must be an object")
 
 
 def nonempty_string(value: object) -> bool:
     return isinstance(value, str) and len(value) > 0
 
 
-def valid_finding(value: object) -> bool:
-    if not isinstance(value, dict):
-        return False
-    path = value.get("path")
+def required_string(field: str) -> str:
+    value = control.get(field)
+    if not nonempty_string(value):
+        reject(f"{field} must be a non-empty string")
+    return str(value)
+
+
+def validate_finding(index: int, finding: object) -> None:
+    if not isinstance(finding, dict):
+        reject(f"finding {index} must be an object")
+    path = finding.get("path")
     if not nonempty_string(path):
-        return False
+        reject(f"finding {index} path must be a non-empty string")
     if str(path).casefold() in {"n/a", "unknown"}:
-        return False
-    line = value.get("line")
+        reject(f"finding {index} path must name a source file")
+    line = finding.get("line")
     if (
         isinstance(line, bool)
         or not isinstance(line, (int, float))
@@ -108,8 +126,8 @@ def valid_finding(value: object) -> bool:
         or line <= 0
         or math.floor(float(line)) != float(line)
     ):
-        return False
-    required_strings = (
+        reject(f"finding {index} line must be a positive integer")
+    for field in (
         "severity",
         "title",
         "problem",
@@ -117,43 +135,37 @@ def valid_finding(value: object) -> bool:
         "fix_direction",
         "regression_test_direction",
         "suggested_diff",
-    )
-    if not all(nonempty_string(value.get(field)) for field in required_strings):
-        return False
-    suggested_diff = str(value.get("suggested_diff", "")).casefold()
+    ):
+        if not nonempty_string(finding.get(field)):
+            reject(f"finding {index} field {field} must be a non-empty string")
+    suggested_diff = str(finding.get("suggested_diff", "")).casefold()
     if suggested_diff.startswith("n/a") or suggested_diff.startswith("cannot provide diff"):
-        return False
-    return True
+        reject(f"finding {index} suggested_diff must be concrete")
 
 
-try:
-    control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    fail()
-
-if not isinstance(control, dict):
-    fail()
-
-if not all(nonempty_string(control.get(field)) for field in ("head_sha", "run_id", "run_attempt", "reason", "summary")):
-    fail()
+head_sha = required_string("head_sha")
+run_id = required_string("run_id")
+run_attempt = required_string("run_attempt")
+required_string("reason")
+required_string("summary")
 
 result = control.get("result")
 if result not in {"APPROVE", "REQUEST_CHANGES"}:
-    fail()
+    reject("result must be APPROVE or REQUEST_CHANGES")
 
 findings = control.get("findings")
 if result == "REQUEST_CHANGES":
     if not isinstance(findings, list) or len(findings) == 0:
-        fail()
+        reject("REQUEST_CHANGES requires at least one finding")
 elif findings is not None and (not isinstance(findings, list) or len(findings) != 0):
-    fail()
+    reject("APPROVE requires findings to be empty")
 
-if not all(valid_finding(finding) for finding in (findings or [])):
-    fail()
+for index, finding in enumerate(findings or [], start=1):
+    validate_finding(index, finding)
 
-print(control["head_sha"])
-print(control["run_id"])
-print(control["run_attempt"])
+print(head_sha)
+print(run_id)
+print(run_attempt)
 print(result)
 PY
 then
