@@ -1083,23 +1083,52 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return failing check or status context names from the PR rollup."""
     failed: list[str] = []
+    latest_check_runs: dict[
+        tuple[str, str],
+        tuple[datetime | None, int, dict[str, Any]],
+    ] = {}
+    status_contexts: list[dict[str, Any]] = []
+    for index, node in enumerate(context_nodes(pr)):
+        if node.get("__typename") != "CheckRun":
+            status_contexts.append(node)
+            continue
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, node.get("name") or "check-run")
+        started_at = parse_github_datetime(node.get("startedAt"))
+        previous = latest_check_runs.get(key)
+        if previous is None:
+            latest_check_runs[key] = (started_at, index, node)
+            continue
+        previous_started_at, previous_index, _ = previous
+        if started_at is None and previous_started_at is not None:
+            continue
+        if previous_started_at is None and started_at is not None:
+            latest_check_runs[key] = (started_at, index, node)
+            continue
+        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
+            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
+            previous_index,
+        ):
+            latest_check_runs[key] = (started_at, index, node)
+
     successful_status_contexts = {
         node.get("context")
-        for node in context_nodes(pr)
-        if node.get("__typename") != "CheckRun"
-        and (node.get("state") or "").upper() == "SUCCESS"
+        for node in status_contexts
+        if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for node in context_nodes(pr):
-        if node.get("__typename") == "CheckRun":
-            conclusion = (node.get("conclusion") or "").upper()
-            if conclusion in FAILED_CHECK_CONCLUSIONS:
-                if is_strix_context(node) and "strix" in successful_status_contexts:
-                    continue
-                failed.append(node.get("name") or "check-run")
-        else:
-            state = (node.get("state") or "").upper()
-            if state in {"FAILURE", "ERROR"}:
-                failed.append(node.get("context") or "status-context")
+    for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
+        conclusion = (node.get("conclusion") or "").upper()
+        if conclusion in FAILED_CHECK_CONCLUSIONS:
+            if is_strix_context(node) and "strix" in successful_status_contexts:
+                continue
+            failed.append(node.get("name") or "check-run")
+    for node in status_contexts:
+        state = (node.get("state") or "").upper()
+        if state in {"FAILURE", "ERROR"}:
+            failed.append(node.get("context") or "status-context")
     return failed
 
 
