@@ -227,6 +227,18 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
 
 
+def test_no_redirect_handler_returns_redirect_without_following():
+    """Readiness checks must not follow redirects to attacker-controlled internal URLs."""
+
+    class RedirectResponse:
+        status = 302
+
+    request = sandboxed_web_e2e.urllib.request.Request("https://example.test/ready")
+    response = RedirectResponse()
+
+    assert sandboxed_web_e2e.NoRedirectHandler().http_response(request, response) is response
+
+
 def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
     """Readiness polling returns false after repeated URL failures."""
 
@@ -238,11 +250,11 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandboxed_web_e2e.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(
-        sandboxed_web_e2e.urllib.request,
-        "urlopen",
-        lambda url, timeout: (_ for _ in ()).throw(sandboxed_web_e2e.urllib.error.URLError("still starting")),
-    )
+    class FailingOpener:
+        def open(self, url, timeout):
+            raise sandboxed_web_e2e.urllib.error.URLError("still starting")
+
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FailingOpener())
 
     service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "web.log")
 
