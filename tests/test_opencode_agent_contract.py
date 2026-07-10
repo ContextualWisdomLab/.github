@@ -408,7 +408,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'timeout-minutes: 12' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 310", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "6"' in workflow
+    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "21"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "20"' in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
@@ -616,6 +616,16 @@ def test_opencode_approve_review_publication_failure_fails_closed():
         r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1400}exit 1',
         workflow,
     )
+
+
+def test_opencode_jq_filters_do_not_embed_literal_expression_openers():
+    """Literal '${{' inside run scripts is parsed as a GitHub expression opener."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'contains("${{")' not in workflow
+    assert 'contains("$" + "{{")' in workflow
 
 
 def test_opencode_model_pool_failure_stops_without_review_state_change():
