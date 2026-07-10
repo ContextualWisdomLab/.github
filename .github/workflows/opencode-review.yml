@@ -656,23 +656,30 @@ jobs:
 
             install_package_dependencies "$package_runner"
             package_name="$(jq -r '.name // empty' "${package_dir}/package.json")"
+            # A named package is not necessarily a workspace member: the default
+            # single-package Tauri layout (root package.json + src-tauri/) has a
+            # name but no workspaces, and `npm run build --workspace <name>`
+            # fails there with "No workspaces found". Use workspace-addressed
+            # builds only when the repo root actually declares workspaces;
+            # otherwise build inside the package directory, which works for
+            # standalone packages and workspace members alike.
             case "$package_runner" in
               npm)
-                if [ -n "$package_name" ]; then
+                if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" npm run build --workspace "$package_name"
                 else
                   run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && npm run build' bash "$package_dir"
                 fi
                 ;;
               pnpm)
-                if [ -n "$package_name" ]; then
+                if [ -n "$package_name" ] && [ -f pnpm-workspace.yaml ]; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" pnpm --filter "$package_name" run build
                 else
                   run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && pnpm run build' bash "$package_dir"
                 fi
                 ;;
               yarn)
-                if [ -n "$package_name" ]; then
+                if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" yarn workspace "$package_name" build
                 else
                   run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && yarn build' bash "$package_dir"
