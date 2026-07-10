@@ -110,5 +110,7 @@ pages and for the org `github.io` / profile content.
   always dry-run — only an explicit manual run with `mode = apply` writes to
   Cloudflare.
 - **No destructive deletes** unless `prune = true` is set explicitly.
-- **Fail-soft:** per-zone/record errors are logged and the run continues; only a
-  failed API-token verification aborts the job (so a broken token is loud).
+- **Fail-soft:** per-zone/record errors are logged and the run continues. Main
+  push dry-runs also log and skip invalid or unavailable Cloudflare credentials
+  so secret rotation does not block unrelated central governance merges. Manual
+  `mode = apply` still hard-fails on missing or invalid credentials.
