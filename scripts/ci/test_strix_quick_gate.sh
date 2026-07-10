@@ -869,6 +869,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")' "failed-check evidence excludes OpenCode's own workflow by legacy name"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'gh run view "$run_id"' "failed-check evidence collector reads failed GitHub Actions job logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'check-runs/${check_run_id}/annotations' "failed-check evidence collector reads GitHub Check annotations"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "emit_supply_chain_alert_evidence" "failed-check evidence collector pulls supply-chain scanner alerts for osv/trivy checks"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "code-scanning/alerts" "failed-check evidence collector reads code-scanning alerts to recover package/CVE/fixed-version detail"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Supply-chain vulnerability findings" "failed-check evidence collector emits a source-backed supply-chain findings section"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "- Supply-chain vulnerability: " "failed-check evidence collector emits canonical package/manifest/advisory/fixed lines the fallback can map"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "supply_chain_tool_for_label" "failed-check evidence collector maps osv-scanner and trivy checks to their code-scanning tool names"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Line-specific repair contract" "failed-check evidence requires line-specific repairs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Failed log signal summary" "failed-check evidence collector preserves fail/error signal lines outside bounded excerpts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Strix model attempt and finding summary" "failed-check evidence collector summarizes every Strix model attempt"
@@ -958,6 +963,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "emit_pytest_failure_findings" "failed-check fallback explains pytest failures instead of posting URL-only evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "emit_cancelled_check_findings" "failed-check fallback explains cancelled check queue states separately from source fixes"
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "do not approve or post a URL-only review" "failed-check fallback rejects URL-only GitHub Check reviews"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "emit_supply_chain_findings" "failed-check fallback defines a supply-chain scanner emitter for osv/trivy/dependency-review"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" 'emit_supply_chain_findings "$EVIDENCE_FILE"' "failed-check fallback wires the supply-chain emitter into the dispatch sequence"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "osv|trivy|dependency[ _-]?review" "failed-check supply-chain emitter scopes to osv-scanner, trivy-fs, and dependency-review checks"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" 'bump `%s` from %s to %s' "failed-check supply-chain emitter states the concrete package version bump instead of a URL"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" 'Supply-chain vulnerability %s in %s' "failed-check supply-chain emitter titles each finding with the advisory id and package"
+	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" '```suggestion' "failed-check supply-chain emitter offers a GitHub-suggestion-ready diff for simple version pins"
 	assert_file_contains "$REPO_ROOT/opencode.jsonc" '"bash": "allow"' "opencode config enables bash so reviewers can run proof commands"
 	assert_file_contains "$REPO_ROOT/opencode.jsonc" '"task": "allow"' "opencode config enables task delegation for deeper review work"
 	assert_file_contains "$REPO_ROOT/opencode.jsonc" '"webfetch": "allow"' "opencode config enables webfetch for source-backed fact checks"
@@ -2018,6 +2029,202 @@ EOF
 	assert_file_contains "$stderr_file" "Non-source-backed cancelled check queue state" "fallback explains cancelled governance checks outside source-backed findings"
 	assert_file_contains "$stderr_file" "no repository source edit is justified by this cancelled check alone" "fallback does not invent source fixes for cancelled queue state"
 	assert_file_not_contains "$output_file" "No deterministic missing-string markers" "fallback must not fall back to generic evidence-dump text when pytest evidence is actionable"
+
+	rm -rf "$tmp_dir"
+}
+
+assert_opencode_failed_check_fallback_maps_supply_chain_vulnerabilities() {
+	local tmp_dir
+	local fixture_repo
+	local evidence_file
+	local output_file
+	local stderr_file
+	tmp_dir="$(mktemp -d)"
+	fixture_repo="$tmp_dir/repo"
+	evidence_file="$tmp_dir/failed-check-evidence.md"
+	output_file="$tmp_dir/fallback.md"
+	stderr_file="$tmp_dir/fallback.err"
+	mkdir -p "$fixture_repo"
+
+	cat >"$fixture_repo/requirements.txt" <<'EOF'
+flask==2.0.1
+requests==2.19.0
+urllib3==1.25.0
+EOF
+
+	cat >"$evidence_file" <<'EOF'
+# Failed GitHub Check Evidence
+
+- PR: #23
+- Head SHA: `abc123def456abc123def456abc123def456abcd`
+- Repository: `ContextualWisdomLab/clearfolio`
+
+## Failed check: OSV-Scanner/osv-scan
+
+- Type: `check_run`
+- Conclusion: `FAILURE`
+- Details URL: https://github.com/ContextualWisdomLab/clearfolio/actions/runs/28863381355
+
+### Supply-chain vulnerability findings
+
+- Supply-chain vulnerability: id=GHSA-j8r2-6x86-q33q severity=HIGH package=requests installed=2.19.0 fixed=2.31.0 manifest=requirements.txt
+
+## Failed check: Security Scan/trivy-fs
+
+- Type: `check_run`
+- Conclusion: `FAILURE`
+- Details URL: https://github.com/ContextualWisdomLab/clearfolio/actions/runs/28863381999
+
+### Failed log excerpt
+
+```text
+requirements.txt (pip)
+=======================
+Total: 1 (HIGH: 1, CRITICAL: 0)
+
+┌──────────┬────────────────┬──────────┬────────┬───────────────────┬───────────────┐
+│ Library  │ Vulnerability  │ Severity │ Status │ Installed Version │ Fixed Version │
+├──────────┼────────────────┼──────────┼────────┼───────────────────┼───────────────┤
+│ urllib3  │ CVE-2023-43804 │ HIGH     │ fixed  │ 1.25.0            │ 1.26.18       │
+└──────────┴────────────────┴──────────┴────────┴───────────────────┴───────────────┘
+```
+EOF
+
+	bash "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" \
+		"$evidence_file" "$fixture_repo" >"$output_file" 2>"$stderr_file"
+
+	# osv-scanner canonical evidence: source-backed finding with the exact manifest line and from->to bump.
+	assert_file_contains "$output_file" "requirements.txt:2 - Supply-chain vulnerability GHSA-j8r2-6x86-q33q in requests" "supply-chain fallback maps the osv-scanner advisory to the exact manifest line"
+	assert_file_contains "$output_file" "bump \`requests\` from 2.19.0 to 2.31.0" "supply-chain fallback states the concrete requests version bump"
+	assert_file_contains "$output_file" "OSV-Scanner/osv-scan" "supply-chain fallback preserves the failed osv-scanner check label as evidence"
+	# trivy-fs job-log table: source-backed finding located under the manifest header.
+	assert_file_contains "$output_file" "requirements.txt:3 - Supply-chain vulnerability CVE-2023-43804 in urllib3" "supply-chain fallback maps the trivy table row to the exact manifest line"
+	assert_file_contains "$output_file" "bump \`urllib3\` from 1.25.0 to 1.26.18" "supply-chain fallback states the concrete urllib3 version bump"
+	assert_file_contains "$output_file" "urllib3==1.26.18" "supply-chain fallback offers a GitHub-suggestion-ready pin for the trivy finding"
+	assert_file_contains "$output_file" "requests==2.31.0" "supply-chain fallback offers a GitHub-suggestion-ready pin for the osv finding"
+	# Never line 0, and no URL-only deflection.
+	assert_file_not_contains "$output_file" ":0 - Supply-chain" "supply-chain fallback never emits a line-zero finding"
+	assert_file_not_contains "$output_file" "see the Actions run URL" "supply-chain fallback does not post URL-only supply-chain reviews"
+
+	rm -rf "$tmp_dir"
+}
+
+assert_opencode_failed_check_fallback_preserves_empty_supply_chain_columns() {
+	# Regression for the record-delimiter bug: the internal per-vulnerability
+	# record was joined with a TAB and read back with `IFS=$'\t'`. Tab is an
+	# IFS-whitespace character, so `read` collapsed consecutive tabs and any empty
+	# interior field (missing installed OR missing fixed) shifted every later
+	# column left by one — producing garbled findings such as a severity word in
+	# the advisory-id slot and a CVE id in the version slot. The collector appends
+	# installed=/fixed= only when present, so both are common real inputs.
+	local tmp_dir
+	local fixture_repo
+	local evidence_file
+	local output_file
+	local stderr_file
+	tmp_dir="$(mktemp -d)"
+	fixture_repo="$tmp_dir/repo"
+	evidence_file="$tmp_dir/failed-check-evidence.md"
+	output_file="$tmp_dir/fallback.md"
+	stderr_file="$tmp_dir/fallback.err"
+	mkdir -p "$fixture_repo"
+
+	cat >"$fixture_repo/requirements.txt" <<'EOF'
+flask==2.0.1
+requests==2.19.0
+EOF
+
+	# Record 1: installed is MISSING (osv/trivy SARIF alert with no installed
+	# version). Record 2: fixed is MISSING (no-fix advisory). Both interior gaps
+	# used to collapse and shift columns.
+	cat >"$evidence_file" <<'EOF'
+# Failed GitHub Check Evidence
+
+- PR: #77
+- Head SHA: `abc123def456abc123def456abc123def456abcd`
+- Repository: `ContextualWisdomLab/clearfolio`
+
+## Failed check: OSV-Scanner/osv-scan
+
+- Type: `check_run`
+- Conclusion: `FAILURE`
+- Details URL: https://github.com/ContextualWisdomLab/clearfolio/actions/runs/28863381355
+
+### Supply-chain vulnerability findings
+
+- Supply-chain vulnerability: id=CVE-2020-0001 severity=CRITICAL package=flask fixed=2.0.2 manifest=requirements.txt
+- Supply-chain vulnerability: id=GHSA-aaaa-bbbb-cccc severity=HIGH package=requests installed=2.19.0 manifest=requirements.txt
+EOF
+
+	bash "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" \
+		"$evidence_file" "$fixture_repo" >"$output_file" 2>"$stderr_file"
+
+	# Record 1 (installed missing): the advisory id must be the CVE (NOT the
+	# severity word), the package must be flask, and the fix target must be the
+	# fixed VERSION (2.0.2), never the CVE id in the version slot.
+	assert_file_contains "$output_file" "Supply-chain vulnerability CVE-2020-0001 in flask" "empty installed keeps the advisory id in the title, not the severity word"
+	assert_file_not_contains "$output_file" "Supply-chain vulnerability CRITICAL in flask" "empty installed does not shift the severity word into the advisory-id slot"
+	assert_file_contains "$output_file" "upgrade \`flask\` to 2.0.2" "empty installed still names the concrete fixed version as the upgrade target"
+	assert_file_not_contains "$output_file" "to CVE-2020-0001" "the CVE id never appears in the upgrade/version slot"
+
+	# Record 2 (fixed missing): the advisory id must be the GHSA (NOT the severity
+	# word), installed must be the real version, and the fix must say no upstream
+	# fix is available — never 'bump ... to <GHSA id>'.
+	assert_file_contains "$output_file" "Supply-chain vulnerability GHSA-aaaa-bbbb-cccc in requests" "empty fixed keeps the advisory id in the title, not the severity word"
+	assert_file_contains "$output_file" "no fixed version is available upstream for \`requests\` 2.19.0" "empty fixed produces a sensible no-fix instruction with the real installed version"
+	assert_file_not_contains "$output_file" "to GHSA-aaaa-bbbb-cccc" "the GHSA id never appears in the upgrade/version slot"
+	assert_file_not_contains "$output_file" "from GHSA-aaaa-bbbb-cccc" "the GHSA id never appears in the from-version slot"
+
+	# Columns are not shifted: severity lands in the severity slot for both.
+	assert_file_contains "$output_file" "CRITICAL requirements.txt" "record 1 severity stays in the severity column"
+	assert_file_contains "$output_file" "HIGH requirements.txt" "record 2 severity stays in the severity column"
+
+	# Line numbers stay positive (never 0), even with empty interior fields.
+	assert_file_not_contains "$output_file" ":0 - Supply-chain" "empty interior fields never produce a line-zero finding"
+
+	rm -rf "$tmp_dir"
+}
+
+assert_opencode_failed_check_fallback_rejects_url_only_supply_chain() {
+	local tmp_dir
+	local fixture_repo
+	local evidence_file
+	local output_file
+	local stderr_file
+	local rc
+	tmp_dir="$(mktemp -d)"
+	fixture_repo="$tmp_dir/repo"
+	evidence_file="$tmp_dir/failed-check-evidence.md"
+	output_file="$tmp_dir/fallback.md"
+	stderr_file="$tmp_dir/fallback.err"
+	mkdir -p "$fixture_repo"
+
+	# A supply-chain check failed, but the evidence carries only the check name
+	# and a run URL — no package, advisory id, manifest, or fixed version. This
+	# must stay fail-closed: no source-backed finding can be invented.
+	cat >"$evidence_file" <<'EOF'
+# Failed GitHub Check Evidence
+
+- PR: #24
+- Head SHA: `abc123def456abc123def456abc123def456abcd`
+- Repository: `ContextualWisdomLab/clearfolio`
+
+## Failed check: OSV-Scanner/osv-scan
+
+- Type: `check_run`
+- Conclusion: `FAILURE`
+- Details URL: https://github.com/ContextualWisdomLab/clearfolio/actions/runs/28863381355
+EOF
+
+	set +e
+	bash "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" \
+		"$evidence_file" "$fixture_repo" >"$output_file" 2>"$stderr_file"
+	rc=$?
+	set -e
+
+	assert_equals "1" "$rc" "URL-only supply-chain evidence does not produce a REQUEST_CHANGES finding"
+	assert_file_not_contains "$output_file" "Supply-chain vulnerability" "URL-only supply-chain evidence emits no supply-chain finding"
+	assert_file_contains "$stderr_file" "No source-backed failed-check fallback finding matched" "URL-only supply-chain evidence stays fail-closed and asks for rerun or newer logs"
 
 	rm -rf "$tmp_dir"
 }
@@ -7230,6 +7437,12 @@ assert_opencode_failed_check_review_validator_rejects_unrelated_findings
 assert_opencode_failed_check_fallback_emits_each_strix_report
 
 assert_opencode_failed_check_fallback_explains_pytest_and_cancelled_checks
+
+assert_opencode_failed_check_fallback_maps_supply_chain_vulnerabilities
+
+assert_opencode_failed_check_fallback_preserves_empty_supply_chain_columns
+
+assert_opencode_failed_check_fallback_rejects_url_only_supply_chain
 
 assert_opencode_failed_check_fallback_rejects_cancelled_queue_only_reviews
 
