@@ -334,6 +334,11 @@ jobs:
             if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
             fi
+            if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
+              mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
+              git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
+              echo "Materialized PR-head Strix workflow for self-test."
+            fi
             if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" 2>/dev/null; then
               mkdir -p "$TRUSTED_WORKSPACE/scripts/ci"
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"
@@ -348,6 +353,11 @@ jobs:
               git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
               if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
                 git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
+              fi
+              if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
+                mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
+                git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
+                echo "Materialized PR-head Strix workflow for self-test."
               fi
               if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" 2>/dev/null; then
                 mkdir -p "$TRUSTED_WORKSPACE/scripts/ci"
