@@ -21,28 +21,34 @@ if [ ! -s "$FAILED_CHECKS_FILE" ]; then
 fi
 
 review_text="$(
-  jq -r '
-    [
-      (.summary // ""),
-      (.reason // ""),
-      (
-        .findings[]?
-        | [
-            (.path // ""),
-            ((.line // "") | tostring),
-            (.severity // ""),
-            (.title // ""),
-            (.problem // ""),
-            (.root_cause // ""),
-            (.fix_direction // ""),
-            (.regression_test_direction // ""),
-            (.suggested_diff // "")
-          ]
-        | join("\n")
-      )
-    ]
-    | join("\n")
-  ' "$CONTROL_JSON_FILE"
+  python3 - "$CONTROL_JSON_FILE" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+parts = [str(control.get("summary") or ""), str(control.get("reason") or "")]
+for finding in control.get("findings") or []:
+    parts.append(
+        "\n".join(
+            str(finding.get(field) or "")
+            for field in (
+                "path",
+                "line",
+                "severity",
+                "title",
+                "problem",
+                "root_cause",
+                "fix_direction",
+                "regression_test_direction",
+                "suggested_diff",
+            )
+        )
+    )
+print("\n".join(parts))
+PY
 )"
 
 contains_review_text() {
@@ -168,23 +174,36 @@ extract_strix_report_model_markers() {
 }
 
 count_strix_review_findings() {
-  jq -r '
-    [
-      (.findings // [])[]
-      | [
-          .title,
-          .problem,
-          .root_cause,
-          .fix_direction,
-          .regression_test_direction,
-          .suggested_diff
-        ]
-        | map(. // "")
-        | join("\n")
-      | select(test("strix|github[-_]models/|deepseek/|openai/gpt-|vertex_ai/|Vulnerability Report"; "i"))
-    ]
-    | length
-  ' "$CONTROL_JSON_FILE"
+  python3 - "$CONTROL_JSON_FILE" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+pattern = re.compile(
+    r"strix|github[-_]models/|deepseek/|openai/gpt-|vertex_ai/|Vulnerability Report",
+    re.IGNORECASE,
+)
+count = 0
+for finding in control.get("findings") or []:
+    text = "\n".join(
+        str(finding.get(field) or "")
+        for field in (
+            "title",
+            "problem",
+            "root_cause",
+            "fix_direction",
+            "regression_test_direction",
+            "suggested_diff",
+        )
+    )
+    if pattern.search(text):
+        count += 1
+print(count)
+PY
 }
 
 validate_distinct_strix_report_findings() {

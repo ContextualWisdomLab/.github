@@ -74,15 +74,95 @@ TMP_JSON="$(mktemp)"
 trap 'rm -f "$TMP_JSON"' EXIT
 printf '%s\n' "$CONTROL_JSON" >"$TMP_JSON"
 
-if ! jq -e . "$TMP_JSON" >/dev/null 2>&1; then
+if ! control_fields="$(
+  python3 - "$TMP_JSON" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+def reject(reason: str) -> None:
+    print(f"Reason: {reason}", file=sys.stderr)
+    raise SystemExit(4)
+
+
+control_path = Path(sys.argv[1])
+try:
+    control = json.loads(control_path.read_text(encoding="utf-8"))
+except Exception as exc:  # noqa: BLE001 - shell gate reports the parse reason.
+    reject(f"control JSON is invalid: {exc}")
+
+if not isinstance(control, dict):
+    reject("control JSON must be an object")
+
+
+def non_empty_string(field: str) -> str:
+    value = control.get(field)
+    if not isinstance(value, str) or not value:
+        reject(f"{field} must be a non-empty string")
+    return value
+
+
+head_sha = non_empty_string("head_sha")
+run_id = non_empty_string("run_id")
+run_attempt = non_empty_string("run_attempt")
+result = control.get("result")
+if result not in {"APPROVE", "REQUEST_CHANGES"}:
+    reject("result must be APPROVE or REQUEST_CHANGES")
+
+non_empty_string("reason")
+non_empty_string("summary")
+
+findings = control.get("findings")
+if result == "REQUEST_CHANGES":
+    if not isinstance(findings, list) or not findings:
+        reject("REQUEST_CHANGES requires at least one finding")
+else:
+    if findings is not None and (not isinstance(findings, list) or findings):
+        reject("APPROVE requires findings to be empty")
+
+for index, finding in enumerate(findings or [], start=1):
+    if not isinstance(finding, dict):
+        reject(f"finding {index} must be an object")
+    for field in (
+        "path",
+        "severity",
+        "title",
+        "problem",
+        "root_cause",
+        "fix_direction",
+        "regression_test_direction",
+        "suggested_diff",
+    ):
+        value = finding.get(field)
+        if not isinstance(value, str) or not value:
+            reject(f"finding {index} field {field} must be a non-empty string")
+    path = finding["path"].lower()
+    if path in {"n/a", "unknown"}:
+        reject(f"finding {index} path must name a source file")
+    line = finding.get("line")
+    if type(line) is not int or line <= 0:
+        reject(f"finding {index} line must be a positive integer")
+    suggested_diff = finding["suggested_diff"].lower()
+    if suggested_diff.startswith("n/a") or suggested_diff.startswith("cannot provide diff"):
+        reject(f"finding {index} suggested_diff must be concrete")
+
+print(head_sha)
+print(run_id)
+print(run_attempt)
+print(result)
+PY
+)"; then
   echo "NO_CONCLUSION"
   exit 4
 fi
 
-CONTROL_HEAD_SHA="$(jq -r '.head_sha // empty' "$TMP_JSON")"
-CONTROL_RUN_ID="$(jq -r '.run_id // empty' "$TMP_JSON")"
-CONTROL_RUN_ATTEMPT="$(jq -r '.run_attempt // empty' "$TMP_JSON")"
-RESULT="$(jq -r '.result // empty' "$TMP_JSON")"
+CONTROL_HEAD_SHA="$(printf '%s\n' "$control_fields" | sed -n '1p')"
+CONTROL_RUN_ID="$(printf '%s\n' "$control_fields" | sed -n '2p')"
+CONTROL_RUN_ATTEMPT="$(printf '%s\n' "$control_fields" | sed -n '3p')"
+RESULT="$(printf '%s\n' "$control_fields" | sed -n '4p')"
 
 if [ "$CONTROL_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
   echo "SHA_MISMATCH"
@@ -97,37 +177,6 @@ fi
 if [ "$EXPECTED_RUN_ATTEMPT" != "-" ] && [ "$CONTROL_RUN_ATTEMPT" != "$EXPECTED_RUN_ATTEMPT" ]; then
   echo "MISSING_SENTINEL"
   exit 2
-fi
-
-if ! jq -e '
-  type == "object"
-  and (.head_sha | type == "string" and length > 0)
-  and (.run_id | type == "string" and length > 0)
-  and (.run_attempt | type == "string" and length > 0)
-  and (.result == "APPROVE" or .result == "REQUEST_CHANGES")
-  and (.reason | type == "string" and length > 0)
-  and (.summary | type == "string" and length > 0)
-  and (
-    if .result == "REQUEST_CHANGES" then (.findings | type == "array" and length > 0)
-    else ((.findings == null) or (.findings | type == "array" and length == 0))
-    end
-  )
-  and all((.findings // [])[];
-    (.path | type == "string" and length > 0)
-    and ((.path | ascii_downcase) as $p | ($p != "n/a" and $p != "unknown"))
-    and (.line | type == "number" and . > 0 and floor == .)
-    and (.severity | type == "string" and length > 0)
-    and (.title | type == "string" and length > 0)
-    and (.problem | type == "string" and length > 0)
-    and (.root_cause | type == "string" and length > 0)
-    and (.fix_direction | type == "string" and length > 0)
-    and (.regression_test_direction | type == "string" and length > 0)
-    and (.suggested_diff | type == "string" and length > 0)
-    and ((.suggested_diff | ascii_downcase) as $d | (($d | startswith("n/a")) | not) and (($d | startswith("cannot provide diff")) | not))
-  )
-' "$TMP_JSON" >/dev/null; then
-  echo "NO_CONCLUSION"
-  exit 4
 fi
 
 if ! python3 "$NORMALIZER" --check-structural-approval "$TMP_JSON" >/dev/null; then
@@ -285,7 +334,28 @@ then
 fi
 
 if [ -n "$NORMALIZED_JSON_FILE" ]; then
-  jq -c '{head_sha, run_id, run_attempt, result, reason, summary, findings:(.findings // [])}' "$TMP_JSON" >"$NORMALIZED_JSON_FILE"
+  python3 - "$TMP_JSON" "$NORMALIZED_JSON_FILE" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+normalized = {
+    "head_sha": control["head_sha"],
+    "run_id": control["run_id"],
+    "run_attempt": control["run_attempt"],
+    "result": control["result"],
+    "reason": control["reason"],
+    "summary": control["summary"],
+    "findings": control.get("findings") or [],
+}
+Path(sys.argv[2]).write_text(
+    json.dumps(normalized, ensure_ascii=False, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
 fi
 
 echo "$RESULT"

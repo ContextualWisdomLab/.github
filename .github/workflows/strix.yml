@@ -97,9 +97,9 @@ concurrency:
   # runs may still cancel the matching PR/head group.
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
-# Scorecard Token-Permissions (alert #43): keep the workflow-level token
-# read-only and grant the id-token/statuses writes only on the job that needs
-# them (the strix scan job below and the publish-manual-pr-evidence-status job).
+# Scorecard Token-Permissions (alert #43): keep GITHUB_TOKEN read-only. Jobs
+# that publish manual PR evidence exchange app or central secret tokens instead
+# of elevating the workflow token's commit-status scope.
 permissions:
   actions: read
   contents: read
@@ -124,14 +124,13 @@ jobs:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) and posts a commit status
-    # (statuses:write); all other scopes stay read-only.
+    # exchanges an OIDC token (id-token); status publication uses exchanged app
+    # or central secret tokens so GITHUB_TOKEN keeps commit-status read-only.
     permissions:
       actions: read
       contents: read
       id-token: write
       models: read
-      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
