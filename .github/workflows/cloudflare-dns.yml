@@ -6,7 +6,8 @@
 #   - prints each zone's Cloudflare nameservers + status so they can be set at
 #     Namecheap (registrar) to delegate the domain to Cloudflare.
 #
-# Auth comes from org GitHub Secrets (scope=ALL): the token never leaves Actions.
+# Auth comes from org GitHub Secrets (scope=ALL): the token never leaves trusted
+# push/dispatch runs. Pull requests run offline config validation only.
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
 #
 # Default is DRY-RUN. Set input mode=apply to actually write.
@@ -32,16 +33,15 @@ on:
       - "infra/cloudflare/zones.json"
       - "infra/cloudflare/reconcile.sh"
       - ".github/workflows/cloudflare-dns.yml"
-  # Same-repo PRs that touch the config get an automatic dry-run (secrets are
-  # available to same-repo PRs; forks get none, so this stays safe). This also
-  # lets the config be validated — and nameservers/status captured — before merge.
+  # PRs validate the declarative config without Cloudflare secrets. Push and
+  # workflow_dispatch runs perform the API-backed dry-run/apply.
   pull_request:
     paths:
       - "infra/cloudflare/zones.json"
       - "infra/cloudflare/reconcile.sh"
       - ".github/workflows/cloudflare-dns.yml"
 
-# push- and pull_request-triggered runs are always dry-run (safe by default);
+# push-triggered runs are always dry-run (safe by default);
 # only an explicit workflow_dispatch with mode=apply is allowed to write.
 concurrency:
   group: cloudflare-dns-${{ github.ref }}
@@ -58,7 +58,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Validate Cloudflare DNS config
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            (.zones | type == "array" and length > 0) and
+            all(.zones[]; (
+              (.zone_name | type == "string" and length > 0) and
+              (.product_repo | type == "string" and length > 0) and
+              (.product_label | type == "string" and length > 0) and
+              (.records | type == "array") and
+              all(.records[]; (
+                (.record_type | type == "string" and length > 0) and
+                (.record_name | type == "string" and length > 0) and
+                (.record_content | type == "string" and length > 0)
+              ))
+            ))
+          ' infra/cloudflare/zones.json >/dev/null
+          count="$(jq '.zones | length' infra/cloudflare/zones.json)"
+          echo "Validated ${count} Cloudflare DNS zone declaration(s) without exposing Cloudflare secrets to pull request code."
+
       - name: Reconcile Cloudflare DNS
+        if: ${{ github.event_name != 'pull_request' }}
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

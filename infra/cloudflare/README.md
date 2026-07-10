@@ -13,10 +13,10 @@ Actions. No Terraform — six zones do not justify the moving parts.
   Cloudflare, you do a **one-time** step at Namecheap: replace the default
   Namecheap nameservers with the two nameservers Cloudflare assigns to that
   zone. From then on, all records are managed here in `zones.json`.
-- **The Cloudflare API token never leaves GitHub Actions.** It lives as the org
-  secret `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ACCOUNT_ID`). It is not
-  available locally and is never committed. Every operation that touches the
-  Cloudflare API runs in a workflow that references
+- **The Cloudflare API token is never exposed to pull request code.** It lives
+  as the org secret `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ACCOUNT_ID`). Pull
+  requests validate `zones.json` offline. Only trusted `main` pushes and manual
+  workflow runs touch the Cloudflare API with
   `${{ secrets.CLOUDFLARE_API_TOKEN }}` / `${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`.
 
 ## Files
@@ -105,9 +105,10 @@ pages and for the org `github.io` / profile content.
 
 ## Safety notes
 
-- **Dry-run is the default.** `workflow_dispatch` defaults to `mode = dry-run`
-  and `push` events are always dry-run — only an explicit manual run with
-  `mode = apply` writes to Cloudflare.
+- **Dry-run is the default.** Pull requests run offline config validation,
+  `workflow_dispatch` defaults to `mode = dry-run`, and `push` events are
+  always dry-run — only an explicit manual run with `mode = apply` writes to
+  Cloudflare.
 - **No destructive deletes** unless `prune = true` is set explicitly.
 - **Fail-soft:** per-zone/record errors are logged and the run continues; only a
   failed API-token verification aborts the job (so a broken token is loud).
