@@ -40,8 +40,15 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.number" in workflow
         assert "cancel-in-progress: true" in workflow
         if filename in {"close-empty-pr.yml", "opencode-review.yml", "security-scan.yml"}:
+            assert "github.event_name == 'pull_request_target'" in concurrency_contract or (
+                "github.event_name == 'pull_request'" in concurrency_contract
+            )
             assert "github.event.pull_request.head.sha" in concurrency_contract
         else:
+            if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
+                assert "github.event_name == 'pull_request'" in concurrency_contract
+            else:
+                assert "github.event_name == 'pull_request_target'" in concurrency_contract
             assert "github.event.pull_request.head.sha" not in concurrency_contract
             assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -54,6 +61,8 @@ def test_strix_keeps_current_head_security_evidence_logs() -> None:
     assert "github.event.inputs.target_repository" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
+    assert "github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository" in concurrency_contract
+    assert "github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert (
         "format('pr-{0}-{1}', github.event.pull_request.number, "
         "github.event.pull_request.head.sha)"
@@ -140,6 +149,17 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     assert "--output=new-results.json" in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
+
+
+def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
+    workflow = workflow_text("osv-scanner-pr.yml")
+    concurrency_contract = workflow.split("permissions:", 1)[0]
+
+    assert "github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name" in concurrency_contract
+    assert "github.event_name == 'pull_request' && github.event.pull_request.number" in concurrency_contract
+    assert workflow.count("scan-args: |-") == 1
+    assert "--no-resolve" in workflow
+    assert "--maven-registry=https://maven-central.storage-download.googleapis.com/maven2" in workflow
 
 
 def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> None:

@@ -11,7 +11,10 @@ on:
     branches: [main, master, develop]
 
 concurrency:
-  group: codeql-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  group: >-
+    codeql-pr-${{
+    github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
