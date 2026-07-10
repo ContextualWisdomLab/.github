@@ -39,8 +39,11 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
         assert "cancel-in-progress: true" in workflow
-        assert "github.event.pull_request.head.sha" not in concurrency_contract
-        assert "format('pr-{0}-{1}'" not in concurrency_contract
+        if filename in {"close-empty-pr.yml", "opencode-review.yml", "security-scan.yml"}:
+            assert "github.event.pull_request.head.sha" in concurrency_contract
+        else:
+            assert "github.event.pull_request.head.sha" not in concurrency_contract
+            assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
 def test_strix_keeps_current_head_security_evidence_logs() -> None:
