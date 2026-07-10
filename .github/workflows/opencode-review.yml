@@ -3301,6 +3301,22 @@ jobs:
               fi
               rm -f "$gh_error_file" "$review_payload_file"
               update_review_overview "$event" "$body" || true
+              if [ "$event" = "APPROVE" ]; then
+                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                  {
+                    printf '## OpenCode approve review publication skipped\n\n'
+                    printf 'OpenCode produced a source-backed current-head APPROVE gate result, but GitHub rejected the pull review publication.\n\n'
+                    printf -- "- Result: \`APPROVE_PUBLICATION_SKIPPED\`\n"
+                    printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
+                    printf -- '- Workflow run: %s\n' "$RUN_ID"
+                    printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
+                    printf -- '- Review state: unchanged because GitHub rejected the review API write.\n'
+                    printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
+                  } >>"$GITHUB_STEP_SUMMARY"
+                fi
+                printf '::notice::OpenCode approve review publication skipped after successful gate; keeping the successful approval gate result for head %s. Branch protection remains authoritative for required reviews and peer checks.\n' "$HEAD_SHA"
+                return 0
+              fi
               printf '::error::OpenCode could not publish the pull review for head %s, so the review state was not changed.\n' "$HEAD_SHA"
               case "$event" in
                 REQUEST_CHANGES | INLINE_COMMENT_PUBLISH_FAILED) echo "::endgroup::" ;;
