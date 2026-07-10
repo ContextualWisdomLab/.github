@@ -160,6 +160,26 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
         "github.event.pull_request.base.repo.full_name"
     ) in workflow
     assert "github.event.pull_request.head.repo.full_name == github.repository" not in workflow
+    assert "  coverage-source-tree:\n" in workflow
+    assert "  coverage-evidence:\n" in workflow
+
+    source_start = workflow.index("  coverage-source-tree:\n")
+    source_end = workflow.index("\n  coverage-evidence:", source_start)
+    source_job = workflow[source_start:source_end]
+    assert "id-token: write" in source_job
+    assert "Exchange OpenCode app token for target repository coverage reads" in source_job
+    assert (
+        "GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+    ) in source_job
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in source_job
+
+    coverage_start = workflow.index("  coverage-evidence:\n")
+    coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
+    coverage_job = workflow[coverage_start:coverage_end]
+    assert "id-token: write" not in coverage_job
+    assert "Report coverage source materialization failure" in coverage_job
+    assert "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131" in coverage_job
 
     start = workflow.index(
         "      - name: Materialize pull request merge tree for coverage measurement\n"
@@ -344,7 +364,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
     assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 360", workflow)
     assert 'timeout-minutes: 75' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 45", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "81"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
@@ -366,9 +386,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/openai/gpt-5"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "900"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
@@ -378,7 +398,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
     assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert 'record_review_status "exhausted"' not in model_pool_runner
@@ -501,7 +521,13 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "github.event_name == 'pull_request_target'" in workflow
     assert "&& github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token" in workflow
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
-    assert "SCHEDULER_READ_TOKEN: ${{ github.token }}" in workflow
+    assert (
+        "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || "
+        "github.event.inputs.target_repository == '' || "
+        "github.event.inputs.target_repository == github.repository) && github.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
+        "steps.opencode_app_token.outputs.token }}"
+    ) in workflow
     assert "&& 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN" in workflow
     assert "--no-trigger-reviews" in workflow
     assert "--enable-auto-merge" in workflow

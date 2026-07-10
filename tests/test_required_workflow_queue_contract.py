@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 
@@ -128,6 +129,43 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 
 
+def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Print OSV findings being compared\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = textwrap.dedent(
+        "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+    )
+
+    for filename in ("old-results.json", "new-results.json"):
+        (tmp_path / filename).write_text('{"results": null}\n', encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "OSV base scan produced 0 finding(s) in old-results.json." in result.stdout
+    assert "OSV head scan produced 0 finding(s) in new-results.json." in result.stdout
+
+
+def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> None:
+    workflow = workflow_text("opencode-review.yml")
+    failed_check_evidence = (REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "skipping optional current-head Strix workflow-run lookup" in workflow
+    assert "skipping optional manual Strix run lookup" in workflow
+    assert "Optional workflow %s is not installed" in failed_check_evidence
+    assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
+
+
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
     """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
     for filename in ("scorecard-pr.yml", "security-scan.yml"):
@@ -204,3 +242,25 @@ def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
     assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
     assert "vulnerable package" in result.stdout
+
+
+def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
+    """Guard repository-local controls for Scorecard Medium-or-higher alerts."""
+    codeowners = (REPO_ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
+    runbook = (REPO_ROOT / "docs" / "scorecard-governance.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "* @seonghobae" in codeowners
+    assert ".github/workflows/* @seonghobae" in codeowners
+    assert "scripts/ci/* @seonghobae" in codeowners
+
+    for alert_id in ("BranchProtectionID", "MaintainedID", "SASTID", "CodeReviewID"):
+        assert alert_id in runbook
+
+    assert "Medium-or-higher governance findings" in runbook
+    assert "code owner review" in runbook
+    assert "review thread resolution" in runbook
+    assert "latest head commit" in runbook
+    assert "cancel superseded runs" in runbook
+    assert "Every central workflow failure must print the actionable reason" in runbook

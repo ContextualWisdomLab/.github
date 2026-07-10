@@ -56,14 +56,151 @@ jobs:
     steps:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
-  coverage-evidence:
-    name: coverage-evidence
+  coverage-source-tree:
+    name: coverage-source-tree
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
         github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
         && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Exchange OpenCode app token for target repository coverage reads
+        id: coverage_read_app_token
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.target_repository != ''
+          && github.event.inputs.target_repository != github.repository
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Materialize pull request merge tree for coverage measurement
+        env:
+          GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
+          COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-source.tar
+        run: |
+          set -euo pipefail
+          fetch_dir="${RUNNER_TEMP}/opencode-coverage-fetch"
+          rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR" "$COVERAGE_SOURCE_ARCHIVE"
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Coverage merge tree materialization requires a GitHub token."
+            exit 1
+          fi
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git init "$fetch_dir"
+          git -C "$fetch_dir" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
+          if ! git -C "$fetch_dir" \
+            -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"; then
+            echo "::error::Coverage fetch could not authenticate to ${TARGET_REPOSITORY} or read base/head SHAs ${PR_BASE_SHA}/${PR_HEAD_SHA}; check token permissions, target repository access, and SHA visibility."
+            exit 1
+          fi
+          git -C "$fetch_dir" checkout --detach "$PR_BASE_SHA"
+          git -C "$fetch_dir" config user.name "github-actions[bot]"
+          git -C "$fetch_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git -C "$fetch_dir" merge --no-ff --no-edit "$PR_HEAD_SHA"; then
+            echo "::error::Coverage merge tree could not be materialized for base ${PR_BASE_SHA} and head ${PR_HEAD_SHA}; resolve merge conflicts or rerun after GitHub can synthesize the PR merge commit."
+            exit 1
+          fi
+          mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
+          mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
+          git -C "$COVERAGE_SOURCE_WORKDIR" status --short
+          tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
+
+      - name: Upload materialized pull request merge tree
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opencode-coverage-source
+          path: ${{ runner.temp }}/opencode-coverage-source.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage-evidence:
+    name: coverage-evidence
+    needs: [coverage-source-tree]
+    if: >-
+      always()
+      && needs.coverage-source-tree.result != 'cancelled'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (
+          github.event_name == 'pull_request_target'
+          && github.event.action != 'closed'
+          && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+        )
       )
     runs-on: ubuntu-latest
     permissions:
@@ -100,40 +237,27 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
-      - name: Materialize pull request merge tree for coverage measurement
+      - name: Report coverage source materialization failure
+        if: needs.coverage-source-tree.result != 'success'
+        run: |
+          echo "::error::Coverage source tree could not be materialized; see the coverage-source-tree job log for the exact target repository, base SHA, head SHA, and fetch or merge failure."
+          exit 1
+
+      - name: Download materialized pull request merge tree
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: opencode-coverage-source
+          path: ${{ runner.temp }}/opencode-coverage-artifact
+
+      - name: Prepare pull request merge tree for coverage measurement
         env:
-          GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
           COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
         run: |
           set -euo pipefail
-          fetch_dir="${RUNNER_TEMP}/opencode-coverage-fetch"
-          rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Coverage merge tree materialization requires a GitHub token."
-            exit 1
-          fi
-          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
-          echo "::add-mask::$auth_header"
-          git init "$fetch_dir"
-          git -C "$fetch_dir" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
-          if ! git -C "$fetch_dir" \
-            -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"; then
-            echo "::error::Coverage fetch could not authenticate to ${TARGET_REPOSITORY} or read base/head SHAs ${PR_BASE_SHA}/${PR_HEAD_SHA}; check token permissions, target repository access, and SHA visibility."
-            exit 1
-          fi
-          git -C "$fetch_dir" checkout --detach "$PR_BASE_SHA"
-          git -C "$fetch_dir" config user.name "github-actions[bot]"
-          git -C "$fetch_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git -C "$fetch_dir" merge --no-ff --no-edit "$PR_HEAD_SHA"; then
-            echo "::error::Coverage merge tree could not be materialized for base ${PR_BASE_SHA} and head ${PR_HEAD_SHA}; resolve merge conflicts or rerun after GitHub can synthesize the PR merge commit."
-            exit 1
-          fi
-          mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
-          mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
+          rm -rf "$COVERAGE_SOURCE_WORKDIR"
+          mkdir -p "$COVERAGE_SOURCE_WORKDIR"
+          tar -xf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
       - name: Install Python coverage measurement tools
@@ -2468,7 +2592,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 350
+        timeout-minutes: 45
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2497,12 +2621,11 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 min per model gives deep reviews enough room. The pool budget,
-          # not a short per-model cutoff, prevents stale provider calls from
-          # consuming the whole 360-min job before the publish gate logs why.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # Bound provider stalls so the org queue gets an actionable log line
+          # and reaches the next candidate instead of pinning the PR for hours.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"
           # Stop after one catalog pass; the long per-model timeout and total
           # budget provide room for deep reviews without looping to job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
@@ -4211,6 +4334,7 @@ jobs:
             if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+                printf 'Strix workflow is not installed on %s; skipping optional current-head Strix workflow-run lookup.\n' "$GH_REPOSITORY" >&2
                 : >"$output_file"
                 rm -f "$runs_json" "$workflow_lookup_err"
                 return 0
@@ -4417,7 +4541,22 @@ jobs:
 
           latest_current_head_manual_strix_run() {
             local runs_json
+            local workflow_lookup_err
             runs_json="$(mktemp)"
+            workflow_lookup_err="$(mktemp)"
+
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+              --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
+              if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+                printf 'Strix workflow is not installed on %s; skipping optional manual Strix run lookup.\n' "$GH_REPOSITORY" >&2
+                rm -f "$runs_json" "$workflow_lookup_err"
+                return 0
+              fi
+              cat "$workflow_lookup_err" >&2
+              rm -f "$runs_json" "$workflow_lookup_err"
+              return 1
+            fi
+            rm -f "$workflow_lookup_err"
 
             if ! gh run list \
               --repo "$GH_REPOSITORY" \
@@ -5208,7 +5347,7 @@ jobs:
         env:
           GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
-          SCHEDULER_READ_TOKEN: ${{ github.token }}
+          SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'missing' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.inputs.pr_base_ref || '' }}
