@@ -149,6 +149,12 @@ def test_opencode_manual_dispatch_canonical_ref_overrides_workflow_ref():
 def test_opencode_target_coverage_materializes_merge_tree_without_checkout_action():
     """Avoid pull_request_target action checkouts of untrusted PR refs."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    assert (
+        "github.event.pull_request.head.repo.full_name == "
+        "github.event.pull_request.base.repo.full_name"
+    ) in workflow
+    assert "github.event.pull_request.head.repo.full_name == github.repository" not in workflow
+
     start = workflow.index(
         "      - name: Materialize pull request merge tree for coverage measurement\n"
     )
