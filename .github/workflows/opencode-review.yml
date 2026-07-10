@@ -759,6 +759,36 @@ jobs:
             fi
           }
 
+          ensure_rust_desktop_deps() {
+            # Install the GTK/WebKitGTK system libraries that Tauri (wry/tao)
+            # links on Linux so desktop-app crates compile — and are therefore
+            # coverable — on the headless coverage runner. Mirrors the
+            # ensure_rust_gpu_adapter pattern above. Detection-gated and
+            # best-effort: repositories without a Tauri config are unaffected
+            # and no gate is weakened — if provisioning fails the coverage
+            # command still runs and reports the compile failure as before.
+            if ! find . -name tauri.conf.json -not -path '*/node_modules/*' -not -path '*/target/*' -print -quit 2>/dev/null | grep -q .; then
+              return 0
+            fi
+            if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+              run_and_capture "Tauri Linux system libraries (WebKitGTK/GTK3) for desktop coverage" \
+                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev || true'
+            fi
+            if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+              append "### Tauri desktop coverage dependencies"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: Tauri configuration detected; WebKitGTK/GTK3 development libraries are available so the desktop crate can compile under coverage."
+              append ""
+            else
+              append "### Tauri desktop coverage dependencies"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: Tauri configuration detected but WebKitGTK/GTK3 libraries could not be provisioned; the coverage command will surface the compile failure as before."
+              append ""
+            fi
+          }
+
           ensure_rust_toolchain() {
             if ! command -v cargo >/dev/null 2>&1; then
               run_and_capture "Rust toolchain install (rustup minimal)" \
@@ -770,6 +800,7 @@ jobs:
               run_and_capture "Rust coverage tooling (cargo-llvm-cov)" cargo install cargo-llvm-cov --locked
             fi
             ensure_rust_gpu_adapter
+            ensure_rust_desktop_deps
           }
 
           rust_coverage_manifests() {
