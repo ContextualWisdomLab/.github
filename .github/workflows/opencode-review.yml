@@ -4662,6 +4662,7 @@ jobs:
                       | select((.status // "") == "completed")
                       | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
                       | select(((.event // "") == "workflow_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
+                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and $newest_success_run_id > 0) | not)
                       | select((.databaseId // .id // 0) > $newest_success_run_id)
                       | "- Strix Security Scan/strix workflow run: " + (.conclusion // "unknown") + (if (.url // .html_url // "") != "" then " (" + (.url // .html_url) + ")" else "" end)
                     )
@@ -4715,6 +4716,8 @@ jobs:
                   | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence"] | index($n)) | not)
                   | select((.status // "") == "completed")
                   | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
+                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("${{"))) | not)
+                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review") | not)
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.conclusion // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
                 '
                 ;;
@@ -4899,6 +4902,9 @@ jobs:
               while IFS= read -r rollup_line; do
                 case "$rollup_line" in
                   "- Strix Security Scan/"*|"- strix:"*)
+                    if printf '%s' "$rollup_line" | grep -Fqi "cancelled"; then
+                      continue
+                    fi
                     failed_strix_run_id="$(printf '%s' "$rollup_line" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
                     if [ -z "$failed_strix_run_id" ] ||
                       [ -z "$manual_strix_success_run_id" ] ||
@@ -5019,6 +5025,8 @@ jobs:
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "metadata-only gate evaluation" and (.workflow // "") == "PR Governance") | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.workflow // "") == "CodeQL") | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")) | not)
+                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("${{"))) | not)
+                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review" and ((.workflow // "") == "Noema Review" or (.workflow // "") == "Required Noema Review")) | not)
                       | "- " + (.label // "check") + ": " + (.conclusion // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
                     elif .kind == "status" then
                       select(((.label // "") | ascii_downcase | contains("opencode-review")) | not)
