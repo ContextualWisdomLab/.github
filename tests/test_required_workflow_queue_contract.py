@@ -187,7 +187,7 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
 
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
-    assert "fail-on-severity: medium" in workflow
+    assert "fail-on-severity: moderate" in workflow
     assert "severity: CRITICAL,HIGH,MEDIUM" in workflow
     assert 'exit-code: "0"' in workflow
     assert "Require Trivy SARIF output" in workflow
