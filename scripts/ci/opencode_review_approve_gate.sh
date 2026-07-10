@@ -71,63 +71,63 @@ if [ -z "$CONTROL_JSON" ]; then
 fi
 
 TMP_JSON="$(mktemp)"
-trap 'rm -f "$TMP_JSON"' EXIT
+TMP_FIELDS="$(mktemp)"
+trap 'rm -f "$TMP_JSON" "$TMP_FIELDS"' EXIT
 printf '%s\n' "$CONTROL_JSON" >"$TMP_JSON"
 
-if ! control_fields="$(
-  python3 - "$TMP_JSON" <<'PY'
+if ! python3 - "$TMP_JSON" >"$TMP_FIELDS" <<'PY'
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
 
 def reject(reason: str) -> None:
     print(f"Reason: {reason}", file=sys.stderr)
-    raise SystemExit(4)
+    raise SystemExit(1)
 
 
 control_path = Path(sys.argv[1])
 try:
     control = json.loads(control_path.read_text(encoding="utf-8"))
-except Exception as exc:  # noqa: BLE001 - shell gate reports the parse reason.
+except (OSError, json.JSONDecodeError) as exc:
     reject(f"control JSON is invalid: {exc}")
 
 if not isinstance(control, dict):
     reject("control JSON must be an object")
 
 
-def non_empty_string(field: str) -> str:
+def nonempty_string(value: object) -> bool:
+    return isinstance(value, str) and len(value) > 0
+
+
+def required_string(field: str) -> str:
     value = control.get(field)
-    if not isinstance(value, str) or not value:
+    if not nonempty_string(value):
         reject(f"{field} must be a non-empty string")
-    return value
+    return str(value)
 
 
-head_sha = non_empty_string("head_sha")
-run_id = non_empty_string("run_id")
-run_attempt = non_empty_string("run_attempt")
-result = control.get("result")
-if result not in {"APPROVE", "REQUEST_CHANGES"}:
-    reject("result must be APPROVE or REQUEST_CHANGES")
-
-non_empty_string("reason")
-non_empty_string("summary")
-
-findings = control.get("findings")
-if result == "REQUEST_CHANGES":
-    if not isinstance(findings, list) or not findings:
-        reject("REQUEST_CHANGES requires at least one finding")
-else:
-    if findings is not None and (not isinstance(findings, list) or findings):
-        reject("APPROVE requires findings to be empty")
-
-for index, finding in enumerate(findings or [], start=1):
+def validate_finding(index: int, finding: object) -> None:
     if not isinstance(finding, dict):
         reject(f"finding {index} must be an object")
+    path = finding.get("path")
+    if not nonempty_string(path):
+        reject(f"finding {index} path must be a non-empty string")
+    if str(path).casefold() in {"n/a", "unknown"}:
+        reject(f"finding {index} path must name a source file")
+    line = finding.get("line")
+    if (
+        isinstance(line, bool)
+        or not isinstance(line, (int, float))
+        or not math.isfinite(float(line))
+        or line <= 0
+        or math.floor(float(line)) != float(line)
+    ):
+        reject(f"finding {index} line must be a positive integer")
     for field in (
-        "path",
         "severity",
         "title",
         "problem",
@@ -136,33 +136,53 @@ for index, finding in enumerate(findings or [], start=1):
         "regression_test_direction",
         "suggested_diff",
     ):
-        value = finding.get(field)
-        if not isinstance(value, str) or not value:
+        if not nonempty_string(finding.get(field)):
             reject(f"finding {index} field {field} must be a non-empty string")
-    path = finding["path"].lower()
-    if path in {"n/a", "unknown"}:
-        reject(f"finding {index} path must name a source file")
-    line = finding.get("line")
-    if type(line) is not int or line <= 0:
-        reject(f"finding {index} line must be a positive integer")
-    suggested_diff = finding["suggested_diff"].lower()
+    suggested_diff = str(finding.get("suggested_diff", "")).casefold()
     if suggested_diff.startswith("n/a") or suggested_diff.startswith("cannot provide diff"):
         reject(f"finding {index} suggested_diff must be concrete")
+
+
+head_sha = required_string("head_sha")
+run_id = required_string("run_id")
+run_attempt = required_string("run_attempt")
+required_string("reason")
+required_string("summary")
+
+result = control.get("result")
+if result not in {"APPROVE", "REQUEST_CHANGES"}:
+    reject("result must be APPROVE or REQUEST_CHANGES")
+
+findings = control.get("findings")
+if result == "REQUEST_CHANGES":
+    if not isinstance(findings, list) or len(findings) == 0:
+        reject("REQUEST_CHANGES requires at least one finding")
+elif findings is not None and (not isinstance(findings, list) or len(findings) != 0):
+    reject("APPROVE requires findings to be empty")
+
+for index, finding in enumerate(findings or [], start=1):
+    validate_finding(index, finding)
 
 print(head_sha)
 print(run_id)
 print(run_attempt)
 print(result)
 PY
-)"; then
+then
   echo "NO_CONCLUSION"
   exit 4
 fi
 
-CONTROL_HEAD_SHA="$(printf '%s\n' "$control_fields" | sed -n '1p')"
-CONTROL_RUN_ID="$(printf '%s\n' "$control_fields" | sed -n '2p')"
-CONTROL_RUN_ATTEMPT="$(printf '%s\n' "$control_fields" | sed -n '3p')"
-RESULT="$(printf '%s\n' "$control_fields" | sed -n '4p')"
+mapfile -t CONTROL_FIELDS <"$TMP_FIELDS"
+if [ "${#CONTROL_FIELDS[@]}" -ne 4 ]; then
+  echo "NO_CONCLUSION"
+  exit 4
+fi
+
+CONTROL_HEAD_SHA="${CONTROL_FIELDS[0]%$'\r'}"
+CONTROL_RUN_ID="${CONTROL_FIELDS[1]%$'\r'}"
+CONTROL_RUN_ATTEMPT="${CONTROL_FIELDS[2]%$'\r'}"
+RESULT="${CONTROL_FIELDS[3]%$'\r'}"
 
 if [ "$CONTROL_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
   echo "SHA_MISMATCH"
@@ -334,12 +354,13 @@ then
 fi
 
 if [ -n "$NORMALIZED_JSON_FILE" ]; then
-  python3 - "$TMP_JSON" "$NORMALIZED_JSON_FILE" <<'PY'
+  if ! python3 - "$TMP_JSON" "$NORMALIZED_JSON_FILE" <<'PY'
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
+
 
 control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 normalized = {
@@ -352,10 +373,14 @@ normalized = {
     "findings": control.get("findings") or [],
 }
 Path(sys.argv[2]).write_text(
-    json.dumps(normalized, ensure_ascii=False, separators=(",", ":")) + "\n",
+    json.dumps(normalized, separators=(",", ":")) + "\n",
     encoding="utf-8",
 )
 PY
+  then
+    echo "NO_CONCLUSION"
+    exit 4
+  fi
 fi
 
 echo "$RESULT"
