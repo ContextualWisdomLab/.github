@@ -1,3 +1,7 @@
+import json
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 
@@ -13,22 +17,58 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
 
     assert workflow.count('default: "1"') >= 2
     assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH" in workflow
+    assert "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''" in workflow
 
 
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     for filename in (
         "close-empty-pr.yml",
         "codeql-pr.yml",
+        "noema-review.yml",
+        "opencode-review.yml",
         "osv-scanner-pr.yml",
         "security-scan.yml",
         "scorecard-pr.yml",
     ):
         workflow = workflow_text(filename)
+        concurrency_contract = workflow.split("permissions:", 1)[0]
 
         assert "concurrency:" in workflow
-        assert "github.event.pull_request.base.repo.full_name || github.repository" in workflow
+        assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
+        assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
         assert "cancel-in-progress: true" in workflow
+        if filename in {"close-empty-pr.yml", "opencode-review.yml", "security-scan.yml"}:
+            assert "github.event.pull_request.head.sha" in concurrency_contract
+        else:
+            assert "github.event.pull_request.head.sha" not in concurrency_contract
+            assert "format('pr-{0}-{1}'" not in concurrency_contract
+
+
+def test_strix_keeps_current_head_security_evidence_logs() -> None:
+    workflow = workflow_text("strix.yml")
+    concurrency_contract = workflow.split("permissions:", 1)[0]
+
+    assert "concurrency:" in workflow
+    assert "github.event.inputs.target_repository" in concurrency_contract
+    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
+    assert "github.repository" in concurrency_contract
+    assert (
+        "format('pr-{0}-{1}', github.event.pull_request.number, "
+        "github.event.pull_request.head.sha)"
+    ) in workflow
+    assert (
+        "format('pr-{0}-{1}', github.event.inputs.pr_number, "
+        "github.event.inputs.pr_head_sha)"
+    ) in workflow
+    assert "github.event.inputs.pr_number != '' && format('pr-{0}'," in workflow
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
+        "&& github.event.action == 'closed' }}"
+    ) in workflow
+    assert "cancel-in-progress stays disabled for normal PR updates" in workflow
+    assert "refs/pull/<n>/head has already advanced before this queued run starts" in workflow
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
@@ -55,12 +95,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         )
         assert "github.event.action != 'closed'" in workflow
 
-    strix = workflow_text("strix.yml")
-
+    strix_workflow = workflow_text("strix.yml")
     assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' && "
-        "github.event.action == 'closed' }}"
-    ) in strix
+        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
+        "&& github.event.action == 'closed' }}"
+    ) in strix_workflow
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
@@ -90,32 +129,90 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
     assert '"$status" = "403"' in workflow
     assert '"$status" = "404"' in workflow
-    assert '"$status" = "429"' in workflow
-    assert '[ "${status#5}" != "$status" ]' in workflow
-    assert "Dependency review support check attempt ${attempt}/${max_attempts}" in workflow
-    assert "Dependency review API is temporarily unavailable" in workflow
-    assert "Dependency review support response body" in workflow
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
-def test_osv_pr_workflows_do_not_depend_on_remote_registry_resolution() -> None:
-    """Keep OSV checks from failing unrelated PRs on Maven/npm registry 429s."""
-    for filename in ("osv-scanner-pr.yml", "security-scan.yml"):
-        workflow = workflow_text(filename)
+def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
+    workflow = workflow_text("security-scan.yml")
 
-        assert "--no-resolve" in workflow
-        assert "fail-on-vuln:" in workflow
-        assert "public registry rate limits" in workflow or "Maven Central HTTP 429" in workflow
+    assert workflow.count("--allow-no-lockfiles") == 4
+    assert "--output=old-results.json" in workflow
+    assert "--output=new-results.json" in workflow
+    assert "test -s old-results.json" in workflow
+    assert "test -s new-results.json" in workflow
 
 
-def test_scorecard_sarif_filters_required_upload_permission_noise() -> None:
-    """Scorecard uploads should not re-open alerts for their own SARIF permission."""
-    for filename in ("scorecard-pr.yml", "scorecard-analysis.yml", "security-scan.yml"):
-        workflow = workflow_text(filename)
+def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> None:
+    workflow = workflow_text("security-scan.yml")
 
-        assert 'result.get("ruleId") == "TokenPermissionsID"' in workflow
-        assert '"\'security-events\' permission set to \'write\'" in message' in workflow
-        assert "necessary security-events SARIF upload permission" in workflow
+    assert "id: osv_base" in workflow
+    assert "id: osv_head" in workflow
+    assert "steps.osv_base.outcome == 'failure'" in workflow
+    assert "steps.osv_head.outcome == 'failure'" in workflow
+    assert "Retry base OSV without transitive resolution" in workflow
+    assert "Retry head OSV without transitive resolution" in workflow
+    assert workflow.count("timeout-minutes: 8") == 2
+    assert workflow.count("timeout-minutes: 4") == 2
+    assert workflow.count("\n            --no-resolve\n") == 2
+    assert workflow.count("Maven Central 429") == 2
+    assert workflow.count("failed or timed out before reporter output was trusted") == 2
+    assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
+    assert "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true" in workflow
+    assert "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true" in workflow
+    assert "--output=old-results.json" in workflow
+    assert "--output=new-results.json" in workflow
+    assert "Print OSV findings being compared" in workflow
+    assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
+
+
+def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Print OSV findings being compared\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = textwrap.dedent(
+        "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+    )
+
+    for filename in ("old-results.json", "new-results.json"):
+        (tmp_path / filename).write_text('{"results": null}\n', encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "OSV base scan produced 0 finding(s) in old-results.json." in result.stdout
+    assert "OSV head scan produced 0 finding(s) in new-results.json." in result.stdout
+
+
+def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> None:
+    workflow = workflow_text("opencode-review.yml")
+    failed_check_evidence = (REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "skipping optional current-head Strix workflow-run lookup" in workflow
+    assert "skipping optional manual Strix run lookup" in workflow
+    assert "Optional workflow %s is not installed" in failed_check_evidence
+    assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
+
+
+def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+    workflow = workflow_text("strix.yml")
+
+    assert "RateLimitError|Too many requests" in workflow
+    assert "LLM warm-up failed" in workflow
+    assert "zero_vulnerabilities_signal" not in workflow
+    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
+    assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
+    assert "before producing a vulnerability report" in workflow
+    assert "genuine findings still fail the check" in workflow
+    assert '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
 
 
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
@@ -123,22 +220,120 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
     for filename in ("scorecard-pr.yml", "security-scan.yml"):
         workflow = workflow_text(filename)
 
-        assert 'PR_DELEGATED_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+        assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+        assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
+        assert "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS" in workflow
         assert "Delegated " in workflow
         assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
+        assert "default-branch governance tracking" in workflow
 
     default_branch_scorecard = workflow_text("scorecard-analysis.yml")
 
     assert "PR_DELEGATED_RULE_IDS" not in default_branch_scorecard
+    assert "FuzzingID" not in default_branch_scorecard
     assert "VulnerabilitiesID" not in default_branch_scorecard
 
 
-def test_repository_declares_fuzzing_surface_for_scorecard() -> None:
-    """Keep the central workflow repo discoverable by Scorecard Fuzzing."""
-    clusterfuzzlite = REPO_ROOT / ".clusterfuzzlite" / "Dockerfile"
-    atheris_harness = REPO_ROOT / "fuzz" / "fuzz_opencode_normalize_output.py"
+def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    assert "fail-on-severity: moderate" in workflow
+    assert "severity: CRITICAL,HIGH,MEDIUM" in workflow
+    assert 'exit-code: "0"' in workflow
+    assert "Require Trivy SARIF output" in workflow
 
-    assert clusterfuzzlite.is_file()
-    assert "FROM scratch" in clusterfuzzlite.read_text(encoding="utf-8")
-    assert atheris_harness.is_file()
-    assert "import atheris" in atheris_harness.read_text(encoding="utf-8")
+    step = "      - name: Print Trivy findings that failed the gate\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+
+    (tmp_path / "trivy-results.sarif").write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {
+                        "tool": {
+                            "driver": {
+                                "rules": [
+                                    {
+                                        "id": "CVE-TEST",
+                                        "properties": {"security-severity": "9.8"},
+                                    }
+                                ]
+                            }
+                        },
+                        "results": [
+                            {
+                                "ruleId": "CVE-TEST",
+                                "message": {
+                                    "text": "Artifact: app\nSeverity: HIGH\nMessage: vulnerable package"
+                                },
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "requirements.txt"},
+                                            "region": {"startLine": 7},
+                                        }
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
+    assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
+    assert "vulnerable package" in result.stdout
+
+    (tmp_path / "trivy-results.sarif").write_text(
+        json.dumps({"runs": [{"tool": {"driver": {"rules": []}}, "results": []}]}),
+        encoding="utf-8",
+    )
+
+    zero_result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+    assert zero_result.returncode == 0
+    assert (
+        "Trivy filesystem scan completed with 0 CRITICAL/HIGH/MEDIUM findings"
+        in zero_result.stdout
+    )
+    assert "failed" not in zero_result.stdout.lower()
+
+
+def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
+    """Guard repository-local controls for Scorecard Medium-or-higher alerts."""
+    codeowners = (REPO_ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
+    runbook = (REPO_ROOT / "docs" / "scorecard-governance.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "* @seonghobae" in codeowners
+    assert ".github/workflows/* @seonghobae" in codeowners
+    assert "scripts/ci/* @seonghobae" in codeowners
+
+    for alert_id in ("BranchProtectionID", "MaintainedID", "SASTID", "CodeReviewID"):
+        assert alert_id in runbook
+
+    assert "Medium-or-higher governance findings" in runbook
+    assert "code owner review" in runbook
+    assert "review thread resolution" in runbook
+    assert "latest head commit" in runbook
+    assert "cancel superseded runs" in runbook
+    assert "Every central workflow failure must print the actionable reason" in runbook

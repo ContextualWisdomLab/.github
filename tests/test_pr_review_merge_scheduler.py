@@ -1050,6 +1050,112 @@ def test_review_state_and_failed_checks():
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
 
 
+def test_failed_status_checks_uses_latest_check_run_for_same_workflow_name():
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-07-10T09:00:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-07-10T09:31:00Z",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}},
+                    },
+                ]
+            }
+        }
+    )
+
+    assert sched.failed_status_checks(pr) == ["lint"]
+
+
+def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
+    timestamped_then_missing = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(timestamped_then_missing) == []
+
+    missing_then_timestamped = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(missing_then_timestamped) == []
+
+
 def test_run_command_failure_scrubs_secrets(monkeypatch):
     import subprocess
 
@@ -1238,6 +1344,66 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     assert f"pr_head_sha={head_sha}" in opencode_call
 
 
+def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: dispatched.append(("strix", workflow)),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(("opencode", workflow)),
+    )
+
+    missing_strix = inspect(make_pr())
+    assert missing_strix.action == "wait"
+    assert "current head has no completed Strix evidence" in missing_strix.reason
+    assert "no cross-repository workflow-dispatch credential" in missing_strix.reason
+
+    strix_complete = inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}))
+    assert strix_complete.action == "wait"
+    assert "current head has completed Strix evidence" in strix_complete.reason
+    assert "OpenCode Review dispatch waits" in strix_complete.reason
+
+    assert dispatched == []
+
+
+def test_stacked_pr_waits_for_central_required_workflow_without_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
+    )
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+
+    assert stacked.action == "wait"
+    assert "stacked PR onto develop" in stacked.reason
+    assert "OpenCode Review dispatch waits" in stacked.reason
+    assert "no cross-repository workflow-dispatch credential" in stacked.reason
+    assert dispatched == []
+
+
+def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+
+    monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", "true")
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -1292,6 +1458,59 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert not any("9004/force-cancel" in " ".join(call) for call in calls)
     assert calls[-1][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+
+
+def test_cancel_stale_pr_queued_runs_force_cancels_same_pr_old_head_runs(monkeypatch):
+    calls = []
+    head_sha = "a" * 40
+    stale_same_pr = {
+        "id": 9001,
+        "name": "OpenCode Review",
+        "head_sha": "old",
+        "pull_requests": [{"number": 1}],
+    }
+    current_same_pr = {
+        "id": 9002,
+        "name": "OpenCode Review",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+    stale_other_pr = {
+        "id": 9003,
+        "name": "OpenCode Review",
+        "head_sha": "old",
+        "pull_requests": [{"number": 2}],
+    }
+    stale_strix = {
+        "id": 9004,
+        "name": "Strix Security Scan",
+        "head_sha": "old",
+        "pull_requests": [{"number": 1}],
+    }
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+            assert "status=queued" in args
+            return json.dumps({"workflow_runs": [stale_same_pr, current_same_pr, stale_other_pr, stale_strix]})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+
+    run_ids = sched.cancel_stale_pr_queued_runs(
+        "owner/repo",
+        make_pr(headRefOid=head_sha),
+        dry_run=False,
+    )
+
+    assert run_ids == ["9001", "9004"]
+    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
+    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9004/force-cancel"] in calls
+    assert not any("9002/force-cancel" in " ".join(call) for call in calls)
+    assert not any("9003/force-cancel" in " ".join(call) for call in calls)
+    assert not any("status=in_progress" in " ".join(call) for call in calls)
 
 
 def test_mutations_refuse_local_credentials(monkeypatch):
@@ -1382,7 +1601,13 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
         make_pr(
             number=7,
             headRefName="feature|x",
-            files={"nodes": [{"path": "scripts/ci/pr_review_merge_scheduler.py"}, {"path": "tests/test_pr_review_merge_scheduler.py"}]},
+            files={
+                "nodes": [
+                    {"path": "scripts/ci/pr_review_merge_scheduler.py"},
+                    {"path": "tests/test_pr_review_merge_scheduler.py"},
+                    {"path": "docs/has`tick.md"},
+                ]
+            },
         ),
         "DIRTY",
     )
@@ -1443,6 +1668,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][0]["guidance"]["changed_files_to_inspect"] == [
         "scripts/ci/pr_review_merge_scheduler.py",
         "tests/test_pr_review_merge_scheduler.py",
+        "docs/has`tick.md",
     ]
     assert "update-branch cannot choose" in payload["decisions"][0]["guidance"]["automation_limit"]
     assert "gh pr checkout 7" in payload["decisions"][0]["guidance"]["commands"]
@@ -1483,6 +1709,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "Changed files to inspect first:" in summary
     assert "- `scripts/ci/pr_review_merge_scheduler.py`" in summary
     assert "- `tests/test_pr_review_merge_scheduler.py`" in summary
+    assert "- `docs/has\\`tick.md`" in summary
     assert "git push --force-with-lease" in summary
     assert "### Branch update requests" in summary
     assert "Requested `update-branch` for PR #8 with `workflow GITHUB_TOKEN`" in summary
@@ -1945,9 +2172,24 @@ def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch
         {"name": "OpenCode Review", "id": 12, "head_sha": "old", "pull_requests": [{"number": 2}]},
         {"name": "OpenCode Review", "id": 13, "head_sha": "old", "pull_requests": [{"number": 1}]},
     ]
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo: runs)
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): runs)
 
+    assert sched.stale_pr_run_ids("owner/repo", make_pr(), statuses=("queued",)) == ["10", "13"]
     assert sched.stale_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == ["13"]
+
+
+def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
+    cancelled = []
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_pr_queued_runs",
+        lambda repo, pr, dry_run: cancelled.append((repo, pr["number"], dry_run)) or [],
+    )
+
+    decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
+
+    assert decision.action == "skip"
+    assert cancelled == [("owner/repo", 1, True)]
 
 
 def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
@@ -2092,6 +2334,7 @@ def test_inspect_pr_dispatches_strix_after_update_branch_observes_new_head(monke
     new_head_pr = make_pr(headRefOid="new-head", reviews={"nodes": []})
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -2117,6 +2360,7 @@ def test_inspect_pr_notes_when_update_branch_head_is_not_observed(monkeypatch):
     )
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append(pr["number"]))
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     decision = inspect(pr, dry_run=False)
@@ -2142,6 +2386,7 @@ def test_inspect_pr_updates_outdated_branch_before_review_dispatch(monkeypatch):
     )
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -2244,6 +2489,75 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
         )
     )
     assert opencode_dispatched == [("owner/repo", "OpenCode Review", "new-head", False)]
+
+
+def test_post_update_branch_followup_waits_for_central_strix_without_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    original = make_pr(headRefOid="old-head")
+    updated = make_pr(headRefOid="new-head")
+
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
+    )
+
+    note = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+
+    assert "updated head new-head observed after update-branch" in note
+    assert "Strix Security Scan dispatch waits" in note
+    assert "no cross-repository workflow-dispatch credential" in note
+    assert dispatched == []
+
+
+def test_post_update_branch_followup_waits_for_central_opencode_without_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    original = make_pr(headRefOid="old-head")
+    updated = make_pr(
+        headRefOid="new-head",
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
+    )
+
+    note = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+
+    assert "updated head new-head observed after update-branch" in note
+    assert "OpenCode Review dispatch waits" in note
+    assert "no cross-repository workflow-dispatch credential" in note
+    assert dispatched == []
 
 
 def test_update_branch_summary_includes_followup_notes():
@@ -2591,6 +2905,7 @@ def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypat
         "update_branch",
         lambda repo, pr, dry_run: updated.append(pr["number"]),
     )
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     assert (
