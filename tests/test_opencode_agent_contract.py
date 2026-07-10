@@ -404,9 +404,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
     assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12", workflow)
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 35", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 350", workflow)
     assert 'timeout-minutes: 12' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 12", workflow)
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 310", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "6"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "20"' in workflow
@@ -428,9 +428,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/openai/gpt-5"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "90"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
