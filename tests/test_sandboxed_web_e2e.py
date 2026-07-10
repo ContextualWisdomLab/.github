@@ -208,13 +208,14 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
 
     attempts = []
 
-    def fake_urlopen(url, timeout):
-        attempts.append((url, timeout))
-        if len(attempts) == 1:
-            raise sandboxed_web_e2e.urllib.error.URLError("not ready")
-        return Response()
+    class FakeOpener:
+        def open(self, url, timeout):
+            attempts.append((url, timeout))
+            if len(attempts) == 1:
+                raise sandboxed_web_e2e.urllib.error.URLError("not ready")
+            return Response()
 
-    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FakeOpener())
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
 
     log_path = tmp_path / "service.log"
@@ -584,3 +585,14 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_web_e2e"] = module
     assert exc_info.value.code == 0
+
+def test_no_redirect_handler_raises_error():
+    """NoRedirectHandler correctly raises HTTPError when a redirect occurs."""
+    import urllib.request
+    from urllib.error import HTTPError
+    import pytest
+    handler = sandboxed_web_e2e.NoRedirectHandler()
+    req = urllib.request.Request("http://example.com")
+    with pytest.raises(HTTPError) as exc_info:
+        handler.redirect_request(req, None, 302, "Found", None, "http://example.com/new")
+    assert exc_info.value.code == 302
