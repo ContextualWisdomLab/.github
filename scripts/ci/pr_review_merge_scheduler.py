@@ -109,7 +109,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
 OPEN_PRS_PAGE_SIZE = 25
-# Must exceed the opencode-review job timeout (360 min) plus typical runner-queue
+# Must exceed the opencode-review job timeout (120 min) plus typical runner-queue
 # wait. QUEUED counts as running and the age clock starts at check creation, so a
 # 45-minute threshold marked every queued/long review "stale" and re-dispatched
 # it; each re-dispatch went to the back of the runner queue and itself went
