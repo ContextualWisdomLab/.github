@@ -353,8 +353,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "opencode_review_model_pool" in workflow
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" in workflow
-    assert "format('pr-{0}', github.event.pull_request.number)" in workflow
-    assert "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" not in workflow
+    assert "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" in workflow
+    assert "format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha)" in workflow
+    assert "github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number)" in workflow
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(encoding="utf-8")
     assert "assert_reasoning_effort_for_candidate" in model_pool_runner
@@ -403,6 +404,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
     assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 75", workflow)
+    assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12", workflow)
     assert 'timeout-minutes: 35' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 25", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
