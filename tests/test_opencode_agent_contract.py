@@ -619,6 +619,16 @@ def test_opencode_approve_review_publication_failure_fails_closed():
     )
 
 
+def test_opencode_jq_filters_do_not_embed_literal_expression_openers():
+    """Literal '${{' inside run scripts is parsed as a GitHub expression opener."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'contains("${{")' not in workflow
+    assert 'contains("$" + "{{")' in workflow
+
+
 def test_opencode_model_pool_failure_stops_without_review_state_change():
     """A continue-on-error model-pool failure must not approve by accident."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
