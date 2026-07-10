@@ -11,7 +11,11 @@ repo_root="$(
 	cd -P -- "$script_dir/../.."
 	pwd -P
 )"
-workflow_file="$repo_root/.github/workflows/strix.yml"
+workflow_root="${TRUSTED_WORKSPACE:-$repo_root}"
+if [ ! -f "$workflow_root/.github/workflows/strix.yml" ]; then
+	workflow_root="$repo_root"
+fi
+workflow_file="$workflow_root/.github/workflows/strix.yml"
 gate_script="$repo_root/scripts/ci/strix_quick_gate.sh"
 full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
 
@@ -103,17 +107,10 @@ for line in lines[jobs_index + 1 :]:
     if line.strip():
         inside_permissions = False
 
-if status_write_jobs:
+if status_write_jobs != ["strix"]:
     print(
-        "Strix workflow GITHUB_TOKEN status permissions must stay read-only; found statuses: write in: "
-        + ", ".join(status_write_jobs),
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-if "strix" not in status_read_jobs:
-    print(
-        "Strix workflow scan job must retain statuses: read for existing status evidence.",
+        "Strix workflow must scope statuses: write only to the strix scan job; found: "
+        + (", ".join(status_write_jobs) if status_write_jobs else "none"),
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -126,6 +123,8 @@ PY
 if ! bash -n "$gate_script" "$full_gate_test"; then
 	record_failure "Strix gate scripts must pass bash syntax checks"
 fi
+
+echo "Checking Strix workflow contract in $workflow_file"
 
 checkout_count="$(grep -Fc "uses: actions/checkout@" "$workflow_file" || true)"
 if [ "$checkout_count" != "1" ]; then
