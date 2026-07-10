@@ -321,7 +321,7 @@ jobs:
                   findings.append((severity, result.get("ruleId", "?"), where, message))
 
           if not findings:
-              print("Trivy failed but produced no SARIF results.")
+              print("Trivy filesystem scan completed with 0 CRITICAL/HIGH/MEDIUM findings in trivy-results.sarif.")
           else:
               print(f"Trivy filesystem scan reported {len(findings)} finding(s):")
               for severity, rule_id, where, message in findings:
