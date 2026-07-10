@@ -208,13 +208,14 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
 
     attempts = []
 
-    def fake_urlopen(url, timeout):
-        attempts.append((url, timeout))
-        if len(attempts) == 1:
-            raise sandboxed_web_e2e.urllib.error.URLError("not ready")
-        return Response()
+    class FakeOpener:
+        def open(self, url, timeout):
+            attempts.append((url, timeout))
+            if len(attempts) == 1:
+                raise sandboxed_web_e2e.urllib.error.URLError("not ready")
+            return Response()
 
-    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FakeOpener())
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
 
     log_path = tmp_path / "service.log"
