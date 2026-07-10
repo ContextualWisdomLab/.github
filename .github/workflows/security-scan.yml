@@ -6,7 +6,7 @@
 #
 #   osv-scan          HARD  diff-scoped — fails on NEW vulns the PR introduces
 #   dependency-review HARD  diff-scoped — fails on vulnerable/denied deps the PR adds
-#   trivy-fs          HARD  repo-wide   — fails on FIXABLE CRITICAL/HIGH findings
+#   trivy-fs          HARD  repo-wide   — fails on FIXABLE CRITICAL/HIGH/MEDIUM findings
 #   scorecard         SOFT  repo posture — uploaded for visibility, never blocks
 #
 # Gating is by the JOB result (a failed job fails this required workflow ->
@@ -18,12 +18,13 @@
 #
 # NOTE on dependency-review: dependency graph can be unavailable on some repos.
 # Treat that as "not enforceable here" instead of making the required workflow
-# unsatisfiable; keep high-severity dependency findings hard-failing where the
-# API is supported.
+# unsatisfiable; keep medium-or-higher dependency findings hard-failing where
+# the API is supported.
 #
 # NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
-# CRITICAL/HIGH finding blocks every PR in that repo until it is fixed. Flip its
-# `exit-code` to "0" to make Trivy visibility-only if that is too strict.
+# CRITICAL/HIGH/MEDIUM finding blocks every PR in that repo until it is fixed.
+# Flip its `exit-code` to "0" to make Trivy visibility-only if that is too
+# strict.
 name: Security Scan
 
 on:
@@ -250,7 +251,7 @@ jobs:
         if: steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          fail-on-severity: high
+          fail-on-severity: moderate
           comment-summary-in-pr: on-failure
 
   trivy-fs:
@@ -271,14 +272,14 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
-          severity: CRITICAL,HIGH
+          severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
           format: sarif
           output: trivy-results.sarif
           exit-code: "1"
           # Without this, trivy-action rebuilds the SARIF scan with ALL
-          # severities and exit-code applies to any LOW/MEDIUM finding,
-          # contradicting the documented CRITICAL/HIGH-only gate above.
+          # severities and exit-code applies to any LOW finding,
+          # contradicting the documented CRITICAL/HIGH/MEDIUM gate above.
           limit-severities-for-sarif: true
       - name: Print Trivy findings that failed the gate
         # SARIF-only output otherwise leaves failures as just "exit code 1".

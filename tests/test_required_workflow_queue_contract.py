@@ -99,6 +99,16 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
+def test_security_scan_hard_fails_medium_plus_dependency_and_trivy_findings() -> None:
+    workflow = workflow_text("security-scan.yml")
+
+    assert "fail-on-severity: moderate" in workflow
+    assert "severity: CRITICAL,HIGH,MEDIUM" in workflow
+    assert "pre-existing FIXABLE" in workflow
+    assert "CRITICAL/HIGH/MEDIUM finding blocks every PR" in workflow
+    assert "LOW finding" in workflow
+
+
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
     workflow = workflow_text("security-scan.yml")
 
