@@ -2996,7 +2996,7 @@ jobs:
 
           warn_gh_publication_failure() {
             local action="$1" error_file="$2"
-            printf 'OpenCode could not publish %s; continuing without review side effect.\n' "$action" >&2
+            printf 'OpenCode could not publish %s; the requested GitHub side effect is unavailable.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
             fi
@@ -3590,9 +3590,9 @@ jobs:
               if [ "$event" = "APPROVE" ]; then
                 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                   {
-                    printf '## OpenCode approve review publication skipped\n\n'
-                    printf 'OpenCode produced a source-backed current-head APPROVE gate result, but GitHub rejected the pull review publication.\n\n'
-                    printf -- "- Result: \`APPROVE_PUBLICATION_SKIPPED\`\n"
+                    printf '## OpenCode approve review publication failed\n\n'
+                    printf 'OpenCode produced a source-backed current-head APPROVE gate result, but GitHub rejected the pull review publication. The workflow fails closed so branch protection cannot observe an approval gate without a matching GitHub pull review.\n\n'
+                    printf -- "- Result: \`APPROVE_PUBLICATION_FAILED\`\n"
                     printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
                     printf -- '- Workflow run: %s\n' "$RUN_ID"
                     printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
@@ -3600,8 +3600,9 @@ jobs:
                     printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
                   } >>"$GITHUB_STEP_SUMMARY"
                 fi
-                printf '::notice::OpenCode approve review publication skipped after successful gate; keeping the successful approval gate result for head %s. Branch protection remains authoritative for required reviews and peer checks.\n' "$HEAD_SHA"
-                return 0
+                printf '::error::OpenCode approve review publication failed for head %s; branch protection still lacks the required GitHub review. Failing closed after logging the GitHub API error above.\n' "$HEAD_SHA"
+                echo "::endgroup::"
+                exit 1
               fi
               printf '::error::OpenCode could not publish the pull review for head %s, so the review state was not changed.\n' "$HEAD_SHA"
               case "$event" in
