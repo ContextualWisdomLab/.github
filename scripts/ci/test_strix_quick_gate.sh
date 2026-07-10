@@ -379,6 +379,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "Wait for trusted OpenCode approval review" "opencode pull_request bridge was removed to avoid duplicate required-check resource use"
 	assert_file_not_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge no longer reconsumes stale trusted review state"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "opencode review workflow must not hard-code repository-specific PR bypasses"
+	assert_file_contains "$workflow_file" "required-workflow-bootstrap:" "opencode required workflow materializes at least one job for pull_request_target ruleset runs"
+	assert_file_contains "$workflow_file" "Required OpenCode workflow run materialized for this PR event." "opencode required workflow bootstrap documents why the sentinel job exists"
 	assert_file_contains "$workflow_file" 'github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository' "opencode review scopes concurrency by target repository"
 	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" "opencode review scopes pull_request_target concurrency by current head"
 	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha)" "opencode review scopes manual concurrency by target PR head"
