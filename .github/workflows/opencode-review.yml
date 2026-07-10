@@ -978,6 +978,36 @@ jobs:
               | sort -u
           }
 
+          rust_coverage_fail_under_lines() {
+            local manifest="$1"
+            python3 - "$manifest" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+manifest = Path(sys.argv[1])
+metadata = (
+    tomllib.loads(manifest.read_text(encoding="utf-8"))
+    .get("package", {})
+    .get("metadata", {})
+    .get("opencode", {})
+    .get("coverage", {})
+)
+value = metadata.get("minimum_lines")
+if value is None:
+    sys.exit(0)
+if isinstance(value, bool) or not isinstance(value, (int, float)):
+    raise SystemExit(
+        "package.metadata.opencode.coverage.minimum_lines must be a number from 0 to 100"
+    )
+if not 0 <= float(value) <= 100:
+    raise SystemExit(
+        "package.metadata.opencode.coverage.minimum_lines must be between 0 and 100"
+    )
+print(f"{float(value):g}")
+PY
+          }
+
           run_rust_test_coverage() {
             local manifests
             ensure_rust_toolchain
@@ -993,15 +1023,35 @@ jobs:
               manifests="$(rust_coverage_manifests)"
               if [ -n "$manifests" ]; then
                 while IFS= read -r manifest; do
+                  local threshold
+                  if ! threshold="$(rust_coverage_fail_under_lines "$manifest")"; then
+                    append "### Rust coverage threshold (${manifest})"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: ${manifest} defines an invalid package.metadata.opencode.coverage.minimum_lines value."
+                    append "- Fix: set package.metadata.opencode.coverage.minimum_lines to a numeric line-coverage percentage from 0 to 100."
+                    append ""
+                    failures=$((failures + 1))
+                    continue
+                  fi
+                  if [ -z "$threshold" ]; then
+                    threshold=100
+                  else
+                    append "### Rust coverage threshold (${manifest})"
+                    append ""
+                    append "- Result: PASS"
+                    append "- Reason: ${manifest} sets package.metadata.opencode.coverage.minimum_lines to ${threshold}%, so Rust coverage enforces the repository-owned baseline instead of the central default."
+                    append ""
+                  fi
                   if ! ensure_tauri_frontend_dist "$manifest"; then
                     continue
                   fi
                   if [ "$manifest" = "Cargo.toml" ]; then
                     run_and_capture "Rust coverage with missing-line report (${manifest})" \
-                      cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
+                      cargo llvm-cov --workspace --all-features --fail-under-lines "$threshold" --show-missing-lines
                   else
                     run_and_capture "Rust coverage with missing-line report (${manifest})" \
-                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines 100 --show-missing-lines
+                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines "$threshold" --show-missing-lines
                   fi
                 done <<<"$manifests"
               else
