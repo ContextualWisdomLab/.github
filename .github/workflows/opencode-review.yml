@@ -183,6 +183,30 @@ jobs:
             rm -f "$log_file"
           }
 
+          run_and_capture_advisory() {
+            local label="$1"
+            shift
+            local log_file
+            log_file="$(mktemp)"
+            append "### ${label}"
+            append ""
+            append '```text'
+            set +e
+            timeout 900 "$@" >"$log_file" 2>&1
+            local rc=$?
+            set -e
+            sed -n '1,220p' "$log_file" >>"$summary_file"
+            append '```'
+            append ""
+            if [ "$rc" -ne 0 ]; then
+              append "- Result: ADVISORY (exit ${rc})"
+            else
+              append "- Result: PASS"
+            fi
+            append ""
+            rm -f "$log_file"
+          }
+
           has_tracked_files() {
             git ls-files "$@" | awk 'NF { found=1 } END { exit found ? 0 : 1 }'
           }
@@ -563,7 +587,7 @@ jobs:
                 append ""
                 failures=$((failures + 1))
               fi
-              run_and_capture "R package coverage with missing-line report (advisory)" \
+              run_and_capture_advisory "R package coverage with missing-line report (advisory)" \
                 bash -c 'Rscript -e '\''lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); cov <- covr::package_coverage(); print(cov); zero <- covr::zero_coverage(cov); if (NROW(zero) > 0) { print(zero); stop("R coverage below 100%; add tests for the listed files/lines.") }'\'' || { echo "covr package_coverage unavailable after package tests; treating missing-line report as advisory."; exit 0; }'
             elif [ -d tests/testthat ]; then
               run_and_capture "R testthat suite" \
