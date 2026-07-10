@@ -204,3 +204,25 @@ def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
     assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
     assert "vulnerable package" in result.stdout
+
+
+def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
+    """Guard repository-local controls for Scorecard Medium-or-higher alerts."""
+    codeowners = (REPO_ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
+    runbook = (REPO_ROOT / "docs" / "scorecard-governance.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "* @seonghobae" in codeowners
+    assert ".github/workflows/* @seonghobae" in codeowners
+    assert "scripts/ci/* @seonghobae" in codeowners
+
+    for alert_id in ("BranchProtectionID", "MaintainedID", "SASTID", "CodeReviewID"):
+        assert alert_id in runbook
+
+    assert "Medium-or-higher governance findings" in runbook
+    assert "code owner review" in runbook
+    assert "review thread resolution" in runbook
+    assert "latest head commit" in runbook
+    assert "cancel superseded runs" in runbook
+    assert "Every central workflow failure must print the actionable reason" in runbook
