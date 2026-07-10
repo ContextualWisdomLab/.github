@@ -3454,6 +3454,55 @@ EOS
 			;;
 		esac
 		;;
+	pr-stale-snapshot-snippet-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/stale-snapshot-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-stale-snapshot/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-stale-snapshot/vulnerabilities/vuln-0001.md" <<'EOS'
+# IDOR in /api/snapshots endpoint allows unauthorized access to database schemas
+
+**Severity:** MEDIUM
+**Target:** backend/app/api/snapshots.py
+
+## Code Analysis
+
+**Location 1:** `backend/app/api/snapshots.py` (lines 78-81)
+  Missing ownership check
+  ```
+  snapshot = await get_snapshot_by_uuid(snapshot_uuid)
+if not snapshot:
+    raise HTTPException(status_code=404)
+return snapshot
+  ```
+
+**Location 2:** `backend/app/api/snapshots.py` (lines 78-81)
+  **Suggested Fix:**
+```diff
+- snapshot = await get_snapshot_by_uuid(snapshot_uuid)
+- if not snapshot:
+-     raise HTTPException(status_code=404)
+- return snapshot
++ snapshot = await get_snapshot_by_uuid(snapshot_uuid)
++ if not snapshot:
++     raise HTTPException(status_code=404)
++ if not await is_project_member(current_user.user_account_uuid, snapshot.project_space_uuid):
++     raise HTTPException(status_code=403)
++ return snapshot
+```
+EOS
+			echo "Penetration test failed: stale MEDIUM snapshot snippet"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after stale snapshot snippet fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: stale-snapshot scenario unexpected model (${STRIX_LLM:-})" >&2
+			exit 38
+			;;
+		esac
+		;;
 	pr-stale-source-plus-real-finding-blocks)
 		case "${STRIX_LLM:-}" in
 		vertex_ai/stale-source-primary)
@@ -4582,6 +4631,32 @@ class WorkspaceRunnerConfig:
         EncryptedString, nullable=True
     )
 EOS
+	elif [ "$scenario" = "pr-stale-snapshot-snippet-fallback-success" ]; then
+		mkdir -p "$repo_root_dir/backend/app/api"
+		cat >"$repo_root_dir/backend/app/api/snapshots.py" <<'EOS'
+from fastapi import HTTPException
+
+
+async def _get_authorized_snapshot(session, schema_snapshot_uuid, user):
+    project_space_uuid = await session.scalar("select project space")
+    if project_space_uuid is None:
+        return None
+    try:
+        await require_project_member(session, project_space_uuid, user.user_account_uuid)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            return None
+        raise
+    return await session.get("SchemaSnapshot", schema_snapshot_uuid)
+
+
+async def get_snapshot(schema_snapshot_uuid, user, session):
+    snap = await _get_authorized_snapshot(session, schema_snapshot_uuid, user)
+    if snap is None:
+        return {"status": "not_found", "snapshot_json": None}
+    data = await session.get("SchemaSnapshotData", schema_snapshot_uuid)
+    return {"status": snap.status, "snapshot_json": data.snapshot_json if data else None}
+EOS
 	elif [ "$scenario" = "pr-stale-source-plus-real-finding-blocks" ]; then
 		mkdir -p "$repo_root_dir/backend/db" "$repo_root_dir/backend/api"
 		cat >"$repo_root_dir/backend/db/models.py" <<'EOS'
@@ -5225,6 +5300,28 @@ run_filtered_gate_case_if_requested() {
 			"__SAME_AS_FALLBACK_MODELS__" \
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
+		;;
+	pr-stale-snapshot-snippet-fallback-success)
+		run_gate_case "pr-stale-snapshot-snippet-fallback-success" \
+			"vertex_ai/stale-snapshot-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan ok after stale snapshot snippet fallback" \
+			"2" \
+			"vertex_ai/stale-snapshot-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"MEDIUM" \
+			"0" \
+			"__PR_SCOPE__" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"backend/app/api/snapshots.py"
 		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
@@ -8738,6 +8835,27 @@ run_gate_case "pr-stale-source-claim-fallback-success" \
 	"0" \
 	"pull_request" \
 	"backend/db/models.py"
+
+run_gate_case "pr-stale-snapshot-snippet-fallback-success" \
+	"vertex_ai/stale-snapshot-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after stale snapshot snippet fallback" \
+	"2" \
+	"vertex_ai/stale-snapshot-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"MEDIUM" \
+	"0" \
+	"__PR_SCOPE__" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"backend/app/api/snapshots.py"
 
 run_gate_case "pr-stale-source-plus-real-finding-blocks" \
 	"vertex_ai/stale-source-primary" \
