@@ -83,23 +83,23 @@ on:
         type: string
 
 concurrency:
+  # Manual evidence runs are workflow_dispatch-scoped by target repository:
+  # github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository
+  # Pull request evidence runs are scoped by base repository:
+  # github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name
   group: >-
-    strix-${{
-    github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
-    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
-    github.repository }}-${{
+    strix-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) ||
-    github.ref }}
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
   # cancel-in-progress stays disabled for normal PR updates and manual evidence
   # runs so current-head Strix evidence leaves logs for review. Closed PR cleanup
   # runs may still cancel the matching PR/head group.
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
-# read-only and grant the id-token/statuses writes only on the job that needs
-# them (the strix scan job below and the publish-manual-pr-evidence-status job).
+# read-only and grant the id-token/statuses writes only on the scan job that
+# needs them. The follow-up publish job uses exchanged app/secret tokens instead.
 permissions:
   actions: read
   contents: read
@@ -124,14 +124,14 @@ jobs:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) and posts a commit status
-    # (statuses:read); all other scopes stay read-only.
+    # exchanges an OIDC token (id-token) and posts same-repository commit status
+    # fallback from this job; all other jobs keep commit-status read-only.
     permissions:
       actions: read
       contents: read
       id-token: write
       models: read
-      statuses: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -334,6 +334,11 @@ jobs:
             if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
             fi
+            if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
+              mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
+              git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
+              echo "Materialized PR-head Strix workflow for self-test."
+            fi
             if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" 2>/dev/null; then
               mkdir -p "$TRUSTED_WORKSPACE/scripts/ci"
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"
@@ -348,6 +353,11 @@ jobs:
               git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
               if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
                 git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
+              fi
+              if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
+                mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
+                git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
+                echo "Materialized PR-head Strix workflow for self-test."
               fi
               if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" 2>/dev/null; then
                 mkdir -p "$TRUSTED_WORKSPACE/scripts/ci"
@@ -729,6 +739,7 @@ jobs:
         if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          GITHUB_STATUS_TOKEN: ${{ github.token }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
@@ -792,6 +803,13 @@ jobs:
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
             exit 0
+          fi
+          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
+            if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
+              exit 0
+            fi
+          else
+            echo "::notice::Skipping github-token fallback for cross-repository Strix status publish."
           fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
 

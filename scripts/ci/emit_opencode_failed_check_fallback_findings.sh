@@ -341,7 +341,19 @@ emit_known_missing_string_finding() {
 	shift 3
 	for preferred_path in "$@"; do
 		if [ -f "${REPO_ROOT%/}/$preferred_path" ]; then
-			match="$(grep -nF -- "$needle" "${REPO_ROOT%/}/$preferred_path" | head -n 1 || true)"
+			if [ "$needle" = "statuses: write" ] && [ "$preferred_path" = ".github/workflows/strix.yml" ]; then
+				match="$(
+					awk '
+						/^jobs:/ { exit }
+						$0 ~ /^[[:space:]]*statuses: write[[:space:]]*$/ {
+							print NR ":" $0
+							exit
+						}
+					' "${REPO_ROOT%/}/$preferred_path" || true
+				)"
+			else
+				match="$(grep -nF -- "$needle" "${REPO_ROOT%/}/$preferred_path" | head -n 1 || true)"
+			fi
 			if [ -n "$match" ]; then
 				path="$preferred_path"
 				line="${match%%:*}"
@@ -365,6 +377,51 @@ emit_known_missing_string_finding() {
 		printf -- '- Fix: Add the exact string "%s" to the relevant workflow or test contract line.\n' "$needle"
 		printf -- '- Regression test: Add a static assertion for this exact string.\n\n'
 		printf -- '- Suggested edit: add a concrete source line containing `%s` to the matching workflow or CI test file, then rerun Strix self-tests.\n\n' "$needle"
+	fi
+}
+
+emit_known_unexpected_string_finding() {
+	local evidence_file="$1"
+	local needle="$2"
+	local title="$3"
+	local preferred_path
+	local match=""
+	local path=""
+	local line=""
+
+	if ! grep -Fq -- "unexpected '$needle'" "$evidence_file" &&
+		! grep -Fq -- "unexpected \"$needle\"" "$evidence_file" &&
+		! grep -Fq -- "must not grant $needle" "$evidence_file"; then
+		return 0
+	fi
+
+	shift 3
+	for preferred_path in "$@"; do
+		if [ -f "${REPO_ROOT%/}/$preferred_path" ]; then
+			match="$(grep -nF -- "$needle" "${REPO_ROOT%/}/$preferred_path" | head -n 1 || true)"
+			if [ -n "$match" ]; then
+				path="$preferred_path"
+				line="${match%%:*}"
+				break
+			fi
+		fi
+	done
+
+	finding_index=$((finding_index + 1))
+	if [ -n "$path" ] && [ -n "$line" ]; then
+		printf '### %s. HIGH %s:%s - %s\n' "$finding_index" "$path" "$line" "$title"
+		printf -- '- Problem: Strix failed because the trusted self-test log reported forbidden "%s" in the required workflow.\n' "$needle"
+		printf -- '- Root cause: The required workflow grants a top-level GITHUB_TOKEN permission broader than the smoke-test contract allows; status writes must stay scoped to the Strix scan job that publishes same-repository evidence.\n'
+		printf -- '- Fix: Remove or downgrade `%s` at `%s:%s` so top-level workflow permissions stay read-only.\n' "$needle" "$path" "$line"
+		printf -- '- Regression test: Keep scripts/ci/strix_required_workflow_smoke.sh and scripts/ci/test_strix_quick_gate.sh asserting that top-level Strix workflow permissions do not contain `%s`.\n\n' "$needle"
+		printf -- '- Suggested edit: change `%s:%s` from `%s` to `statuses: read`, or remove the permission if no status read is needed.\n\n' "$path" "$line" "$needle"
+	else
+		printf '### %s. HIGH unknown:1 - %s\n' "$finding_index" "$title"
+		printf -- '- Problem: Strix failed because the trusted self-test log reported forbidden "%s", but the current source no longer contains that literal in the expected files.\n' "$needle"
+		printf -- '- Root cause: The failed check likely used stale trusted-base workflow material or the evidence did not include a mappable current-head source line.\n'
+		printf -- '- Fix: Rerun the current-head Strix check after confirming the workflow and tests no longer contain `%s`.\n' "$needle"
+		printf -- '- Regression test: Keep the required workflow smoke test covering this forbidden literal.\n\n'
+		printf -- '- Suggested edit: no source edit can be suggested from the current source; rerun after the trusted workflow source updates.\n\n'
 	fi
 }
 
@@ -639,8 +696,8 @@ emit_strix_provider_failure_finding() {
 		if grep -Eq "api\\.deepseek\\.com|401 Unauthorized|Authentication Fails|DeepseekException" "$strix_evidence_file"; then
 			printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported `RateLimitError` / `Too many requests` for the primary `openai/gpt-5` attempt, then fallback attempts reached direct DeepSeek (`api.deepseek.com`) and failed with `401 Unauthorized` or `Authentication Fails`, ending with `Configured model and fallback models were unavailable`.\n'
 			printf -- '- Root cause: The fallback model names were not routed through the GitHub Models endpoint for this failed PR check, so a GitHub Models token was used against direct DeepSeek instead of `https://models.github.ai/inference`; no Strix Vulnerability Report window was produced.\n'
-			printf -- '- Fix: Do not approve from this failed scan. Keep %s:%s on the approved GitHub Models fallback list (`github_models/openai/o3 github_models/openai/gpt-5-chat`) and remove direct DeepSeek fallback routing from the workflow before rerunning the failed PR Strix check.\n' "$path" "$line"
-			printf -- '- Suggested edit: `%s:%s` must use `STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == '\''github_models'\'' && '\''github_models/openai/o3 github_models/openai/gpt-5-chat'\'' || '\'''\'' }}` instead of unqualified `deepseek/...` values that route to `api.deepseek.com`.\n' "$path" "$line"
+			printf -- '- Fix: Do not approve from this failed scan. Keep %s:%s on the approved GitHub Models fallback list (`github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528`) and remove direct DeepSeek fallback routing from the workflow before rerunning the failed PR Strix check.\n' "$path" "$line"
+			printf -- '- Suggested edit: `%s:%s` must use `STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == '\''github_models'\'' && '\''github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528'\'' || '\'''\'' }}` instead of unqualified `deepseek/...` values that route to `api.deepseek.com`.\n' "$path" "$line"
 		else
 			printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported LLM CONNECTION FAILED, RateLimitError or Too many requests for the primary model, provider/budget output for fallback models, and Configured model and fallback models were unavailable.\n'
 			printf -- '- Root cause: The configured GitHub Models primary/fallback provider capacity or provider route failed for this run; no Strix Vulnerability Report window was produced, so there is no application source line to patch from this evidence.\n'
@@ -925,6 +982,13 @@ emit_known_missing_string_finding \
 	"OpenCode review must try GitHub Models GPT-5 first" \
 	".github/workflows/opencode-review.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"
+emit_known_unexpected_string_finding \
+	"$EVIDENCE_FILE" \
+	"statuses: write" \
+	"Strix required workflow must keep top-level GITHUB_TOKEN statuses read-only" \
+	".github/workflows/strix.yml" \
+	"scripts/ci/test_strix_quick_gate.sh" \
+	"scripts/ci/strix_required_workflow_smoke.sh"
 
 emit_github_billing_lock_finding
 emit_pytest_failure_findings "$EVIDENCE_FILE"

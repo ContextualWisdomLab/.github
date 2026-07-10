@@ -61,8 +61,10 @@ def test_strix_keeps_current_head_security_evidence_logs() -> None:
     assert "github.event.inputs.target_repository" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
-    assert "github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository" in concurrency_contract
-    assert "github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name" in concurrency_contract
+    assert (
+        "strix-${{ github.event.inputs.target_repository || "
+        "github.event.pull_request.base.repo.full_name || github.repository }}"
+    ) in concurrency_contract
     assert (
         "format('pr-{0}-{1}', github.event.pull_request.number, "
         "github.event.pull_request.head.sha)"
