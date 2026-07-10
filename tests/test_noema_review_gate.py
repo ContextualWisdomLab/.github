@@ -1,8 +1,5 @@
-import io
 import json
-import os
 import sys
-import urllib.error
 
 import pytest
 

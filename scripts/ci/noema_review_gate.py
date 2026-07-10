@@ -279,7 +279,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         return None
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https")
+        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
