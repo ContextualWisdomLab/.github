@@ -40,8 +40,9 @@ def test_opencode_review_run_blocks_are_valid_bash():
         return
 
     for step_name in (
+        "Materialize pull request merge tree for coverage measurement",
         "Prepare bounded OpenCode review evidence",
-        "Approve PR if OpenCode review passed",
+        "Publish OpenCode review outcome",
     ):
         script = _extract_run_block(workflow_text, step_name)
         result = subprocess.run(

@@ -1,3 +1,6 @@
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -19,16 +22,23 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     for filename in (
         "close-empty-pr.yml",
         "codeql-pr.yml",
+        "noema-review.yml",
+        "opencode-review.yml",
         "osv-scanner-pr.yml",
         "security-scan.yml",
         "scorecard-pr.yml",
+        "strix.yml",
     ):
         workflow = workflow_text(filename)
+        concurrency_contract = workflow.split("permissions:", 1)[0]
 
         assert "concurrency:" in workflow
-        assert "github.event.pull_request.base.repo.full_name || github.repository" in workflow
+        assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
+        assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
         assert "cancel-in-progress: true" in workflow
+        assert "github.event.pull_request.head.sha" not in concurrency_contract
+        assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
@@ -55,12 +65,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         )
         assert "github.event.action != 'closed'" in workflow
 
-    strix = workflow_text("strix.yml")
-
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' && "
-        "github.event.action == 'closed' }}"
-    ) in strix
+    assert "cancel-in-progress: true" in workflow_text("strix.yml")
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
@@ -91,3 +96,97 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert '"$status" = "403"' in workflow
     assert '"$status" = "404"' in workflow
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+
+
+def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> None:
+    workflow = workflow_text("security-scan.yml")
+
+    assert "id: osv_base" in workflow
+    assert "id: osv_head" in workflow
+    assert "steps.osv_base.outcome == 'failure'" in workflow
+    assert "steps.osv_head.outcome == 'failure'" in workflow
+    assert "Retry base OSV without transitive resolution" in workflow
+    assert "Retry head OSV without transitive resolution" in workflow
+    assert workflow.count("\n            --no-resolve\n") == 2
+    assert workflow.count("Maven Central 429") == 2
+    assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
+    assert "--output=old-results.json" in workflow
+    assert "--output=new-results.json" in workflow
+
+
+def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
+    """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
+    for filename in ("scorecard-pr.yml", "security-scan.yml"):
+        workflow = workflow_text(filename)
+
+        assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+        assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
+        assert "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS" in workflow
+        assert "Delegated " in workflow
+        assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
+        assert "default-branch governance tracking" in workflow
+
+    default_branch_scorecard = workflow_text("scorecard-analysis.yml")
+
+    assert "PR_DELEGATED_RULE_IDS" not in default_branch_scorecard
+    assert "FuzzingID" not in default_branch_scorecard
+    assert "VulnerabilitiesID" not in default_branch_scorecard
+
+
+def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Print Trivy findings that failed the gate\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+
+    (tmp_path / "trivy-results.sarif").write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {
+                        "tool": {
+                            "driver": {
+                                "rules": [
+                                    {
+                                        "id": "CVE-TEST",
+                                        "properties": {"security-severity": "9.8"},
+                                    }
+                                ]
+                            }
+                        },
+                        "results": [
+                            {
+                                "ruleId": "CVE-TEST",
+                                "message": {
+                                    "text": "Artifact: app\nSeverity: HIGH\nMessage: vulnerable package"
+                                },
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "requirements.txt"},
+                                            "region": {"startLine": 7},
+                                        }
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
+    assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
+    assert "vulnerable package" in result.stdout
