@@ -158,7 +158,12 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "uses: actions/checkout" not in step
     assert "refs/pull/${{ github.event.pull_request.number }}/merge" not in step
     assert "TARGET_REPOSITORY:" in step
+    assert "x-access-token:%s" in step
+    assert "AUTHORIZATION: basic ${auth_header}" in step
+    assert "AUTHORIZATION: bearer" not in step
+    assert 'http."${GITHUB_SERVER_URL}/".extraheader' not in step
     assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' in step
+    assert "Coverage fetch could not authenticate" in step
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
     assert 'Coverage merge tree could not be materialized' in step
     assert "PR_HEAD_SHA:" in step
