@@ -981,31 +981,31 @@ jobs:
           rust_coverage_fail_under_lines() {
             local manifest="$1"
             python3 - "$manifest" <<'PY'
-import sys
-import tomllib
-from pathlib import Path
+          import sys
+          import tomllib
+          from pathlib import Path
 
-manifest = Path(sys.argv[1])
-metadata = (
-    tomllib.loads(manifest.read_text(encoding="utf-8"))
-    .get("package", {})
-    .get("metadata", {})
-    .get("opencode", {})
-    .get("coverage", {})
-)
-value = metadata.get("minimum_lines")
-if value is None:
-    sys.exit(0)
-if isinstance(value, bool) or not isinstance(value, (int, float)):
-    raise SystemExit(
-        "package.metadata.opencode.coverage.minimum_lines must be a number from 0 to 100"
-    )
-if not 0 <= float(value) <= 100:
-    raise SystemExit(
-        "package.metadata.opencode.coverage.minimum_lines must be between 0 and 100"
-    )
-print(f"{float(value):g}")
-PY
+          manifest = Path(sys.argv[1])
+          metadata = (
+              tomllib.loads(manifest.read_text(encoding="utf-8"))
+              .get("package", {})
+              .get("metadata", {})
+              .get("opencode", {})
+              .get("coverage", {})
+          )
+          value = metadata.get("minimum_lines")
+          if value is None:
+              sys.exit(0)
+          if isinstance(value, bool) or not isinstance(value, (int, float)):
+              raise SystemExit(
+                  "package.metadata.opencode.coverage.minimum_lines must be a number from 0 to 100"
+              )
+          if not 0 <= float(value) <= 100:
+              raise SystemExit(
+                  "package.metadata.opencode.coverage.minimum_lines must be between 0 and 100"
+              )
+          print(f"{float(value):g}")
+          PY
           }
 
           run_rust_test_coverage() {
