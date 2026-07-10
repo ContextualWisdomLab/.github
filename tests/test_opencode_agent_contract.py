@@ -332,7 +332,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'review_write_token="$OPENCODE_APP_TOKEN"' in workflow
     assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-$GH_TOKEN}"' not in workflow
-    assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "6"' in workflow
+    assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"' in workflow
     assert "gh_error_is_retryable_publication_failure()" in workflow
     assert "review_publish_retry_sleep_seconds()" in workflow
     assert 'post_pull_review_with_retry "primary review"' in workflow
@@ -353,8 +353,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "opencode_review_model_pool" in workflow
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" in workflow
-    assert "format('pr-{0}', github.event.pull_request.number)" in workflow
-    assert "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" not in workflow
+    assert "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" in workflow
+    assert "format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha)" in workflow
+    assert "github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number)" in workflow
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(encoding="utf-8")
     assert "assert_reasoning_effort_for_candidate" in model_pool_runner
@@ -402,12 +403,13 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 75", workflow)
-    assert 'timeout-minutes: 35' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 25", workflow)
+    assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 35", workflow)
+    assert 'timeout-minutes: 12' in workflow
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 12", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "21"' in workflow
-    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
+    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "6"' in workflow
+    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "20"' in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5-mini "
@@ -426,14 +428,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/openai/gpt-5"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "300"' in workflow
-    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "1200"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' in workflow
+    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "90"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
-    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "120"' in workflow
-    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "600"' in workflow
+    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"' in workflow
+    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"' in workflow
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
     assert "OpenCode model pool did not produce a successful current-head control block" in workflow
     assert "while :" in model_pool_runner
