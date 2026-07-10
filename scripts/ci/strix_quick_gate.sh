@@ -597,7 +597,7 @@ is_preexisting_report_dir() {
 is_github_models_model() {
 	case "$1" in
 	openai/openai/* | github_models/* | \
-	openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
+	openai/o3 | openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
 	openai/deepseek/* | openai/meta/* | openai/mistral-ai/* | \
 	deepseek/* | meta/* | mistral-ai/*)
 		return 0
@@ -611,7 +611,7 @@ is_github_models_model() {
 is_github_models_api_compatible_model() {
 	case "$1" in
 	openai/openai/* | github_models/* | \
-	openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
+	openai/o3 | openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
 	openai/deepseek/* | openai/meta/* | openai/mistral-ai/* | \
 	deepseek/* | meta/* | mistral-ai/*)
 		return 0
@@ -1482,6 +1482,7 @@ PY
 
 	copy_required_scope_support_files() {
 		local include_strix_model_utils=0
+		local include_opencode_normalizer=0
 		local changed_file relative_path
 		for changed_file in "$@"; do
 			relative_path="$(normalize_changed_file_path "$changed_file")" || return 2
@@ -1489,11 +1490,17 @@ PY
 			scripts/ci/strix_quick_gate.sh | scripts/ci/test_strix_quick_gate.sh)
 				include_strix_model_utils=1
 				;;
+			fuzz/fuzz_opencode_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
+				include_opencode_normalizer=1
+				;;
 			esac
 		done
 
 		if [ "$include_strix_model_utils" -eq 1 ]; then
 			copy_scope_support_file "scripts/ci/strix_model_utils.sh" || return 2
+		fi
+		if [ "$include_opencode_normalizer" -eq 1 ]; then
+			copy_scope_support_file "scripts/ci/opencode_review_normalize_output.py" || return 2
 		fi
 	}
 
@@ -1899,27 +1906,45 @@ vulnerability_record_intersects_changed_file() {
 	if [ "${diff_rc:-0}" -ne 0 ]; then
 		diff_output="$(git diff --unified=0 "$base_sha..$head_sha" -- "$changed_file" 2>/dev/null)" || return 0
 	fi
-	DIFF_OUTPUT="$diff_output" python3 - "$start_line" "$end_line" <<'PY'
-import os
+	local diff_output_file
+	diff_output_file="$(mktemp "${TMPDIR:-/tmp}/strix-diff.XXXXXX")" || {
+		echo "ERROR: unable to create temporary diff file for changed-line evaluation." >&2
+		return 1
+	}
+	local intersects_rc
+	if (
+		trap 'rm -f -- "$diff_output_file"' EXIT
+		printf '%s' "$diff_output" >"$diff_output_file"
+		python3 - "$diff_output_file" "$start_line" "$end_line" <<'PY'
 import re
 import sys
 
-target_start = int(sys.argv[1])
-target_end = int(sys.argv[2])
+diff_output_path = sys.argv[1]
+target_start = int(sys.argv[2])
+target_end = int(sys.argv[3])
 hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-for line in os.environ.get("DIFF_OUTPUT", "").splitlines():
-    match = hunk_re.match(line)
-    if not match:
-        continue
-    start = int(match.group(1))
-    count = int(match.group(2) or "1")
-    if count == 0:
-        continue
-    end = start + count - 1
-    if start <= target_end and target_start <= end:
-        raise SystemExit(0)
+with open(diff_output_path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        match = hunk_re.match(line)
+        if not match:
+            continue
+        start = int(match.group(1))
+        count = int(match.group(2) or "1")
+        if count == 0:
+            continue
+        end = start + count - 1
+        if start <= target_end and target_start <= end:
+            raise SystemExit(0)
 raise SystemExit(1)
 PY
+	)
+	then
+		intersects_rc=0
+	else
+		intersects_rc=$?
+	fi
+	return "$intersects_rc"
 }
 
 extract_first_severity_rank() {
@@ -2603,6 +2628,32 @@ is_vertex_not_found_error() {
 	return 1
 }
 
+github_models_api_base_is_active() {
+	if [ -z "$LLM_API_BASE_FILE" ]; then
+		return 1
+	fi
+
+	local resolved_llm_api_base_file
+	if ! resolved_llm_api_base_file="$(resolve_trusted_input_file "LLM_API_BASE_FILE" "$LLM_API_BASE_FILE" 2>/dev/null)"; then
+		return 1
+	fi
+
+	local llm_api_base_value
+	llm_api_base_value="$(cat -- "$resolved_llm_api_base_file" 2>/dev/null)" || return 1
+	llm_api_base_value="${llm_api_base_value%%/generateContent*}"
+	llm_api_base_value="${llm_api_base_value%%:generateContent*}"
+	llm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
+	is_github_models_api_base "$llm_api_base_value"
+}
+
+strix_log_has_github_models_context() {
+	if grep -Eiq '(models\.github\.ai|GitHub Models|github_models)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	github_models_api_base_is_active
+}
+
 is_github_models_unavailable_model_error() {
 	if grep -Eiq 'Unavailable model:[[:space:]]*[^[:space:]]+' "$STRIX_LOG" &&
 		grep -Eiq '(litellm\.BadRequestError|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|models\.github\.ai|GitHub Models|openai)' "$STRIX_LOG"; then
@@ -2612,6 +2663,11 @@ is_github_models_unavailable_model_error() {
 	if grep -Eiq '(PermissionDeniedError|Error code:[[:space:]]*403|(^|[^0-9])403([^0-9]|$))' "$STRIX_LOG" &&
 		grep -Eiq '(LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
 		grep -Eiq '(models\.github\.ai|GitHub Models|openai|OpenAIException)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	if grep -Eiq '(UnsupportedToolUse|tool use\. Using tool is not supported by this model|Using tool is not supported by this model)' "$STRIX_LOG" &&
+		strix_log_has_github_models_context; then
 		return 0
 	fi
 

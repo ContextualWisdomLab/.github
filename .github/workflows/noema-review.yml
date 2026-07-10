@@ -26,10 +26,13 @@ on:
 concurrency:
   group: >-
     noema-review-${{
-    github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}-${{
+    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
+    github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
+    github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
-    github.event.inputs.pr_number || github.run_id }}
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
+    github.run_id }}
   cancel-in-progress: true
 
 permissions:
