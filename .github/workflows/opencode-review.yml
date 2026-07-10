@@ -1283,7 +1283,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 35
     permissions:
       actions: read
       checks: read
@@ -2832,7 +2832,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 25
+        timeout-minutes: 12
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2861,11 +2861,11 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 5 min per model keeps the review queue moving while still giving
+          # 3 min per model keeps the review queue moving while still giving
           # healthy providers enough time to emit a bounded control result.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "300"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "1200"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "90"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"
           # Stop after one catalog pass; the bounded retry budget should fail
           # closed with visible diagnostics instead of tying up the queue.
           OPENCODE_POOL_MAX_CYCLES: "1"
@@ -3220,7 +3220,7 @@ jobs:
 
       - name: Publish OpenCode review outcome
         if: always()
-        timeout-minutes: 35
+        timeout-minutes: 12
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3253,24 +3253,24 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "21"
-          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "6"
+          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "20"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
-          REVIEW_PUBLISH_RETRY_ATTEMPTS: "6"
-          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "60"
+          REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
+          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
           OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"
           OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "240"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "360"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "180"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"
-          OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "120"
-          OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "600"
+          OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"
+          OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"
         run: |
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
