@@ -1,0 +1,50 @@
+{
+  "_about": "Declarative Cloudflare DNS config for ContextualWisdomLab. Reconciled by .github/workflows/cloudflare-dns.yml (curl + jq, idempotent). The Cloudflare account id and API token are supplied at runtime from org GitHub Secrets CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN. NOTHING secret lives in this file.",
+  "_record_schema": {
+    "record_type": "A | AAAA | CNAME | TXT | MX | ... (Cloudflare DNS record type)",
+    "record_name": "FQDN or @ for the zone apex (e.g. 'keyverse.io' or 'www.keyverse.io')",
+    "record_content": "target value (IP, hostname, text, ...)",
+    "record_proxied": "true|false — orange-cloud proxy; use true for Pages custom domains fronted by CF",
+    "record_ttl": "1 for automatic, or seconds; ignored when record_proxied is true",
+    "record_priority": "integer, only for MX/SRV records (optional)"
+  },
+  "_records_note": "Records are intentionally empty for now: the Pages hosting targets do not exist yet. Once a Cloudflare Pages project is created for a product, add its custom-domain records here (usually a CNAME from the apex/www to <project>.pages.dev, proxied=true) and re-run the workflow in apply mode.",
+  "zones": [
+    {
+      "zone_name": "keyverse.io",
+      "product_repo": "cwl-idp",
+      "product_label": "Keyverse",
+      "records": []
+    },
+    {
+      "zone_name": "wardnet.io",
+      "product_repo": "waf-ids-ai-soc",
+      "product_label": "Wardnet",
+      "records": []
+    },
+    {
+      "zone_name": "inkspan.io",
+      "product_repo": "cwl-editor",
+      "product_label": "Inkspan",
+      "records": []
+    },
+    {
+      "zone_name": "cloud-erd.app",
+      "product_repo": "pg-erd-cloud",
+      "product_label": "Cloud ERD",
+      "records": []
+    },
+    {
+      "zone_name": "naruon.net",
+      "product_repo": "naruon",
+      "product_label": "Naruon",
+      "records": []
+    },
+    {
+      "zone_name": "naruon.io",
+      "product_repo": "naruon",
+      "product_label": "Naruon",
+      "records": []
+    }
+  ]
+}
