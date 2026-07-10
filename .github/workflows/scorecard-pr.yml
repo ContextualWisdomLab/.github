@@ -1,0 +1,101 @@
+# Uploads an OpenSSF Scorecard code scanning analysis on every PR so the org
+# ruleset "CWL Central required workflows" -> code_scanning(Scorecard)
+# requirement can be satisfied on PR refs. scorecard-analysis.yml only runs on
+# push/schedule (default branch), so PRs never had a Scorecard analysis and
+# stayed mergeStateStatus=BLOCKED.
+#
+# NOTE: Scorecard reports repository-posture findings (branch protection, token
+# permissions, dependency pinning, ...) that are unrelated to the PR diff. The
+# org code_scanning ruleset rule therefore gates Scorecard at a raised
+# threshold (see the ruleset) and delegates PR-only SAST/vulnerability posture
+# findings to the dedicated CodeQL, OSV, Trivy, and dependency-review hard gates.
+name: Scorecard PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+    branches: [main, master, develop]
+
+concurrency:
+  group: scorecard-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
+  analysis:
+    name: Scorecard
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # publish_results is only valid on the default branch; PR runs upload
+          # SARIF to code scanning without publishing to the public OpenSSF API.
+          publish_results: false
+
+      - name: Filter delegated PR-only Scorecard SARIF findings
+        run: |
+          python3 <<'PY'
+          import json
+          import pathlib
+
+          PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}
+          PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}
+          PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS
+
+          sarif_path = pathlib.Path("results.sarif")
+          sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+          hard_gate_delegated = 0
+          governance_delegated = 0
+          for run in sarif.get("runs", []):
+              kept = []
+              for result in run.get("results", []):
+                  rule_id = result.get("ruleId")
+                  if rule_id in PR_DELEGATED_RULE_IDS:
+                      if rule_id in PR_HARD_GATE_RULE_IDS:
+                          hard_gate_delegated += 1
+                      if rule_id in PR_GOVERNANCE_RULE_IDS:
+                          governance_delegated += 1
+                      continue
+                  kept.append(result)
+              run["results"] = kept
+          filtered_path = sarif_path.with_name(f"{sarif_path.name}.filtered")
+          filtered_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          filtered_path.replace(sarif_path)
+          print(
+              "Delegated "
+              f"{hard_gate_delegated} PR-only Scorecard SAST/vulnerability finding(s) to "
+              "CodeQL, OSV, Trivy, and dependency-review hard gates."
+          )
+          print(
+              "Delegated "
+              f"{governance_delegated} PR-only Scorecard fuzzing posture finding(s) "
+              "to default-branch governance tracking."
+          )
+          PY
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: results.sarif
+          category: scorecard-pr

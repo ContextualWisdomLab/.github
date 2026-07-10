@@ -1,8 +1,5 @@
-import io
 import json
-import os
 import sys
-import urllib.error
 
 import pytest
 
@@ -58,6 +55,12 @@ def test_scrub_sensitive_data():
     assert noema.scrub_sensitive_data("api_key=12345") == "api_key=***"
     assert noema.scrub_sensitive_data("client_secret='abc'") == "client_secret=***"
     assert noema.scrub_sensitive_data("password: xyz") == "password: ***"
+
+
+def test_scrub_sensitive_data_authorization_headers():
+    assert noema.scrub_sensitive_data("Authorization: Basic dXNlcjpwYXNz") == "Authorization: Basic ***"
+    assert noema.scrub_sensitive_data("Proxy-Authorization: Basic dXNlcjpwYXNz") == "Proxy-Authorization: Basic ***"
+    assert noema.scrub_sensitive_data("authorization: bearer xyz") == "authorization: bearer ***"
 
 
 def test_split_repo_and_graphql(monkeypatch):
@@ -198,6 +201,11 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     monkeypatch.delenv("NOEMA_LLM_API_KEY", raising=False)
     assert noema.call_llm("owner/repo", 1, pr, "diff", False) is None
 
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "review-model")
@@ -208,18 +216,130 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         seen["body"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse({"choices": [{"message": {"content": '{"decision":"approve","summary":"ok","findings":[]}'}}]})
 
-    monkeypatch.setattr(noema.urllib.request, "urlopen", fake_urlopen)
+    # Since we replaced urlopen with build_opener, we mock build_opener
+    class FakeOpener:
+        def __init__(self, call_func):
+            self.call_func = call_func
+        def open(self, request, timeout=None):
+            return self.call_func(request, timeout)
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
     verdict = noema.call_llm("owner/repo", 1, pr, "diff", True)
     assert verdict["decision"] == "approve"
     assert seen["url"] == "https://llm.example.test/chat"
     assert seen["body"]["model"] == "review-model"
 
+    def fake_urlopen_defer(request, timeout=None):
+        return FakeResponse({"choices": [{"message": {"content": '{"decision":"defer"}'}}]})
+
     monkeypatch.setattr(
         noema.urllib.request,
-        "urlopen",
-        lambda *args, **kwargs: FakeResponse({"choices": [{"message": {"content": '{"decision":"defer"}'}}]}),
+        "build_opener",
+        lambda *args: FakeOpener(fake_urlopen_defer)
     )
     with pytest.raises(RuntimeError, match="unsupported decision"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test case-insensitive valid URL
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "HTTPS://llm.example.test/chat")
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+    # Test invalid scheme (and no original URL in error)
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
+    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test localhost rejection
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost/chat")
+    with pytest.raises(ValueError, match="URL cannot target localhost"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test missing hostname
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http:///chat")
+    with pytest.raises(ValueError, match="URL must have a valid hostname"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test internal IP rejection
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://169.254.169.254/chat")
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    import socket
+    original_getaddrinfo = socket.getaddrinfo
+
+    # Test DNS resolution bypass
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "resolved-to-local.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Test unresolved hostname does not break
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
+    def fake_getaddrinfo_error(host, port, *args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+    # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
+    def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
+        if host == "weird-dns.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+
+def test_noema_redirect_handler_rejects_redirects():
+    """Noema must not follow redirects after validating the initial URL."""
+    handler = noema.NoRedirectHandler()
+    request = noema.urllib.request.Request("https://llm.example.test/chat")
+
+    with pytest.raises(noema.urllib.error.HTTPError):
+        handler.redirect_request(
+            request,
+            fp=None,
+            code=302,
+            msg="Found",
+            headers={},
+            newurl="http://169.254.169.254/latest/meta-data/",
+        )
+
+
+def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
+    """A URL with an embedded tab is normalized by urlparse to an http scheme
+    with a valid hostname, but its raw form does not start with http:// — the
+    startswith guard must still reject it to prevent SSRF via control-character
+    scheme evasion."""
+    pr = make_pr()
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http\t://sneaky.example.com/chat")
+
+    import socket
+
+    def raise_gaierror(host, port, *args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
+    with pytest.raises(ValueError, match="must start with http:// or https://"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+
+def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
+    """Keep the parsed-scheme SSRF guard covered as defense in depth."""
+    pr = make_pr()
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    parsed = noema.urllib.parse.ParseResult("file", "llm.example.test", "/chat", "", "", "")
+    monkeypatch.setattr(noema.urllib.parse, "urlparse", lambda _: parsed)
+
+    with pytest.raises(ValueError, match="URL scheme must be http or https"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
 

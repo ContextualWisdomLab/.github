@@ -2,7 +2,7 @@ name: Required Noema Review
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_run:
     workflows: ["Required OpenCode Review", "Strix Security Scan"]
     types: [completed]
@@ -25,9 +25,9 @@ on:
 
 concurrency:
   group: >-
-    noema-review-${{ github.event_name }}-${{
+    noema-review-${{
     github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
     github.event.inputs.pr_number || github.run_id }}
   cancel-in-progress: true
@@ -39,14 +39,24 @@ permissions:
   id-token: write
 
 jobs:
+  cancel-closed-pr-runs:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   noema-review:
     name: noema-review
     runs-on: ubuntu-latest
     if: >-
       github.event_name == 'workflow_dispatch'
-      || github.event_name == 'workflow_run'
+      || (
+        github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion != 'cancelled'
+      )
       || (
         github.event_name == 'pull_request_target'
+        && github.event.action != 'closed'
         && github.event.pull_request.head.repo.full_name == github.repository
       )
     env:

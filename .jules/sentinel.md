@@ -22,3 +22,12 @@
 **Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
 **Learning:** Functions that fetch URLs provided via user inputs (e.g., `wait_for_url` fetching `--backend-ready-url` in CI scripts) can inadvertently read local files if they do not validate the scheme. Python's `urllib.request.urlopen` supports `file://` schemes, allowing attackers to access arbitrary file contents from the host machine or sandbox if they can control the URL parameter.
 **Prevention:** Always validate URL inputs to restrict allowed schemes. Check that URLs explicitly start with `http://` or `https://` before fetching them with standard libraries like `urllib`.
+## 2026-07-03 - Prevent SSRF via URL Scheme Validation
+**Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
+**Learning:** External URL fetching with `urllib.request.urlopen` (like API endpoints passed via environment variables) can accept schemes like `file://` implicitly, which could allow arbitrary file reading or internal network scanning if the environment is misconfigured or manipulated.
+**Prevention:** Always validate that URLs explicitly start with `http://` or `https://` before using them in standard library requests. Append  to suppress linter warnings only after verifying the input is validated.
+## 2026-07-09 - Prevent SSRF via Redirects in urllib
+
+**Vulnerability:** Initial URL validation for SSRF (e.g., checking scheme and IP address) is insufficient if the HTTP client automatically follows redirects. In `urllib.request.urlopen`, redirects are followed by default, allowing an attacker to bypass initial checks by returning a 302 redirect to an internal IP (like `169.254.169.254` or `127.0.0.1`).
+**Learning:** `urllib.request.urlopen` does not inherit the security properties of the initial URL string check. It will follow HTTP redirects unconditionally to any target URL, creating a severe SSRF risk when dealing with external API endpoints that can be manipulated by malicious responses.
+**Prevention:** Explicitly disable redirects by subclassing `urllib.request.HTTPRedirectHandler`, overriding `redirect_request` to raise an `urllib.error.HTTPError`, and using `urllib.request.build_opener(NoRedirectHandler())` instead of the default `urlopen`.

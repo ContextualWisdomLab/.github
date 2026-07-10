@@ -114,6 +114,32 @@ def test_run_split_repo_and_graphql(monkeypatch):
     with pytest.raises(ValueError):
         sched.split_repo("/repo")
 
+    assert sched.validate_git_ref("feature/safe.branch-1") == "feature/safe.branch-1"
+    for bad_ref in (
+        "",
+        "-bad",
+        "HEAD",
+        "feature/../main",
+        "feature/.tmp/main",
+        "feature/./main",
+        "feature//main",
+        "feature/main.",
+        "feature/@{upstream}",
+        "feat;echo pwned",
+    ):
+        with pytest.raises(ValueError):
+            sched.validate_git_ref(bad_ref)
+
+    assert sched.validate_git_sha("a" * 40) == "a" * 40
+    for bad_sha in ("", "a" * 39, "g" * 40, "a" * 40 + ";echo pwned"):
+        with pytest.raises(ValueError):
+            sched.validate_git_sha(bad_sha)
+
+    assert sched.validate_github_repository("owner/repo.name") == "owner/repo.name"
+    for bad_repo in ("", "owner", "owner/repo/extra", "owner/repo;echo pwned"):
+        with pytest.raises(ValueError):
+            sched.validate_github_repository(bad_repo)
+
     calls = []
 
     def fake_run(args, stdin=None):
@@ -273,6 +299,29 @@ def test_gh_graphql_retries_transient_gateway_errors(monkeypatch):
     assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
     assert len(calls) == 3
     assert sleeps == [1, 2]
+
+
+def test_gh_graphql_retries_transient_http2_stream_cancel(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(args, stdin=None):
+        calls.append((args, stdin))
+        if len(calls) == 1:
+            raise RuntimeError(
+                "Command failed (1): gh api graphql\n"
+                "stream error: stream ID 1; CANCEL; received from peer"
+            )
+        return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
+
+    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
+    assert len(calls) == 2
+    assert sleeps == [1]
 
 
 def test_gh_graphql_does_not_retry_non_transient_errors(monkeypatch):
@@ -1032,6 +1081,8 @@ def test_run_command_failure_scrubs_secrets(monkeypatch):
 
 def test_actions_call_gh_with_expected_arguments(monkeypatch):
     calls = []
+    head_sha = "a" * 40
+    base_sha = "b" * 40
 
     def fake_run(args, stdin=None):
         calls.append(args)
@@ -1040,7 +1091,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         return ""
 
     monkeypatch.setattr(sched, "run", fake_run)
-    pr = make_pr()
+    pr = make_pr(baseRefOid=base_sha, headRefOid=head_sha)
     sched.enable_auto_merge("owner/repo", pr, dry_run=True)
     sched.merge_pr("owner/repo", pr, dry_run=True)
     sched.disable_auto_merge("owner/repo", pr, dry_run=True)
@@ -1060,11 +1111,21 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
     assert "--squash" in calls[0]
-    assert calls[0][-2:] == ["--match-head-commit", "head"]
-    assert calls[1] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--squash", "--match-head-commit", "head"]
+    assert calls[0][-2:] == ["--match-head-commit", head_sha]
+    assert calls[1] == [
+        "gh",
+        "pr",
+        "merge",
+        "1",
+        "--repo",
+        "owner/repo",
+        "--squash",
+        "--match-head-commit",
+        head_sha,
+    ]
     assert calls[2] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
     assert calls[3][:4] == ["gh", "api", "-X", "PUT"]
-    assert calls[3][-1] == "expected_head_sha=head"
+    assert calls[3][-1] == f"expected_head_sha={head_sha}"
     assert calls[4][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
     assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[6][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
@@ -1107,7 +1168,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
 
-    pr = make_pr()
+    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
     sched.rerun_actions_job("owner/repo", "101", dry_run=False, action="rerun-opencode-review")
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
@@ -1120,8 +1181,67 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     assert calls[4][0][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
 
 
+def test_missing_evidence_dispatch_uses_central_required_workflow_repository(monkeypatch):
+    calls = []
+    head_sha = "a" * 40
+    base_sha = "b" * 40
+
+    def fake_run_with_env(args, *, stdin=None, env=None):
+        calls.append((args, None if env is None else env.get("GH_TOKEN")))
+        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+            return '{"workflow_runs": []}'
+        return ""
+
+    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+
+    pr = make_pr(baseRefName="develop", baseRefOid=base_sha, headRefOid=head_sha)
+    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+
+    strix_call = calls[0][0]
+    opencode_call = calls[-1][0]
+
+    assert calls and all(call[1] == "workflow-actions-token" for call in calls)
+    assert strix_call[:7] == [
+        "gh",
+        "workflow",
+        "run",
+        "Strix Security Scan",
+        "--repo",
+        "ContextualWisdomLab/.github",
+        "--ref",
+    ]
+    assert strix_call[7] == "main"
+    assert "-f" in strix_call
+    assert "target_repository=owner/repo" in strix_call
+    assert f"pr_base_sha={base_sha}" in strix_call
+    assert f"pr_head_sha={head_sha}" in strix_call
+
+    assert opencode_call[:7] == [
+        "gh",
+        "workflow",
+        "run",
+        "OpenCode Review",
+        "--repo",
+        "ContextualWisdomLab/.github",
+        "--ref",
+    ]
+    assert opencode_call[7] == "main"
+    assert "target_repository=owner/repo" in opencode_call
+    assert "pr_base_ref=develop" in opencode_call
+    assert f"pr_base_sha={base_sha}" in opencode_call
+    assert f"pr_head_sha={head_sha}" in opencode_call
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
+    head_sha = "a" * 40
+    base_sha = "b" * 40
     stale_same_pr = {
         "id": 9001,
         "name": "OpenCode Review",
@@ -1131,7 +1251,7 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     current_same_pr = {
         "id": 9002,
         "name": "OpenCode Review",
-        "head_sha": "head",
+        "head_sha": head_sha,
         "pull_requests": [{"number": 1}],
     }
     stale_other_pr = {
@@ -1159,7 +1279,12 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
 
-    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", make_pr(), dry_run=False)
+    sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(baseRefOid=base_sha, headRefOid=head_sha),
+        dry_run=False,
+    )
 
     assert ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
@@ -1167,6 +1292,59 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert not any("9004/force-cancel" in " ".join(call) for call in calls)
     assert calls[-1][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+
+
+def test_cancel_stale_pr_queued_runs_force_cancels_same_pr_old_head_runs(monkeypatch):
+    calls = []
+    head_sha = "a" * 40
+    stale_same_pr = {
+        "id": 9001,
+        "name": "OpenCode Review",
+        "head_sha": "old",
+        "pull_requests": [{"number": 1}],
+    }
+    current_same_pr = {
+        "id": 9002,
+        "name": "OpenCode Review",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+    stale_other_pr = {
+        "id": 9003,
+        "name": "OpenCode Review",
+        "head_sha": "old",
+        "pull_requests": [{"number": 2}],
+    }
+    stale_strix = {
+        "id": 9004,
+        "name": "Strix Security Scan",
+        "head_sha": "old",
+        "pull_requests": [{"number": 1}],
+    }
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+            assert "status=queued" in args
+            return json.dumps({"workflow_runs": [stale_same_pr, current_same_pr, stale_other_pr, stale_strix]})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+
+    run_ids = sched.cancel_stale_pr_queued_runs(
+        "owner/repo",
+        make_pr(headRefOid=head_sha),
+        dry_run=False,
+    )
+
+    assert run_ids == ["9001", "9004"]
+    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
+    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9004/force-cancel"] in calls
+    assert not any("9002/force-cancel" in " ".join(call) for call in calls)
+    assert not any("9003/force-cancel" in " ".join(call) for call in calls)
+    assert not any("status=in_progress" in " ".join(call) for call in calls)
 
 
 def test_mutations_refuse_local_credentials(monkeypatch):
@@ -1257,7 +1435,13 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
         make_pr(
             number=7,
             headRefName="feature|x",
-            files={"nodes": [{"path": "scripts/ci/pr_review_merge_scheduler.py"}, {"path": "tests/test_pr_review_merge_scheduler.py"}]},
+            files={
+                "nodes": [
+                    {"path": "scripts/ci/pr_review_merge_scheduler.py"},
+                    {"path": "tests/test_pr_review_merge_scheduler.py"},
+                    {"path": "docs/has`tick.md"},
+                ]
+            },
         ),
         "DIRTY",
     )
@@ -1318,6 +1502,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][0]["guidance"]["changed_files_to_inspect"] == [
         "scripts/ci/pr_review_merge_scheduler.py",
         "tests/test_pr_review_merge_scheduler.py",
+        "docs/has`tick.md",
     ]
     assert "update-branch cannot choose" in payload["decisions"][0]["guidance"]["automation_limit"]
     assert "gh pr checkout 7" in payload["decisions"][0]["guidance"]["commands"]
@@ -1358,6 +1543,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "Changed files to inspect first:" in summary
     assert "- `scripts/ci/pr_review_merge_scheduler.py`" in summary
     assert "- `tests/test_pr_review_merge_scheduler.py`" in summary
+    assert "- `docs/has\\`tick.md`" in summary
     assert "git push --force-with-lease" in summary
     assert "### Branch update requests" in summary
     assert "Requested `update-branch` for PR #8 with `workflow GITHUB_TOKEN`" in summary
@@ -1443,7 +1629,12 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(isDraft=True)).action == "skip"
-    assert inspect(make_pr(baseRefName="develop")).reason == "base branch is develop; expected main"
+    stacked = inspect(make_pr(baseRefName="develop"))
+    assert stacked.action == "review_dispatch"
+    assert stacked.reason == "stacked PR onto develop; OpenCode review dispatched"
+    stacked_no_dispatch = inspect(make_pr(baseRefName="develop"), trigger_reviews=False)
+    assert stacked_no_dispatch.action == "skip"
+    assert stacked_no_dispatch.reason == "stacked PR onto develop; OpenCode review absent"
     external_head = inspect(make_pr(headRepository={"nameWithOwner": "fork/repo"}, isCrossRepository=True))
     assert external_head.action == "security_dispatch"
     conflict = inspect(
@@ -1815,9 +2006,24 @@ def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch
         {"name": "OpenCode Review", "id": 12, "head_sha": "old", "pull_requests": [{"number": 2}]},
         {"name": "OpenCode Review", "id": 13, "head_sha": "old", "pull_requests": [{"number": 1}]},
     ]
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo: runs)
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): runs)
 
+    assert sched.stale_pr_run_ids("owner/repo", make_pr(), statuses=("queued",)) == ["10", "13"]
     assert sched.stale_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == ["13"]
+
+
+def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
+    cancelled = []
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_pr_queued_runs",
+        lambda repo, pr, dry_run: cancelled.append((repo, pr["number"], dry_run)) or [],
+    )
+
+    decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
+
+    assert decision.action == "skip"
+    assert cancelled == [("owner/repo", 1, True)]
 
 
 def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
@@ -1962,6 +2168,7 @@ def test_inspect_pr_dispatches_strix_after_update_branch_observes_new_head(monke
     new_head_pr = make_pr(headRefOid="new-head", reviews={"nodes": []})
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -1987,6 +2194,7 @@ def test_inspect_pr_notes_when_update_branch_head_is_not_observed(monkeypatch):
     )
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append(pr["number"]))
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     decision = inspect(pr, dry_run=False)
@@ -2012,6 +2220,7 @@ def test_inspect_pr_updates_outdated_branch_before_review_dispatch(monkeypatch):
     )
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -2461,6 +2670,7 @@ def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypat
         "update_branch",
         lambda repo, pr, dry_run: updated.append(pr["number"]),
     )
+    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     assert (

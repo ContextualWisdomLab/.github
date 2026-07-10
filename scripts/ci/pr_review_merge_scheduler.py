@@ -109,13 +109,22 @@ query($owner: String!, $name: String!, $number: Int!) {
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
 OPEN_PRS_PAGE_SIZE = 25
-DEFAULT_STALE_OPENCODE_MINUTES = 45
+# Must exceed the opencode-review job timeout (360 min) plus typical runner-queue
+# wait. QUEUED counts as running and the age clock starts at check creation, so a
+# 45-minute threshold marked every queued/long review "stale" and re-dispatched
+# it; each re-dispatch went to the back of the runner queue and itself went
+# stale, multiplying load until the org queue saturated. 420 only recovers
+# genuinely zombie checks that outlive any legitimate run.
+DEFAULT_STALE_OPENCODE_MINUTES = 420
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
+GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
+GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
@@ -468,6 +477,68 @@ def split_repo(repo: str) -> tuple[str, str]:
     return owner, name
 
 
+def validate_git_ref(ref: str) -> str:
+    """Return a conservative Git ref name for gh workflow dispatch fields."""
+    if (
+        not isinstance(ref, str)
+        or not ref
+        or not GIT_REF_RE.fullmatch(ref)
+        or ref == "HEAD"
+        or ref.startswith("/")
+        or ref.endswith(("/", "."))
+        or "@{" in ref
+        or ".." in ref
+        or "//" in ref
+    ):
+        raise ValueError(f"invalid git ref: {ref!r}")
+    if any(part == "." or part.startswith(".") for part in ref.split("/")):
+        raise ValueError(f"invalid git ref: {ref!r}")
+    return ref
+
+
+def validate_git_sha(sha: str) -> str:
+    """Return a 40-character hex SHA for head-guarded GitHub operations."""
+    if not isinstance(sha, str) or not GIT_SHA_RE.fullmatch(sha):
+        raise ValueError(f"invalid git sha: {sha!r}")
+    return sha
+
+
+def validate_github_repository(repo: str) -> str:
+    """Return a GitHub owner/repository name safe to pass to gh."""
+    if not isinstance(repo, str) or not GITHUB_REPOSITORY_RE.fullmatch(repo):
+        raise ValueError(f"invalid GitHub repository: {repo!r}")
+    return repo
+
+
+def validated_pr_dispatch_fields(pr: dict[str, Any]) -> tuple[str, str, str]:
+    """Return validated base ref, base SHA, and head SHA for workflow dispatch."""
+    return (
+        validate_git_ref(pr["baseRefName"]),
+        validate_git_sha(pr["baseRefOid"]),
+        validate_git_sha(pr["headRefOid"]),
+    )
+
+
+def workflow_dispatch_target(repo: str, base_ref: str) -> tuple[str, str, list[str]]:
+    """Return repository, ref, and extra inputs for workflow dispatch.
+
+    Organization required workflows are sourced from ContextualWisdomLab/.github,
+    while most target repositories deliberately do not keep repo-local workflow
+    copies. When configured, dispatch the central workflow and pass the real
+    target repository as data.
+    """
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    if not dispatch_repo:
+        return target_repo, base_ref, []
+    dispatch_repo = validate_github_repository(dispatch_repo)
+    dispatch_ref = validate_git_ref(
+        (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REF") or "main").strip() or "main"
+    )
+    extra_inputs = [] if dispatch_repo == target_repo else ["-f", f"target_repository={target_repo}"]
+    return dispatch_repo, dispatch_ref, extra_inputs
+
+
 TRANSIENT_GITHUB_API_ERRORS = (
     "HTTP 500",
     "HTTP 502",
@@ -481,8 +552,10 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "i/o timeout",
     "server error",
     "service unavailable",
+    "stream error",
     "temporary failure",
     "timeout",
+    "received from peer",
 )
 
 
@@ -1055,20 +1128,20 @@ def workflow_action_required_reason(checks: list[str]) -> str:
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Enable squash auto-merge for a PR at its current head."""
     number = str(pr["number"])
-    head = pr["headRefOid"]
     if dry_run:
         return
     require_github_actions_mutation_actor("enable-auto-merge")
+    head = validate_git_sha(pr["headRefOid"])
     run(["gh", "pr", "merge", number, "--repo", repo, "--auto", "--squash", "--match-head-commit", head])
 
 
 def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Merge a current-head-approved PR immediately with a head guard."""
     number = str(pr["number"])
-    head = pr["headRefOid"]
     if dry_run:
         return
     require_github_actions_mutation_actor("direct-merge")
+    head = validate_git_sha(pr["headRefOid"])
     run(["gh", "pr", "merge", number, "--repo", repo, "--squash", "--match-head-commit", head])
 
 
@@ -1102,10 +1175,10 @@ def disable_auto_merge_decision(
 def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Ask GitHub to update a PR branch, guarded by the observed head SHA."""
     number = str(pr["number"])
-    head = pr["headRefOid"]
     if dry_run:
         return
     require_github_actions_mutation_actor("update-branch")
+    head = validate_git_sha(pr["headRefOid"])
     run(
         [
             "gh",
@@ -1278,10 +1351,10 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
-def active_workflow_runs(repo: str) -> list[dict[str, Any]]:
-    """Return queued and in-progress workflow runs for a repository."""
+def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
+    """Return active workflow runs for a repository."""
     runs: list[dict[str, Any]] = []
-    for status in ("queued", "in_progress"):
+    for status in statuses:
         payload = json.loads(
             run_github_actions(
                 [
@@ -1306,13 +1379,19 @@ def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
     return any(pr.get("number") == pr_number for pr in run_data.get("pull_requests") or [])
 
 
-def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list[str]:
-    """Return active OpenCode run ids for older heads of the same pull request."""
+def stale_pr_run_ids(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    workflow: str | None = None,
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> list[str]:
+    """Return active run ids for older heads of the same pull request."""
     head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
     stale: list[str] = []
-    for run_data in active_workflow_runs(repo):
-        if run_data.get("name") != workflow:
+    for run_data in active_workflow_runs(repo, statuses):
+        if workflow is not None and run_data.get("name") != workflow:
             continue
         if str(run_data.get("head_sha") or "").lower() == head:
             continue
@@ -1324,14 +1403,15 @@ def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list
     return stale
 
 
-def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
-    if dry_run:
-        return []
-    require_github_actions_control_actor("force-cancel-stale-opencode-review")
-    run_ids = stale_opencode_run_ids(repo, workflow, pr)
+def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list[str]:
+    """Return active OpenCode run ids for older heads of the same pull request."""
+    return stale_pr_run_ids(repo, pr, workflow=workflow)
+
+
+def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
+    """Force-cancel workflow runs by id."""
     if not run_ids:
-        return []
+        return
     if len(run_ids) <= 1:  # pragma: no cover
         for run_id in run_ids:  # pragma: no cover
             run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"])  # pragma: no cover
@@ -1342,6 +1422,25 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
                 lambda run_id: run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"]),
                 run_ids
             ))
+
+
+def cancel_stale_pr_queued_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel queued runs for older heads of the same PR."""
+    if dry_run:
+        return []
+    require_github_actions_control_actor("force-cancel-stale-pr-queued-runs")
+    run_ids = stale_pr_run_ids(repo, pr, statuses=("queued",))
+    force_cancel_workflow_runs(repo, run_ids)
+    return run_ids
+
+
+def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
+    if dry_run:
+        return []
+    require_github_actions_control_actor("force-cancel-stale-opencode-review")
+    run_ids = stale_opencode_run_ids(repo, workflow, pr)
+    force_cancel_workflow_runs(repo, run_ids)
     return run_ids
 
 
@@ -1354,6 +1453,8 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         return
     if dry_run:
         return
+    base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
+    dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
     run_github_actions(
         [
             "gh",
@@ -1361,17 +1462,18 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             "run",
             workflow,
             "--repo",
-            repo,
+            dispatch_repo,
             "--ref",
-            pr["baseRefName"],
+            dispatch_ref,
+            *extra_inputs,
             "-f",
             f"pr_number={pr['number']}",
             "-f",
-            f"pr_base_ref={pr['baseRefName']}",
+            f"pr_base_ref={base_ref}",
             "-f",
-            f"pr_base_sha={pr['baseRefOid']}",
+            f"pr_base_sha={base_sha}",
             "-f",
-            f"pr_head_sha={pr['headRefOid']}",
+            f"pr_head_sha={head_sha}",
         ]
     )
 
@@ -1384,6 +1486,8 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         return
     if dry_run:
         return
+    base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
+    dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
     run_github_actions(
         [
             "gh",
@@ -1391,15 +1495,16 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
             "run",
             workflow,
             "--repo",
-            repo,
+            dispatch_repo,
             "--ref",
-            pr["baseRefName"],
+            dispatch_ref,
+            *extra_inputs,
             "-f",
             f"pr_number={pr['number']}",
             "-f",
-            f"pr_base_sha={pr['baseRefOid']}",
+            f"pr_base_sha={base_sha}",
             "-f",
-            f"pr_head_sha={pr['headRefOid']}",
+            f"pr_head_sha={head_sha}",
         ]
     )
 
@@ -1488,8 +1593,26 @@ def inspect_pr(
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
+    cancel_stale_pr_queued_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
-        return Decision(number, "skip", f"base branch is {base_ref}; expected {base_branch}")
+        # Stacked/cascade PR (base is another feature branch). Org required
+        # workflows are only injected for default-branch-target PRs, so these
+        # PRs never receive an OpenCode review on their own — dispatch one here.
+        # Merge automation stays default-branch-only; rulesets do not gate
+        # feature-branch merges.
+        opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+        if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
+            dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            return Decision(
+                number,
+                "review_dispatch",
+                f"stacked PR onto {base_ref}; OpenCode review dispatched",
+            )
+        return Decision(
+            number,
+            "skip",
+            f"stacked PR onto {base_ref}; OpenCode review {opencode_state}",
+        )
 
     outdated_cleanup_count = resolve_outdated_review_threads(pr, dry_run=dry_run)
 
@@ -1843,6 +1966,12 @@ def markdown_cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", "<br>")
 
 
+def markdown_code_span(value: object) -> str:
+    """Escape a value for a compact Markdown inline code span."""
+    escaped = str(value).replace("`", "\\`")
+    return f"`{escaped}`"
+
+
 def write_actions_summary(
     decisions: list[Decision],
     *,
@@ -1969,7 +2098,7 @@ def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
                 [
                     "",
                     "Changed files to inspect first:",
-                    *(f"- `{path.replace('`', '\\`')}`" for path in changed_files),
+                    *(f"- {markdown_code_span(path)}" for path in changed_files),
                 ]
             )
     return lines
@@ -2626,7 +2755,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--review-dispatch-limit",
         type=int,
-        default=int(os.environ.get("REVIEW_DISPATCH_LIMIT", "-1")),
+        default=int(os.environ.get("REVIEW_DISPATCH_LIMIT", "1")),
         help="Maximum OpenCode/Strix review dispatch actions per scheduler run; -1 means unlimited",
     )
     parser.add_argument("--enable-auto-merge", action=argparse.BooleanOptionalAction, default=True)

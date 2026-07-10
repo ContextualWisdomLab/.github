@@ -88,7 +88,13 @@ on:
 
 concurrency:
   group: central-pr-review-fix-scheduler-${{ inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
-  cancel-in-progress: false
+  cancel-in-progress: true
+
+# Scorecard Token-Permissions (alert #8): declare a least-privilege default at
+# the workflow level. The dispatch-review-fixes job declares its own elevated
+# permissions block; the default token stays read-only.
+permissions:
+  contents: read
 
 jobs:
   dispatch-review-fixes:
