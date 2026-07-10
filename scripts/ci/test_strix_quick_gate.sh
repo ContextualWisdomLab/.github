@@ -97,7 +97,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
 	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" "strix workflow scopes pull_request_target concurrency to the active pull request head"
-	assert_file_contains "$workflow_file" 'strix-${{ github.event.inputs.target_repository || github.repository }}' "strix manual dispatch concurrency scopes to the target repository when provided"
+	assert_file_contains "$workflow_file" 'strix-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}' "strix manual dispatch concurrency scopes to the target repository when provided"
 	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha)" "strix workflow scopes manual PR evidence concurrency to the requested pull request head"
 	assert_file_contains "$workflow_file" "github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number)" "strix workflow retains a manual PR fallback group when no head SHA is provided"
 	assert_file_contains "$workflow_file" "|| github.ref" "strix workflow scopes non-PR concurrency to the current ref"
