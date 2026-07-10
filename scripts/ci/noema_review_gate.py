@@ -11,6 +11,7 @@ import re
 import socket
 import subprocess
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
@@ -257,6 +258,22 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     return diff, truncated
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """A URL opener handler that refuses to follow redirects to prevent SSRF."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        """Raise an HTTPError instead of following the redirect."""
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response."""
     stripped = text.strip()
@@ -277,9 +294,14 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
     if not api_url or not api_key:
         print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
         return None
+    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https:// to prevent SSRF vulnerabilities"
+        )
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https")
+        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
@@ -298,9 +320,6 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
                 continue
             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
                 raise ValueError("URL cannot target internal IP addresses")
-
-    if not (api_url.startswith("http://") or api_url.startswith("https://")):
-        raise ValueError(f"NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities, got: {api_url}")
 
     prompt = {
         "role": "user",
@@ -338,7 +357,8 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    with opener.open(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
