@@ -11,6 +11,7 @@ import re
 import socket
 import subprocess
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
@@ -257,6 +258,22 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     return diff, truncated
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """A URL opener handler that refuses to follow redirects to prevent SSRF."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        """Raise an HTTPError instead of following the redirect."""
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response."""
     stripped = text.strip()
@@ -340,7 +357,8 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    with opener.open(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
