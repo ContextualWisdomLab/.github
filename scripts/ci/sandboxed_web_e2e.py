@@ -26,6 +26,15 @@ from scripts.ci import sandboxed_verify
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 
 
+class NoRedirectHandler(urllib.request.HTTPErrorProcessor):
+    """Explicitly disable redirects to prevent SSRF bypasses via 301/302 to local IPs."""
+
+    def http_response(self, request, response):
+        return response
+
+    https_response = http_response
+
+
 @dataclass
 class Service:
     """A long-running web service process and its log file."""
@@ -115,11 +124,12 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
     deadline = time.monotonic() + timeout
+    opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
         if service.process.poll() is not None:
             return False
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:  # nosec B310
+            with opener.open(url, timeout=2) as response:  # nosec B310
                 if 200 <= response.status < 500:
                     return True
         except (urllib.error.URLError, TimeoutError):
