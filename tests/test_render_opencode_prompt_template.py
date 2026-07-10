@@ -62,8 +62,13 @@ def test_module_entrypoint(monkeypatch, tmp_path):
     )
     monkeypatch.setenv("HEAD_SHA", "abc123")
 
+    module = sys.modules.pop("scripts.ci.render_opencode_prompt_template", None)
     with pytest.raises(SystemExit) as exc_info:
-        runpy.run_module("scripts.ci.render_opencode_prompt_template", run_name="__main__")
+        try:
+            runpy.run_module("scripts.ci.render_opencode_prompt_template", run_name="__main__")
+        finally:
+            if module is not None:
+                sys.modules["scripts.ci.render_opencode_prompt_template"] = module
 
     assert exc_info.value.code == 0
     assert prompt_file.read_text(encoding="utf-8") == "abc123\n"

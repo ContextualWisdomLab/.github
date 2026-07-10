@@ -533,10 +533,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "tokens_limit_reached" "opencode review detects provider context-window overflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 360' "opencode review target uses the maximum GitHub-hosted runner timeout"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 45' "opencode model pool has a queue-friendly runner budget while the script deadline leaves approval headroom"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 350' "opencode model pool has a deep-review runner budget while the script deadline leaves approval headroom"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "900"' "opencode primary review has a bounded per-model timeout before trying fallback models"
-	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"' "opencode model pool exits before the job timeout so the approval gate can publish a reason"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review has a deep but bounded per-model timeout before trying fallback models"
+	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' "opencode model pool exits before the job timeout so the approval gate can publish a reason"
 	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "1"' "opencode model pool stops after one full candidate pass instead of looping to the job timeout"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model pool only runs after coverage evidence passed"
 	assert_file_contains "$workflow_file" "id: opencode_review_model_pool" "opencode DeepSeek V3 fallback still runs after a primary model timeout or step failure when coverage evidence passed"
@@ -644,11 +644,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode model pool has no configured model candidates." "opencode model pool fails fast when no candidates are configured"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OPENAI_API_KEY is not configured" "opencode model pool skips native OpenAI candidates when the org secret is absent"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "configured max cycle count" "opencode model pool exits before the job timeout after configured cycles"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400' "opencode model pool keeps a safe default retry budget unless the workflow explicitly disables it"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' "opencode model pool keeps a deep-review default retry budget unless the workflow explicitly disables it"
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary and fallback paths avoid multi-attempt stalls on one model"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode catalog fallback tries each model once before moving on"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "900"' "opencode catalog fallback has a bounded per-model review timeout before step timeout"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog fallback has a deep but bounded per-model review timeout before step timeout"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5-mini openai/gpt-5 github-models/openai/o4-mini" "opencode review tries the observed high-success DeepSeek V3 path before native OpenAI and compact OpenAI reasoning fallbacks"
@@ -852,25 +852,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "initial review overview comment"' "opencode initial overview comment soft-fails permission-denied publication errors"
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "pull review with primary review token"' "opencode approval explains primary review publication failures"
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "pull review with fallback review token"' "opencode approval explains fallback review publication failures"
-	assert_file_contains "$workflow_file" 'gh_error_is_rate_limited()' "opencode approval detects rate-limited publication failures"
-	assert_file_contains "$workflow_file" '[ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"' "opencode approval only soft-fails rate-limited approve publication failures"
-	local approval_step
-	local helper_line
-	local approve_call_line
-	approval_step="$(
-		awk '
-			/^[[:space:]]*- name: Approve PR if OpenCode review passed/ { in_step = 1 }
-			in_step { print }
-			in_step && /^[[:space:]]*- name: Run merge scheduler after approval/ { exit }
-		' "$workflow_file"
-	)"
-	helper_line="$(grep -nF 'gh_error_is_rate_limited()' <<<"$approval_step" | head -n 1 | cut -d: -f1 || true)"
-	approve_call_line="$(grep -nF '[ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"' <<<"$approval_step" | head -n 1 | cut -d: -f1 || true)"
-	if [ -z "$helper_line" ] || [ -z "$approve_call_line" ] || [ "$helper_line" -ge "$approve_call_line" ]; then
-		record_failure "opencode approval step must define gh_error_is_rate_limited before create_pull_review uses it"
-	fi
-	assert_file_contains "$workflow_file" 'OpenCode could not publish the APPROVE pull review for head %s because the GitHub API rate limit was exceeded' "opencode approval keeps successful gate results for rate-limited approval review publication"
-	assert_file_contains "$workflow_file" 'OpenCode could not publish the pull review for head %s, so the review state was not changed.' "opencode approval fails when review publication fails"
+	assert_file_contains "$workflow_file" 'OpenCode could not publish the pull review for head %s, so the review state was not changed.' "opencode approval fails closed when review publication fails"
+	assert_file_contains "$workflow_file" 'REQUEST_CHANGES | INLINE_COMMENT_PUBLISH_FAILED) echo "::endgroup::" ;;' "opencode only closes a review-body log group for events that opened one"
+	assert_file_not_contains "$workflow_file" 'OpenCode approve review publication skipped' "opencode approval does not report skipped approval publication as success"
+	assert_file_not_contains "$workflow_file" 'keeping the successful approval gate result' "opencode approval does not soft-pass without publishing an approving review"
+	assert_file_not_contains "$workflow_file" 'gh_error_is_rate_limited()' "opencode approval does not soft-pass rate-limited approval publication failures"
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "review overview comment"' "opencode approval soft-fails permission-denied overview publication"
 	assert_file_not_contains "$workflow_file" 'gh api -X DELETE "repos/${GH_REPOSITORY}/issues/comments/${comment_id}"' "opencode review must not delete Review Overview gate evidence"
 	assert_file_not_contains "$workflow_file" '--file "$OPENCODE_EVIDENCE_FILE"' "opencode review must not attach evidence content to GitHub Models requests"
