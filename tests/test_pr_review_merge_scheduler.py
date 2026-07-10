@@ -1092,6 +1092,70 @@ def test_failed_status_checks_uses_latest_check_run_for_same_workflow_name():
     assert sched.failed_status_checks(pr) == ["lint"]
 
 
+def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
+    timestamped_then_missing = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(timestamped_then_missing) == []
+
+    missing_then_timestamped = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(missing_then_timestamped) == []
+
+
 def test_run_command_failure_scrubs_secrets(monkeypatch):
     import subprocess
 
