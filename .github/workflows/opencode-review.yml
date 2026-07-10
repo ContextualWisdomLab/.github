@@ -1283,7 +1283,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 350
     permissions:
       actions: read
       checks: read
@@ -2832,7 +2832,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 12
+        timeout-minutes: 310
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2861,13 +2861,13 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 3 min per model keeps the review queue moving while still giving
-          # healthy providers enough time to emit a bounded control result.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "90"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"
-          # Stop after one catalog pass; the bounded retry budget should fail
-          # closed with visible diagnostics instead of tying up the queue.
+          # 90 min per model gives deep reviews enough room to finish; shorter
+          # windows cut off successful DeepSeek V3 reviews before they converge.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          # Stop after one catalog pass; the retry budget should fail closed
+          # with visible diagnostics before the 350-min job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
