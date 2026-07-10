@@ -16,9 +16,12 @@
 #   CF_MODE        (optional) "dry-run" (default) | "apply"
 #   CF_PRUNE       (optional) "true" to delete undeclared records | "false" (default)
 #   CF_CONFIG      (optional) path to zones config (default infra/cloudflare/zones.json)
+#   CF_ALLOW_DRY_RUN_TOKEN_FAILURE
+#                  (optional) "true" lets trusted push dry-runs skip Cloudflare
+#                  API work when the token is invalid; apply still hard-fails.
 #
-# Exit status: 0 on success (including fail-soft per-zone errors). Non-zero only
-# when the API token itself cannot be verified, so a broken token is loud.
+# Exit status: 0 on success (including fail-soft per-zone errors and optional
+# trusted dry-run token skips). Apply/non-soft token failures are non-zero.
 
 set -uo pipefail
 
@@ -27,18 +30,54 @@ CF_MODE="${CF_MODE:-dry-run}"
 CF_PRUNE="${CF_PRUNE:-false}"
 CF_CONFIG="${CF_CONFIG:-infra/cloudflare/zones.json}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
+CF_HTTP_FILE="$(mktemp)"
 
 zone_error_count=0
 
 log()  { printf '%s\n' "$*"; }
 sumln(){ printf '%s\n' "$*" >>"$SUMMARY"; }
+last_http(){ cat "$CF_HTTP_FILE" 2>/dev/null || printf '?'; }
+
+cleanup() {
+  rm -f "$CF_HTTP_FILE"
+}
+trap cleanup EXIT
+
+truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+allow_dry_run_token_failure() {
+  [ "$CF_MODE" = "dry-run" ] && truthy "${CF_ALLOW_DRY_RUN_TOKEN_FAILURE:-false}"
+}
+
+handle_token_failure() {
+  local reason="$1"
+  if allow_dry_run_token_failure; then
+    log "::warning::Cloudflare DNS dry-run skipped: ${reason}. Rotate or re-scope CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID before manual apply; apply mode remains a hard failure."
+    sumln "## Cloudflare DNS reconcile"
+    sumln ""
+    sumln "> Warning: dry-run skipped because ${reason}. Manual \`mode=apply\` remains blocked until the Cloudflare secret is fixed."
+    exit 0
+  fi
+  log "Aborting: cannot proceed without a valid API token."
+  exit 1
+}
 
 require_env() {
   local missing=0
   [ -n "${CF_API_TOKEN:-}" ]  || { log "ERROR: CF_API_TOKEN is empty"; missing=1; }
   [ -n "${CF_ACCOUNT_ID:-}" ] || { log "ERROR: CF_ACCOUNT_ID is empty"; missing=1; }
   [ -f "$CF_CONFIG" ]         || { log "ERROR: config not found: $CF_CONFIG"; missing=1; }
-  [ "$missing" -eq 0 ] || exit 2
+  if [ "$missing" -ne 0 ]; then
+    if [ ! -f "$CF_CONFIG" ]; then
+      exit 2
+    fi
+    handle_token_failure "Cloudflare credentials are missing"
+  fi
 }
 
 # cf_api METHOD PATH [JSON_BODY] -> prints response body; sets global CF_HTTP
@@ -56,6 +95,7 @@ cf_api() {
       -H "Authorization: Bearer ${CF_API_TOKEN}")"
   fi
   CF_HTTP="$http"
+  printf '%s' "$http" >"$CF_HTTP_FILE"
   cat "$tmp"
   rm -f "$tmp"
 }
@@ -68,7 +108,7 @@ verify_token() {
     log "TOKEN_STATUS: valid (Cloudflare API token verified)"
     return 0
   fi
-  log "TOKEN_STATUS: INVALID — token verification failed (http ${CF_HTTP:-?})"
+  log "TOKEN_STATUS: INVALID — token verification failed (http $(last_http))"
   log "$(printf '%s' "$resp" | jq -c '.errors // .' 2>/dev/null)"
   return 1
 }
@@ -90,7 +130,7 @@ create_zone() {
     printf '%s' "$resp" | jq -c '.result'
     return 0
   fi
-  log "ERROR: failed to create zone ${name} (http ${CF_HTTP:-?}): $(printf '%s' "$resp" | jq -c '.errors // .')"
+  log "ERROR: failed to create zone ${name} (http $(last_http)): $(printf '%s' "$resp" | jq -c '.errors // .')"
   return 1
 }
 
@@ -191,8 +231,7 @@ main() {
   log ""
 
   if ! verify_token; then
-    log "Aborting: cannot proceed without a valid API token."
-    exit 1
+    handle_token_failure "Cloudflare API token verification failed"
   fi
 
   sumln "## Cloudflare DNS reconcile"
