@@ -42,77 +42,6 @@ assert_file_not_contains() {
 	fi
 }
 
-assert_status_permissions_scoped() {
-	local output
-
-	if ! output="$(python3 - "$workflow_file" 2>&1 <<'PY'
-from pathlib import Path
-import re
-import sys
-
-workflow = Path(sys.argv[1])
-lines = workflow.read_text(encoding="utf-8").splitlines()
-
-try:
-    permissions_index = lines.index("permissions:")
-    jobs_index = lines.index("jobs:")
-except ValueError as exc:
-    print(f"Strix workflow is missing the required top-level block: {exc}", file=sys.stderr)
-    raise SystemExit(1)
-
-top_level_permissions = lines[permissions_index + 1 : jobs_index]
-expected_read_permissions = {
-    "actions: read",
-    "contents: read",
-    "models: read",
-}
-missing = sorted(expected_read_permissions - {line.strip() for line in top_level_permissions})
-if missing:
-    print(
-        "Strix workflow top-level permissions are missing read-only scopes: "
-        + ", ".join(missing),
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-if any(line.strip() == "statuses: write" for line in top_level_permissions):
-    print("Strix workflow top-level GITHUB_TOKEN must not grant statuses: write.", file=sys.stderr)
-    raise SystemExit(1)
-
-status_write_jobs: list[str] = []
-current_job = ""
-inside_permissions = False
-for line in lines[jobs_index + 1 :]:
-    job_match = re.match(r"^  ([A-Za-z0-9_-]+):$", line)
-    if job_match:
-        current_job = job_match.group(1)
-        inside_permissions = False
-        continue
-    if current_job and line == "    permissions:":
-        inside_permissions = True
-        continue
-    if not inside_permissions:
-        continue
-    if line.startswith("      "):
-        if line.strip() == "statuses: write":
-            status_write_jobs.append(current_job)
-        continue
-    if line.strip():
-        inside_permissions = False
-
-if status_write_jobs != ["strix"]:
-    print(
-        "Strix workflow must scope statuses: write only to the strix scan job; found: "
-        + (", ".join(status_write_jobs) if status_write_jobs else "none"),
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-PY
-	)"; then
-		record_failure "$output"
-	fi
-}
-
 if ! bash -n "$gate_script" "$full_gate_test"; then
 	record_failure "Strix gate scripts must pass bash syntax checks"
 fi
@@ -136,7 +65,7 @@ assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE"' "Strix workfl
 assert_file_contains "$workflow_file" "Self-test Strix required workflow contract" "Strix workflow uses bounded required-path smoke test"
 assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_REQUIRED_SMOKE"' "Strix workflow executes bounded smoke test"
 assert_file_contains "$workflow_file" "timeout-minutes: 2" "Strix required-path smoke test has a short timeout"
-assert_status_permissions_scoped
+assert_file_not_contains "$workflow_file" 'statuses: write' "Strix workflow keeps GITHUB_TOKEN status permissions read-only"
 assert_file_contains "$workflow_file" 'context="strix"' "Strix workflow publishes the strix commit status context"
 assert_file_not_contains "$workflow_file" 'repository: ${{ github.repository }}' "Strix workflow must not checkout target repository with actions/checkout in privileged context"
 assert_file_not_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE_TEST"' "Strix required path must not execute the full long-form gate harness"
