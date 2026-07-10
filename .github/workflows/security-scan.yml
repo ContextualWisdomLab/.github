@@ -69,6 +69,7 @@ jobs:
       - name: Scan base with OSV
         id: osv_base
         continue-on-error: true
+        timeout-minutes: 8
         uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |
@@ -81,10 +82,11 @@ jobs:
       - name: Explain base OSV resolver fallback
         if: steps.osv_base.outcome == 'failure'
         run: |
-          echo "::warning::OSV base scan failed before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+          echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
       - name: Retry base OSV without transitive resolution
         if: steps.osv_base.outcome == 'failure'
         continue-on-error: true
+        timeout-minutes: 4
         uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |
@@ -105,6 +107,7 @@ jobs:
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
+        timeout-minutes: 8
         uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |
@@ -117,10 +120,11 @@ jobs:
       - name: Explain head OSV resolver fallback
         if: steps.osv_head.outcome == 'failure'
         run: |
-          echo "::warning::OSV head scan failed before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+          echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
       - name: Retry head OSV without transitive resolution
         if: steps.osv_head.outcome == 'failure'
         continue-on-error: true
+        timeout-minutes: 4
         uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |

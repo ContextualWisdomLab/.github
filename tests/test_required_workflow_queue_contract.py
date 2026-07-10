@@ -148,8 +148,11 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "steps.osv_head.outcome == 'failure'" in workflow
     assert "Retry base OSV without transitive resolution" in workflow
     assert "Retry head OSV without transitive resolution" in workflow
+    assert workflow.count("timeout-minutes: 8") == 2
+    assert workflow.count("timeout-minutes: 4") == 2
     assert workflow.count("\n            --no-resolve\n") == 2
     assert workflow.count("Maven Central 429") == 2
+    assert workflow.count("failed or timed out before reporter output was trusted") == 2
     assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
     assert "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true" in workflow
     assert "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true" in workflow
