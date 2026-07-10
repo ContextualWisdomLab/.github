@@ -151,6 +151,10 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     assert "required-workflow-bootstrap:" in workflow
     assert "Required OpenCode workflow run materialized for this PR event." in workflow
+    bootstrap_start = workflow.index("  required-workflow-bootstrap:\n")
+    bootstrap_end = workflow.index("\n  cancel-closed-pr-runs:", bootstrap_start)
+    bootstrap_job = workflow[bootstrap_start:bootstrap_end]
+    assert "\n    if:" not in bootstrap_job
     assert (
         "github.event.pull_request.head.repo.full_name == "
         "github.event.pull_request.base.repo.full_name"

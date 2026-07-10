@@ -46,7 +46,6 @@ permissions:
 jobs:
   required-workflow-bootstrap:
     name: required-workflow-bootstrap
-    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - run: echo "Required OpenCode workflow run materialized for this PR event."
