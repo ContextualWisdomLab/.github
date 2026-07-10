@@ -1050,6 +1050,112 @@ def test_review_state_and_failed_checks():
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
 
 
+def test_failed_status_checks_uses_latest_check_run_for_same_workflow_name():
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-07-10T09:00:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-07-10T09:31:00Z",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}},
+                    },
+                ]
+            }
+        }
+    )
+
+    assert sched.failed_status_checks(pr) == ["lint"]
+
+
+def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
+    timestamped_then_missing = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(timestamped_then_missing) == []
+
+    missing_then_timestamped = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(missing_then_timestamped) == []
+
+
 def test_run_command_failure_scrubs_secrets(monkeypatch):
     import subprocess
 
