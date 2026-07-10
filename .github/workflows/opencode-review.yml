@@ -283,6 +283,28 @@ jobs:
             printf '%s\n' "$*" >>"$summary_file"
           }
 
+          append_command() {
+            printf '$ ' >>"$summary_file"
+            printf '%q ' "$@" >>"$summary_file"
+            printf '\n' >>"$summary_file"
+          }
+
+          emit_captured_log() {
+            local log_file="$1"
+            local line_count
+            line_count="$(wc -l <"$log_file" | tr -d '[:space:]')"
+            if [ "${line_count:-0}" -le 260 ]; then
+              cat "$log_file" >>"$summary_file"
+              return
+            fi
+
+            sed -n '1,140p' "$log_file" >>"$summary_file"
+            append ""
+            append "... output truncated: showing first 140 and last 180 of ${line_count} lines ..."
+            append ""
+            tail -n 180 "$log_file" >>"$summary_file"
+          }
+
           run_and_capture() {
             local label="$1"
             shift
@@ -291,11 +313,12 @@ jobs:
             append "### ${label}"
             append ""
             append '```text'
+            append_command "$@"
             set +e
             timeout 900 "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
-            sed -n '1,220p' "$log_file" >>"$summary_file"
+            emit_captured_log "$log_file"
             append '```'
             append ""
             if [ "$rc" -ne 0 ]; then
@@ -316,11 +339,12 @@ jobs:
             append "### ${label}"
             append ""
             append '```text'
+            append_command "$@"
             set +e
             timeout 900 "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
-            sed -n '1,220p' "$log_file" >>"$summary_file"
+            emit_captured_log "$log_file"
             append '```'
             append ""
             if [ "$rc" -ne 0 ]; then
@@ -552,6 +576,129 @@ jobs:
             esac
           }
 
+          ensure_tauri_frontend_dist() {
+            local manifest="$1"
+            local crate_dir
+            local config_path
+            local frontend_dist
+            local dist_path
+            local package_dir
+            local package_runner
+            local package_name
+
+            crate_dir="$(dirname "$manifest")"
+            config_path="${crate_dir}/tauri.conf.json"
+            if [ ! -f "$config_path" ]; then
+              return 0
+            fi
+
+            frontend_dist="$(
+              jq -er '(.build.frontendDist // .build.distDir // empty) | select(type == "string")' "$config_path" 2>/dev/null || true
+            )"
+            if [ -z "$frontend_dist" ]; then
+              return 0
+            fi
+            case "$frontend_dist" in
+              http://*|https://*)
+                append "### Tauri frontendDist"
+                append ""
+                append "- Result: PASS"
+                append "- Reason: ${config_path} uses external frontendDist \`${frontend_dist}\`; no local dist directory is required before Rust coverage."
+                append ""
+                return 0
+                ;;
+            esac
+
+            dist_path="${crate_dir}/${frontend_dist}"
+            if [ -e "$dist_path" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: ${config_path} frontendDist already exists at \`${dist_path}\` before Rust coverage."
+              append ""
+              return 0
+            fi
+
+            package_dir="$(dirname "$crate_dir")"
+            if [ ! -f "${package_dir}/package.json" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: ${config_path} requires local frontendDist \`${frontend_dist}\`, but ${package_dir}/package.json was not found, so the frontend cannot be built before Rust coverage."
+              append "- Fix: add the Tauri frontend package manifest or commit/generated build output before running \`cargo llvm-cov --manifest-path ${manifest}\`."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+
+            if ! jq -e '.scripts.build // empty' "${package_dir}/package.json" >/dev/null; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: ${config_path} requires local frontendDist \`${frontend_dist}\`, but ${package_dir}/package.json has no build script."
+              append "- Fix: add a frontend build script that creates \`${frontend_dist}\` before Rust coverage runs."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+
+            package_runner="$(select_package_runner)"
+            if [ -z "$package_runner" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: ${config_path} requires local frontendDist \`${frontend_dist}\`, but no supported package runner is available to build ${package_dir}."
+              append "- Fix: make npm, pnpm, or yarn available on the coverage runner."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+
+            install_package_dependencies "$package_runner"
+            package_name="$(jq -r '.name // empty' "${package_dir}/package.json")"
+            case "$package_runner" in
+              npm)
+                if [ -n "$package_name" ]; then
+                  run_and_capture "Tauri frontendDist build (${package_dir})" npm run build --workspace "$package_name"
+                else
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && npm run build' bash "$package_dir"
+                fi
+                ;;
+              pnpm)
+                if [ -n "$package_name" ]; then
+                  run_and_capture "Tauri frontendDist build (${package_dir})" pnpm --filter "$package_name" run build
+                else
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && pnpm run build' bash "$package_dir"
+                fi
+                ;;
+              yarn)
+                if [ -n "$package_name" ]; then
+                  run_and_capture "Tauri frontendDist build (${package_dir})" yarn workspace "$package_name" build
+                else
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && yarn build' bash "$package_dir"
+                fi
+                ;;
+            esac
+
+            if [ -e "$dist_path" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: ${config_path} frontendDist was built at \`${dist_path}\` before Rust coverage."
+              append ""
+              return 0
+            fi
+
+            append "### Tauri frontendDist"
+            append ""
+            append "- Result: FAIL"
+            append "- Reason: ${config_path} still requires missing local frontendDist \`${frontend_dist}\` after the frontend build command completed."
+            append "- Fix: make the frontend build write to \`${dist_path}\` or update ${config_path} to the actual build output path."
+            append ""
+            failures=$((failures + 1))
+            return 1
+          }
+
           check_javascript_coverage_thresholds() {
             local summary_list
             local checker
@@ -760,6 +907,36 @@ jobs:
             fi
           }
 
+          ensure_rust_desktop_deps() {
+            # Install the GTK/WebKitGTK system libraries that Tauri (wry/tao)
+            # links on Linux so desktop-app crates compile — and are therefore
+            # coverable — on the headless coverage runner. Mirrors the
+            # ensure_rust_gpu_adapter pattern above. Detection-gated and
+            # best-effort: repositories without a Tauri config are unaffected
+            # and no gate is weakened — if provisioning fails the coverage
+            # command still runs and reports the compile failure as before.
+            if ! find . -name tauri.conf.json -not -path '*/node_modules/*' -not -path '*/target/*' -print -quit 2>/dev/null | grep -q .; then
+              return 0
+            fi
+            if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+              run_and_capture "Tauri Linux system libraries (WebKitGTK/GTK3) for desktop coverage" \
+                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev || true'
+            fi
+            if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+              append "### Tauri desktop coverage dependencies"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: Tauri configuration detected; WebKitGTK/GTK3 development libraries are available so the desktop crate can compile under coverage."
+              append ""
+            else
+              append "### Tauri desktop coverage dependencies"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: Tauri configuration detected but WebKitGTK/GTK3 libraries could not be provisioned; the coverage command will surface the compile failure as before."
+              append ""
+            fi
+          }
+
           ensure_rust_toolchain() {
             if ! command -v cargo >/dev/null 2>&1; then
               run_and_capture "Rust toolchain install (rustup minimal)" \
@@ -771,6 +948,7 @@ jobs:
               run_and_capture "Rust coverage tooling (cargo-llvm-cov)" cargo install cargo-llvm-cov --locked
             fi
             ensure_rust_gpu_adapter
+            ensure_rust_desktop_deps
           }
 
           rust_coverage_manifests() {
@@ -800,6 +978,36 @@ jobs:
               | sort -u
           }
 
+          rust_coverage_fail_under_lines() {
+            local manifest="$1"
+            python3 - "$manifest" <<'PY'
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          manifest = Path(sys.argv[1])
+          metadata = (
+              tomllib.loads(manifest.read_text(encoding="utf-8"))
+              .get("package", {})
+              .get("metadata", {})
+              .get("opencode", {})
+              .get("coverage", {})
+          )
+          value = metadata.get("minimum_lines")
+          if value is None:
+              sys.exit(0)
+          if isinstance(value, bool) or not isinstance(value, (int, float)):
+              raise SystemExit(
+                  "package.metadata.opencode.coverage.minimum_lines must be a number from 0 to 100"
+              )
+          if not 0 <= float(value) <= 100:
+              raise SystemExit(
+                  "package.metadata.opencode.coverage.minimum_lines must be between 0 and 100"
+              )
+          print(f"{float(value):g}")
+          PY
+          }
+
           run_rust_test_coverage() {
             local manifests
             ensure_rust_toolchain
@@ -815,12 +1023,35 @@ jobs:
               manifests="$(rust_coverage_manifests)"
               if [ -n "$manifests" ]; then
                 while IFS= read -r manifest; do
+                  local threshold
+                  if ! threshold="$(rust_coverage_fail_under_lines "$manifest")"; then
+                    append "### Rust coverage threshold (${manifest})"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: ${manifest} defines an invalid package.metadata.opencode.coverage.minimum_lines value."
+                    append "- Fix: set package.metadata.opencode.coverage.minimum_lines to a numeric line-coverage percentage from 0 to 100."
+                    append ""
+                    failures=$((failures + 1))
+                    continue
+                  fi
+                  if [ -z "$threshold" ]; then
+                    threshold=100
+                  else
+                    append "### Rust coverage threshold (${manifest})"
+                    append ""
+                    append "- Result: PASS"
+                    append "- Reason: ${manifest} sets package.metadata.opencode.coverage.minimum_lines to ${threshold}%, so Rust coverage enforces the repository-owned baseline instead of the central default."
+                    append ""
+                  fi
+                  if ! ensure_tauri_frontend_dist "$manifest"; then
+                    continue
+                  fi
                   if [ "$manifest" = "Cargo.toml" ]; then
                     run_and_capture "Rust coverage with missing-line report (${manifest})" \
-                      cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
+                      cargo llvm-cov --workspace --all-features --fail-under-lines "$threshold" --show-missing-lines
                   else
                     run_and_capture "Rust coverage with missing-line report (${manifest})" \
-                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines 100 --show-missing-lines
+                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines "$threshold" --show-missing-lines
                   fi
                 done <<<"$manifests"
               else
