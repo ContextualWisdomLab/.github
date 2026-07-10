@@ -1282,7 +1282,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
     permissions:
       actions: read
       checks: read
@@ -2831,7 +2831,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 350
+        timeout-minutes: 90
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2860,11 +2860,11 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 min per model is intentionally deep enough for tool-using reviews
+          # 15 min per model is intentionally deep enough for tool-using reviews
           # while still forcing stale providers to yield to the next candidate.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "5400"
           # Stop after one catalog pass; the long per-model timeout and total
           # budget provide room for deep reviews without looping to job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
