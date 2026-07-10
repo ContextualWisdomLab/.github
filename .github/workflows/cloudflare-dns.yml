@@ -87,9 +87,14 @@ jobs:
           CF_MODE: ${{ github.event.inputs.mode || 'dry-run' }}
           CF_PRUNE: ${{ github.event.inputs.prune || 'false' }}
           CF_CONFIG: infra/cloudflare/zones.json
+          CF_ALLOW_DRY_RUN_TOKEN_FAILURE: ${{ github.event_name == 'push' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           if [ -z "${CF_API_TOKEN}" ] || [ -z "${CF_ACCOUNT_ID}" ]; then
+            if [ "${CF_MODE}" = "dry-run" ] && [ "${CF_ALLOW_DRY_RUN_TOKEN_FAILURE}" = "true" ]; then
+              echo "::warning::Cloudflare DNS dry-run skipped: CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets are unavailable to this push run. Rotate or re-scope the org secrets before manual apply."
+              exit 0
+            fi
             echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets are not available to this run."
             exit 1
           fi
