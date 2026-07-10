@@ -33,7 +33,9 @@ on:
     branches: [main, master, develop]
 
 concurrency:
-  group: security-scan-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  group: >-
+    security-scan-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event.pull_request.number }}-${{ github.event.pull_request.head.sha || github.run_id }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #42): workflow-level token stays
