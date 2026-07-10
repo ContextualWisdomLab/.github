@@ -28,6 +28,3 @@
 ## 2026-07-02 - Credential Masking Security Hole in Subprocess Environments
 **Learning:** Found a critical missing credential masking pattern in `scripts/ci/noema_review_gate.py`'s `scrub_sensitive_data` which didn't mask `Authorization: Basic` or `Proxy-Authorization: Basic` tokens unlike its analogous helper in `scripts/ci/pr_review_merge_scheduler.py`. This leaves exception messages and logs vulnerable to exposing sensitive credentials when HTTP operations fail.
 **Action:** When implementing credential masking functions that sanitize tracebacks and log messages, ensure the masking scope includes all relevant headers, particularly `Authorization` and `Proxy-Authorization`. Ensure parity across masking helpers across CI scripts to prevent blind spots.
-## 2026-07-07 - Pre-compile Regex Patterns in Python Scripts Embedded in Bash
-**Learning:** Found an anti-pattern in `scripts/ci/validate_opencode_failed_check_review.sh` where a Python script injected via HEREDOC repeatedly recompiled regex patterns using `re.sub` and `re.match` within tight loops for cleaning and parsing CI logs. This caused measurable overhead.
-**Action:** Always pre-compile regex patterns at the module level using `re.compile()` in Python scripts, even those embedded inside Bash scripts via HEREDOCs, to prevent redundant compilations when processing large inputs.
