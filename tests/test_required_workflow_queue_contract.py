@@ -28,7 +28,6 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         "osv-scanner-pr.yml",
         "security-scan.yml",
         "scorecard-pr.yml",
-        "strix.yml",
     ):
         workflow = workflow_text(filename)
         concurrency_contract = workflow.split("permissions:", 1)[0]
@@ -40,6 +39,20 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "cancel-in-progress: true" in workflow
         assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
+
+
+def test_strix_preserves_current_head_evidence_runs_until_logs_exist() -> None:
+    workflow = workflow_text("strix.yml")
+    concurrency_contract = workflow.split("permissions:", 1)[0]
+
+    assert "concurrency:" in workflow
+    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
+    assert "github.repository" in concurrency_contract
+    assert "github.event.pull_request.number" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "pre-job cancellation leaves no scanner log" in workflow
+    assert "github.event.pull_request.head.sha" not in concurrency_contract
+    assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
@@ -66,7 +79,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         )
         assert "github.event.action != 'closed'" in workflow
 
-    assert "cancel-in-progress: true" in workflow_text("strix.yml")
+    assert "cancel-in-progress: false" in workflow_text("strix.yml")
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
