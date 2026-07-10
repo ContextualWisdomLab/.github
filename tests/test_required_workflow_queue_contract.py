@@ -17,6 +17,8 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
 
     assert workflow.count('default: "1"') >= 2
     assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH" in workflow
+    assert "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''" in workflow
 
 
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:

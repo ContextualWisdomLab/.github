@@ -539,6 +539,29 @@ def workflow_dispatch_target(repo: str, base_ref: str) -> tuple[str, str, list[s
     return dispatch_repo, dispatch_ref, extra_inputs
 
 
+def env_flag_enabled(name: str) -> bool:
+    """Return whether an environment flag is explicitly truthy."""
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def workflow_dispatch_wait_reason(repo: str, workflow: str) -> str | None:
+    """Explain why cross-repository required workflow dispatch should wait."""
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    if not dispatch_repo:
+        return None
+    dispatch_repo = validate_github_repository(dispatch_repo)
+    if dispatch_repo == target_repo or env_flag_enabled("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH"):
+        return None
+    return (
+        f"{workflow} dispatch waits for central required workflow materialization; "
+        f"required workflow source is {dispatch_repo}, but this scheduler run has no "
+        "cross-repository workflow-dispatch credential. Wait for the organization required "
+        "workflow to materialize, or rerun the same-head target-repository job after GitHub "
+        "exposes it in the PR check rollup."
+    )
+
+
 TRANSIENT_GITHUB_API_ERRORS = (
     "HTTP 500",
     "HTTP 502",
@@ -1263,6 +1286,9 @@ def post_update_branch_followup(
 
     strix_state = strix_evidence_state(updated_pr)
     if strix_state == "missing":
+        wait_reason = workflow_dispatch_wait_reason(repo, security_workflow)
+        if wait_reason:
+            return f"{head_note}; {wait_reason}"
         dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
         return (
             f"{head_note}; same-head Strix evidence dispatched because workflow-token branch updates "
@@ -1275,6 +1301,9 @@ def post_update_branch_followup(
     if opencode_state == "running":
         return f"{head_note}; same-head OpenCode review is already running"
 
+    wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+    if wait_reason:
+        return f"{head_note}; {wait_reason}"
     dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
     return f"{head_note}; same-head Strix evidence is complete, so OpenCode review was dispatched"
 
@@ -1602,6 +1631,9 @@ def inspect_pr(
         # feature-branch merges.
         opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
         if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
+            wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+            if wait_reason:
+                return Decision(number, "wait", f"stacked PR onto {base_ref}; {wait_reason}")
             dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
             return Decision(
                 number,
@@ -1895,6 +1927,9 @@ def inspect_pr(
                     "wait",
                     "current head has no completed Strix evidence; review dispatch limit reached",
                 )
+            wait_reason = workflow_dispatch_wait_reason(repo, security_workflow)
+            if wait_reason:
+                return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
             dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
             return decide(
                 "security_dispatch",
@@ -1909,6 +1944,9 @@ def inspect_pr(
                 "wait",
                 "current head has completed Strix evidence; review dispatch limit reached",
             )
+        wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+        if wait_reason:
+            return decide("wait", f"current head has completed Strix evidence; {wait_reason}")
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
         return decide(
             "review_dispatch",
