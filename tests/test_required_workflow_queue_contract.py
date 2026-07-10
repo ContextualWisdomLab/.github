@@ -120,6 +120,22 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
         assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
 
 
+def test_noema_review_fails_closed_when_required_configuration_is_missing() -> None:
+    workflow = workflow_text("noema-review.yml")
+
+    assert "fail_unavailable()" in workflow
+    assert 'echo "::error::$message"' in workflow
+    assert "vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || ''" in workflow
+    assert "Noema app token exchange unavailable: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured." in workflow
+    assert "Noema app token exchange unavailable: OIDC request environment is missing." in workflow
+    assert "Noema app token exchange unavailable: OIDC token request did not complete." in workflow
+    assert "Noema app token exchange unavailable: OIDC token response was empty." in workflow
+    assert "Noema app token exchange unavailable: app token request did not complete." in workflow
+    assert "Noema app token exchange unavailable: app token response was empty." in workflow
+    assert "::error::Noema app token is unavailable; review cannot submit a verdict." in workflow
+    assert "Noema app token is unavailable; review skipped." not in workflow
+
+
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
