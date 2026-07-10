@@ -372,7 +372,7 @@ jobs:
           }
           trap restore_workspace_config EXIT
           cd "$TARGET_WORKSPACE"
-          timeout 900 opencode run "$(cat "$prompt_file")" \
+          timeout 18000 opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-autofix \
             --model "$MODEL" \
