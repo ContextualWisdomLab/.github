@@ -84,10 +84,14 @@ on:
 
 concurrency:
   group: >-
-    strix-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    strix-${{
+    github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
+    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
+    github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
-    github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
-    github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) ||
+    github.ref }}
   # cancel-in-progress stays disabled for normal PR updates and manual evidence
   # runs so current-head Strix evidence leaves logs for review. Closed PR cleanup
   # runs may still cancel the matching PR/head group.
@@ -618,7 +622,7 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/gpt-5-chat github_models/openai/o3 github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528 github_models/deepseek/deepseek-r1' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3 github_models/openai/gpt-5-chat' || '' }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -727,7 +731,6 @@ jobs:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ job.status }}
@@ -790,9 +793,6 @@ jobs:
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
             exit 0
           fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
-            exit 0
-          fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
 
   publish-manual-pr-evidence-status:
@@ -802,7 +802,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      statuses: write
     steps:
       - name: Exchange OpenCode app token for target repository status
         id: target_app_token
@@ -875,7 +874,6 @@ jobs:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ needs.strix.result }}
@@ -936,9 +934,6 @@ jobs:
             exit 0
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ] && post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           echo "::warning::Could not publish manual Strix status from follow-up job; scan job publishes the authoritative status when target credentials are available."
