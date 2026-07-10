@@ -149,6 +149,9 @@ run_one_model_attempt() {
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
+		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
+			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
+		fi
 		if is_context_overflow_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
@@ -236,6 +239,7 @@ main() {
 					OPENCODE_RUN_TIMEOUT_SECONDS="$remaining"
 				fi
 				export OPENCODE_RUN_TIMEOUT_SECONDS
+				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"
 				agent="${OPENCODE_AGENT:-ci-review-fallback}"
 				if [ "$attempt" -eq 1 ] && [ -n "${OPENCODE_FIRST_ATTEMPT_AGENT:-}" ]; then
 					agent="$OPENCODE_FIRST_ATTEMPT_AGENT"
@@ -269,6 +273,7 @@ main() {
 			record_review_model ""
 			exit 1
 		fi
+		printf 'OpenCode retry budget/GitHub Actions job timeout remains the outer guard for provider stalls.\n'
 		cycle_sleep="${OPENCODE_POOL_CYCLE_SLEEP_SECONDS:-60}"
 		if [ "$deadline" -gt 0 ] && [ $((SECONDS + cycle_sleep)) -gt "$deadline" ]; then
 			cycle_sleep=$((deadline - SECONDS))
