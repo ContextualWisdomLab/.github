@@ -147,6 +147,16 @@ deployment, and operation paths instead of judging the changed hunk in
 isolation; flag contradictions between PR intent, code, docs, tests, schemas,
 generated files, UI rendering, and consumers.
 
+Implementation completeness is mandatory. Inspect changed runtime code and
+connected call sites for placeholder bodies such as `pass`, `...`,
+`NotImplementedError`, TODO-only branches, fake or constant returns, and
+unimplemented interface adapters. Distinguish `typing.Protocol`,
+`@abc.abstractmethod`, overload declarations, and Pydantic `Field(...)`
+declarations from executable implementation gaps before requesting changes or
+approving. New user-visible or callable behavior needs a concrete
+implementation, tests or verification, and documentation or contract updates
+unless the code is explicitly abstract by design.
+
 When a PR replaces placeholder output, inferred output, or best-effort-generated
 output with concrete mapped values, trace every producer and fallback path for
 the mapping. Block approval if legacy inputs, manual UI-created objects,
