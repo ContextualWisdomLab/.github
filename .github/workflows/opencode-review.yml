@@ -282,6 +282,28 @@ jobs:
             printf '%s\n' "$*" >>"$summary_file"
           }
 
+          append_command() {
+            printf '$ ' >>"$summary_file"
+            printf '%q ' "$@" >>"$summary_file"
+            printf '\n' >>"$summary_file"
+          }
+
+          emit_captured_log() {
+            local log_file="$1"
+            local line_count
+            line_count="$(wc -l <"$log_file" | tr -d '[:space:]')"
+            if [ "${line_count:-0}" -le 260 ]; then
+              cat "$log_file" >>"$summary_file"
+              return
+            fi
+
+            sed -n '1,140p' "$log_file" >>"$summary_file"
+            append ""
+            append "... output truncated: showing first 140 and last 180 of ${line_count} lines ..."
+            append ""
+            tail -n 180 "$log_file" >>"$summary_file"
+          }
+
           run_and_capture() {
             local label="$1"
             shift
@@ -290,11 +312,12 @@ jobs:
             append "### ${label}"
             append ""
             append '```text'
+            append_command "$@"
             set +e
             timeout 900 "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
-            sed -n '1,220p' "$log_file" >>"$summary_file"
+            emit_captured_log "$log_file"
             append '```'
             append ""
             if [ "$rc" -ne 0 ]; then
@@ -315,11 +338,12 @@ jobs:
             append "### ${label}"
             append ""
             append '```text'
+            append_command "$@"
             set +e
             timeout 900 "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
-            sed -n '1,220p' "$log_file" >>"$summary_file"
+            emit_captured_log "$log_file"
             append '```'
             append ""
             if [ "$rc" -ne 0 ]; then
