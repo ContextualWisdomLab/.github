@@ -813,7 +813,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.name // "") | contains("${{"))' "failed-check evidence ignores cancelled matrix-template helper checks without logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "noema-review"' "failed-check evidence ignores cancelled Noema queue replacement checks without source logs"
 	assert_file_contains "$workflow_file" 'metadata-only gate evaluation' "opencode approval gate ignores cancelled metadata-only PR Governance helper gates"
-	assert_file_contains "$workflow_file" '((.name // "") | contains("${{"))' "opencode failed-check collection ignores cancelled matrix-template helper checks without logs"
+	assert_file_contains "$workflow_file" '((.name // "") | contains("\u0024{{"))' "opencode failed-check collection ignores cancelled matrix-template helper checks without logs without exposing a workflow-expression token"
 	assert_file_contains "$workflow_file" '(.name // "") == "noema-review"' "opencode failed-check collection ignores cancelled Noema queue replacement checks without source logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '"strix security scan/"*' "failed-check evidence maps stale Strix workflow helper checks to the manual strix evidence status"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '$successful_strix_runs > 0' "failed-check evidence drops cancelled duplicate Strix runs once same-head Strix evidence succeeded"
