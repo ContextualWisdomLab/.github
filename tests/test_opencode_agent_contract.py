@@ -372,6 +372,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"', workflow)
     assert not re.search(r"--slurp\s*\\\n\s*--jq", workflow)
+    assert workflow.count('["opencode-review","coverage-evidence"]') >= 2
     assert "falling back to current-head REST check-runs" in workflow
 
     strix_workflow = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")
