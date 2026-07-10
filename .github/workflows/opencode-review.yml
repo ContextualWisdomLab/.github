@@ -1286,7 +1286,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 120
     permissions:
       actions: read
       checks: read
@@ -2835,7 +2835,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 310
+        timeout-minutes: 45
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2851,24 +2851,20 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # Ordered by observed successful review completion first, then
-          # contract-reliability and quota. DeepSeek V3 currently has the best
-          # success rate in the org queue, so it leads with enough time to finish
-          # a deep review. Native OpenAI candidates follow as provider-diverse
-          # fallback when OPENAI_API_KEY is available. Compact reasoning models
-          # remain early fallbacks. Rate-starved flagships stay last because
-          # first-placing them stalled previous reviews until timeout instead of
-          # reaching healthier models.
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5-mini openai/gpt-5 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
+          # Prefer the native OpenAI backend when the org secret is available,
+          # then fall through to GitHub Models. Provider stalls must release the
+          # org queue promptly with a visible MODEL_OUTPUT_UNAVAILABLE reason.
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5-mini openai/gpt-5 github-models/deepseek/deepseek-v3-0324 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 min per model gives deep reviews enough room to finish; shorter
-          # windows cut off successful DeepSeek V3 reviews before they converge.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # Ten minutes per model is enough for healthy providers to emit the
+          # required control block and short enough to avoid queue pileups when a
+          # provider stalls silently.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"
           # Stop after one catalog pass; the retry budget should fail closed
           # with visible diagnostics before the 350-min job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
@@ -4587,7 +4583,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-18000}s" opencode run "$(cat "$prompt_file")" \
+            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-600}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \

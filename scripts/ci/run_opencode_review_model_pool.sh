@@ -134,7 +134,7 @@ run_one_model_attempt() {
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id
 
-	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
+	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-60}"
 
 	rm -f "$opencode_json_file" "$opencode_export_file" "$candidate_output_file"
@@ -193,8 +193,8 @@ main() {
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
-	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}"
+	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
+	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	deadline=0
 	if [ "$budget_seconds" -gt 0 ]; then
