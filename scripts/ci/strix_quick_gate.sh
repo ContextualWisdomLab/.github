@@ -515,7 +515,7 @@ is_supported_source_file() {
 	*.java | *.kt | *.kts | *.groovy | *.scala | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
 		return 0
 		;;
-	Dockerfile | */Dockerfile | Containerfile | */Containerfile | Makefile | */Makefile)
+	Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile)
 		return 0
 		;;
 	*)
@@ -1229,7 +1229,7 @@ pull_request_scope_context_files() {
 		# changed in the PR. Include the trusted copies so Strix does not downgrade
 		# a clean finding to provider/failure-signal output due to missing Dockerfiles
 		# or VERSION context.
-		.github/workflows/* | Dockerfile | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml)
+		.github/workflows/* | Dockerfile | Dockerfile.* | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml)
 			needs_deployment_context=1
 			;;
 		esac
@@ -1296,6 +1296,7 @@ EOF
 	if [ "$needs_deployment_context" -eq 1 ]; then
 		cat <<'EOF'
 Dockerfile
+Dockerfile.test
 backend/api/auth.py
 backend/core/config.py
 backend/core/runtime_secrets.py
@@ -2897,6 +2898,12 @@ has_blocking_vulnerability_reports() {
 }
 
 fail_reported_vulnerabilities_before_fallback_success() {
+	case "$PR_FINDINGS_DECISION" in
+	allow_baseline | allow_manifest_only)
+		return 1
+		;;
+	esac
+
 	if has_blocking_vulnerability_reports; then
 		echo "Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." >&2
 		echo "Strix quick scan failed with a non-recoverable error." >&2

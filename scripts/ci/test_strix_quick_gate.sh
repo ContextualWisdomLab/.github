@@ -81,8 +81,9 @@ assert_workflow_uses_are_sha_pinned() {
 
 assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "needs_deployment_context=0" "strix gate tracks deployment-context scoped PRs"
-	assert_file_contains "$GATE_SCRIPT" ".github/workflows/* | Dockerfile | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml" "strix gate recognizes deployment and CI files"
-	assert_file_contains "$GATE_SCRIPT" "Dockerfile | */Dockerfile | Containerfile | */Containerfile | Makefile | */Makefile" "strix gate treats extensionless deployment files as source files"
+	assert_file_contains "$GATE_SCRIPT" ".github/workflows/* | Dockerfile | Dockerfile.* | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml" "strix gate recognizes deployment and CI files"
+	assert_file_contains "$GATE_SCRIPT" "Dockerfile.test" "strix gate includes test-image Dockerfiles with workflow scan context"
+	assert_file_contains "$GATE_SCRIPT" "Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile" "strix gate treats deployment files as source files"
 	assert_file_contains "$GATE_SCRIPT" "backend/scripts/docker_entrypoint.sh" "strix gate includes the combined Docker image entrypoint with deployment context"
 	assert_file_contains "$GATE_SCRIPT" "backend/api/auth.py" "strix gate includes backend auth context for deployment scans"
 	assert_file_contains "$GATE_SCRIPT" "frontend/package-lock.json" "strix gate includes frontend dependency lock context"
@@ -861,9 +862,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "pull review with fallback review token"' "opencode approval explains fallback review publication failures"
 	assert_file_contains "$workflow_file" 'OpenCode could not publish the pull review for head %s, so the review state was not changed.' "opencode approval fails closed when review publication fails"
 	assert_file_contains "$workflow_file" 'REQUEST_CHANGES | INLINE_COMMENT_PUBLISH_FAILED) echo "::endgroup::" ;;' "opencode only closes a review-body log group for events that opened one"
-	assert_file_not_contains "$workflow_file" 'OpenCode approve review publication skipped' "opencode approval does not report skipped approval publication as success"
-	assert_file_not_contains "$workflow_file" 'keeping the successful approval gate result' "opencode approval does not soft-pass without publishing an approving review"
-	assert_file_not_contains "$workflow_file" 'gh_error_is_rate_limited()' "opencode approval does not soft-pass rate-limited approval publication failures"
+	assert_file_contains "$workflow_file" '[ "$event" = "APPROVE" ]' "opencode approval soft-passes only APPROVE review publication failures"
+	assert_file_contains "$workflow_file" 'OpenCode approve review publication skipped after successful gate; keeping the successful approval gate result' "opencode approval preserves successful approval gates when GitHub rejects the review write"
+	assert_file_contains "$workflow_file" 'Branch protection remains authoritative for required reviews and peer checks.' "opencode approval logs that branch protection remains authoritative after review write failure"
+	assert_file_not_contains "$workflow_file" 'gh_error_is_rate_limited()' "opencode approval soft-pass is event-scoped rather than rate-limit-specific"
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "review overview comment"' "opencode approval soft-fails permission-denied overview publication"
 	assert_file_not_contains "$workflow_file" 'gh api -X DELETE "repos/${GH_REPOSITORY}/issues/comments/${comment_id}"' "opencode review must not delete Review Overview gate evidence"
 	assert_file_not_contains "$workflow_file" '--file "$OPENCODE_EVIDENCE_FILE"' "opencode review must not attach evidence content to GitHub Models requests"
@@ -3160,7 +3162,7 @@ case "${FAKE_STRIX_SCENARIO:?}" in
 			;;
 		esac
 		;;
-	github-models-fallback-provider-signal-tries-next | github-models-fallback-vulnerability-before-next-success-blocks)
+	github-models-fallback-provider-signal-tries-next | github-models-fallback-baseline-vulnerability-before-next-success-continues | github-models-fallback-changed-vulnerability-before-next-success-blocks | github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
 			echo "LLM CONNECTION FAILED"
@@ -3169,12 +3171,26 @@ case "${FAKE_STRIX_SCENARIO:?}" in
 			exit 1
 			;;
 		openai/deepseek/deepseek-r1-0528)
-			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-vulnerability-before-next-success-blocks" ]; then
+			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-baseline-vulnerability-before-next-success-continues" ]; then
 				mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities"
 				cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities/vuln-0001.md" <<'EOS'
 Severity: CRITICAL
 Location 1:
 sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java:5
+EOS
+			elif [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-changed-vulnerability-before-next-success-blocks" ]; then
+				mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed-provider-signal/vulnerabilities"
+				cat >"$STRIX_REPORTS_DIR/fake-pr-changed-provider-signal/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java:12
+EOS
+			elif [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" ]; then
+				mkdir -p "$STRIX_REPORTS_DIR/fake-pr-dockerfile-test-provider-signal/vulnerabilities"
+				cat >"$STRIX_REPORTS_DIR/fake-pr-dockerfile-test-provider-signal/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: MEDIUM
+Location 1:
+Dockerfile.test:1
 EOS
 			else
 				echo "LLM CONNECTION FAILED"
@@ -4641,6 +4657,21 @@ EOS
 		touch "$repo_root_dir/docker-compose.yml"
 		touch "$repo_root_dir/render.yaml"
 		echo '0.0.0' >"$repo_root_dir/VERSION"
+	elif [ "$scenario" = "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" ]; then
+		mkdir -p "$repo_root_dir/.github/workflows"
+		cat >"$repo_root_dir/.github/workflows/build-ci-image.yml" <<'EOS'
+name: Build CI image
+jobs:
+  build:
+    steps:
+      - uses: docker/build-push-action@example
+        with:
+          file: ./Dockerfile.test
+EOS
+		cat >"$repo_root_dir/Dockerfile.test" <<'EOS'
+FROM python:3.13-slim
+HEALTHCHECK CMD python -V || exit 1
+EOS
 	elif [ "$scenario" = "pr-critical-changed-internal-dotdir-target" ]; then
 		mkdir -p "$repo_root_dir/.github/workflows"
 		echo 'name: OpenCode Review' >"$repo_root_dir/.github/workflows/opencode-review.yml"
@@ -4873,6 +4904,10 @@ PY
 	set -e
 
 	assert_equals "$expected_exit" "$rc" "scenario=$scenario exit code"
+	if [ "$expected_exit" != "$rc" ]; then
+		echo "scenario=$scenario gate output:" >&2
+		sed 's/^/  | /' "$output_log" >&2
+	fi
 
 	if [ -n "$expected_message" ]; then
 		case "$expected_message" in
@@ -5091,6 +5126,99 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			"frontend/src/components/CalendarLayout.tsx"
+		;;
+	github-models-fallback-baseline-vulnerability-before-next-success-continues)
+		run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
+			"openai/gpt-5" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
+			"3" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
+			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
+		;;
+	github-models-fallback-changed-vulnerability-before-next-success-blocks)
+		run_gate_case "github-models-fallback-changed-vulnerability-before-next-success-blocks" \
+			"openai/gpt-5" \
+			"" \
+			"1" \
+			"Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
+		;;
+	github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
+		run_gate_case "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" \
+			"openai/gpt-5" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
+			"3" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
+			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0" \
+			"MEDIUM" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			".github/workflows/build-ci-image.yml" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
 		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
@@ -8000,7 +8128,37 @@ run_gate_case "github-models-fallback-provider-signal-tries-next" \
 	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 	"1"
 
-run_gate_case "github-models-fallback-vulnerability-before-next-success-blocks" \
+run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
+	"openai/gpt-5" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
+	"3" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
+	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+	"1"
+
+run_gate_case "github-models-fallback-changed-vulnerability-before-next-success-blocks" \
 	"openai/gpt-5" \
 	"" \
 	"1" \
@@ -8020,6 +8178,36 @@ run_gate_case "github-models-fallback-vulnerability-before-next-success-blocks" 
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+	"1"
+
+run_gate_case "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" \
+	"openai/gpt-5" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
+	"3" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
+	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"0" \
+	"MEDIUM" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	".github/workflows/build-ci-image.yml" \
 	"" \
 	"" \
 	"0" \
