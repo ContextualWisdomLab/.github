@@ -420,8 +420,10 @@ target_workflow_available() {
 manual_success_for_label() {
 	local label="$1"
 	local failed_run_id="${2:-}"
+	local failed_conclusion="${3:-}"
 	local key
 	local lower_label
+	local lower_failed_conclusion
 	local success_context
 	local success_url
 	local success_description
@@ -430,6 +432,7 @@ manual_success_for_label() {
 	key="${label##*/}"
 	key="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
 	lower_label="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
+	lower_failed_conclusion="$(printf '%s' "$failed_conclusion" | tr '[:upper:]' '[:lower:]')"
 	case "$lower_label" in
 		"strix security scan/"*)
 			key="strix"
@@ -441,7 +444,8 @@ manual_success_for_label() {
 			continue
 		fi
 		success_run_id="$(printf '%s' "$success_url" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
-		if [ -n "$failed_run_id" ] &&
+		if { [ "$key" != "strix" ] || [ "$lower_failed_conclusion" != "cancelled" ]; } &&
+			[ -n "$failed_run_id" ] &&
 			[ -n "$success_run_id" ] &&
 			[ "$failed_run_id" -ge "$success_run_id" ]; then
 			continue
@@ -455,7 +459,8 @@ manual_success_for_label() {
 			continue
 		fi
 		success_run_id="$(printf '%s' "$success_url" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
-		if [ -n "$failed_run_id" ] &&
+		if { [ "$key" != "strix" ] || [ "$lower_failed_conclusion" != "cancelled" ]; } &&
+			[ -n "$failed_run_id" ] &&
 			[ -n "$success_run_id" ] &&
 			[ "$failed_run_id" -ge "$success_run_id" ]; then
 			continue
@@ -518,6 +523,8 @@ gh api graphql \
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.checkSuite.workflowRun.workflow.name // "") == "CodeQL") | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")) | not)
+				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("${{"))) | not)
+				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review" and ((.checkSuite.workflowRun.workflow.name // "") == "Noema Review" or (.checkSuite.workflowRun.workflow.name // "") == "Required Noema Review")) | not)
 				| select((.name // "") != "opencode-review")
 				| select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
 				| select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
@@ -630,13 +637,23 @@ fi
 		--limit 100 \
 		--json databaseId,workflowName,status,conclusion,url,event,headSha \
 		--jq '
-			.[]
+			(. // []) as $runs
+			| ([
+				$runs[]
+				| select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+				| select((.headSha // "") == env.HEAD_SHA)
+				| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
+				| select((.status // "") == "completed")
+				| select((.conclusion // "" | ascii_downcase) == "success")
+			] | length) as $successful_strix_runs
+			| $runs[]
 			| select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
 			| select((.headSha // "") == env.HEAD_SHA)
 			| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
 			| select((.status // "") == "completed")
 			| select((.conclusion // "" | ascii_downcase) as $c | ["failure","timed_out","action_required","cancelled","startup_failure"] | index($c))
 			| select(((.event // "") == "workflow_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
+			| select(((.conclusion // "" | ascii_downcase) == "cancelled" and $successful_strix_runs > 0) | not)
 			| [
 			"workflow_run",
 			(if (.workflowName // "") != "" then .workflowName else "workflow run" end),
@@ -685,7 +702,7 @@ while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; d
 done <"$workflow_run_contexts"
 
 while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; do
-	if success_line="$(manual_success_for_label "$label" "$run_id")"; then
+	if success_line="$(manual_success_for_label "$label" "$run_id" "$conclusion")"; then
 		IFS=$'\t' read -r success_context success_url success_description <<<"$success_line"
 		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 			"$kind" \
