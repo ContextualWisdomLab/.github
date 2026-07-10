@@ -1238,6 +1238,66 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     assert f"pr_head_sha={head_sha}" in opencode_call
 
 
+def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: dispatched.append(("strix", workflow)),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(("opencode", workflow)),
+    )
+
+    missing_strix = inspect(make_pr())
+    assert missing_strix.action == "wait"
+    assert "current head has no completed Strix evidence" in missing_strix.reason
+    assert "no cross-repository workflow-dispatch credential" in missing_strix.reason
+
+    strix_complete = inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}))
+    assert strix_complete.action == "wait"
+    assert "current head has completed Strix evidence" in strix_complete.reason
+    assert "OpenCode Review dispatch waits" in strix_complete.reason
+
+    assert dispatched == []
+
+
+def test_stacked_pr_waits_for_central_required_workflow_without_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
+    )
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+
+    assert stacked.action == "wait"
+    assert "stacked PR onto develop" in stacked.reason
+    assert "OpenCode Review dispatch waits" in stacked.reason
+    assert "no cross-repository workflow-dispatch credential" in stacked.reason
+    assert dispatched == []
+
+
+def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+
+    monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", "true")
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -2323,6 +2383,75 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
         )
     )
     assert opencode_dispatched == [("owner/repo", "OpenCode Review", "new-head", False)]
+
+
+def test_post_update_branch_followup_waits_for_central_strix_without_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    original = make_pr(headRefOid="old-head")
+    updated = make_pr(headRefOid="new-head")
+
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
+    )
+
+    note = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+
+    assert "updated head new-head observed after update-branch" in note
+    assert "Strix Security Scan dispatch waits" in note
+    assert "no cross-repository workflow-dispatch credential" in note
+    assert dispatched == []
+
+
+def test_post_update_branch_followup_waits_for_central_opencode_without_dispatch_credential(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+
+    dispatched = []
+    original = make_pr(headRefOid="old-head")
+    updated = make_pr(
+        headRefOid="new-head",
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
+    )
+
+    note = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+
+    assert "updated head new-head observed after update-branch" in note
+    assert "OpenCode Review dispatch waits" in note
+    assert "no cross-repository workflow-dispatch credential" in note
+    assert dispatched == []
 
 
 def test_update_branch_summary_includes_followup_notes():
