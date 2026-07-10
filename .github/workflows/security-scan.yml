@@ -83,6 +83,7 @@ jobs:
           echo "::warning::OSV base scan failed before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
       - name: Retry base OSV without transitive resolution
         if: steps.osv_base.outcome == 'failure'
+        continue-on-error: true
         uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |
@@ -118,6 +119,7 @@ jobs:
           echo "::warning::OSV head scan failed before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
       - name: Retry head OSV without transitive resolution
         if: steps.osv_head.outcome == 'failure'
+        continue-on-error: true
         uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |
@@ -132,6 +134,45 @@ jobs:
           set -euo pipefail
           test -s old-results.json
           test -s new-results.json
+      - name: Print OSV findings being compared
+        shell: python3 {0}
+        run: |
+          import json
+          from pathlib import Path
+
+          def iter_findings(path):
+              data = json.loads(Path(path).read_text(encoding="utf-8"))
+              for result in data.get("results", []):
+                  source = result.get("source", {})
+                  source_name = source.get("path") or source.get("name") or "unknown"
+                  for package in result.get("packages", []):
+                      package_info = package.get("package", {})
+                      package_name = package_info.get("name") or "unknown"
+                      package_version = package_info.get("version") or "unknown"
+                      for vulnerability in package.get("vulnerabilities", []):
+                          aliases = ", ".join(vulnerability.get("aliases") or [])
+                          summary = (vulnerability.get("summary") or "").replace("\n", " ").strip()
+                          yield {
+                              "source": source_name,
+                              "package": package_name,
+                              "version": package_version,
+                              "id": vulnerability.get("id") or "unknown",
+                              "aliases": aliases,
+                              "summary": summary,
+                          }
+
+          for label, path in (("base", "old-results.json"), ("head", "new-results.json")):
+              findings = list(iter_findings(path))
+              print(f"OSV {label} scan produced {len(findings)} finding(s) in {path}.")
+              for finding in findings[:50]:
+                  alias_text = f" aliases={finding['aliases']}" if finding["aliases"] else ""
+                  summary_text = f" - {finding['summary']}" if finding["summary"] else ""
+                  print(
+                      f"- {finding['source']}: {finding['package']}@{finding['version']} "
+                      f"{finding['id']}{alias_text}{summary_text}"
+                  )
+              if len(findings) > 50:
+                  print(f"... {len(findings) - 50} additional {label} OSV finding(s) omitted from the log summary.")
       - name: Report PR-introduced OSV findings
         uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:

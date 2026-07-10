@@ -120,8 +120,12 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert workflow.count("\n            --no-resolve\n") == 2
     assert workflow.count("Maven Central 429") == 2
     assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
+    assert "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true" in workflow
+    assert "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true" in workflow
     assert "--output=old-results.json" in workflow
     assert "--output=new-results.json" in workflow
+    assert "Print OSV findings being compared" in workflow
+    assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 
 
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
