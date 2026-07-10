@@ -74,6 +74,7 @@ jobs:
             --format=json
             --output=old-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+            --allow-no-lockfiles
             -r
             ./
       - name: Explain base OSV resolver fallback
@@ -88,6 +89,7 @@ jobs:
             --format=json
             --output=old-results.json
             --no-resolve
+            --allow-no-lockfiles
             -r
             ./
       - name: Checkout head
@@ -107,6 +109,7 @@ jobs:
             --format=json
             --output=new-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+            --allow-no-lockfiles
             -r
             ./
       - name: Explain head OSV resolver fallback
@@ -121,6 +124,7 @@ jobs:
             --format=json
             --output=new-results.json
             --no-resolve
+            --allow-no-lockfiles
             -r
             ./
       - name: Require OSV scan output

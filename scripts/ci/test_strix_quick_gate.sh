@@ -385,7 +385,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'cancel-in-progress: true' "opencode review cancels stale in-progress review attempts when a newer PR event arrives"
 	assert_file_contains "$workflow_file" "Checkout pull request merge ref for coverage measurement" "opencode pull_request_target coverage execution uses the trusted merge ref"
 	assert_file_contains "$workflow_file" "stale OpenCode run: event head=" "opencode review side effects are skipped for stale heads"
-	assert_file_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == github.repository" "opencode pull_request_target coverage execution is limited to same-repository PR heads"
+	assert_file_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name" "opencode pull_request_target coverage execution is limited to same-repository PR heads using the target PR base repo"
+	assert_file_not_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == github.repository" "opencode required workflow must not compare PR head repo to the central workflow source repository"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result != 'cancelled'" "opencode review does not enqueue stale side-effect jobs after coverage evidence cancellation"
 	assert_file_contains "$workflow_file" "opencode-review-target:" "opencode trusted review job owns the required check surface"
 	assert_file_contains "$workflow_file" "Initialize CodeGraph index for OpenCode" "opencode review workflow initializes CodeGraph before review"
@@ -650,6 +651,17 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "required OpenCode reviews measure coverage instead of approving skipped coverage evidence"
 	assert_file_not_contains "$workflow_file" "Exchange OpenCode app token for target repository coverage reads" "coverage evidence must not expose OIDC to PR-head test execution"
+	local coverage_merge_tree_step
+	coverage_merge_tree_step="$(
+		awk '
+			/^[[:space:]]*- name: Materialize pull request merge tree for coverage measurement/ { in_step = 1 }
+			in_step { print }
+			in_step && /^[[:space:]]*- name:/ && $0 !~ /Materialize pull request merge tree for coverage measurement/ { exit }
+		' "$workflow_file"
+	)"
+	if [[ "$coverage_merge_tree_step" != *'GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}'* ]]; then
+		record_failure "opencode coverage merge-tree fetch must use OPENCODE_APPROVE_TOKEN before github.token for target repository reads"
+	fi
 	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' "coverage evidence fetches exact base and head commits as data"
 	assert_file_contains "$workflow_file" 'merge --no-ff --no-edit "$PR_HEAD_SHA"' "coverage evidence materializes the current pull request merge tree without action checkout"
 	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage evidence logs an actionable merge-tree failure reason"
@@ -828,6 +840,21 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "pull review with fallback review token"' "opencode approval explains fallback review publication failures"
 	assert_file_contains "$workflow_file" 'gh_error_is_rate_limited()' "opencode approval detects rate-limited publication failures"
 	assert_file_contains "$workflow_file" '[ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"' "opencode approval only soft-fails rate-limited approve publication failures"
+	local approval_step
+	local helper_line
+	local approve_call_line
+	approval_step="$(
+		awk '
+			/^[[:space:]]*- name: Approve PR if OpenCode review passed/ { in_step = 1 }
+			in_step { print }
+			in_step && /^[[:space:]]*- name: Run merge scheduler after approval/ { exit }
+		' "$workflow_file"
+	)"
+	helper_line="$(grep -nF 'gh_error_is_rate_limited()' <<<"$approval_step" | head -n 1 | cut -d: -f1 || true)"
+	approve_call_line="$(grep -nF '[ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"' <<<"$approval_step" | head -n 1 | cut -d: -f1 || true)"
+	if [ -z "$helper_line" ] || [ -z "$approve_call_line" ] || [ "$helper_line" -ge "$approve_call_line" ]; then
+		record_failure "opencode approval step must define gh_error_is_rate_limited before create_pull_review uses it"
+	fi
 	assert_file_contains "$workflow_file" 'OpenCode could not publish the APPROVE pull review for head %s because the GitHub API rate limit was exceeded' "opencode approval keeps successful gate results for rate-limited approval review publication"
 	assert_file_contains "$workflow_file" 'OpenCode could not publish the pull review for head %s, so the review state was not changed.' "opencode approval fails when review publication fails"
 	assert_file_contains "$workflow_file" 'warn_gh_publication_failure "review overview comment"' "opencode approval soft-fails permission-denied overview publication"

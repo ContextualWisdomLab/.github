@@ -98,6 +98,16 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
+def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
+    workflow = workflow_text("security-scan.yml")
+
+    assert workflow.count("--allow-no-lockfiles") == 4
+    assert "--output=old-results.json" in workflow
+    assert "--output=new-results.json" in workflow
+    assert "test -s old-results.json" in workflow
+    assert "test -s new-results.json" in workflow
+
+
 def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> None:
     workflow = workflow_text("security-scan.yml")
 
