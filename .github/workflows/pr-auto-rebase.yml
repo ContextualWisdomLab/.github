@@ -88,11 +88,14 @@ concurrency:
   group: central-pr-auto-rebase-${{ inputs.target_repository || vars.AUTO_REBASE_TARGET_REPOSITORY || github.repository }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   auto-rebase:
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # force-push rebased PR head branches
+      contents: read         # checkout only; force-push uses the app or PR-write token below
       pull-requests: write   # read PR queue and manage labels
       issues: write          # create/add the needs-manual-rebase label and hand-off comment
       id-token: write        # exchange the OpenCode GitHub App token via OIDC
@@ -186,10 +189,14 @@ jobs:
       - name: Auto-rebase cleanly-rebasable PRs
         env:
           # Prefer a dedicated PR-write token, then the OpenCode app token, then
-          # the workflow token. The chosen credential is used both for the GitHub
-          # API and for the git force-push (via x-access-token), so it must be
-          # able to write PR head branches in TARGET_REPOSITORY.
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
+          # the workflow-exchanged app token. The chosen credential is used both
+          # for the GitHub API and for the git force-push (via x-access-token),
+          # so it must be able to write PR head branches in TARGET_REPOSITORY.
+          # Do not fall back to github.token: this workflow keeps GITHUB_TOKEN
+          # read-only for Scorecard Token-Permissions, and pr_auto_rebase.py
+          # reports a clear GH_TOKEN-required error when no write credential is
+          # configured.
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
         run: |
           set -euo pipefail
           args=(

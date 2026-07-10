@@ -2061,11 +2061,12 @@ def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
             ]
         )
         if changed_files:
+            escaped_paths = [path.replace("`", "\\`") for path in changed_files]
             lines.extend(
                 [
                     "",
                     "Changed files to inspect first:",
-                    *(f"- `{path.replace('`', '\\`')}`" for path in changed_files),
+                    *(f"- `{path}`" for path in escaped_paths),
                 ]
             )
     return lines
