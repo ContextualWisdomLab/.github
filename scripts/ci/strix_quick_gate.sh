@@ -343,9 +343,10 @@ if "\\" in relative_path_str:
 normalized = posixpath.normpath(relative_path_str)
 if normalized in (".", "") or normalized.startswith("../") or normalized == "..":
     raise SystemExit(1)
-# '@' is required for Apple/Tauri retina asset names like 128x128@2x.png; it is
+# '@' is required for Apple/Tauri retina asset names (128x128@2x.png) and '+'
+# for SvelteKit's mandatory route files (+page.svelte, +layout.ts). Both are
 # inert in POSIX paths and every downstream consumer quotes these values.
-if not re.fullmatch(r"[A-Za-z0-9_.@/ \[\]-]+", normalized):
+if not re.fullmatch(r"[A-Za-z0-9_.@+/ \[\]-]+", normalized):
     raise SystemExit(1)
 relative_path = Path(normalized)
 if relative_path.is_absolute():
