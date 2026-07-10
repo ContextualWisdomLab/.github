@@ -208,13 +208,14 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
 
     attempts = []
 
-    def fake_urlopen(url, timeout):
-        attempts.append((url, timeout))
-        if len(attempts) == 1:
-            raise sandboxed_web_e2e.urllib.error.URLError("not ready")
-        return Response()
+    class FakeOpener:
+        def open(self, url, timeout):
+            attempts.append((url, timeout))
+            if len(attempts) == 1:
+                raise sandboxed_web_e2e.urllib.error.URLError("not ready")
+            return Response()
 
-    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FakeOpener())
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
 
     log_path = tmp_path / "service.log"
@@ -224,6 +225,18 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 10, service) is True
     assert len(attempts) == 2
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
+
+
+def test_no_redirect_handler_returns_redirect_without_following():
+    """Readiness checks must not follow redirects to attacker-controlled internal URLs."""
+
+    class RedirectResponse:
+        status = 302
+
+    request = sandboxed_web_e2e.urllib.request.Request("https://example.test/ready")
+    response = RedirectResponse()
+
+    assert sandboxed_web_e2e.NoRedirectHandler().http_response(request, response) is response
 
 
 def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
@@ -237,11 +250,11 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandboxed_web_e2e.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(
-        sandboxed_web_e2e.urllib.request,
-        "urlopen",
-        lambda url, timeout: (_ for _ in ()).throw(sandboxed_web_e2e.urllib.error.URLError("still starting")),
-    )
+    class FailingOpener:
+        def open(self, url, timeout):
+            raise sandboxed_web_e2e.urllib.error.URLError("still starting")
+
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FailingOpener())
 
     service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "web.log")
 
