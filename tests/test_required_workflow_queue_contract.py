@@ -215,6 +215,11 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
 
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
+    assert "fail-on-severity: moderate" in workflow
+    assert "severity: CRITICAL,HIGH,MEDIUM" in workflow
+    assert 'exit-code: "0"' in workflow
+    assert "Require Trivy SARIF output" in workflow
+
     step = "      - name: Print Trivy findings that failed the gate\n"
     start = workflow.index(step)
     run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
@@ -262,11 +267,11 @@ def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        check=True,
         capture_output=True,
         text=True,
     )
 
+    assert result.returncode == 1
     assert "Trivy filesystem scan reported 1 finding(s):" in result.stdout
     assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
     assert "vulnerable package" in result.stdout
