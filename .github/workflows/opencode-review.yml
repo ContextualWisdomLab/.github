@@ -1286,7 +1286,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 120
     permissions:
       actions: read
       checks: read
@@ -2835,7 +2835,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 310
+        timeout-minutes: 45
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2854,19 +2854,20 @@ jobs:
           # High-sensitivity review candidates only. Mini/nano/o*-mini models
           # previously consumed the whole job on context-window timeouts before
           # the pool reached stronger reviewers, so the default pool now starts
-          # with GPT-5/o3-class models and keeps provider-diverse full-size
-          # fallbacks.
+          # with GPT-5/o3-class models, keeps provider-diverse full-size
+          # fallbacks, and bounds provider stalls so the org queue releases with
+          # a visible MODEL_OUTPUT_UNAVAILABLE reason.
           OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Keep one provider from monopolizing the required-review queue. Real
-          # review results usually arrive well before this; slow context-window
-          # stalls fall through with a visible log reason.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "1800"
+          # Ten minutes per model is enough for healthy providers to emit the
+          # required control block and short enough to avoid queue pileups when a
+          # provider stalls silently.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "7200"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"
           # Stop after one catalog pass; the retry budget should fail closed
           # with visible diagnostics before the 350-min job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
@@ -4585,7 +4586,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-18000}s" opencode run "$(cat "$prompt_file")" \
+            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-600}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \
