@@ -193,8 +193,8 @@ main() {
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
-	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}"
+	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-900}"
+	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	deadline=0
 	if [ "$budget_seconds" -gt 0 ]; then
