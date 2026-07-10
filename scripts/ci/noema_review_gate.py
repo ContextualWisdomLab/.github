@@ -261,7 +261,15 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """A URL opener handler that refuses to follow redirects to prevent SSRF."""
 
-    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
         """Raise an HTTPError instead of following the redirect."""
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
@@ -288,7 +296,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         return None
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https")
+        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
@@ -309,7 +317,10 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
                 raise ValueError("URL cannot target internal IP addresses")
 
     if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
-        raise ValueError(f"NOEMA_LLM_API_URL must start with http:// or https:// to prevent SSRF vulnerabilities, got: {api_url}")
+        raise ValueError(
+            "NOEMA_LLM_API_URL must start with http:// or https:// "
+            "to prevent SSRF vulnerabilities"
+        )
 
     prompt = {
         "role": "user",
