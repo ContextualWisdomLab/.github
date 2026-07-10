@@ -3322,14 +3322,14 @@ jobs:
           gh_error_is_retryable_publication_failure() {
             local error_file="$1"
             [ -s "$error_file" ] || return 1
-            grep -Eiq 'API rate limit exceeded|secondary rate limit|You have exceeded a secondary rate limit|abuse detection|Try again later|retry later' "$error_file"
+            grep -Eiq 'API rate limit exceeded|secondary rate limit|You have exceeded a secondary rate limit|abuse detection|Try again later|retry later|timed out after [0-9]+ seconds' "$error_file"
           }
 
           review_publish_retry_sleep_seconds() {
             local token_value="$1" default_sleep="$2"
             local rate_json remaining reset_epoch now delay
 
-            rate_json="$(env GH_TOKEN="$token_value" gh api rate_limit 2>/dev/null || true)"
+            rate_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$token_value" gh api rate_limit 2>/dev/null || true)"
             remaining="$(printf '%s' "$rate_json" | jq -r '.resources.core.remaining // empty' 2>/dev/null || true)"
             reset_epoch="$(printf '%s' "$rate_json" | jq -r '.resources.core.reset // empty' 2>/dev/null || true)"
             if [ "$remaining" = "0" ] && [ -n "$reset_epoch" ] && [[ "$reset_epoch" =~ ^[0-9]+$ ]]; then
@@ -3345,15 +3345,21 @@ jobs:
 
           post_pull_review_with_retry() {
             local token_label="$1" token_value="$2" review_payload_file="$3" error_file="$4"
-            local attempts default_sleep attempt sleep_seconds
+            local attempts default_sleep attempt sleep_seconds api_timeout publish_status
 
             attempts="${REVIEW_PUBLISH_RETRY_ATTEMPTS:-3}"
             default_sleep="${REVIEW_PUBLISH_RETRY_SLEEP_SECONDS:-30}"
+            api_timeout="${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}"
             attempt=1
             while :; do
               : >"$error_file"
-              if env GH_TOKEN="$token_value" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$error_file"; then
+              timeout "${api_timeout}s" env GH_TOKEN="$token_value" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$error_file"
+              publish_status=$?
+              if [ "$publish_status" -eq 0 ]; then
                 return 0
+              fi
+              if [ "$publish_status" -eq 124 ]; then
+                printf 'GitHub pull review publication with %s token timed out after %s seconds.\n' "$token_label" "$api_timeout" >>"$error_file"
               fi
               if ! gh_error_is_retryable_publication_failure "$error_file" || [ "$attempt" -ge "$attempts" ]; then
                 return 1
@@ -3535,7 +3541,7 @@ jobs:
             } >"$overview_body_file"
 
             if ! overview_comment_id="$(
-              env GH_TOKEN="$overview_comment_token" \
+              timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                 gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
                 --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
                 2>"$gh_error_file"
@@ -3547,14 +3553,14 @@ jobs:
             if [ -n "$overview_comment_id" ]; then
               : >"$gh_error_file"
               if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
-                env GH_TOKEN="$overview_comment_token" \
+                timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                   gh api -X PATCH "repos/${GH_REPOSITORY}/issues/comments/${overview_comment_id}" --input - >/dev/null 2>"$gh_error_file"; then
                 warn_gh_publication_failure "review overview update" "$gh_error_file"
               fi
             else
               : >"$gh_error_file"
               if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
-                env GH_TOKEN="$overview_comment_token" \
+                timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                   gh api -X POST "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - >/dev/null 2>"$gh_error_file"; then
                 warn_gh_publication_failure "review overview comment" "$gh_error_file"
               fi
