@@ -4321,6 +4321,7 @@ jobs:
             if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+                printf 'Strix workflow is not installed on %s; skipping optional current-head Strix workflow-run lookup.\n' "$GH_REPOSITORY" >&2
                 : >"$output_file"
                 rm -f "$runs_json" "$workflow_lookup_err"
                 return 0
@@ -4527,7 +4528,22 @@ jobs:
 
           latest_current_head_manual_strix_run() {
             local runs_json
+            local workflow_lookup_err
             runs_json="$(mktemp)"
+            workflow_lookup_err="$(mktemp)"
+
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+              --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
+              if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+                printf 'Strix workflow is not installed on %s; skipping optional manual Strix run lookup.\n' "$GH_REPOSITORY" >&2
+                rm -f "$runs_json" "$workflow_lookup_err"
+                return 0
+              fi
+              cat "$workflow_lookup_err" >&2
+              rm -f "$runs_json" "$workflow_lookup_err"
+              return 1
+            fi
+            rm -f "$workflow_lookup_err"
 
             if ! gh run list \
               --repo "$GH_REPOSITORY" \
