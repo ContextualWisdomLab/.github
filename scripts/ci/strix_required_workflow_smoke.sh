@@ -11,7 +11,11 @@ repo_root="$(
 	cd -P -- "$script_dir/../.."
 	pwd -P
 )"
-workflow_file="$repo_root/.github/workflows/strix.yml"
+workflow_root="${TRUSTED_WORKSPACE:-$repo_root}"
+if [ ! -f "$workflow_root/.github/workflows/strix.yml" ]; then
+	workflow_root="$repo_root"
+fi
+workflow_file="$workflow_root/.github/workflows/strix.yml"
 gate_script="$repo_root/scripts/ci/strix_quick_gate.sh"
 full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
 
@@ -116,6 +120,8 @@ PY
 if ! bash -n "$gate_script" "$full_gate_test"; then
 	record_failure "Strix gate scripts must pass bash syntax checks"
 fi
+
+echo "Checking Strix workflow contract in $workflow_file"
 
 checkout_count="$(grep -Fc "uses: actions/checkout@" "$workflow_file" || true)"
 if [ "$checkout_count" != "1" ]; then
