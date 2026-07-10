@@ -41,18 +41,29 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
-def test_strix_preserves_current_head_evidence_runs_until_logs_exist() -> None:
+def test_strix_keeps_current_head_security_evidence_logs() -> None:
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
     assert "concurrency:" in workflow
+    assert "github.event.inputs.target_repository" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
-    assert "github.event.pull_request.number" in workflow
-    assert "cancel-in-progress: false" in workflow
-    assert "pre-job cancellation leaves no scanner log" in workflow
-    assert "github.event.pull_request.head.sha" not in concurrency_contract
-    assert "format('pr-{0}-{1}'" not in concurrency_contract
+    assert (
+        "format('pr-{0}-{1}', github.event.pull_request.number, "
+        "github.event.pull_request.head.sha)"
+    ) in workflow
+    assert (
+        "format('pr-{0}-{1}', github.event.inputs.pr_number, "
+        "github.event.inputs.pr_head_sha)"
+    ) in workflow
+    assert "github.event.inputs.pr_number != '' && format('pr-{0}'," in workflow
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
+        "&& github.event.action == 'closed' }}"
+    ) in workflow
+    assert "cancel-in-progress stays disabled for normal PR updates" in workflow
+    assert "refs/pull/<n>/head has already advanced before this queued run starts" in workflow
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
@@ -79,7 +90,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         )
         assert "github.event.action != 'closed'" in workflow
 
-    assert "cancel-in-progress: false" in workflow_text("strix.yml")
+    strix_workflow = workflow_text("strix.yml")
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
+        "&& github.event.action == 'closed' }}"
+    ) in strix_workflow
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
