@@ -289,6 +289,25 @@ def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     assert "[HIGH (security-severity=9.8)] CVE-TEST requirements.txt:7" in result.stdout
     assert "vulnerable package" in result.stdout
 
+    (tmp_path / "trivy-results.sarif").write_text(
+        json.dumps({"runs": [{"tool": {"driver": {"rules": []}}, "results": []}]}),
+        encoding="utf-8",
+    )
+
+    zero_result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+    assert zero_result.returncode == 0
+    assert (
+        "Trivy filesystem scan completed with 0 CRITICAL/HIGH/MEDIUM findings"
+        in zero_result.stdout
+    )
+    assert "failed" not in zero_result.stdout.lower()
+
 
 def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     """Guard repository-local controls for Scorecard Medium-or-higher alerts."""
