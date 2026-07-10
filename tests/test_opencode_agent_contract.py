@@ -599,6 +599,25 @@ def test_opencode_pending_peer_checks_hold_approval_without_failing_required_wor
     assert "build_waiting_for_checks_body" not in workflow
 
 
+def test_opencode_approve_review_publication_failure_fails_closed():
+    """APPROVE gates must not pass without a matching GitHub pull review."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "APPROVE_PUBLICATION_FAILED" in workflow
+    assert "APPROVE_PUBLICATION_SKIPPED" not in workflow
+    assert "OpenCode approve review publication failed for head %s" in workflow
+    assert (
+        "branch protection cannot observe an approval gate without a matching GitHub pull review"
+        in workflow
+    )
+    assert re.search(
+        r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1400}exit 1',
+        workflow,
+    )
+
+
 def test_opencode_model_pool_failure_stops_without_review_state_change():
     """A continue-on-error model-pool failure must not approve by accident."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
