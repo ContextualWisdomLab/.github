@@ -396,6 +396,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
+target_workflow_available() {
+	local workflow_file="$1"
+	local workflow_lookup_err
+
+	workflow_lookup_err="$(mktemp)"
+	tmp_files+=("$workflow_lookup_err")
+
+	if gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/${workflow_file}" \
+		--jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
+		return 0
+	fi
+
+	if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+		printf 'Optional workflow %s is not installed on %s; skipping current-head workflow-run lookup.\n' "$workflow_file" "$GH_REPOSITORY" >&2
+		return 1
+	fi
+
+	cat "$workflow_lookup_err" >&2
+	return 1
+}
+
 manual_success_for_label() {
 	local label="$1"
 	local failed_run_id="${2:-}"
@@ -580,26 +601,28 @@ gh api graphql \
 		| @tsv
 	' >"$manual_success_check_runs"
 
-env HEAD_SHA="$HEAD_SHA" gh run list \
-	--repo "$GH_REPOSITORY" \
-	--workflow strix.yml \
-	--commit "$HEAD_SHA" \
-	--limit 200 \
-	--json databaseId,workflowName,status,conclusion,url,event,headSha \
-	--jq '
-		.[]
-		| select((.event // "") == "workflow_dispatch")
-		| select((.headSha // "") == env.HEAD_SHA)
-		| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
-		| select((.status // "") == "completed")
-		| select((.conclusion // "" | ascii_downcase) == "success")
-		| [
-			"strix",
-			(.url // ""),
-			"Manual workflow_dispatch Strix evidence passed"
-		]
-		| @tsv
-	' >>"$manual_success_check_runs" || true
+if target_workflow_available "strix.yml"; then
+	env HEAD_SHA="$HEAD_SHA" gh run list \
+		--repo "$GH_REPOSITORY" \
+		--workflow strix.yml \
+		--commit "$HEAD_SHA" \
+		--limit 200 \
+		--json databaseId,workflowName,status,conclusion,url,event,headSha \
+		--jq '
+			.[]
+			| select((.event // "") == "workflow_dispatch")
+			| select((.headSha // "") == env.HEAD_SHA)
+			| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
+			| select((.status // "") == "completed")
+			| select((.conclusion // "" | ascii_downcase) == "success")
+			| [
+				"strix",
+				(.url // ""),
+				"Manual workflow_dispatch Strix evidence passed"
+			]
+			| @tsv
+		' >>"$manual_success_check_runs" || true
+fi
 
 	env HEAD_SHA="$HEAD_SHA" gh run list \
 		--repo "$GH_REPOSITORY" \

@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 
@@ -126,6 +127,43 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "--output=new-results.json" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
+
+
+def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Print OSV findings being compared\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = textwrap.dedent(
+        "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+    )
+
+    for filename in ("old-results.json", "new-results.json"):
+        (tmp_path / filename).write_text('{"results": null}\n', encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "OSV base scan produced 0 finding(s) in old-results.json." in result.stdout
+    assert "OSV head scan produced 0 finding(s) in new-results.json." in result.stdout
+
+
+def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> None:
+    workflow = workflow_text("opencode-review.yml")
+    failed_check_evidence = (REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "skipping optional current-head Strix workflow-run lookup" in workflow
+    assert "skipping optional manual Strix run lookup" in workflow
+    assert "Optional workflow %s is not installed" in failed_check_evidence
+    assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
