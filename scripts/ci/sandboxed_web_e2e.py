@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import typing
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -27,21 +26,13 @@ from scripts.ci import sandboxed_verify
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 
 
+class NoRedirectHandler(urllib.request.HTTPErrorProcessor):
+    """Explicitly disable redirects to prevent SSRF bypasses via 301/302 to local IPs."""
 
-class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """A URL opener handler that refuses to follow redirects to prevent SSRF."""
+    def http_response(self, request, response):
+        return response
 
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: typing.Any,
-        code: int,
-        msg: str,
-        headers: typing.Any,
-        newurl: str,
-    ) -> None:
-        """Raise an HTTPError instead of following the redirect."""
-        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+    https_response = http_response
 
 
 @dataclass
@@ -133,11 +124,11 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
     deadline = time.monotonic() + timeout
+    opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
         if service.process.poll() is not None:
             return False
         try:
-            opener = urllib.request.build_opener(NoRedirectHandler())
             with opener.open(url, timeout=2) as response:  # nosec B310
                 if 200 <= response.status < 500:
                     return True
