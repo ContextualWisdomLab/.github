@@ -14,10 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  # Upload SARIF to Security > Code Scanning. See github/codeql-action#2117.
+  # Scorecard Token-Permissions (alert #41): keep the workflow-level token
+  # read-only. SARIF upload needs security-events:write, but the osv-scan job
+  # below already grants it at job scope, so it is redundant (and over-broad)
+  # here.
   actions: read
   contents: read
-  security-events: write
 
 jobs:
   cancel-closed-pr-runs:
@@ -29,7 +31,12 @@ jobs:
   osv-scan:
     if: github.event.action != 'closed'
     # ponytail: use upstream reusable PR workflow, don't hand-roll the diff scan
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    # Pinned to v2.3.8 + 1 commit (3a7550f) which gates the JSON job outputs
+    # behind the new `export-results` input (default false). v2.3.8 dumped the
+    # full old/new osv-scanner JSON into job outputs unconditionally, tripping
+    # GitHub's 1,048,576-byte job-outputs cap and failing the run. Same nested
+    # action pins as v2.3.8; only the Export step is now conditional.
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@3a7550f43ba5b58905a821ce3a0ed24c4858b3f4 # v2.3.8 + export-results gate
     permissions:
       actions: read
       contents: read
@@ -39,3 +46,13 @@ jobs:
       # (medium_or_higher), not by failing this check. Keep the check green
       # so it only supplies the analysis; the ruleset decides blocking.
       fail-on-vuln: false
+      # RELIABILITY: resolve Maven parent POMs through Google's byte-identical
+      # Maven Central mirror instead of repo.maven.apache.org, which
+      # intermittently 429s during transitive resolution (e.g.
+      # spring-boot-starter-parent). Same maven2 layout, same bytes -> no
+      # coverage loss; transitive scanning stays fully enabled. See
+      # security-scan.yml for the full rationale.
+      scan-args: |-
+        --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+        -r
+        ./

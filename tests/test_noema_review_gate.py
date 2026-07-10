@@ -1,8 +1,5 @@
-import io
 import json
-import os
 import sys
-import urllib.error
 
 import pytest
 
@@ -287,6 +284,25 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
     assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+
+def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
+    """A URL with an embedded tab is normalized by urlparse to an http scheme
+    with a valid hostname, but its raw form does not start with http:// — the
+    startswith guard must still reject it to prevent SSRF via control-character
+    scheme evasion."""
+    pr = make_pr()
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http\t://sneaky.example.com/chat")
+
+    import socket
+
+    def raise_gaierror(host, port, *args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
+    with pytest.raises(ValueError, match="must start with http:// or https://"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
 
 
 def test_format_findings_and_submit_review(monkeypatch):
