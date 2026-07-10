@@ -282,6 +282,11 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             f"{sys.executable} -c \"raise SystemExit(0)\"",
         ],
     )
+    module = sys.modules.pop("scripts.ci.sandboxed_web_e2e", None)
     with pytest.raises(SystemExit) as exc_info:
-        runpy.run_module("scripts.ci.sandboxed_web_e2e", run_name="__main__")
+        try:
+            runpy.run_module("scripts.ci.sandboxed_web_e2e", run_name="__main__")
+        finally:
+            if module is not None:
+                sys.modules["scripts.ci.sandboxed_web_e2e"] = module
     assert exc_info.value.code == 0

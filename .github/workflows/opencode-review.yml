@@ -37,6 +37,7 @@ concurrency:
     opencode-review-${{
     github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
     github.event.inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
@@ -2592,7 +2593,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 45
+        timeout-minutes: 350
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2621,11 +2622,11 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Bound provider stalls so the org queue gets an actionable log line
-          # and reaches the next candidate instead of pinning the PR for hours.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
+          # 90 min per model is intentionally deep enough for tool-using reviews
+          # while still forcing stale providers to yield to the next candidate.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
           # Stop after one catalog pass; the long per-model timeout and total
           # budget provide room for deep reviews without looping to job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
@@ -2760,12 +2761,6 @@ jobs:
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
             fi
-          }
-
-          gh_error_is_rate_limited() {
-            local error_file="$1"
-            [ -s "$error_file" ] || return 1
-            grep -Eiq '(API rate limit exceeded|rate limit exceeded|secondary rate limit)' "$error_file"
           }
 
                     emit_change_flow_mermaid_graph() {
@@ -3023,6 +3018,18 @@ jobs:
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"
+          OPENCODE_MODEL_ATTEMPTS: "1"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "240"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "360"
+          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
+          OPENCODE_BACKOFF_MAX_SECONDS: "30"
+          OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
+          OPENCODE_AGENT: ci-review-fallback
+          OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"
+          OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "300"
+          OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "4200"
         run: |
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
@@ -3069,12 +3076,6 @@ jobs:
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
             fi
-          }
-
-          gh_error_is_rate_limited() {
-            local error_file="$1"
-            [ -s "$error_file" ] || return 1
-            grep -Eiq '(API rate limit exceeded|rate limit exceeded|secondary rate limit)' "$error_file"
           }
 
                     emit_change_flow_mermaid_graph() {
@@ -3298,26 +3299,12 @@ jobs:
                 fi
                 warn_gh_publication_failure "pull review with fallback review token" "$gh_error_file"
               fi
-              if [ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"; then
-                rm -f "$gh_error_file" "$review_payload_file"
-                update_review_overview "$event" "$body" || true
-                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                  {
-                    printf '## OpenCode approve review publication skipped\n\n'
-                    printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
-                    printf -- '- Workflow run: %s\n' "$RUN_ID"
-                    printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
-                    printf 'OpenCode completed the approval gate, but GitHub rejected the pull-review write due to API rate limiting. The required workflow remains successful because failed checks, mergeability, and unresolved review threads were already gated before approval.\n\n'
-                    printf '%s\n' "$body"
-                  } >>"$GITHUB_STEP_SUMMARY"
-                fi
-                printf '::warning::OpenCode could not publish the APPROVE pull review for head %s because the GitHub API rate limit was exceeded; keeping the successful approval gate result because pre-approval source, check, mergeability, and review-thread gates passed.\n' "$HEAD_SHA"
-                return 0
-              fi
               rm -f "$gh_error_file" "$review_payload_file"
               update_review_overview "$event" "$body" || true
               printf '::error::OpenCode could not publish the pull review for head %s, so the review state was not changed.\n' "$HEAD_SHA"
-              echo "::endgroup::"
+              case "$event" in
+                REQUEST_CHANGES | INLINE_COMMENT_PUBLISH_FAILED) echo "::endgroup::" ;;
+              esac
               exit 1
             fi
             rm -f "$gh_error_file" "$review_payload_file"
@@ -5009,6 +4996,64 @@ jobs:
             scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
+          rekick_model_pool_on_exhaustion() {
+            local rekick_attempt=1
+            local rekick_output outcome model rekick_status
+            local sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS:-15}"
+            local max_sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS:-300}"
+            local max_total_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS:-4200}"
+            local started_at now elapsed
+
+            started_at="$(date +%s)"
+
+            while [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" = "exhausted" ]; do
+              if [ "$max_total_seconds" -gt 0 ]; then
+                now="$(date +%s)"
+                elapsed="$((now - started_at))"
+                if [ "$elapsed" -ge "$max_total_seconds" ]; then
+                  printf 'OpenCode model pool remained exhausted for %s seconds; stopping re-kicks and continuing with fail-closed handling.\n' "$elapsed" >&2
+                  break
+                fi
+              fi
+              printf 'OpenCode model pool exhausted; re-kicking model pool (attempt %s).\n' "$rekick_attempt"
+              rekick_output="$(mktemp)"
+              rekick_status=0
+              GITHUB_OUTPUT="$rekick_output" OPENCODE_OUTPUT_FILE="$OPENCODE_MODEL_POOL_OUTPUT_FILE" \
+                bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh" || rekick_status=$?
+              if [ "$rekick_status" -ne 0 ]; then
+                printf 'OpenCode model pool re-kick command exited with status %s; continuing with fail-closed handling.\n' "$rekick_status" >&2
+              fi
+              outcome="$(awk -F= '/^review_status=/{v=$2} END{print v}' "$rekick_output")"
+              model="$(awk -F= '/^review_model=/{v=$2} END{print v}' "$rekick_output")"
+              rm -f "$rekick_output"
+
+              if [ -z "$outcome" ]; then
+                printf 'OpenCode model pool re-kick produced no review_status output; treating outcome as exhausted.\n' >&2
+                outcome="exhausted"
+              fi
+              OPENCODE_MODEL_POOL_OUTCOME="$outcome"
+              OPENCODE_MODEL_POOL_MODEL="$model"
+              if [ "$outcome" = "success" ]; then
+                if [ -z "$model" ]; then
+                  printf 'OpenCode model pool re-kick succeeded but published an empty review_model.\n' >&2
+                fi
+                printf 'OpenCode model pool re-kick recovered with model: %s\n' "${model:-unknown}"
+                break
+              fi
+              if [ "$sleep_seconds" -gt 0 ]; then
+                printf 'OpenCode model pool still exhausted after re-kick attempt %s; retrying in %s seconds.\n' "$rekick_attempt" "$sleep_seconds"
+                sleep "$sleep_seconds"
+              fi
+              if [ "$sleep_seconds" -lt "$max_sleep_seconds" ]; then
+                sleep_seconds=$((sleep_seconds * 2))
+                if [ "$sleep_seconds" -gt "$max_sleep_seconds" ]; then
+                  sleep_seconds="$max_sleep_seconds"
+                fi
+              fi
+              rekick_attempt=$((rekick_attempt + 1))
+            done
+          }
+
           live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           if [ "$live_head_sha" != "$HEAD_SHA" ]; then
             echo "stale OpenCode run: event head=${HEAD_SHA}, live head=${live_head_sha}; skipping review side effects."
@@ -5020,6 +5065,7 @@ jobs:
             request_changes_for_coverage_evidence_failure
           fi
 
+          rekick_model_pool_on_exhaustion
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
 
           # The model pool uses continue-on-error so this final step can publish
