@@ -315,6 +315,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Run OpenCode PR Review model pool" in workflow
     assert "opencode_review_model_pool" in workflow
     assert "run_opencode_review_model_pool.sh" in workflow
+    assert "rekick_model_pool_on_exhaustion" in workflow
+    assert "format('pr-{0}', github.event.pull_request.number)" in workflow
+    assert "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" not in workflow
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(encoding="utf-8")
     assert "assert_reasoning_effort_for_candidate" in model_pool_runner
@@ -364,7 +367,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
     assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 360", workflow)
     assert 'timeout-minutes: 75' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 45", workflow)
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "81"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
@@ -386,11 +389,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/openai/gpt-5"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "900"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
+    assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
+    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "300"' in workflow
+    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "4200"' in workflow
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
     assert "OpenCode model pool did not produce a successful current-head control block" in workflow
     assert "while :" in model_pool_runner
@@ -398,7 +404,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
     assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert 'record_review_status "exhausted"' not in model_pool_runner

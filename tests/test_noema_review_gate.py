@@ -305,6 +305,18 @@ def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
 
+def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
+    """Keep the parsed-scheme SSRF guard covered as defense in depth."""
+    pr = make_pr()
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    parsed = noema.urllib.parse.ParseResult("file", "llm.example.test", "/chat", "", "", "")
+    monkeypatch.setattr(noema.urllib.parse, "urlparse", lambda _: parsed)
+
+    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+
 def test_format_findings_and_submit_review(monkeypatch):
     findings = noema.format_findings(
         [
