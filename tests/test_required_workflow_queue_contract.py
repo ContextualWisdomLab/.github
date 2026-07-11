@@ -260,6 +260,12 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     # Queue hygiene: stale queued runs are cancelled with a logged identity.
     assert "ORG_SWEEP_STALE_QUEUE_HOURS" in workflow
     assert "/actions/runs?status=queued&per_page=100" in workflow
+    # The scheduler requires --project-flow; the sweep must derive and pass it
+    # per target repository (regression: the first sweep failed every repo with
+    # "--project-flow is required").
+    assert "--project-flow" in workflow
+    assert 'main|master) project_flow="github-flow"' in workflow
+    assert 'develop) project_flow="git-flow"' in workflow
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
