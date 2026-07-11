@@ -131,7 +131,7 @@ jobs:
       contents: read
       id-token: write
       models: read
-      statuses: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
