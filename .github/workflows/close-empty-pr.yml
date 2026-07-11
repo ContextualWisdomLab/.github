@@ -43,12 +43,37 @@ jobs:
         run: |
           set -euo pipefail
 
+          gh_api_json_with_retry() {
+            local attempt output_file error_file
+            output_file="$(mktemp)"
+            error_file="$(mktemp)"
+            for attempt in 1 2 3 4; do
+              if gh api "$@" >"$output_file" 2>"$error_file" && jq -e type "$output_file" >/dev/null 2>&1; then
+                cat "$output_file"
+                rm -f "$output_file" "$error_file"
+                return 0
+              fi
+              if [ "$attempt" -lt 4 ]; then
+                echo "GitHub API metadata request attempt ${attempt} did not return valid JSON; retrying." >&2
+                cat "$error_file" >&2 || true
+                sleep $((attempt * 3))
+              fi
+            done
+            echo "::warning::GitHub API metadata request did not return valid JSON after 4 attempts: gh api $*" >&2
+            cat "$error_file" >&2 || true
+            rm -f "$output_file" "$error_file"
+            return 1
+          }
+
           # GitHub computes the diff asynchronously; poll briefly for a settled
           # changed_files count before deciding (null while still computing).
           changed=""
           draft="false"
           for _ in 1 2 3 4 5 6; do
-            payload="$(gh api "repos/${REPO}/pulls/${PR}")"
+            if ! payload="$(gh_api_json_with_retry "repos/${REPO}/pulls/${PR}")"; then
+              echo "PR #${PR} changed_files=unknown draft=${draft}; leaving it open because metadata could not be read."
+              exit 0
+            fi
             changed="$(jq -r '.changed_files // ""' <<<"$payload")"
             draft="$(jq -r '.draft // false' <<<"$payload")"
             [ -n "$changed" ] && break
