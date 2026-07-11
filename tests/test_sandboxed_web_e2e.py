@@ -228,16 +228,16 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
 
 
-def test_no_redirect_handler_returns_redirect_without_following():
-    """Readiness checks must not follow redirects to attacker-controlled internal URLs."""
-
-    class RedirectResponse:
-        status = 302
+def test_no_redirect_handler_raises_httperror_without_following():
+    """Readiness checks must raise HTTPError on redirects to prevent attacker-controlled internal URLs."""
+    import urllib.error
 
     request = sandboxed_web_e2e.urllib.request.Request("https://example.test/ready")
-    response = RedirectResponse()
 
-    assert sandboxed_web_e2e.NoRedirectHandler().http_response(request, response) is response
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        sandboxed_web_e2e.NoRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1")
+
+    assert exc_info.value.code == 302
 
 
 def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
