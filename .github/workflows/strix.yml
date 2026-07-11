@@ -83,19 +83,14 @@ on:
         type: string
 
 concurrency:
-  # Manual evidence runs are workflow_dispatch-scoped by target repository:
-  # github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository
-  # Pull request evidence runs are scoped by base repository:
-  # github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name
+  # Include the event name so manual workflow_dispatch evidence cannot cancel
+  # the required pull_request_target Strix context that branch protection reads.
+  # PR-number scope keeps the queue on the current HEAD within each event class.
   group: >-
-    strix-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
+    strix-${{ github.event_name }}-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
-  # cancel-in-progress stays disabled for normal PR updates and manual evidence
-  # runs so current-head Strix evidence leaves logs for review. Closed PR cleanup
-  # runs may still cancel the matching PR/head group.
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
+  cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.

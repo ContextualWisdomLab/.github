@@ -256,7 +256,7 @@ jobs:
           repository: ContextualWisdomLab/.github
           fetch-depth: 1
           persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: ${{ github.workflow_sha }}
 
       - name: Report coverage source materialization failure
         if: needs.coverage-source-tree.result != 'success'
@@ -1378,7 +1378,7 @@ jobs:
           repository: ContextualWisdomLab/.github
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: ${{ github.workflow_sha }}
 
       - name: Exchange OpenCode app token for target repository review reads
         id: review_read_app_token
@@ -1608,62 +1608,11 @@ jobs:
         run: |
           set -euo pipefail
           context_env_file="${RUNNER_TEMP:-.}/opencode-review-context.env"
-          python3 <<'PY' >"$context_env_file"
-          import json
-          import os
-          import re
-          import sys
-
-          event_path = os.environ.get("GITHUB_EVENT_PATH")
-          if not event_path:
-              print("::error::GITHUB_EVENT_PATH is not available for OpenCode review context resolution.", file=sys.stderr)
-              raise SystemExit(1)
-
-          try:
-              with open(event_path, encoding="utf-8") as handle:
-                  event = json.load(handle)
-          except (OSError, json.JSONDecodeError) as exc:
-              print(f"::error::Could not read GitHub event payload for OpenCode review context: {exc}", file=sys.stderr)
-              raise SystemExit(1)
-
-          inputs = event.get("inputs") or {}
-          pull_request = event.get("pull_request") or {}
-          base = pull_request.get("base") or {}
-          head = pull_request.get("head") or {}
-          base_repo = base.get("repo") or {}
-          values = {
-              "GH_REPOSITORY": str(
-                  base_repo.get("full_name") or inputs.get("target_repository") or os.environ.get("GITHUB_REPOSITORY") or ""
-              ).strip(),
-              "PR_NUMBER": str(pull_request.get("number") or inputs.get("pr_number") or "").strip(),
-              "PR_BASE_SHA": str(base.get("sha") or inputs.get("pr_base_sha") or "").strip(),
-              "PR_HEAD_SHA": str(head.get("sha") or inputs.get("pr_head_sha") or "").strip(),
-          }
-          values["HEAD_SHA"] = values["PR_HEAD_SHA"]
-
-          validators = {
-              "GH_REPOSITORY": r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
-              "PR_NUMBER": r"[1-9][0-9]*",
-              "PR_BASE_SHA": r"[0-9a-fA-F]{40}",
-              "PR_HEAD_SHA": r"[0-9a-fA-F]{40}",
-              "HEAD_SHA": r"[0-9a-fA-F]{40}",
-          }
-          for name, pattern in validators.items():
-              if not re.fullmatch(pattern, values[name]):
-                  print(f"::error::Invalid OpenCode review context value for {name}.", file=sys.stderr)
-                  raise SystemExit(1)
-
-          for name, value in values.items():
-              print(f"{name}={value}")
-          PY
-          while IFS='=' read -r name value; do
-            case "$name" in
-              GH_REPOSITORY|PR_NUMBER|PR_BASE_SHA|PR_HEAD_SHA|HEAD_SHA)
-                printf -v "$name" '%s' "$value"
-                export "$name"
-                ;;
-            esac
-          done <"$context_env_file"
+          python3 scripts/ci/opencode_review_context.py \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --env-file "$context_env_file"
+          # shellcheck source=/dev/null
+          . "$context_env_file"
           printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
 
@@ -2247,11 +2196,40 @@ jobs:
           mkdir -p "$OPENCODE_REVIEW_WORKDIR"
           if [ -s "$OPENCODE_EVIDENCE_FILE" ]; then
             cp "$OPENCODE_EVIDENCE_FILE" "$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
+            append_evidence_section() {
+              local section_title="$1"
+              local byte_limit="$2"
+              local section_file
+              local section_bytes
+              section_file="$(mktemp)"
+              awk -v wanted="## ${section_title}" '
+                $0 == wanted { emit = 1; print; next }
+                emit && /^## / { exit }
+                emit { print }
+              ' "$OPENCODE_EVIDENCE_FILE" >"$section_file"
+              if [ -s "$section_file" ]; then
+                section_bytes="$(wc -c <"$section_file" | tr -d "[:space:]")"
+                printf '\n\n## Repeated current-head section for models without file reads: %s\n\n' "$section_title"
+                head -c "$byte_limit" "$section_file"
+                if [ "${section_bytes:-0}" -gt "$byte_limit" ]; then
+                  printf '\n\n[Section truncated to first %s of %s bytes; use ./bounded-review-evidence.md for the remaining current-head evidence.]\n' "$byte_limit" "$section_bytes"
+                fi
+              fi
+              rm -f "$section_file"
+            }
             {
               printf '# Current-head bounded evidence excerpt\n\n'
               printf 'Current-head bounded evidence excerpt, inlined to prevent false no-change or no-coverage approvals when tool/file reads are skipped:\n\n'
               printf 'The Current-head authority order section in this excerpt controls historical review and conversation comment excerpts.\n\n'
               head -c 9000 "$OPENCODE_EVIDENCE_FILE"
+              printf '\n\n# Repeated current-head sections for models without file reads\n\n'
+              printf 'If direct tool calls, MCP calls, or file reads are unavailable, use these repeated current-head sections before deciding. Do not emit raw tool-call markup or request changes merely because the full evidence file was not inlined.\n'
+              append_evidence_section "Current-head authority order" 3000
+              append_evidence_section "Other unresolved review thread evidence" 5000
+              append_evidence_section "Failed GitHub Check evidence" 7000
+              append_evidence_section "Coverage execution evidence" 7000
+              append_evidence_section "Changed files" 7000
+              append_evidence_section "Focused changed hunks" 14000
               printf '\n\n[Full evidence is available in ./bounded-review-evidence.md inside the isolated review workspace.]\n'
             } >"$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
           fi
@@ -2336,6 +2314,11 @@ jobs:
           and web_search for bounded external lookups. Bounded evidence is available in
           ./bounded-review-evidence.md. Inspect changed files and focused hunks directly when MCP evidence is
           insufficient. Never return raw tool-call markup, tool-call JSON, or MCP call syntax in the review body.
+          If full-file reads or tool calls do not execute, use the inlined repeated current-head sections for
+          Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and
+          unresolved thread evidence; do not request changes solely because your own tool or file read did not
+          run. Such access gaps are review source limitations unless current-head evidence explicitly reports a
+          materialization failure. REQUEST_CHANGES findings must cite a positive line, never line 0.
           Always return a final control block instead of a progress summary. Do not request rollback of Node 24
           or Python 3.14 solely from model memory. Every blocker needs observable impact, trigger condition,
           minimal fix direction, and exact regression test or verification command. The
@@ -2487,6 +2470,11 @@ jobs:
           and web_search for bounded external lookups. Bounded evidence is available in
           ./bounded-review-evidence.md. Inspect changed files and focused hunks directly when MCP evidence is
           insufficient. Never return raw tool-call markup, tool-call JSON, or MCP call syntax in the review body.
+          If full-file reads or tool calls do not execute, use the inlined repeated current-head sections for
+          Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and
+          unresolved thread evidence; do not request changes solely because your own tool or file read did not
+          run. Such access gaps are review source limitations unless current-head evidence explicitly reports a
+          materialization failure. REQUEST_CHANGES findings must cite a positive line, never line 0.
           Always return a final control block instead of a progress summary. Do not request rollback of Node 24
           or Python 3.14 solely from model memory. Every blocker needs observable impact, trigger condition,
           minimal fix direction, and exact regression test or verification command. The

@@ -62,23 +62,16 @@ def test_strix_keeps_current_head_security_evidence_logs() -> None:
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
     assert (
-        "strix-${{ github.event.inputs.target_repository || "
+        "strix-${{ github.event_name }}-${{ github.event.inputs.target_repository || "
         "github.event.pull_request.base.repo.full_name || github.repository }}"
     ) in concurrency_contract
-    assert (
-        "format('pr-{0}-{1}', github.event.pull_request.number, "
-        "github.event.pull_request.head.sha)"
-    ) in workflow
-    assert (
-        "format('pr-{0}-{1}', github.event.inputs.pr_number, "
-        "github.event.inputs.pr_head_sha)"
-    ) in workflow
     assert "github.event.inputs.pr_number != '' && format('pr-{0}'," in workflow
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
-        "&& github.event.action == 'closed' }}"
-    ) in workflow
-    assert "cancel-in-progress stays disabled for normal PR updates" in workflow
+    assert "format('pr-{0}-{1}'" not in concurrency_contract
+    assert "github.event.pull_request.head.sha" not in concurrency_contract
+    assert "github.event.inputs.pr_head_sha" not in concurrency_contract
+    assert "cancel-in-progress: true" in workflow
+    assert "manual workflow_dispatch evidence cannot cancel" in workflow
+    assert "PR-number scope keeps the queue on the current HEAD" in workflow
     assert "refs/pull/<n>/head has already advanced before this queued run starts" in workflow
 
 
@@ -107,10 +100,8 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "github.event.action != 'closed'" in workflow
 
     strix_workflow = workflow_text("strix.yml")
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
-        "&& github.event.action == 'closed' }}"
-    ) in strix_workflow
+    assert "cancel-in-progress: true" in strix_workflow
+    assert "PR-number scope keeps the queue on the current HEAD" in strix_workflow
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
@@ -129,6 +120,11 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "github.event.inputs.canonical_ref" not in workflow
         assert "inputs.canonical_ref" not in workflow
         assert "workflow_sha" in workflow
+        assert "ref: ${{ steps.trusted_source.outputs.ref }}" not in workflow
+        assert (
+            "ref: ${{ github.workflow_sha }}" in workflow
+            or "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
+        )
         assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in workflow
         assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
 
@@ -172,7 +168,7 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
     assert workflow.count("if: env.PR_NUMBER != ''") >= 3
 
 
-def test_noema_and_scheduler_materialize_trusted_workflow_sha() -> None:
+def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
     noema = workflow_text("noema-review.yml")
     scheduler = workflow_text("pr-review-merge-scheduler.yml")
 

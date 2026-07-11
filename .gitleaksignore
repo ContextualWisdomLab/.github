@@ -1,5 +1,9 @@
 # Historical false-positive GitHub-token fixtures from scheduler secret-scrubbing tests.
 # The live tests now construct these token-like strings at runtime; new findings remain blocking.
+995d6b3606e0effe6722c422b369da9ef0171824:tests/test_pr_review_merge_scheduler.py:github-pat:2900
+995d6b3606e0effe6722c422b369da9ef0171824:tests/test_pr_review_merge_scheduler.py:github-pat:2908
+995d6b3606e0effe6722c422b369da9ef0171824:tests/test_pr_review_merge_scheduler.py:github-pat:2923
+995d6b3606e0effe6722c422b369da9ef0171824:tests/test_pr_review_merge_scheduler.py:github-pat:2928
 123bddb83426e21367f61affa004f9259b101fe8:tests/test_pr_review_merge_scheduler.py:github-pat:224
 123bddb83426e21367f61affa004f9259b101fe8:tests/test_pr_review_merge_scheduler.py:github-pat:227
 14655a9304c2dbe1e2ad6c963af4a2a0b7bd4b89:tests/test_pr_review_merge_scheduler.py:github-pat:2770

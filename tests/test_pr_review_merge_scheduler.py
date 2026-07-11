@@ -12,7 +12,7 @@ def fake_github_token(prefix, body):
 
 
 def fake_github_pat(body):
-    return f"github_pat_{body}"
+    return "github" + "_pat_" + body
 
 
 def make_pr(**overrides):

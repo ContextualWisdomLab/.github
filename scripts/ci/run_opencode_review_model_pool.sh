@@ -83,7 +83,9 @@ write_prompt() {
 		printf 'Read bounded review evidence from `%s` and source files from `%s` when tool access works.\n' "$OPENCODE_EVIDENCE_FILE" "$OPENCODE_SOURCE_WORKDIR"
 		printf 'Use the trusted review workspace `%s` for scripts, prompts, policy files, CodeGraph config, and validation helpers.\n\n' "$OPENCODE_REVIEW_WORKDIR"
 		printf 'First review the current-head evidence excerpt in this prompt. Then inspect full evidence, changed files, focused related code, and configured structural/search tools when available.\n'
-		printf 'If tool calls or file reads are unavailable, do not emit progress notes or raw tool-call text. Finish from the inlined evidence packet only when it contains enough changed-file, hunk, coverage, check, and thread evidence; otherwise return REQUEST_CHANGES with a concrete missing-evidence finding tied to the absent evidence, not a generic model-exhaustion message.\n'
+		printf 'Never emit raw tool-call markup, MCP call syntax, function-call JSON, tool_call text, or a JSON array of tool calls. If tool calls or file reads are unavailable, do not emit progress notes or raw tool-call text.\n'
+		printf 'If full-file reads do not execute, use the inlined evidence packet and its repeated current-head sections for Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and unresolved thread evidence.\n'
+		printf 'Do not request changes solely because your tool call, MCP call, or full-file read was not executed. Treat that as a review source limitation unless current-head evidence explicitly reports a materialization failure; any such finding must be tied to that evidence, not a generic model-exhaustion message. REQUEST_CHANGES findings must cite a positive source/evidence line; never use line 0.\n'
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
 		printf 'Required control block shape:\n'
 		printf '```json\n'
