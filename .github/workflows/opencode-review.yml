@@ -38,8 +38,7 @@ concurrency:
     github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
     github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && github.event.inputs.pr_head_sha && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
     github.run_id }}
@@ -514,6 +513,9 @@ jobs:
             elif [ -f "${project_dir}/pyproject.toml" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
+            elif [ -f "${project_dir}/requirements.txt" ]; then
+              run_and_capture "Python coverage with missing-line report (${project_dir})" \
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
@@ -556,6 +558,9 @@ jobs:
                 if [ -f "${project_dir}/pyproject.toml" ]; then
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. uv run pytest tests/test_docstrings.py' bash "$project_dir"
+                elif [ -f "${project_dir}/requirements.txt" ]; then
+                  run_and_capture "Python docstring coverage (${project_dir})" \
+                    bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
                 else
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
@@ -2843,7 +2848,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 45
+        timeout-minutes: 12
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2865,22 +2870,22 @@ jobs:
           # with GPT-5/o3-class models, keeps provider-diverse full-size
           # fallbacks, and bounds provider stalls so the org queue releases with
           # a visible MODEL_OUTPUT_UNAVAILABLE reason.
-          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Ten minutes per model is enough for healthy providers to emit the
+          # Three minutes per model is enough for healthy providers to emit the
           # required control block and short enough to avoid queue pileups when a
           # provider stalls silently.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"
           # Stop after one catalog pass; the retry budget should fail closed
           # with visible diagnostics before the 350-min job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
-          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
-          OPENCODE_BACKOFF_MAX_SECONDS: "30"
+          OPENCODE_BACKOFF_INITIAL_SECONDS: "5"
+          OPENCODE_BACKOFF_MAX_SECONDS: "5"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
@@ -3613,7 +3618,7 @@ jobs:
                     printf -- '- Workflow run: %s\n' "$RUN_ID"
                     printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
                     printf -- '- Review state: unchanged because GitHub rejected the review API write.\n'
-                    printf -- '- Branch protection remains authoritative for required reviews and peer checks.\n\n'
+                    printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
                   } >>"$GITHUB_STEP_SUMMARY"
                 fi
                 printf '::error::OpenCode approve review publication failed for head %s; branch protection still lacks the required GitHub review. Failing closed after logging the GitHub API error above.\n' "$HEAD_SHA"

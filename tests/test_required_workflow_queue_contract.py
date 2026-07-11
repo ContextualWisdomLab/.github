@@ -43,17 +43,16 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "github.event_name == 'pull_request_target'" in concurrency_contract or (
                 "github.event_name == 'pull_request'" in concurrency_contract
             )
-            assert "github.event.pull_request.head.sha" in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
             else:
                 assert "github.event_name == 'pull_request_target'" in concurrency_contract
-            assert "github.event.pull_request.head.sha" not in concurrency_contract
-            assert "format('pr-{0}-{1}'" not in concurrency_contract
+        assert "github.event.pull_request.head.sha" not in concurrency_contract
+        assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
-def test_strix_keeps_current_head_security_evidence_logs() -> None:
+def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
@@ -65,20 +64,13 @@ def test_strix_keeps_current_head_security_evidence_logs() -> None:
         "strix-${{ github.event.inputs.target_repository || "
         "github.event.pull_request.base.repo.full_name || github.repository }}"
     ) in concurrency_contract
-    assert (
-        "format('pr-{0}-{1}', github.event.pull_request.number, "
-        "github.event.pull_request.head.sha)"
-    ) in workflow
-    assert (
-        "format('pr-{0}-{1}', github.event.inputs.pr_number, "
-        "github.event.inputs.pr_head_sha)"
-    ) in workflow
+    assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
     assert "github.event.inputs.pr_number != '' && format('pr-{0}'," in workflow
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
-        "&& github.event.action == 'closed' }}"
-    ) in workflow
-    assert "cancel-in-progress stays disabled for normal PR updates" in workflow
+    assert "format('pr-{0}-{1}'" not in concurrency_contract
+    assert "github.event.pull_request.head.sha" not in concurrency_contract
+    assert "github.event.inputs.pr_head_sha" not in concurrency_contract
+    assert "cancel-in-progress: true" in workflow
+    assert "PR-number scope keeps the queue on the current HEAD" in workflow
     assert "refs/pull/<n>/head has already advanced before this queued run starts" in workflow
 
 
@@ -107,10 +99,18 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "github.event.action != 'closed'" in workflow
 
     strix_workflow = workflow_text("strix.yml")
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
-        "&& github.event.action == 'closed' }}"
-    ) in strix_workflow
+    assert "cancel-in-progress: true" in strix_workflow
+
+
+def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
+    workflow = workflow_text("close-empty-pr.yml")
+
+    assert "gh_api_json_with_retry()" in workflow
+    assert "jq -e type" in workflow
+    assert "did not return valid JSON; retrying" in workflow
+    assert "did not return valid JSON after 4 attempts" in workflow
+    assert "leaving it open because metadata could not be read" in workflow
+    assert "exit 0" in workflow
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
@@ -118,6 +118,15 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
         workflow = workflow_text(filename)
 
         assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
+
+
+def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() -> None:
+    workflow = workflow_text("noema-review.yml")
+    concurrency_contract = workflow.split("permissions:", 1)[0]
+
+    assert "github.repository }}-${{ github.event_name }}-${{" in concurrency_contract
+    assert "github.event_name == 'workflow_run'" in concurrency_contract
+    assert "github.event_name == 'pull_request_target'" in concurrency_contract
 
 
 def test_noema_review_skips_until_exchange_url_is_configured_then_fails_closed() -> None:
@@ -215,6 +224,65 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "--output=new-results.json" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
+
+
+def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Mark clean OSV SARIF as comprehensive\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = textwrap.dedent(
+        "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+    )
+    sarif_path = tmp_path / "results.sarif"
+    sarif_path.write_text(
+        json.dumps(
+            {
+                "version": "2.1.0",
+                "runs": [
+                    {
+                        "tool": {
+                            "driver": {
+                                "name": "osv-scanner",
+                                "isComprehensive": False,
+                            }
+                        },
+                        "results": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    updated = json.loads(sarif_path.read_text(encoding="utf-8"))
+
+    assert updated["runs"][0]["tool"]["driver"]["isComprehensive"] is True
+    assert "marked the code-scanning analysis comprehensive" in result.stdout
+
+
+def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Upload OSV SARIF to code scanning\n"
+    start = workflow.index(step)
+    upload_step = workflow[start : workflow.index("\n      - name:", start + len(step))]
+
+    assert "Checkout PR merge ref for OSV SARIF upload" not in workflow
+    assert 'merge_ref="refs/pull/${PR_NUMBER}/merge"' not in workflow
+    assert "commit_oid is not a merge commit" in upload_step
+    assert "github/codeql-action/upload-sarif" in upload_step
+    assert "sarif_file: results.sarif" in upload_step
+    assert "ref: refs/pull/${{ github.event.pull_request.number }}/head" in upload_step
+    assert "sha: ${{ github.event.pull_request.head.sha }}" in upload_step
+    assert "category:" not in upload_step
 
 
 def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
@@ -384,7 +452,7 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
         assert alert_id in runbook
 
     assert "Medium-or-higher governance findings" in runbook
-    assert "code owner review" in runbook
+    assert "current-head OpenCode review evidence" in runbook
     assert "review thread resolution" in runbook
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
