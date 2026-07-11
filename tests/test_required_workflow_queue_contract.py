@@ -229,6 +229,16 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     assert "test -s new-results.json" in workflow
 
 
+def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
+    workflow = workflow_text("secret-scan.yml")
+
+    assert 'CURRENT_SHA: ${{ github.sha }}' in workflow
+    assert 'log_opts="${BASE_SHA}..${HEAD_SHA}"' in workflow
+    assert 'log_opts="${CURRENT_SHA}"' in workflow
+    assert '--log-opts="${log_opts}"' in workflow
+    assert "unrelated remote refs are excluded" in workflow
+
+
 def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
     workflow = workflow_text("osv-scanner-pr.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
