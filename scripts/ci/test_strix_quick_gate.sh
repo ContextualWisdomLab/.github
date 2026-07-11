@@ -15,6 +15,20 @@ GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
 
 FAILURES=0
 
+# Keep local developer/provider secrets from changing fake Strix model routing.
+unset STRIX_LLM
+unset LLM_API_KEY
+unset LLM_API_BASE
+unset OPENAI_API_KEY
+unset STRIX_GITHUB_MODELS_TOKEN
+unset LITELLM_API_KEY
+unset LITELLM_MASTER_KEY
+unset GEMINI_API_KEY
+unset GOOGLE_APPLICATION_CREDENTIALS
+if ! python3 -c 'import pathlib' >/dev/null 2>&1; then
+	export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
+fi
+
 record_failure() {
 	echo "FAIL: $1" >&2
 	FAILURES=$((FAILURES + 1))
@@ -429,7 +443,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'install_deps <- c("Depends", "Imports", "LinkingTo")' "opencode R coverage avoids installing oversized suggested dependencies"
 	assert_file_contains "$workflow_file" 'read.dcf("DESCRIPTION")' "opencode R coverage installs target package dependencies from DESCRIPTION"
 	assert_file_contains "$workflow_file" "R package testthat suite" "opencode R package coverage requires package testthat evidence"
-	assert_file_contains "$workflow_file" "R coverage tooling install unavailable or exceeded the runner time budget; deferring to required peer R CMD check evidence." "opencode R coverage defers runner package-install failures to required peer R checks"
+	assert_file_contains "$workflow_file" "R coverage tooling install did not complete or exceeded 780 seconds" "opencode R coverage defers runner package-install failures to required peer R checks"
 	assert_file_contains "$workflow_file" "testthat unavailable in coverage runner; deferring to required peer R CMD check evidence." "opencode R package tests defer only when testthat cannot be installed in the coverage runner"
 	assert_file_contains "$workflow_file" "covr package_coverage unavailable after package tests; treating missing-line report as advisory." "opencode R package coverage does not block on covr installation reproduction after tests pass"
 	assert_file_contains "$workflow_file" "R coverage tooling packages unavailable after install" "opencode R coverage verifies covr/testthat are loadable after installation"
@@ -542,6 +556,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'timeout-minutes: 420' "opencode review target keeps a bounded runner budget so deep reviews can finish and stalled reviews still release queue capacity"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 40' "opencode evidence preparation fails closed before it ties up the review queue"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 350' "opencode model pool gives deep tool-using reviews more than 30 minutes while capping stalled model attempts"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 45' "opencode approval step keeps a bounded post-review publication budget"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review gives each model 90 minutes before trying fallback models"
 	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' "opencode model pool exits before the job timeout so the approval gate can publish a reason"
@@ -920,6 +935,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}' "opencode evidence step passes HEAD_SHA to failed-check evidence collection"
 	assert_file_contains "$workflow_file" "FAILED_CHECK_EVIDENCE_ATTEMPTS" "opencode review workflow bounds waiting for peer check failures before model review"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 350' "opencode model stage has a bounded but deep-review-capable timeout"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 40' "opencode evidence preparation has a bounded peer-check wait timeout"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"' "opencode review workflow keeps pre-model peer-check waiting bounded for required workflow DX"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"' "opencode review workflow retries peer-check evidence without stalling the model stage for Strix-scale durations"
 	assert_file_contains "$workflow_file" "found completed failed peer-check evidence while other peer checks are still running" "opencode evidence preparation retries stale failed checks while peer checks are pending"
@@ -1091,6 +1107,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "MODEL: github-models/gpt-4.1" "opencode review must not fall back to GPT-4.1"
 	assert_file_contains "$workflow_file" "github-models/openai/gpt-5-chat" "opencode review includes GitHub Models GPT-5 chat as a catalog fallback"
 	assert_file_not_contains "$workflow_file" "github-models/openai/gpt-4.1-mini" "opencode review does not fall back to GPT-4.1 mini review evidence"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-5" "opencode review includes GitHub Models GPT-5 as a catalog fallback"
 	assert_file_not_contains "$workflow_file" "github-models/openai/gpt-5-mini" "opencode review excludes GitHub Models GPT-5 mini from the high-sensitivity review pool"
 
 	assert_file_contains "$opencode_config" '"mcp"' "opencode config declares MCP servers"
@@ -2779,6 +2796,9 @@ run_gate_case() {
 
 	if [ -n "${STRIX_TEST_CASE_FILTER:-}" ] && [ "$scenario" != "$STRIX_TEST_CASE_FILTER" ]; then
 		return
+	fi
+	if [ "${STRIX_TEST_TRACE_CASES:-0}" = "1" ]; then
+		printf 'RUN_GATE_CASE: %s\n' "$scenario" >&2
 	fi
 
 	local tmp_dir

@@ -85,18 +85,15 @@ on:
 concurrency:
   # Include the event name so manual workflow_dispatch evidence cannot cancel
   # the required pull_request_target Strix context that branch protection reads.
-  # Within each event class, PR-number scope still keeps only the current head.
+  # PR-number scope keeps the queue on the current HEAD within each event class.
   group: >-
     strix-${{ github.event_name }}-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
-  # PR-number scope keeps the queue on the current HEAD: a synchronize event
-  # cancels older Strix evidence for the same PR before it burns reviewer time.
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
-# read-only and grant status publication only through exchanged app/secret
-# tokens. GITHUB_TOKEN can read status evidence but must not write it.
+# read-only and scope same-repo status publication to the Strix scan job.
 permissions:
   actions: read
   contents: read
@@ -121,8 +118,8 @@ jobs:
     timeout-minutes: 45
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) and reads commit status evidence here;
-    # publication uses exchanged app/secret tokens below.
+    # exchanges an OIDC token (id-token) and publishes same-repo status evidence
+    # from the scan job only.
     permissions:
       actions: read
       contents: read
@@ -739,6 +736,7 @@ jobs:
           GITHUB_STATUS_TOKEN: ${{ (github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ job.status }}
@@ -802,6 +800,9 @@ jobs:
             exit 0
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
