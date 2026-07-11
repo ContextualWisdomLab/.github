@@ -2849,7 +2849,9 @@ def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direc
     def policy_blocked_merge(repo, pr, dry_run):
         raise RuntimeError(
             "Command failed (1): gh pr merge 1 --repo owner/repo --squash --match-head-commit head\n"
-            "X Pull request owner/repo#1 is not mergeable: the base branch policy prohibits the merge."
+            "X Pull request owner/repo#1 is not mergeable: the base branch policy prohibits the merge.\n"
+            "gh: Repository rule violations found\n\n"
+            "At least 2 approving reviews are required by reviewers with write access. (HTTP 405)"
         )
 
     monkeypatch.setattr(sched, "merge_pr", policy_blocked_merge)
@@ -2863,6 +2865,7 @@ def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direc
 
     assert decision.action == "auto_merge"
     assert "direct merge was blocked by branch policy" in decision.reason
+    assert "At least 2 approving reviews are required" in decision.reason
     assert auto_merges == [("owner/repo", 1, True)]
 
     already_queued = inspect(
@@ -2879,6 +2882,12 @@ def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direc
 
     with pytest.raises(RuntimeError, match="base branch policy prohibits"):
         inspect(approved, merge_mode="direct")
+
+
+def test_direct_merge_block_detail_keeps_generic_refusal_tail():
+    error = RuntimeError("Command failed\nfirst diagnostic line\nlast diagnostic line")
+
+    assert sched.direct_merge_block_detail(error) == "first diagnostic line last diagnostic line"
 
 
 def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypatch, capsys):
@@ -3082,11 +3091,11 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
 def test_scrub_sensitive_data_and_run_error():
     assert sched.scrub_sensitive_data("Authorization: Bearer mytoken123") == "Authorization: Bearer ***"
     assert sched.scrub_sensitive_data("token mytoken123") == "token ***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghp", "unit_token_primary")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghs", "unit_token_server")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("gho", "unit_token_oauth")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghp", "unit_token_extended")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("gho", "unit_token_oauth_extended")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("ghp", "1234567890abcdef")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("ghs", "1234567890abcdef")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("gho", "1234567890abcdef")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("ghp", "1234567890abcdef1234")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("gho", "1234567890abcdef1234567890extra")) == "***"
     assert sched.scrub_sensitive_data(fake_github_pat("11AAAAA_abcdefg1234567890")) == "***"
     assert sched.scrub_sensitive_data(fake_github_token("ghp", "placeholder_token_with_underscores_123")) == "***"
     assert sched.scrub_sensitive_data(fake_github_token("gho", "installation_token_value")) == "***"
@@ -3109,7 +3118,7 @@ def test_scrub_sensitive_data_and_run_error():
                 sys.executable,
                 "-c",
                 "import sys; sys.exit(1)",
-                fake_github_token("ghp", "unit_token_extended"),
+                fake_github_token("ghp", "1234567890abcdef1234"),
             ],
             stdin=None,
         )
@@ -3221,7 +3230,7 @@ def test_parse_conflict_reason_missing_branches():
 
 
 def test_run_masks_secrets():
-    token = fake_github_token("ghp", "unit_test_token")
+    token = fake_github_token("ghp", "abcdef1234567890abcdef1234567890abcdef")
     with pytest.raises(RuntimeError) as exc_info:
         sched.run(
             [
@@ -3246,7 +3255,7 @@ def test_run_masks_secrets():
 
 
 def test_run_masks_secrets_in_args():
-    token = fake_github_token("ghp", "unit_test_token")
+    token = fake_github_token("ghp", "abcdef1234567890abcdef1234567890abcdef")
     with pytest.raises(RuntimeError) as exc_info:
         sched.run(
             [

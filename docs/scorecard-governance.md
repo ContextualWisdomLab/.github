@@ -9,12 +9,15 @@ as per-repository suppressions.
 
 The default branch must have both a GitHub branch protection rule and the
 organization required-workflow ruleset. The branch protection rule for `main`
-must require all of the following:
+or the inherited organization ruleset must require all of the following:
 
 - status checks from the central review, SAST, dependency, and Scorecard gates
   to pass against the latest head commit before merge;
 - stale approvals to be dismissed after a push;
-- code owner review through `.github/CODEOWNERS`;
+- current-head OpenCode review evidence from the central required workflow;
+- code owner review coverage through CODEOWNERS-owned workflow and CI paths,
+  with the organization required-workflow ruleset carrying the enforceable
+  single-maintainer approval gate;
 - review thread resolution before merge;
 - last-pusher approval protection;
 - force-push and branch deletion protection.
@@ -40,10 +43,11 @@ and to cancel superseded runs.
 
 ## CodeReviewID
 
-`CodeReviewID` is a review-governance signal. The durable control is code-owner
-review, stale-approval dismissal, review-thread resolution, and latest-head
-required checks. Historical approved-changeset ratios are monitored but not
-used to waive current-head review gates.
+`CodeReviewID` is a review-governance signal. The durable control is
+current-head OpenCode approval evidence, stale-approval dismissal,
+review-thread resolution, and latest-head required checks. Historical
+approved-changeset ratios are monitored but not used to waive current-head
+review gates.
 
 ## Failure Evidence
 

@@ -133,8 +133,8 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -o "$trusted_archive" \
             "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
-           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
-           test -f scripts/ci/noema_review_gate.py
+          tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
+          test -f scripts/ci/noema_review_gate.py
 
       - name: Exchange Noema app token
         if: env.PR_NUMBER != ''
