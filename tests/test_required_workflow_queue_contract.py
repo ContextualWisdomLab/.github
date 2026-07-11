@@ -159,12 +159,20 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
     assert "Noema review skipped: no pull request number is associated with this event." in workflow
     assert "if: env.PR_NUMBER == ''" in workflow
     assert workflow.count("if: env.PR_NUMBER != ''") >= 4
+    assert "Materialize trusted Noema review gate" in workflow
+    assert "uses: actions/checkout" not in workflow
+    assert 'git fetch --depth=1 trusted "$TRUSTED_REF"' in workflow
+    assert "Unsafe trusted Noema source ref" in workflow
 
 
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "github.event.workflow_run.pull_requests[0].number" in workflow
+    assert "Materialize trusted scheduler" in workflow
+    assert "uses: actions/checkout" not in workflow
+    assert 'git fetch --depth=1 trusted "$TRUSTED_REF"' in workflow
+    assert "Unsafe trusted scheduler source ref" in workflow
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:

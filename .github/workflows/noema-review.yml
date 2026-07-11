@@ -88,14 +88,23 @@ jobs:
           esac
           printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
 
-      - name: Checkout trusted Noema review gate
+      - name: Materialize trusted Noema review gate
         if: env.PR_NUMBER != ''
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ steps.trusted_source.outputs.ref }}
-          fetch-depth: 1
-          persist-credentials: false
+        env:
+          TRUSTED_REF: ${{ steps.trusted_source.outputs.ref }}
+        run: |
+          set -euo pipefail
+          case "$TRUSTED_REF" in
+            ""|*..*|*~*|*^*|*:*|*\\*|*' '*)
+              echo "::error::Unsafe trusted Noema source ref: ${TRUSTED_REF}"
+              exit 1
+              ;;
+          esac
+          git init --quiet .
+          git remote add trusted https://github.com/ContextualWisdomLab/.github.git
+          git fetch --depth=1 trusted "$TRUSTED_REF"
+          git checkout --detach --quiet FETCH_HEAD
+          git remote remove trusted
 
       - name: Exchange Noema app token
         if: env.PR_NUMBER != ''

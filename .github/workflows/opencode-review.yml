@@ -1577,7 +1577,11 @@ jobs:
           FAILED_CHECK_EVIDENCE_KILL_AFTER_SECONDS: "10"
         run: |
           set -euo pipefail
-          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
+          {
+            printf 'OPENCODE_CHANGED_FILES_FILE<<OPENCODE_CHANGED_FILES_FILE_EOF\n'
+            printf '%s\n' "$OPENCODE_CHANGED_FILES_FILE"
+            printf 'OPENCODE_CHANGED_FILES_FILE_EOF\n'
+          } >>"$GITHUB_ENV"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
