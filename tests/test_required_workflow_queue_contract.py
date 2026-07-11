@@ -129,21 +129,9 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "INPUT_CANONICAL_REF" not in workflow
         assert "github.event.inputs.canonical_ref" not in workflow
         assert "inputs.canonical_ref" not in workflow
-
-    opencode_workflow = workflow_text("opencode-review.yml")
-    assert "workflow_sha" in opencode_workflow
-    assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in opencode_workflow
-    assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in opencode_workflow
-
-    for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
-        workflow = workflow_text(filename)
-
-        assert "Resolve trusted" not in workflow
-        assert "workflow_sha" not in workflow
-        assert "workflow_ref" not in workflow
-        assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" not in workflow
-        assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" not in workflow
-        assert "ref: main" in workflow
+        assert "workflow_sha" in workflow
+        assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in workflow
+        assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
 
 
 def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() -> None:
@@ -190,14 +178,17 @@ def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
     scheduler = workflow_text("pr-review-merge-scheduler.yml")
 
     for workflow in (noema, scheduler):
-        assert "repository: ContextualWisdomLab/.github" in workflow
+        assert "workflow_sha" in workflow
+        assert "workflow_repository" in workflow
+        assert "Trusted" in workflow or "trusted" in workflow
+        assert "Materialize trusted" in workflow
+        assert "uses: actions/checkout" not in workflow
+        assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in workflow
+        assert "Trusted" in workflow and "source ref must resolve to the immutable workflow commit SHA" in workflow
+        assert "repository: ContextualWisdomLab/.github" not in workflow
         assert "repository: ${{ steps.trusted_source.outputs.repository }}" not in workflow
-        assert "ref: main" in workflow
-        assert "persist-credentials: false" in workflow
+        assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
         assert "INPUT_CANONICAL_REF" not in workflow
-        assert "workflow_sha" not in workflow
-        assert "workflow_repository" not in workflow
-        assert "workflow_ref" not in workflow
 
 
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
