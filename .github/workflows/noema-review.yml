@@ -17,11 +17,6 @@ on:
         required: false
         default: ""
         type: string
-      canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for trusted review scripts
-        required: false
-        default: main
-        type: string
 
 concurrency:
   group: >-
@@ -72,28 +67,12 @@ jobs:
         run: |
           echo "::notice::Noema review skipped: no pull request number is associated with this event."
 
-      - name: Resolve trusted Noema review source ref
-        if: env.PR_NUMBER != ''
-        id: trusted_source
-        env:
-          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: |
-          set -euo pipefail
-          trusted_ref="${INPUT_CANONICAL_REF:-main}"
-          case "$WORKFLOW_REF" in
-            ContextualWisdomLab/.github/.github/workflows/noema-review.yml@*)
-              trusted_ref="${WORKFLOW_REF##*@}"
-              ;;
-          esac
-          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
-
       - name: Checkout trusted Noema review gate
         if: env.PR_NUMBER != ''
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: main
           fetch-depth: 1
           persist-credentials: false
 

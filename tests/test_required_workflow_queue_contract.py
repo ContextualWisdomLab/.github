@@ -158,7 +158,7 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
 
     assert "Noema review skipped: no pull request number is associated with this event." in workflow
     assert "if: env.PR_NUMBER == ''" in workflow
-    assert workflow.count("if: env.PR_NUMBER != ''") >= 4
+    assert workflow.count("if: env.PR_NUMBER != ''") >= 3
 
 
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:

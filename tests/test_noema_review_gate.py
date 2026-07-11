@@ -7,6 +7,10 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+def fake_secret(*parts: str) -> str:
+    return "".join(parts)
+
+
 def make_pr(**overrides):
     """Build a minimal pull request payload for Noema tests."""
     value = {
@@ -48,8 +52,8 @@ def test_scrub_sensitive_data():
     assert noema.scrub_sensitive_data("ok") == "ok"
     assert noema.scrub_sensitive_data("Bearer abcdef123") == "Bearer ***"
     assert noema.scrub_sensitive_data("TOKEN xyz_987") == "TOKEN ***"
-    assert noema.scrub_sensitive_data("github_pat_123456789") == "***"
-    assert noema.scrub_sensitive_data("ghp_12345") == "***"
+    assert noema.scrub_sensitive_data(fake_secret("github_", "pat_", "123456789")) == "***"
+    assert noema.scrub_sensitive_data(fake_secret("gh", "p_", "12345")) == "***"
     assert noema.scrub_sensitive_data("sk-abc-123_456") == "***"
     assert noema.scrub_sensitive_data("xoxb-1234-5678") == "***"
     assert noema.scrub_sensitive_data("AKIA1234567890ABCDEF") == "***"

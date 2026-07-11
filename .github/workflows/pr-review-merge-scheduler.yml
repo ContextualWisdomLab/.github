@@ -65,11 +65,6 @@ on:
         required: false
         default: ""
         type: string
-      canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for scheduler code
-        required: false
-        default: "main"
-        type: string
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
@@ -244,26 +239,11 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Resolve trusted scheduler source ref
-        id: trusted_source
-        env:
-          INPUT_CANONICAL_REF: ${{ inputs.canonical_ref || '' }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: |
-          set -euo pipefail
-          trusted_ref="${INPUT_CANONICAL_REF:-main}"
-          case "$WORKFLOW_REF" in
-            ContextualWisdomLab/.github/.github/workflows/pr-review-merge-scheduler.yml@*)
-              trusted_ref="${WORKFLOW_REF##*@}"
-              ;;
-          esac
-          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
-
       - name: Checkout trusted scheduler
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: main
           fetch-depth: 1
 
       - name: Self-test scheduler
@@ -276,7 +256,7 @@ jobs:
           SCHEDULER_READ_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ steps.trusted_source.outputs.ref }}
+          SCHEDULER_REQUIRED_WORKFLOW_REF: main
           SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail
