@@ -736,7 +736,6 @@ jobs:
           GITHUB_STATUS_TOKEN: ${{ (github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          GITHUB_STATUS_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           STRIX_RESULT: ${{ job.status }}
