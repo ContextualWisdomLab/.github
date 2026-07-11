@@ -30,6 +30,7 @@ class NoRedirectHandler(urllib.request.HTTPErrorProcessor):
     """Explicitly disable redirects to prevent SSRF bypasses via 301/302 to local IPs."""
 
     def http_response(self, request, response):
+        """Return the original HTTP response without following redirects."""
         return response
 
     https_response = http_response
