@@ -130,6 +130,11 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "github.event.inputs.canonical_ref" not in workflow
         assert "inputs.canonical_ref" not in workflow
         assert "workflow_sha" in workflow
+        assert "ref: ${{ steps.trusted_source.outputs.ref }}" not in workflow
+        assert (
+            "ref: ${{ github.workflow_sha }}" in workflow
+            or "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
+        )
         assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in workflow
         assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
 
