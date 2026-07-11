@@ -1639,12 +1639,12 @@ def auto_merge_wait_reason(merge_state: str) -> str:
 
 
 def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool:
-    """Return whether merge should be attempted before branch freshness repair."""
+    """Return whether GitHub currently reports policy-clean mergeability."""
     if merge_state in {"DIRTY", "CONFLICTING", "UNKNOWN"}:
         return False
     if merge_state == "CLEAN":
         return True
-    return (pr.get("mergeable") or "").upper() == "MERGEABLE"
+    return False
 
 
 def inspect_pr(
@@ -1944,7 +1944,7 @@ def inspect_pr(
                 )
             return decide(
                 "wait",
-                f"current head is approved; direct merge waits for CLEAN mergeability, current merge state is {merge_state}",
+                f"current head is approved; direct merge waits for CLEAN mergeability; GitHub mergeability is {merge_state}",
             )
         if merge_mode != "auto":
             return decide("wait", f"current head is approved; unsupported merge mode: {merge_mode}")

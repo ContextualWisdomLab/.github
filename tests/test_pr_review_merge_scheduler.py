@@ -2662,7 +2662,7 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     blocked_unmergeable_direct = inspect(blocked_unmergeable, merge_mode="direct")
     assert blocked_unmergeable_direct.action == "wait"
     assert blocked_unmergeable_direct.reason == (
-        "current head is approved; direct merge waits for CLEAN mergeability, current merge state is BLOCKED"
+        "current head is approved; direct merge waits for CLEAN mergeability; GitHub mergeability is BLOCKED"
     )
     external_unmergeable = inspect(
         make_pr(
@@ -2690,18 +2690,19 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ),
         merge_mode="direct",
     )
-    assert blocked_direct.action == "merge"
+    assert blocked_direct.action == "wait"
     assert "GitHub mergeability is BLOCKED" in blocked_direct.reason
-    assert direct_merges == [("owner/repo", 1, True)]
+    assert "direct merge waits for CLEAN mergeability" in blocked_direct.reason
+    assert direct_merges == []
     direct = inspect(approved, merge_mode="direct")
     assert direct.action == "merge"
     assert "--match-head-commit" in direct.reason
-    assert direct_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
+    assert direct_merges == [("owner/repo", 1, True)]
 
     direct_or_auto = inspect(approved, merge_mode="direct_or_auto")
     assert direct_or_auto.action == "merge"
     assert "--match-head-commit" in direct_or_auto.reason
-    assert direct_merges == [("owner/repo", 1, True), ("owner/repo", 1, True), ("owner/repo", 1, True)]
+    assert direct_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
 
     already_auto_direct_or_auto = inspect(
         make_pr(
@@ -2713,7 +2714,6 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert already_auto_direct_or_auto.action == "merge"
     assert "direct merge requested" in already_auto_direct_or_auto.reason
     assert direct_merges == [
-        ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
@@ -2734,7 +2734,6 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
     ]
 
     blocked_but_mergeable_and_compare_behind = inspect(
@@ -2745,12 +2744,10 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ),
         merge_mode="direct_or_auto",
     )
-    assert blocked_but_mergeable_and_compare_behind.action == "merge"
+    assert blocked_but_mergeable_and_compare_behind.action == "update_branch"
     assert "GitHub mergeability is BLOCKED" in blocked_but_mergeable_and_compare_behind.reason
-    assert "direct merge requested" in blocked_but_mergeable_and_compare_behind.reason
+    assert "base branch is 20 commit(s) ahead" in blocked_but_mergeable_and_compare_behind.reason
     assert direct_merges == [
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
@@ -2768,21 +2765,41 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ),
         merge_mode="direct_or_auto",
     )
-    assert blocked_direct_or_auto.action == "merge"
+    assert blocked_direct_or_auto.action == "auto_merge"
     assert "GitHub mergeability is BLOCKED" in blocked_direct_or_auto.reason
+    assert "auto-merge enabled" in blocked_direct_or_auto.reason
     assert direct_merges == [
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
+    ]
+    assert auto_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
+    blocked_already_auto = inspect(
+        make_pr(
+            mergeStateStatus="BLOCKED",
+            autoMergeRequest={"enabledAt": "now"},
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        ),
+        merge_mode="direct_or_auto",
+    )
+    assert blocked_already_auto.action == "wait"
+    assert "auto-merge is already enabled" in blocked_already_auto.reason
+    assert "GitHub mergeability is BLOCKED" in blocked_already_auto.reason
+    assert direct_merges == [
+        ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
     ]
-    assert auto_merges == [("owner/repo", 1, True)]
+    assert auto_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
     blocked_auto = inspect(blocked_approved, merge_mode="auto")
     assert blocked_auto.action == "auto_merge"
-    assert auto_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
+    assert auto_merges == [
+        ("owner/repo", 1, True),
+        ("owner/repo", 1, True),
+        ("owner/repo", 1, True),
+    ]
 
     external_approved = inspect(
         make_pr(
