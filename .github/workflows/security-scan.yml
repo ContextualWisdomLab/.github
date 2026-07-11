@@ -213,54 +213,16 @@ jobs:
               "comprehensive so fixed PR-introduced alerts close after a clean "
               "base/head comparison."
           )
-      - name: Fetch PR merge ref for OSV SARIF upload
-        id: pr_merge
-        if: always() && hashFiles('results.sarif') != ''
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          merge_ref="refs/pull/${PR_NUMBER}/merge"
-          auth_header="$(
-            python3 - <<'PY'
-          import base64
-          import os
-
-          token = os.environ["GH_TOKEN"].encode("utf-8")
-          print(
-              "AUTHORIZATION: basic "
-              + base64.b64encode(b"x-access-token:" + token).decode("ascii")
-          )
-          PY
-          )"
-          git -c "http.https://github.com/.extraheader=${auth_header}" \
-            fetch --no-tags --depth=1 \
-            "https://github.com/${BASE_REPOSITORY}.git" \
-            "${merge_ref}"
-          merge_sha="$(git rev-parse FETCH_HEAD)"
-          parent_count="$(
-            git cat-file -p "${merge_sha}" |
-              awk '/^parent / { count += 1 } END { print count + 0 }'
-          )"
-          if [ "${parent_count}" -lt 2 ]; then
-            echo "::error::${merge_ref} resolved to ${merge_sha}, but it has ${parent_count} parent(s); code scanning requires a PR merge commit."
-            exit 1
-          fi
-          {
-            echo "ref=${merge_ref}"
-            echo "sha=${merge_sha}"
-          } >> "${GITHUB_OUTPUT}"
-          echo "Fetched ${merge_ref} at ${merge_sha} (${parent_count} parents) for OSV SARIF upload."
       - name: Upload OSV SARIF to code scanning
         if: always() && hashFiles('results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
           sarif_file: results.sarif
-          ref: ${{ steps.pr_merge.outputs.ref }}
-          sha: ${{ steps.pr_merge.outputs.sha }}
+          # results.sarif is produced after checkout of the pull request head.
+          # Uploading it against refs/pull/*/merge can race GitHub's synthetic
+          # merge ref and fail with "commit_oid is not a merge commit".
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
       - name: Upload OSV debug artifacts
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v6.0.0
