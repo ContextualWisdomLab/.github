@@ -122,7 +122,7 @@ if status_write_jobs:
     )
     raise SystemExit(1)
 PY
-		)"; then
+	)"; then
 		record_failure "$output"
 	fi
 }

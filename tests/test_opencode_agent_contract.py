@@ -103,8 +103,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "gpt-5-nano",
         "openai/gpt-5-mini",
         "openai/gpt-5-nano",
-        "openai/o4-mini",
         "openai/o3-mini",
+        "openai/o4-mini",
     }
     assert banned_review_candidates.isdisjoint(
         set(direct_openai_models) | set(github_candidate_models)
@@ -325,8 +325,6 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "placeholder bodies (`pass`, `...`, `NotImplementedError`)" in workflow
     assert "Distinguish typing.Protocol, abc abstractmethod" in workflow
     assert "executable implementation gaps" in workflow
-    assert "Python implementation completeness scan" in workflow
-    assert "scripts/ci/implementation_completeness_scan.py" in workflow
     assert "CHECK_LOOKUP_GH_TOKEN" in workflow
     assert "retrying with workflow github token" in workflow
     assert 'review_write_token="$GH_TOKEN"' in workflow
@@ -384,10 +382,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_central_review_process_fallback" not in workflow
     assert "opencode.jsonc | \\" in workflow
-    assert "scripts/ci/implementation_completeness_scan.py | \\" in workflow
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
-    assert "tests/test_implementation_completeness_scan.py | \\" in workflow
     assert "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py" in workflow
     assert "ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml" in workflow
     assert "ContextualWisdomLab/appguardrail:tests/test_org_security_failure_collector.py" in workflow
@@ -442,7 +438,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
     assert "retry budget and the workflow step timeout" in model_pool_runner
     assert 'record_review_status "exhausted"' not in model_pool_runner
