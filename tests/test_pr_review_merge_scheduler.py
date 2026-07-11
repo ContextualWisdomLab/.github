@@ -3221,7 +3221,7 @@ def test_parse_conflict_reason_missing_branches():
 
 
 def test_run_masks_secrets():
-    token = fake_github_token("ghp", "abcdef1234567890abcdef1234567890abcdef")
+    token = fake_github_token("ghp", "unit_test_token")
     with pytest.raises(RuntimeError) as exc_info:
         sched.run(
             [
@@ -3246,7 +3246,7 @@ def test_run_masks_secrets():
 
 
 def test_run_masks_secrets_in_args():
-    token = fake_github_token("ghp", "abcdef1234567890abcdef1234567890abcdef")
+    token = fake_github_token("ghp", "unit_test_token")
     with pytest.raises(RuntimeError) as exc_info:
         sched.run(
             [
