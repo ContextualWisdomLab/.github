@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import typing
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
