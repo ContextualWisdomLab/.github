@@ -2924,9 +2924,11 @@ jobs:
           OPENCODE_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"
-          # Stop after one catalog pass; the retry budget should fail closed
-          # with visible diagnostics before the 350-min job timeout.
-          OPENCODE_POOL_MAX_CYCLES: "1"
+          # Keep cycling through the high-sensitivity catalog until a model
+          # emits a valid control block or the bounded retry/step timeout fires.
+          # A single invalid no-control response is provider/tool state, not a
+          # source finding.
+          OPENCODE_POOL_CYCLE_SLEEP_SECONDS: "15"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "5"
           OPENCODE_BACKOFF_MAX_SECONDS: "5"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
