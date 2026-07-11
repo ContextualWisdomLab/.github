@@ -1,6 +1,13 @@
 import json
 
+import pytest
+
 from scripts.ci import opencode_review_normalize_output as norm
+
+
+@pytest.fixture(autouse=True)
+def clear_caches():
+    norm.current_changed_files.cache_clear()
 
 
 FULL_SUMMARY = """\
@@ -92,7 +99,8 @@ def test_changed_file_and_verification_posture_detection():
 
 def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
-    assert norm.current_changed_files() == set()
+    norm.current_changed_files.cache_clear()
+    assert norm.current_changed_files() == frozenset()
     assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
 
     changed_files = tmp_path / "changed-files.txt"
@@ -107,8 +115,10 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, 
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
+    norm.current_changed_files.cache_clear()
     assert norm.mentions_actual_changed_file("No executable changes here", "no changed files")
     assert norm.mentions_verification_posture("No executable changes here", "no changed files")
     assert norm.mentions_full_coverage("No executable changes here", "no changed files")
@@ -119,12 +129,13 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, 
     assert norm.mentions_verification_posture("No UI codebase changes", "No UI codebase changes")
     assert norm.mentions_full_coverage("No UI codebase changes", "No UI codebase changes")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
 
-    assert norm.current_changed_files() == {
+    assert norm.current_changed_files() == frozenset({
         ".github/workflows/opencode-review.yml",
         "scripts/ci/opencode_review_normalize_output.py",
-    }
+    })
     assert norm.mentions_actual_changed_file(
         "Reviewed .github/workflows/opencode-review.yml.",
         "",
@@ -139,7 +150,8 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, 
     )
 
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(tmp_path / "missing.txt"))
-    assert norm.current_changed_files() == set()
+    norm.current_changed_files.cache_clear()
+    assert norm.current_changed_files() == frozenset()
     assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
 
 
@@ -149,6 +161,7 @@ def test_preferred_review_language_handles_unreadable_and_unknown_evidence(tmp_p
         "## Review language evidence\nPreferred review language: `Spanish`\n",
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     assert norm.preferred_review_language() is None
@@ -169,6 +182,7 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
     false_summary = (
         FULL_SUMMARY.replace("scripts/ci/example.py", ".github/workflows/opencode-review.yml")
@@ -227,6 +241,7 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
     )
 
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE")
+    norm.current_changed_files.cache_clear()
     assert not norm.contradicts_changed_file_kinds(approval["reason"], approval["summary"])
 
 
@@ -243,6 +258,7 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(tmp_path, m
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
     summary = (
         "Approval sufficiency: The change is a simple typo fix in a string with no functional impact. "
@@ -276,6 +292,7 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(tmp_path, m
     assert norm.check_structural_approval(path) == 4
 
     changed_files.write_text("README.md\n", encoding="utf-8")
+    norm.current_changed_files.cache_clear()
     assert not norm.contradicts_material_changed_file_scope(
         approval["reason"],
         approval["summary"],
@@ -295,6 +312,7 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(tmp
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
     approval = control(
         reason="Typo fix in documentation string",
@@ -400,10 +418,12 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path,
     changed_files = tmp_path / "changed-files.txt"
     changed_files.write_text("tests/actual_changed_file.py\n", encoding="utf-8")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
     wrong_file = tmp_path / "wrong-file.json"
     wrong_file.write_text(json.dumps(control()), encoding="utf-8")
     assert norm.check_structural_approval(wrong_file) == 4
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE")
+    norm.current_changed_files.cache_clear()
 
     request_changes = tmp_path / "request.json"
     request_changes.write_text(json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8")
@@ -526,6 +546,7 @@ A\t.github/workflows/opencode-review.yml
 """,
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     repaired = norm.valid_control(
@@ -557,6 +578,7 @@ def test_valid_control_repairs_summary_from_invalid_utf8_evidence(tmp_path, monk
         b"## Changed files\n\n"
         b"M\tscripts/ci/opencode_review_normalize_output.py\n"
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     repaired = norm.valid_control(
@@ -604,11 +626,13 @@ M\t.github/workflows/r.yml
 """,
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
     monkeypatch.delenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", raising=False)
     changed_files = tmp_path / "changed-files.txt"
     changed_files.write_text(".github/workflows/r.yml\n", encoding="utf-8")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
     repaired = norm.valid_control(
         control(
@@ -665,6 +689,7 @@ M\ttests/test_opencode_review_normalize_output.py
 """,
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     repaired = norm.valid_control(
@@ -731,8 +756,10 @@ M\tapps/desktop/src/App.test.tsx
         "apps/desktop/src/App.tsx\napps/desktop/src/App.test.tsx\n",
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
     repaired = norm.valid_control(
         control(
@@ -799,8 +826,10 @@ M\tscripts/ci/test_strix_quick_gate.sh
         ".github/workflows/strix.yml\nscripts/ci/test_strix_quick_gate.sh\n",
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    norm.current_changed_files.cache_clear()
 
     repaired = norm.valid_control(
         control(
@@ -845,6 +874,7 @@ M\tscripts/ci/example.py
 """,
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
     kwargs = {
         "expected_head_sha": "head",
@@ -949,6 +979,7 @@ M\tscripts/ci/example.py
 
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text("placeholder", encoding="utf-8")
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
     original_read_text = norm.Path.read_text
 
@@ -978,6 +1009,7 @@ Preferred review language: `Korean`
 """,
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     reviewed = norm.valid_control(
@@ -1017,6 +1049,7 @@ Preferred review language: `Korean`
 """,
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     assert (
@@ -1151,6 +1184,7 @@ def test_review_language_contract_rejects_english_only_korean_pr(tmp_path, monke
         "## Review language evidence\n\n- Preferred review language: `Korean`\n",
         encoding="utf-8",
     )
+    norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
 
     assert norm.valid_control(
