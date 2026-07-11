@@ -266,6 +266,8 @@ def test_security_scan_osv_upload_uses_default_analysis_category() -> None:
 
     assert "github/codeql-action/upload-sarif" in upload_step
     assert "sarif_file: results.sarif" in upload_step
+    assert "ref: refs/pull/${{ github.event.pull_request.number }}/merge" in upload_step
+    assert "sha: ${{ github.sha }}" in upload_step
     assert "category:" not in upload_step
 
 
