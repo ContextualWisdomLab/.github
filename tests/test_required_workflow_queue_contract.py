@@ -159,6 +159,20 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
     assert workflow.count("if: env.PR_NUMBER != ''") >= 4
 
 
+def test_noema_and_scheduler_trusted_checkouts_use_workflow_sha() -> None:
+    noema = workflow_text("noema-review.yml")
+    scheduler = workflow_text("pr-review-merge-scheduler.yml")
+
+    for workflow in (noema, scheduler):
+        assert "workflow_sha" in workflow
+        assert "workflow_repository" in workflow
+        assert "Trusted" in workflow or "trusted" in workflow
+        assert "repository: ${{ steps.trusted_source.outputs.repository }}" in workflow
+        assert "ref: ${{ steps.trusted_source.outputs.ref }}" in workflow
+        assert "persist-credentials: false" in workflow
+        assert "INPUT_CANONICAL_REF" not in workflow
+
+
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 

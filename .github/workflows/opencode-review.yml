@@ -1564,7 +1564,29 @@ jobs:
           FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
         run: |
           set -euo pipefail
-          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
+
+          case "${GH_REPOSITORY:-}" in
+            */*) ;;
+            *)
+              echo "::error::Invalid GH_REPOSITORY for OpenCode evidence collection."
+              exit 1
+              ;;
+          esac
+          case "${PR_NUMBER:-}" in
+            ''|*[!0-9]*)
+              echo "::error::Invalid PR_NUMBER for OpenCode evidence collection."
+              exit 1
+              ;;
+          esac
+          for candidate_sha in "$PR_BASE_SHA" "$PR_HEAD_SHA" "$HEAD_SHA"; do
+            case "$candidate_sha" in
+              [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+              *)
+                echo "::error::Invalid commit SHA for OpenCode evidence collection."
+                exit 1
+                ;;
+            esac
+          done
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
