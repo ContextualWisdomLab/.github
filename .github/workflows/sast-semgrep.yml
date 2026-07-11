@@ -1,0 +1,100 @@
+# Central multi-language SAST gate for every ContextualWisdomLab repo.
+#
+# Fills a governance gap left when the duplicate LOCAL Semgrep workflow was
+# removed (xtrmLLMBatchPython) in favour of the central required workflows.
+# Semgrep auto-detects the languages present, so this runs everywhere and is a
+# no-op on repos with no supported source.
+#
+#   semgrep  multi-language SAST  -> SARIF uploaded under category "semgrep"
+#
+# Gating is by the JOB result (high sensitivity: fail on WARNING/ERROR, i.e.
+# Medium+), ref-independent, exactly like trivy-fs in security-scan.yml. The
+# SARIF is uploaded under a DISTINCT category ("semgrep") and is NOT added to
+# the code_scanning ruleset rule, so it does not affect auto-merge. The SARIF
+# upload is best-effort (continue-on-error) so a repo that has not enabled code
+# scanning still gets the gate without a JOB_STATUS_CONFIGURATION_ERROR.
+#
+# Engine license: Semgrep OSS CLI is LGPL-2.1 (a containerized CLI invoked in
+# CI, not linked) — acceptable under the commercial-only OSS policy. Registry
+# ruleset p/default is the Semgrep community pack.
+name: SAST Semgrep
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+    branches: [main, master, develop]
+  push:
+    branches: [main, master, develop]
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  group: sast-semgrep-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-closed-pr-runs:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
+  semgrep:
+    name: Semgrep (multi-language SAST)
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    env:
+      # Deterministic, no telemetry: registry rules are fetched but no scan data
+      # is sent back.
+      SEMGREP_SEND_METRICS: "off"
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Run Semgrep (SARIF)
+        id: semgrep
+        run: |
+          set +e
+          echo "Using semgrep/semgrep:1.169.0@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/src" \
+            -w /src \
+            -e SEMGREP_SEND_METRICS=off \
+            --entrypoint semgrep \
+            semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942 \
+            scan \
+            --config=p/default \
+            --severity=WARNING \
+            --severity=ERROR \
+            --exclude=.github/workflows \
+            --error \
+            --sarif \
+            --output=semgrep-results.sarif \
+            --metrics=off
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+      - name: Upload Semgrep SARIF to code scanning
+        if: always() && hashFiles('semgrep-results.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+      - name: Enforce Semgrep gate (fail on Medium+ findings)
+        if: steps.semgrep.outputs.rc != '0'
+        run: |
+          echo "::error::Semgrep found WARNING/ERROR (Medium+) findings. See the 'semgrep' code scanning category."
+          exit 1
