@@ -258,6 +258,17 @@ def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(tmp_pat
     assert "marked the code-scanning analysis comprehensive" in result.stdout
 
 
+def test_security_scan_osv_upload_uses_default_analysis_category() -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Upload OSV SARIF to code scanning\n"
+    start = workflow.index(step)
+    upload_step = workflow[start : workflow.index("\n      - name:", start + len(step))]
+
+    assert "github/codeql-action/upload-sarif" in upload_step
+    assert "sarif_file: results.sarif" in upload_step
+    assert "category:" not in upload_step
+
+
 def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Print OSV findings being compared\n"
