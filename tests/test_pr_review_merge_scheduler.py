@@ -1940,6 +1940,9 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert same_head_auto_decision.action == "wait"
     assert same_head_auto_decision.reason == "current head is approved; auto-merge already enabled"
     assert disabled == []
+    dirty_auto_reason = sched.auto_merge_wait_reason("DIRTY")
+    assert "auto-merge is already enabled" in dirty_auto_reason
+    assert "conflict repair is required before GitHub can merge it" in dirty_auto_reason
     blocked_auto = make_pr(
         restMergeableState="blocked",
         autoMergeRequest={"enabledAt": "now"},
@@ -2219,7 +2222,7 @@ def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
     assert cancelled == [("owner/repo", 1, True)]
 
 
-def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
+def test_inspect_pr_blocks_auto_merge_for_approved_conflicts(monkeypatch):
     auto_merges = []
     disables = []
     monkeypatch.setattr(
@@ -2238,11 +2241,11 @@ def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
     )
     decision = inspect(approved_conflict)
-    assert decision.action == "auto_merge"
-    assert "auto-merge enabled and queued while conflict repair remains required" in decision.reason
+    assert decision.action == "block"
+    assert "auto-merge is not queued until merge conflict repair is pushed" in decision.reason
     assert "merge conflict: DIRTY" in decision.reason
     assert "gh pr checkout 1" in decision.reason
-    assert auto_merges == [("owner/repo", 1, True)]
+    assert auto_merges == []
     assert disables == []
 
     already_queued = inspect(
@@ -2252,12 +2255,11 @@ def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
             autoMergeRequest={"enabledAt": "now"},
         )
     )
-    assert already_queued.action == "wait"
-    assert "auto-merge is already enabled" in already_queued.reason
-    assert "conflict repair is required" in already_queued.reason
+    assert already_queued.action == "disable_auto_merge"
+    assert "merge conflict repair is required before auto-merge can be queued" in already_queued.reason
     assert "merge conflict: CONFLICTING" in already_queued.reason
-    assert auto_merges == [("owner/repo", 1, True)]
-    assert disables == []
+    assert auto_merges == []
+    assert disables == [("owner/repo", 1, True)]
 
     disabled_by_inputs = inspect(
         make_pr(
@@ -2266,10 +2268,10 @@ def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
         ),
         enable_auto_merge_flag=False,
     )
-    assert disabled_by_inputs.action == "wait"
-    assert "auto-merge is not queued" in disabled_by_inputs.reason
+    assert disabled_by_inputs.action == "block"
+    assert "auto-merge is not queued until merge conflict repair is pushed" in disabled_by_inputs.reason
     assert "merge conflict: DIRTY" in disabled_by_inputs.reason
-    assert auto_merges == [("owner/repo", 1, True)]
+    assert auto_merges == []
 
     external_conflict = inspect(
         make_pr(
@@ -2282,7 +2284,7 @@ def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
     assert external_conflict.action == "wait"
     assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in external_conflict.reason
     assert "merge conflict: DIRTY" in external_conflict.reason
-    assert auto_merges == [("owner/repo", 1, True)]
+    assert auto_merges == []
 
     direct_mode = inspect(
         make_pr(
@@ -2291,10 +2293,10 @@ def test_inspect_pr_queues_auto_merge_for_approved_conflicts(monkeypatch):
         ),
         merge_mode="direct",
     )
-    assert direct_mode.action == "wait"
-    assert "merge mode is direct" in direct_mode.reason
+    assert direct_mode.action == "block"
+    assert "auto-merge is not queued until merge conflict repair is pushed" in direct_mode.reason
     assert "merge conflict: DIRTY" in direct_mode.reason
-    assert auto_merges == [("owner/repo", 1, True)]
+    assert auto_merges == []
 
 
 def test_wait_for_updated_branch_head_polls_until_head_changes(monkeypatch):
