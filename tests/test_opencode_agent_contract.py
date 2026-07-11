@@ -652,6 +652,19 @@ def test_opencode_pending_peer_checks_hold_approval_without_failing_required_wor
     assert "build_waiting_for_checks_body" not in workflow
 
 
+def test_opencode_review_publication_prefers_merge_token_before_app_token():
+    """Use the less-contended merge token before the OpenCode app token."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || "
+        "steps.opencode_app_token.outputs.token || github.token }}"
+    ) in workflow
+
+
 def test_opencode_approve_review_publication_failure_keeps_gate_result():
     """A rejected APPROVE review write is logged without losing source evidence."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
