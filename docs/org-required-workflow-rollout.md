@@ -104,6 +104,33 @@ The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the
 
 Do not centralize the scheduler by running a `.github` scheduled job against other repositories with the `.github` repository token. That would either fail permission checks or use the wrong mutation actor. The central path is a required workflow executed in each target repository context.
 
+- Heartbeat fallback posture: event-driven target-repository runs stop retrying once their triggering event is consumed, so a PR that becomes mergeable AFTER its last event (approval published after the scheduler pass, merge-preview checks landing late, a temporary base-branch policy blocker clearing) has no later trigger and sits approved-but-unmerged. The `org-queue-sweep` job in the central scheduler workflow closes this gap: it runs hourly (`17 * * * *`) only in `ContextualWisdomLab/.github`, re-runs the same trusted scheduler script against every non-archived organization repository, and merges/updates through the identical guarded contract. It never uses the `.github` repository `github.token` for sibling mutations — it requires `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the exchanged OpenCode app token, and fails with a visible `::error` reason when no cross-repository mutation credential is available instead of silently no-opping. Every swept repository prints its per-PR decision log, so an unmerged PR always has a concrete logged reason at most one hour old.
+- Queue hygiene posture: during the sweep, workflow runs still `queued` after `ORG_SWEEP_STALE_QUEUE_HOURS` (default 24h) are cancelled with their run id, workflow name, head branch, and age logged. A run queued that long belongs to a head that PR events will never revisit (closed PR, force-pushed branch, or a previous runner outage), and leaving it keeps the Actions queue holding non-current-head work.
+
+## Second-reviewer (Noema) posture
+
+The org's two-reviewer merge rule needs a second approving-review identity
+independent of OpenCode. That identity is the Noema reviewer, whose judgement
+plane is the PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
+(`reviewer/noema_reviewer`, noema#9) and whose GitHub identity comes from the
+Noema GitHub App (token-exchange Worker) *or* a `NOEMA_REVIEW_TOKEN` secret.
+
+- Token posture: `noema-review.yml` now prefers a `NOEMA_REVIEW_TOKEN` secret
+  as the reviewer identity when present, skipping the OIDC app-token exchange.
+  This lets the second reviewer submit real approving reviews without deploying
+  the Noema Worker. When neither the secret nor `NOEMA_TOKEN_EXCHANGE_URL` is
+  configured, the step still emits the unconfigured notice and skips rather than
+  failing the check.
+- Honesty posture: `noema_review_gate.py` refuses to review as a primary review
+  actor (`opencode-agent`, `github-actions`), so a `NOEMA_REVIEW_TOKEN` that
+  resolves to one of those identities cannot manufacture a fake second review —
+  it must be a distinct write-access identity.
+- Minimal admin config to activate the second reviewer: set the org/repo
+  secrets `NOEMA_REVIEW_TOKEN` (a distinct write-access token) and the LLM
+  endpoint (`NOEMA_LLM_MODEL`, `NOEMA_LLM_API_URL`, `NOEMA_LLM_API_KEY`). Until
+  then the `noema-review` check stays green-by-skip and only OpenCode approves,
+  so the classic `.github` 2-review protection keeps `.github` PRs blocked.
+
 ## Scope
 
 The active ruleset no longer maintains a repository-name allowlist. Live
