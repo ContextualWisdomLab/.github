@@ -1167,6 +1167,14 @@ jobs:
           append "- Required docstring evidence: repository-owned docstring gates must pass when configured; otherwise docstring coverage is advisory."
           append ""
 
+          implementation_changed_files="$(mktemp)"
+          changed_files_for_coverage >"$implementation_changed_files"
+          run_and_capture "Python implementation completeness scan" \
+            python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
+              --repo-root . \
+              --changed-files "$implementation_changed_files"
+          rm -f "$implementation_changed_files"
+
           measured_any=0
 
           if has_changed_tracked_files '*.py'; then
@@ -1315,7 +1323,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 420
     permissions:
       actions: read
       checks: read
@@ -2930,7 +2938,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 12
+        timeout-minutes: 350
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2946,30 +2954,24 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. Mini/nano/o*-mini models
-          # previously consumed the whole job on context-window timeouts before
-          # the pool reached stronger reviewers, so the default pool now starts
-          # with GPT-5/o3-class models, keeps provider-diverse full-size
-          # fallbacks, and bounds provider stalls so the org queue releases with
-          # a visible MODEL_OUTPUT_UNAVAILABLE reason.
-          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
+          # High-sensitivity review candidates only. DeepSeek V3 has been the
+          # most reliable first-pass reviewer in the org queue, then the pool
+          # falls through to full-size GPT/o3 and reasoning-capable fallbacks.
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Three minutes per model is enough for healthy providers to emit the
-          # required control block and short enough to avoid queue pileups when a
-          # provider stalls silently.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"
-          # Keep cycling through the high-sensitivity catalog until a model
-          # emits a valid control block or the bounded retry/step timeout fires.
-          # A single invalid no-control response is provider/tool state, not a
-          # source finding.
-          OPENCODE_POOL_CYCLE_SLEEP_SECONDS: "15"
-          OPENCODE_BACKOFF_INITIAL_SECONDS: "5"
-          OPENCODE_BACKOFF_MAX_SECONDS: "5"
+          # 90 minutes per model gives deep tool-using reviews room to finish;
+          # stale providers still yield within the bounded retry budget.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          # Stop after one catalog pass; the retry budget fails closed with
+          # visible diagnostics before the 350-minute step timeout.
+          OPENCODE_POOL_MAX_CYCLES: "1"
+          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
+          OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
@@ -3364,11 +3366,11 @@ jobs:
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
-          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
           OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "180"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
@@ -4297,7 +4299,7 @@ jobs:
               "scripts/ci/test_strix_quick_gate.sh"
             emit_known_missing_string_finding \
               "MODEL: github-models/deepseek/deepseek-r1-0528" \
-              "OpenCode review must start with DeepSeek R1" \
+              "OpenCode failed-check diagnosis must keep DeepSeek R1" \
               ".github/workflows/opencode-review.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
 
@@ -4705,7 +4707,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-600}s" opencode run "$(cat "$prompt_file")" \
+            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \

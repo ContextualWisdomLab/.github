@@ -84,19 +84,23 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs == [
+        ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5"],
         ["github-models", "openai/gpt-5"],
         ["github-models", "openai/gpt-5-chat"],
         ["github-models", "openai/o3"],
         ["github-models", "deepseek/deepseek-r1-0528"],
+        ["github-models", "deepseek/deepseek-r1"],
     ]
     assert direct_openai_models == ["gpt-5"]
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models == [
+        "deepseek/deepseek-v3-0324",
         "openai/gpt-5",
         "openai/gpt-5-chat",
         "openai/o3",
         "deepseek/deepseek-r1-0528",
+        "deepseek/deepseek-r1",
     ]
     banned_review_candidates = {
         "gpt-5-nano",
@@ -428,31 +432,33 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
+    assert "implementation_completeness_scan.py" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
     assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 40", workflow)
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 120", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 420", workflow)
     assert 'timeout-minutes: 40' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 12", workflow)
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
     assert re.search(r"Publish OpenCode review outcome[\s\S]{0,120}timeout-minutes: 45", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "49"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"' in workflow
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "openai/gpt-5 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
-        'github-models/deepseek/deepseek-r1-0528"'
+        "github-models/deepseek/deepseek-r1-0528 "
+        'github-models/deepseek/deepseek-r1"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"' in workflow
-    assert "OPENCODE_POOL_MAX_CYCLES" not in workflow
-    assert 'OPENCODE_POOL_CYCLE_SLEEP_SECONDS: "15"' in workflow
-    assert 'OPENCODE_BACKOFF_MAX_SECONDS: "5"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
+    assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"' in workflow
@@ -469,9 +475,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
-    assert "workflow step timeout remain the outer guards for invalid or unavailable provider output" in model_pool_runner
+    assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert "OpenCode model pool exhausted before producing a valid control conclusion." in model_pool_runner
     assert 'record_review_status "exhausted"' in model_pool_runner
     assert "Never emit raw tool-call markup" in model_pool_runner
@@ -480,7 +486,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "retry budget exhausted" not in model_pool_runner
     assert 'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "openai/gpt-5 "
         "github-models/openai/gpt-5 "
         "github-models/openai/o3 "
         'github-models/deepseek/deepseek-r1-0528"'

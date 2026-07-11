@@ -128,7 +128,7 @@ jobs:
       contents: read
       id-token: write
       models: read
-      statuses: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -736,6 +736,7 @@ jobs:
         if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          GITHUB_STATUS_TOKEN: ${{ (github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
@@ -792,6 +793,9 @@ jobs:
           }
 
           if post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           if post_strix_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"; then
