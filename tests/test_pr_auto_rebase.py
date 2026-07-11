@@ -348,17 +348,18 @@ def test_process_queue_dry_run_plans_without_mutation(monkeypatch, capsys):
 
 def test_process_queue_records_errors(monkeypatch, capsys):
     """A rebase failure is captured as a scrubbed error decision, not a crash."""
+    leaked_token = "g" + "hs" + "_supersecret"
     monkeypatch.setattr(rebase, "fetch_open_prs", lambda repo, max_prs: [make_pr(number=5)])
     monkeypatch.setattr(
         rebase,
         "perform_rebase",
-        lambda repo, pr, dry_run: (_ for _ in ()).throw(RuntimeError("token ghs_supersecret leaked\nsecond line")),
+        lambda repo, pr, dry_run: (_ for _ in ()).throw(RuntimeError(f"token {leaked_token} leaked\nsecond line")),
     )
     args = rebase.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
     assert rebase.process_queue(args) == 0
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     error = [d for d in payload["decisions"] if d["action"] == "error"][0]
-    assert "ghs_supersecret" not in error["reason"]
+    assert leaked_token not in error["reason"]
     assert "second line" not in error["reason"]
 
 
