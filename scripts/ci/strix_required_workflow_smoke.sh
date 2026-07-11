@@ -107,17 +107,29 @@ for line in lines[jobs_index + 1 :]:
     if line.strip():
         inside_permissions = False
 
-if status_read_jobs != ["strix"]:
+if status_read_jobs and status_read_jobs != ["strix"]:
     print(
-        "Strix workflow must scope statuses: read only to the strix scan job; found: "
-        + (", ".join(status_read_jobs) if status_read_jobs else "none"),
+        "Strix workflow must scope statuses: read only to the strix scan job when read is used; found: "
+        + ", ".join(status_read_jobs),
         file=sys.stderr,
     )
     raise SystemExit(1)
-if status_write_jobs:
+if status_write_jobs and status_write_jobs != ["strix"]:
     print(
-        "Strix workflow must not grant GITHUB_TOKEN statuses: write; found: "
+        "Strix workflow must scope statuses: write only to the strix scan job when write is used; found: "
         + ", ".join(status_write_jobs),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if status_read_jobs and status_write_jobs:
+    print(
+        "Strix workflow must choose statuses: read or statuses: write for the strix scan job, not both.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not status_read_jobs and not status_write_jobs:
+    print(
+        "Strix workflow must scope statuses: read or statuses: write to the strix scan job; found: none",
         file=sys.stderr,
     )
     raise SystemExit(1)
