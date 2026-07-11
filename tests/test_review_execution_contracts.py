@@ -119,12 +119,7 @@ def test_discovers_package_managers_java_r_json_and_main(tmp_path, capsys, monke
     assert '"java"' in capsys.readouterr().out
 
     monkeypatch.setattr(sys, "argv", ["review_execution_contracts.py", "--repo-root", str(repo), "--format", "json"])
-    module = sys.modules.pop("scripts.ci.review_execution_contracts", None)
     try:
-        try:
-            runpy.run_module("scripts.ci.review_execution_contracts", run_name="__main__")
-        finally:
-            if module is not None:
-                sys.modules["scripts.ci.review_execution_contracts"] = module
+        runpy.run_module("scripts.ci.review_execution_contracts", run_name="__main__")
     except SystemExit as exc:
         assert exc.code == 0

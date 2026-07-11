@@ -191,178 +191,6 @@ emit_strix_vulnerability_evidence() {
 	done <"$merged_ranges_tmp"
 }
 
-supply_chain_tool_for_label() {
-	# Map a failed supply-chain check label to the code-scanning SARIF tool name
-	# used to file its alerts, so their package/advisory/fixed-version detail can
-	# be pulled into the evidence as source-backed canonical lines.
-	local label_lower
-	label_lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-	case "$label_lower" in
-		*osv*) printf 'OSV-Scanner' ;;
-		*trivy*) printf 'Trivy' ;;
-		*) printf '' ;;
-	esac
-}
-
-emit_supply_chain_alert_evidence() {
-	# Supply-chain scanners (osv-scanner, trivy-fs) upload SARIF to code scanning
-	# rather than printing findings in the failed job log. Their advisories are
-	# fully source-backed: each alert names the exact vulnerable package, the
-	# manifest file + line it is pinned on, the CVE/GHSA id, the severity, and the
-	# fixed version. Pull those alerts for the current head and emit canonical
-	# supply-chain lines so the OpenCode failed-check fallback can map them to
-	# concrete "bump <pkg> from <installed> to <fixed>" findings instead of a
-	# URL-only review. Best-effort: never fail the collector.
-	local label="$1"
-	local tool
-	local alerts_json
-	local canonical
-	local ref
-
-	tool="$(supply_chain_tool_for_label "$label")"
-	if [ -z "$tool" ]; then
-		return 0
-	fi
-
-	alerts_json="$(mktemp)"
-	canonical="$(mktemp)"
-	tmp_files+=("$alerts_json" "$canonical")
-
-	for ref in "$HEAD_SHA" "refs/pull/${PR_NUMBER}/head"; do
-		if gh api -X GET "repos/${GH_REPOSITORY}/code-scanning/alerts" \
-			-f "tool_name=${tool}" \
-			-f "ref=${ref}" \
-			-f "state=open" \
-			-f "per_page=100" \
-			--paginate >"$alerts_json" 2>/dev/null && [ -s "$alerts_json" ]; then
-			if jq -e 'type == "array" and length > 0' "$alerts_json" >/dev/null 2>&1; then
-				break
-			fi
-		fi
-		: >"$alerts_json"
-	done
-
-	if [ ! -s "$alerts_json" ]; then
-		return 0
-	fi
-
-	python3 - "$alerts_json" >"$canonical" 2>/dev/null <<'PYEOF' || true
-import json
-import re
-import sys
-
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        alerts = json.load(handle)
-except Exception:
-    sys.exit(0)
-
-if not isinstance(alerts, list):
-    sys.exit(0)
-
-ID_RE = re.compile(r"(CVE-\d{4}-\d{3,}|GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})", re.I)
-
-
-def first(patterns, text):
-    for pattern in patterns:
-        match = re.search(pattern, text, re.I)
-        if match:
-            return match.group(1).strip().strip("`'\"")
-    return ""
-
-
-def clean_version(value):
-    return value.strip().strip("`'\"").rstrip(".,;)")
-
-
-seen = set()
-for alert in alerts:
-    if not isinstance(alert, dict):
-        continue
-    rule = alert.get("rule") or {}
-    instance = alert.get("most_recent_instance") or {}
-    location = (instance.get("location") or {})
-    manifest = (location.get("path") or "").strip()
-    line = location.get("start_line") or 0
-    message = ((instance.get("message") or {}).get("text") or "")
-    text = " ".join(
-        str(part)
-        for part in (
-            message,
-            rule.get("description") or "",
-            rule.get("full_description") or "",
-            rule.get("name") or "",
-        )
-    )
-    id_match = ID_RE.search(str(rule.get("id") or "")) or ID_RE.search(text)
-    vuln_id = id_match.group(1) if id_match else str(rule.get("id") or "").strip()
-    severity = (
-        rule.get("security_severity_level")
-        or rule.get("severity")
-        or "high"
-    ).upper()
-    package = first(
-        [
-            r"Package:\s*([A-Za-z0-9._/+-]+)",
-            r"['\"`]([A-Za-z0-9._/+-]+)@[0-9]",
-            r"Package\s+['\"]([A-Za-z0-9._/+-]+?)(?:@[^'\"]*)?['\"]",
-            r"for (?:the )?package[:\s]+['\"`]?([A-Za-z0-9._/+-]+)['\"`]?",
-        ],
-        text,
-    )
-    # A package name may still arrive as pkg@version; keep only the name.
-    package = package.split("@", 1)[0]
-    installed = clean_version(
-        first(
-            [
-                r"Installed Version:\s*([^\s,;]+)",
-                r"@([0-9][A-Za-z0-9._+-]*)",
-                r"currently[:\s]+([0-9][A-Za-z0-9._+-]*)",
-            ],
-            text,
-        )
-    )
-    fixed = clean_version(
-        first(
-            [
-                r"Fixed Version:\s*([^\s,;]+)",
-                r"[Ff]ixed in[:\s]+([0-9][A-Za-z0-9._+-]*)",
-                r"[Pp]atched in[:\s]+([0-9][A-Za-z0-9._+-]*)",
-            ],
-            text,
-        )
-    )
-    if not (vuln_id and package and manifest):
-        continue
-    key = (manifest.lower(), package.lower(), vuln_id.lower())
-    if key in seen:
-        continue
-    seen.add(key)
-    fields = [
-        f"id={vuln_id}",
-        f"severity={severity}",
-        f"package={package}",
-    ]
-    if installed:
-        fields.append(f"installed={installed}")
-    if fixed:
-        fields.append(f"fixed={fixed}")
-    fields.append(f"manifest={manifest}")
-    if isinstance(line, int) and line > 0:
-        fields.append(f"line={line}")
-    print("- Supply-chain vulnerability: " + " ".join(fields))
-PYEOF
-
-	if [ ! -s "$canonical" ]; then
-		return 0
-	fi
-
-	printf '### Supply-chain vulnerability findings\n\n'
-	printf 'Source-backed code-scanning alerts for this failed supply-chain check (package, manifest line, advisory id, and fixed version):\n\n'
-	emit_bounded_file "$canonical" 100
-	printf '\n'
-}
-
 owner="${GH_REPOSITORY%%/*}"
 repo="${GH_REPOSITORY#*/}"
 pr_node_id="$(
@@ -396,34 +224,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-target_workflow_available() {
-	local workflow_file="$1"
-	local workflow_lookup_err
-
-	workflow_lookup_err="$(mktemp)"
-	tmp_files+=("$workflow_lookup_err")
-
-	if gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/${workflow_file}" \
-		--jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
-		return 0
-	fi
-
-	if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
-		printf 'Optional workflow %s is not installed on %s; skipping current-head workflow-run lookup.\n' "$workflow_file" "$GH_REPOSITORY" >&2
-		return 1
-	fi
-
-	cat "$workflow_lookup_err" >&2
-	return 1
-}
-
 manual_success_for_label() {
 	local label="$1"
 	local failed_run_id="${2:-}"
-	local failed_conclusion="${3:-}"
 	local key
 	local lower_label
-	local lower_failed_conclusion
 	local success_context
 	local success_url
 	local success_description
@@ -432,7 +237,6 @@ manual_success_for_label() {
 	key="${label##*/}"
 	key="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
 	lower_label="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
-	lower_failed_conclusion="$(printf '%s' "$failed_conclusion" | tr '[:upper:]' '[:lower:]')"
 	case "$lower_label" in
 		"strix security scan/"*)
 			key="strix"
@@ -444,8 +248,7 @@ manual_success_for_label() {
 			continue
 		fi
 		success_run_id="$(printf '%s' "$success_url" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
-		if { [ "$key" != "strix" ] || [ "$lower_failed_conclusion" != "cancelled" ]; } &&
-			[ -n "$failed_run_id" ] &&
+		if [ -n "$failed_run_id" ] &&
 			[ -n "$success_run_id" ] &&
 			[ "$failed_run_id" -ge "$success_run_id" ]; then
 			continue
@@ -459,8 +262,7 @@ manual_success_for_label() {
 			continue
 		fi
 		success_run_id="$(printf '%s' "$success_url" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
-		if { [ "$key" != "strix" ] || [ "$lower_failed_conclusion" != "cancelled" ]; } &&
-			[ -n "$failed_run_id" ] &&
+		if [ -n "$failed_run_id" ] &&
 			[ -n "$success_run_id" ] &&
 			[ "$failed_run_id" -ge "$success_run_id" ]; then
 			continue
@@ -523,8 +325,6 @@ gh api graphql \
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.checkSuite.workflowRun.workflow.name // "") == "CodeQL") | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")) | not)
-				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("${{"))) | not)
-				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review" and ((.checkSuite.workflowRun.workflow.name // "") == "Noema Review" or (.checkSuite.workflowRun.workflow.name // "") == "Required Noema Review")) | not)
 				| select((.name // "") != "opencode-review")
 				| select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
 				| select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
@@ -608,28 +408,26 @@ gh api graphql \
 		| @tsv
 	' >"$manual_success_check_runs"
 
-if target_workflow_available "strix.yml"; then
-	env HEAD_SHA="$HEAD_SHA" gh run list \
-		--repo "$GH_REPOSITORY" \
-		--workflow strix.yml \
-		--commit "$HEAD_SHA" \
-		--limit 200 \
-		--json databaseId,workflowName,status,conclusion,url,event,headSha \
-		--jq '
-			.[]
-			| select((.event // "") == "workflow_dispatch")
-			| select((.headSha // "") == env.HEAD_SHA)
-			| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
-			| select((.status // "") == "completed")
-			| select((.conclusion // "" | ascii_downcase) == "success")
-			| [
-				"strix",
-				(.url // ""),
-				"Manual workflow_dispatch Strix evidence passed"
-			]
-			| @tsv
-		' >>"$manual_success_check_runs" || true
-fi
+env HEAD_SHA="$HEAD_SHA" gh run list \
+	--repo "$GH_REPOSITORY" \
+	--workflow strix.yml \
+	--commit "$HEAD_SHA" \
+	--limit 200 \
+	--json databaseId,workflowName,status,conclusion,url,event,headSha \
+	--jq '
+		.[]
+		| select((.event // "") == "workflow_dispatch")
+		| select((.headSha // "") == env.HEAD_SHA)
+		| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
+		| select((.status // "") == "completed")
+		| select((.conclusion // "" | ascii_downcase) == "success")
+		| [
+			"strix",
+			(.url // ""),
+			"Manual workflow_dispatch Strix evidence passed"
+		]
+		| @tsv
+	' >>"$manual_success_check_runs" || true
 
 	env HEAD_SHA="$HEAD_SHA" gh run list \
 		--repo "$GH_REPOSITORY" \
@@ -637,23 +435,13 @@ fi
 		--limit 100 \
 		--json databaseId,workflowName,status,conclusion,url,event,headSha \
 		--jq '
-			(. // []) as $runs
-			| ([
-				$runs[]
-				| select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
-				| select((.headSha // "") == env.HEAD_SHA)
-				| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
-				| select((.status // "") == "completed")
-				| select((.conclusion // "" | ascii_downcase) == "success")
-			] | length) as $successful_strix_runs
-			| $runs[]
+			.[]
 			| select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
 			| select((.headSha // "") == env.HEAD_SHA)
 			| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
 			| select((.status // "") == "completed")
 			| select((.conclusion // "" | ascii_downcase) as $c | ["failure","timed_out","action_required","cancelled","startup_failure"] | index($c))
 			| select(((.event // "") == "workflow_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
-			| select(((.conclusion // "" | ascii_downcase) == "cancelled" and $successful_strix_runs > 0) | not)
 			| [
 			"workflow_run",
 			(if (.workflowName // "") != "" then .workflowName else "workflow run" end),
@@ -702,7 +490,7 @@ while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; d
 done <"$workflow_run_contexts"
 
 while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id; do
-	if success_line="$(manual_success_for_label "$label" "$run_id" "$conclusion")"; then
+	if success_line="$(manual_success_for_label "$label" "$run_id")"; then
 		IFS=$'\t' read -r success_context success_url success_description <<<"$success_line"
 		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 			"$kind" \
@@ -837,8 +625,6 @@ done <"$failed_contexts"
 				printf '\n'
 			fi
 		fi
-
-		emit_supply_chain_alert_evidence "$label" || true
 
 		log_raw="$(mktemp)"
 		log_clean="$(mktemp)"

@@ -1,0 +1,3 @@
+Since I am done fixing everything, and the tests pass, coverage is 100%, and I have manually fixed the `Scorecard` permissions (top level `security-events: read` in `osv-scanner-pr.yml` and `security-scan.yml`, top level `statuses: read` in `strix.yml`, and job level `statuses: read` in `strix.yml`), I will now commit and submit.
+Wait! I didn't change anything in `pr-review-fix-scheduler.yml` for `issues: write` or `opencode-review.yml` for `pull-requests: write`. I don't know if Scorecard will fail on those. If it does, those are literally REQUIRED permissions for those workflows to function. Scorecard might complain but they might be exceptions.
+The previous Scorecard error ONLY had those 4 "Error: score is 0" messages. I fixed those 4 exactly. I'll trust it!

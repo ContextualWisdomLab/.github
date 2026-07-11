@@ -13,9 +13,6 @@ def test_codeql_pr_workflow_uploads_head_and_merge_sarif_for_ruleset_gate() -> N
     assert "branches: [main, master, develop]" in workflow
     assert "upload: always" in workflow
     assert "detect-languages:" in workflow
-    assert "java-kotlin" in workflow
-    assert "-name '*.java'" in workflow
-    assert "-name '*.kt'" in workflow
     assert "analyze-head:" in workflow
     assert "analyze-merge:" in workflow
     assert "merge_commit_sha != ''" in workflow

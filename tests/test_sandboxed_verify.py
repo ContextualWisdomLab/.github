@@ -190,11 +190,6 @@ def test_module_main_entrypoint(monkeypatch, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(sys, "argv", ["sandboxed_verify.py", "--repo-root", str(repo), "--", sys.executable, "-c", "raise SystemExit(0)"])
-    module = sys.modules.pop("scripts.ci.sandboxed_verify", None)
     with pytest.raises(SystemExit) as exc_info:
-        try:
-            runpy.run_module("scripts.ci.sandboxed_verify", run_name="__main__")
-        finally:
-            if module is not None:
-                sys.modules["scripts.ci.sandboxed_verify"] = module
+        runpy.run_module("scripts.ci.sandboxed_verify", run_name="__main__")
     assert exc_info.value.code == 0
