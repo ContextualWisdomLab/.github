@@ -65,11 +65,6 @@ on:
         required: false
         default: ""
         type: string
-      canonical_ref:
-        description: Deprecated; scheduler code is resolved from this workflow's trusted source SHA
-        required: false
-        default: "main"
-        type: string
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
