@@ -353,12 +353,16 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Distinguish typing.Protocol, abc abstractmethod" in workflow
     assert "executable implementation gaps" in workflow
     assert "CHECK_LOOKUP_GH_TOKEN" in workflow
+    assert "CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE" in workflow
     assert "retrying with workflow github token" in workflow
     assert 'review_write_token="$GH_TOKEN"' in workflow
     assert 'review_write_token="$OPENCODE_APP_TOKEN"' in workflow
     assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
     assert 'review_write_token="$configured_review_write_token"' in workflow
     assert 'review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
+    assert 'review_write_fallback_token="$OPENCODE_APP_TOKEN"' in workflow
+    assert "review write fallback token source=" in workflow
+    assert "using github-token primary and opencode-app fallback" in workflow
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-$GH_TOKEN}"' not in workflow
     assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"' in workflow
     assert "gh_error_is_retryable_publication_failure()" in workflow

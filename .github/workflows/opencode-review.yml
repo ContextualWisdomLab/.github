@@ -3329,8 +3329,9 @@ jobs:
         if: always()
         timeout-minutes: 45
         env:
-          GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
+          CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
@@ -3382,47 +3383,64 @@ jobs:
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
           echo "PR=#${PR_NUMBER} head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT}"
+          configured_review_write_token="${GH_TOKEN:-}"
+          configured_review_write_token_source="${CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE:-configured}"
+          if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
+            configured_review_write_token_source="opencode-app"
+          fi
+          check_lookup_token_source="${configured_review_write_token_source:-configured}"
           if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
             GH_TOKEN="$OPENCODE_APP_TOKEN"
-          fi
-          check_lookup_token_source="configured"
-          if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
+            export GH_TOKEN
             check_lookup_token_source="opencode-app"
-          fi
-          configured_review_write_token="${GH_TOKEN:-}"
-          if [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && { [ -z "${OPENCODE_APP_TOKEN:-}" ] || [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ]; }; then
+          elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
             GH_TOKEN="$CHECK_LOOKUP_GH_TOKEN"
             export GH_TOKEN
             check_lookup_token_source="github-token"
           fi
           review_write_token="$GH_TOKEN"
           review_write_fallback_token=""
-          review_write_token_source="configured"
-          if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
+          review_write_fallback_token_source=""
+          review_write_token_source="${check_lookup_token_source:-configured}"
+          if { [ "${configured_review_write_token_source:-}" = "PR_REVIEW_MERGE_TOKEN" ] || [ "${configured_review_write_token_source:-}" = "OPENCODE_APPROVE_TOKEN" ]; } && [ -n "${configured_review_write_token:-}" ]; then
+            review_write_token="$configured_review_write_token"
+            review_write_token_source="$configured_review_write_token_source"
+            if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] && [ "${OPENCODE_APP_TOKEN:-}" != "${review_write_token:-}" ]; then
+              review_write_fallback_token="$OPENCODE_APP_TOKEN"
+              review_write_fallback_token_source="opencode-app"
+            elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${CHECK_LOOKUP_GH_TOKEN:-}" != "${review_write_token:-}" ]; then
+              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
+              review_write_fallback_token_source="github-token"
+            elif [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${OPENCODE_APP_TOKEN:-}" != "${review_write_token:-}" ]; then
+              review_write_fallback_token="$OPENCODE_APP_TOKEN"
+              review_write_fallback_token_source="opencode-app"
+            fi
+          elif [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
             review_write_token="$OPENCODE_APP_TOKEN"
             review_write_token_source="opencode-app"
-          elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ]; then
-            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
-              review_write_token="$configured_review_write_token"
-              if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
-                review_write_token_source="opencode-app"
-              else
-                review_write_token_source="configured"
-              fi
-              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
-            else
-              review_write_token="$CHECK_LOOKUP_GH_TOKEN"
-              review_write_token_source="github-token"
+            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
+              review_write_fallback_token="$configured_review_write_token"
+              review_write_fallback_token_source="$configured_review_write_token_source"
             fi
-          elif [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
-            review_write_token_source="opencode-app"
+          elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
+            review_write_token="$CHECK_LOOKUP_GH_TOKEN"
+            review_write_token_source="github-token"
+            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
+              review_write_fallback_token="$configured_review_write_token"
+              review_write_fallback_token_source="$configured_review_write_token_source"
+              if [ "${configured_review_write_token_source:-}" = "opencode-app" ]; then
+                echo "::warning::No PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN is configured for same-repository review writes; using github-token primary and opencode-app fallback, which may not satisfy required approving review provenance."
+              fi
+            fi
           fi
           if [ -z "${review_write_fallback_token:-}" ] && [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
             review_write_fallback_token="$configured_review_write_token"
+            review_write_fallback_token_source="$configured_review_write_token_source"
           fi
           overview_comment_token="$review_write_token"
           echo "check lookup token source=${check_lookup_token_source}"
           echo "review write token source=${review_write_token_source}"
+          echo "review write fallback token source=${review_write_fallback_token_source:-none}"
 
           app_token_limited_check_lookup() {
             [ "${check_lookup_token_source:-}" = "opencode-app" ] && [ -n "${OPENCODE_APP_TOKEN:-}" ]
