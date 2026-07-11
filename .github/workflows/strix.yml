@@ -96,8 +96,8 @@ concurrency:
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
-# read-only and grant the id-token/statuses writes only on the scan job that
-# needs them. The follow-up publish job uses exchanged app/secret tokens instead.
+# read-only and grant status publication only through exchanged app/secret
+# tokens. GITHUB_TOKEN can read status evidence but must not write it.
 permissions:
   actions: read
   contents: read
@@ -122,8 +122,8 @@ jobs:
     timeout-minutes: 45
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) and posts same-repository commit status
-    # fallback from this job; all other jobs keep commit-status read-only.
+    # exchanges an OIDC token (id-token) and keeps commit status writes scoped
+    # to this scan job; publication still prefers exchanged app/secret tokens below.
     permissions:
       actions: read
       contents: read
@@ -737,7 +737,6 @@ jobs:
         if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
-          GITHUB_STATUS_TOKEN: ${{ github.token }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
@@ -801,13 +800,6 @@ jobs:
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
             exit 0
-          fi
-          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
-            if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
-              exit 0
-            fi
-          else
-            echo "::notice::Skipping github-token fallback for cross-repository Strix status publish."
           fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
 

@@ -83,31 +83,25 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
 
     assert candidate_pairs
-    assert candidate_pairs[:3] == [
+    assert candidate_pairs == [
         ["openai", "gpt-5"],
         ["github-models", "openai/gpt-5"],
         ["github-models", "openai/gpt-5-chat"],
+        ["github-models", "openai/o3"],
+        ["github-models", "deepseek/deepseek-r1-0528"],
     ]
     assert direct_openai_models == ["gpt-5"]
     assert set(github_candidate_models).issubset(set(github_models))
-    assert github_candidate_models[:3] == [
-        "openai/gpt-5",
-        "openai/gpt-5-chat",
-        "openai/o3",
-    ]
-    assert {
+    assert github_candidate_models == [
         "openai/gpt-5",
         "openai/gpt-5-chat",
         "openai/o3",
         "deepseek/deepseek-r1-0528",
-    }.issubset(set(github_candidate_models))
+    ]
     banned_review_candidates = {
-        "gpt-5-mini",
         "gpt-5-nano",
-        "openai/gpt-5-mini",
         "openai/gpt-5-nano",
         "openai/o3-mini",
-        "openai/o4-mini",
     }
     assert banned_review_candidates.isdisjoint(
         set(direct_openai_models) | set(github_candidate_models)

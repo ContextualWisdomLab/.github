@@ -102,6 +102,17 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "cancel-in-progress: true" in strix_workflow
 
 
+def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
+    workflow = workflow_text("close-empty-pr.yml")
+
+    assert "gh_api_json_with_retry()" in workflow
+    assert "jq -e type" in workflow
+    assert "did not return valid JSON; retrying" in workflow
+    assert "did not return valid JSON after 4 attempts" in workflow
+    assert "leaving it open because metadata could not be read" in workflow
+    assert "exit 0" in workflow
+
+
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
     for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
         workflow = workflow_text(filename)

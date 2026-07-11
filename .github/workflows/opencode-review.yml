@@ -505,6 +505,9 @@ jobs:
             elif [ -f "${project_dir}/pyproject.toml" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
+            elif [ -f "${project_dir}/requirements.txt" ]; then
+              run_and_capture "Python coverage with missing-line report (${project_dir})" \
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
@@ -547,6 +550,9 @@ jobs:
                 if [ -f "${project_dir}/pyproject.toml" ]; then
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. uv run pytest tests/test_docstrings.py' bash "$project_dir"
+                elif [ -f "${project_dir}/requirements.txt" ]; then
+                  run_and_capture "Python docstring coverage (${project_dir})" \
+                    bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
                 else
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
