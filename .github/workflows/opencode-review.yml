@@ -3000,6 +3000,12 @@ jobs:
             printf 'OpenCode could not publish %s; the requested GitHub side effect is unavailable.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
+              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
+                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
+              fi
+              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
+                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
+              fi
             fi
           }
 
@@ -3296,12 +3302,22 @@ jobs:
             review_write_token="$OPENCODE_APP_TOKEN"
             review_write_token_source="opencode-app"
           elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ]; then
-            review_write_token="$CHECK_LOOKUP_GH_TOKEN"
-            review_write_token_source="github-token"
+            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
+              review_write_token="$configured_review_write_token"
+              if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
+                review_write_token_source="opencode-app"
+              else
+                review_write_token_source="configured"
+              fi
+              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
+            else
+              review_write_token="$CHECK_LOOKUP_GH_TOKEN"
+              review_write_token_source="github-token"
+            fi
           elif [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
             review_write_token_source="opencode-app"
           fi
-          if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
+          if [ -z "${review_write_fallback_token:-}" ] && [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
             review_write_fallback_token="$configured_review_write_token"
           fi
           overview_comment_token="$review_write_token"
@@ -3317,6 +3333,12 @@ jobs:
             printf 'OpenCode could not publish %s; continuing without review side effect.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
+              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
+                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
+              fi
+              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
+                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
+              fi
             fi
           }
 
