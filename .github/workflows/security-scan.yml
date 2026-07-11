@@ -36,8 +36,7 @@ concurrency:
   group: >-
     security-scan-${{
     github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}-${{
-    github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.run_id }}
+    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #42): workflow-level token stays
@@ -205,7 +204,9 @@ jobs:
               total_results += len(run.get("results", []))
               run.setdefault("tool", {}).setdefault("driver", {})["isComprehensive"] = True
 
-          sarif_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          temp_path = sarif_path.with_name(f"{sarif_path.name}.tmp")
+          temp_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          temp_path.replace(sarif_path)
           print(
               "OSV reporter SARIF contains "
               f"{total_results} result(s); marked the code-scanning analysis "

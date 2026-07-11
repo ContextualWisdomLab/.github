@@ -16,8 +16,7 @@ concurrency:
   group: >-
     close-empty-pr-${{
     github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event_name == 'pull_request_target' && github.event.pull_request.number || github.run_id }}-${{
-    github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.run_id }}
+    github.event_name == 'pull_request_target' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:

@@ -43,17 +43,16 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "github.event_name == 'pull_request_target'" in concurrency_contract or (
                 "github.event_name == 'pull_request'" in concurrency_contract
             )
-            assert "github.event.pull_request.head.sha" in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
             else:
                 assert "github.event_name == 'pull_request_target'" in concurrency_contract
-            assert "github.event.pull_request.head.sha" not in concurrency_contract
-            assert "format('pr-{0}-{1}'" not in concurrency_contract
+        assert "github.event.pull_request.head.sha" not in concurrency_contract
+        assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
-def test_strix_keeps_current_head_security_evidence_logs() -> None:
+def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
@@ -65,20 +64,13 @@ def test_strix_keeps_current_head_security_evidence_logs() -> None:
         "strix-${{ github.event.inputs.target_repository || "
         "github.event.pull_request.base.repo.full_name || github.repository }}"
     ) in concurrency_contract
-    assert (
-        "format('pr-{0}-{1}', github.event.pull_request.number, "
-        "github.event.pull_request.head.sha)"
-    ) in workflow
-    assert (
-        "format('pr-{0}-{1}', github.event.inputs.pr_number, "
-        "github.event.inputs.pr_head_sha)"
-    ) in workflow
+    assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
     assert "github.event.inputs.pr_number != '' && format('pr-{0}'," in workflow
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
-        "&& github.event.action == 'closed' }}"
-    ) in workflow
-    assert "cancel-in-progress stays disabled for normal PR updates" in workflow
+    assert "format('pr-{0}-{1}'" not in concurrency_contract
+    assert "github.event.pull_request.head.sha" not in concurrency_contract
+    assert "github.event.inputs.pr_head_sha" not in concurrency_contract
+    assert "cancel-in-progress: true" in workflow
+    assert "PR-number scope keeps the queue on the current HEAD" in workflow
     assert "refs/pull/<n>/head has already advanced before this queued run starts" in workflow
 
 
@@ -107,10 +99,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "github.event.action != 'closed'" in workflow
 
     strix_workflow = workflow_text("strix.yml")
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
-        "&& github.event.action == 'closed' }}"
-    ) in strix_workflow
+    assert "cancel-in-progress: true" in strix_workflow
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
