@@ -113,7 +113,7 @@ on:
 concurrency:
   group: >-
     central-pr-review-merge-scheduler-${{ github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
@@ -303,8 +303,8 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -o "$trusted_archive" \
             "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
-           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
-           test -f scripts/ci/pr_review_merge_scheduler.py
+          tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
+          test -f scripts/ci/pr_review_merge_scheduler.py
 
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
@@ -316,7 +316,7 @@ jobs:
           SCHEDULER_READ_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          SCHEDULER_REQUIRED_WORKFLOW_REF: main
+          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ steps.trusted_source.outputs.ref }}
           SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail

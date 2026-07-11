@@ -3,17 +3,15 @@ title = "ContextualWisdomLab central gitleaks configuration"
 [extend]
 useDefault = true
 
-[[allowlists]]
+[allowlist]
 description = "False-positive token-like strings used by scheduler scrubber regression tests only."
-regexTarget = "line"
+regexTarget = "match"
 paths = [
   '''^\.gitleaks\.toml$''',
   '''(^|/)__pycache__/''',
   '''\.pyc$''',
 ]
 regexes = [
-  '''fake_github_token\("(?:ghp|gho|ghu|ghs|ghr)", "(?:1234567890abcdef(?:1234)?|1234567890abcdef1234567890extra|abcdef1234567890abcdef1234567890abcdef|installation_token_value|user_token_value|server_token_value|runner_token_value|placeholder_token_with_underscores_123|unit_test_token|unit_token_[a-z_]+)"\)''',
-  '''fake_github_pat\("11AAAAA_(?:abcdefg|abcdefg1234567890)"\)''',
-  '''gh[pousr]_(?:1234567890abcdef(?:1234)?|1234567890abcdef1234567890extra|abcdef1234567890abcdef1234567890abcdef|installation_token_value|user_token_value|server_token_value|runner_token_value|placeholder_token_with_underscores_123|unit_test_token|unit_token_[a-z_]+)''',
+  '''gh[pousr]_(?:1234567890abcdef(?:1234)?|abcdef1234567890abcdef1234567890abcdef|installation_token_value|user_token_value|server_token_value|runner_token_value|placeholder_token_with_underscores_123)''',
   '''github_pat_11AAAAA_(?:abcdefg|abcdefg1234567890)''',
 ]

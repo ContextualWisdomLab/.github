@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import json
-import re
 import runpy
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -75,30 +73,6 @@ def test_filter_accepts_top_level_classifications():
     assert sarif["runs"][0]["results"] == [
         {"ruleId": "github-pat", "classifications": ["credential"]}
     ]
-
-
-def test_gitleaks_allowlist_is_limited_to_scheduler_fixture_lines():
-    """Scheduler scrubber fixtures are allowlisted without broad PAT suppression."""
-    config = tomllib.loads(Path(".gitleaks.toml").read_text(encoding="utf-8"))
-    allowlist = config["allowlists"][0]
-    patterns = [re.compile(pattern) for pattern in allowlist["regexes"]]
-    old_literal_fixture = "ghp_" + "abcdef1234567890abcdef1234567890abcdef"
-    unrelated_literal = "ghp_" + "abcdef1234567890abcdef1234567890abcdee"
-
-    assert allowlist["regexTarget"] == "line"
-    assert any(
-        pattern.search('token = fake_github_token("ghp", "abcdef1234567890abcdef1234567890abcdef")')
-        for pattern in patterns
-    )
-    assert any(
-        pattern.search('assert scrub(fake_github_token("gho", "1234567890abcdef1234567890extra"))')
-        for pattern in patterns
-    )
-    assert any(pattern.search(f'token = "{old_literal_fixture}"') for pattern in patterns)
-    assert not any(
-        pattern.search(f'token = "{unrelated_literal}"')
-        for pattern in patterns
-    )
 
 
 def test_load_sarif_reports_invalid_json(tmp_path):

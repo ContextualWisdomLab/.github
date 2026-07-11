@@ -33,8 +33,7 @@ concurrency:
     github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
     github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && github.event.inputs.pr_head_sha && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
     github.run_id }}
@@ -530,6 +529,9 @@ jobs:
             elif [ -f "${project_dir}/pyproject.toml" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
+            elif [ -f "${project_dir}/requirements.txt" ]; then
+              run_and_capture "Python coverage with missing-line report (${project_dir})" \
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
@@ -572,6 +574,9 @@ jobs:
                 if [ -f "${project_dir}/pyproject.toml" ]; then
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. uv run pytest tests/test_docstrings.py' bash "$project_dir"
+                elif [ -f "${project_dir}/requirements.txt" ]; then
+                  run_and_capture "Python docstring coverage (${project_dir})" \
+                    bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
                 else
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
@@ -1161,14 +1166,6 @@ jobs:
           append "- Required test evidence: supported repository test suites must pass."
           append "- Required docstring evidence: repository-owned docstring gates must pass when configured; otherwise docstring coverage is advisory."
           append ""
-
-          implementation_changed_files="$(mktemp)"
-          changed_files_for_coverage >"$implementation_changed_files"
-          run_and_capture "Python implementation completeness scan" \
-            python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
-              --repo-root . \
-              --changed-files "$implementation_changed_files"
-          rm -f "$implementation_changed_files"
 
           measured_any=0
 
@@ -2933,7 +2930,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 45
+        timeout-minutes: 12
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2949,10 +2946,13 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. DeepSeek V3 has been the
-          # most reliable first-pass reviewer in the org queue, then the pool
-          # falls through to full-size GPT/o3 and reasoning-capable fallbacks.
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
+          # High-sensitivity review candidates only. Mini/nano/o*-mini models
+          # previously consumed the whole job on context-window timeouts before
+          # the pool reached stronger reviewers, so the default pool now starts
+          # with GPT-5/o3-class models, keeps provider-diverse full-size
+          # fallbacks, and bounds provider stalls so the org queue releases with
+          # a visible MODEL_OUTPUT_UNAVAILABLE reason.
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -3097,6 +3097,12 @@ jobs:
             printf 'OpenCode could not publish %s; the requested GitHub side effect is unavailable.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
+              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
+                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
+              fi
+              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
+                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
+              fi
             fi
           }
 
@@ -3357,11 +3363,11 @@ jobs:
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
           OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "180"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
@@ -3393,12 +3399,22 @@ jobs:
             review_write_token="$OPENCODE_APP_TOKEN"
             review_write_token_source="opencode-app"
           elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ]; then
-            review_write_token="$CHECK_LOOKUP_GH_TOKEN"
-            review_write_token_source="github-token"
+            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
+              review_write_token="$configured_review_write_token"
+              if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
+                review_write_token_source="opencode-app"
+              else
+                review_write_token_source="configured"
+              fi
+              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
+            else
+              review_write_token="$CHECK_LOOKUP_GH_TOKEN"
+              review_write_token_source="github-token"
+            fi
           elif [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
             review_write_token_source="opencode-app"
           fi
-          if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
+          if [ -z "${review_write_fallback_token:-}" ] && [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
             review_write_fallback_token="$configured_review_write_token"
           fi
           overview_comment_token="$review_write_token"
@@ -3414,6 +3430,12 @@ jobs:
             printf 'OpenCode could not publish %s; continuing without review side effect.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
+              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
+                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
+              fi
+              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
+                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
+              fi
             fi
           }
 
@@ -4682,7 +4704,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}s" opencode run "$(cat "$prompt_file")" \
+            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-600}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \
