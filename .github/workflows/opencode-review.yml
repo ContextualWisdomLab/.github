@@ -506,6 +506,9 @@ jobs:
             elif [ -f "${project_dir}/pyproject.toml" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
+            elif [ -f "${project_dir}/requirements.txt" ]; then
+              run_and_capture "Python coverage with missing-line report (${project_dir})" \
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
@@ -548,6 +551,9 @@ jobs:
                 if [ -f "${project_dir}/pyproject.toml" ]; then
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. uv run pytest tests/test_docstrings.py' bash "$project_dir"
+                elif [ -f "${project_dir}/requirements.txt" ]; then
+                  run_and_capture "Python docstring coverage (${project_dir})" \
+                    bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
                 else
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
@@ -2851,13 +2857,11 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. Mini/nano/o*-mini models
-          # previously consumed the whole job on context-window timeouts before
-          # the pool reached stronger reviewers, so the default pool now starts
-          # with GPT-5/o3-class models, keeps provider-diverse full-size
-          # fallbacks, and bounds provider stalls so the org queue releases with
-          # a visible MODEL_OUTPUT_UNAVAILABLE reason.
-          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
+          # High-sensitivity review candidates. Start with native OpenAI,
+          # then try compact GitHub Models fallbacks before full-size reasoning
+          # fallbacks so provider stalls still leave a visible
+          # MODEL_OUTPUT_UNAVAILABLE reason without exhausting the queue.
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5-mini openai/gpt-5 github-models/deepseek/deepseek-v3-0324 github-models/openai/o4-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/openai/o3 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -3605,7 +3609,7 @@ jobs:
                     printf -- '- Workflow run: %s\n' "$RUN_ID"
                     printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
                     printf -- '- Review state: unchanged because GitHub rejected the review API write.\n'
-                    printf -- '- Branch protection remains authoritative for required reviews and peer checks.\n\n'
+                    printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
                   } >>"$GITHUB_STEP_SUMMARY"
                 fi
                 printf '::error::OpenCode approve review publication failed for head %s; branch protection still lacks the required GitHub review. Failing closed after logging the GitHub API error above.\n' "$HEAD_SHA"
