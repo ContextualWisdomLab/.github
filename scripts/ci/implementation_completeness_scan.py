@@ -240,5 +240,5 @@ def main() -> int:
     return 1 if findings or errors else 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

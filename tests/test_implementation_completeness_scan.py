@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import ast
+import sys
 from pathlib import Path
+
+import pytest
 
 from scripts.ci import implementation_completeness_scan as scan
 
@@ -114,3 +118,100 @@ def test_changed_files_tolerates_utf8_bom(tmp_path: Path) -> None:
     changed.write_text("\ufeffapp/main.py\n", encoding="utf-8")
 
     assert scan.changed_paths_from_file(changed) == [Path("app/main.py")]
+
+
+def test_helpers_cover_dotted_names_and_non_placeholders() -> None:
+    tree = ast.parse(
+        """
+import abc
+import typing
+from abc import abstractmethod
+
+
+class Api(typing.Protocol[int]):
+    def declared(self) -> None:
+        ...
+
+
+class Base(abc.ABC):
+    def helper(self) -> None:
+        value = 1
+        return None
+
+
+def raises_other_error():
+    raise ValueError("not a stub")
+
+
+class Concrete:
+    @abstractmethod
+    def declared_abstract(self):
+        pass
+"""
+    )
+
+    assert scan.dotted_name(tree.body[3].bases[0]) == "typing.Protocol"
+    assert scan.dotted_name(ast.Tuple()) == ""
+    assert scan.is_protocol_or_abc_base(tree.body[4].bases[0])
+    helper = tree.body[4].body[0]
+    other_error = tree.body[5]
+    abstract_method = tree.body[6].body[0]
+    assert isinstance(helper, ast.FunctionDef)
+    assert isinstance(other_error, ast.FunctionDef)
+    assert isinstance(abstract_method, ast.FunctionDef)
+    assert scan.is_abstract_or_overload(abstract_method)
+    assert scan.placeholder_reason(helper) is None
+    assert scan.placeholder_reason(other_error) is None
+    assert scan.strip_docstring([]) == []
+    assert not scan.is_runtime_python_path(Path("README.md"))
+
+
+def test_scan_reports_parse_errors_and_skips_duplicates(tmp_path: Path) -> None:
+    source = tmp_path / "pkg" / "broken.py"
+    source.parent.mkdir()
+    source.write_text("def broken(:\n", encoding="utf-8")
+    changed = write_changed_files(
+        tmp_path,
+        "pkg/broken.py",
+        "pkg/broken.py",
+        "/absolute.py",
+        "notes.txt",
+        "pkg/missing.py",
+    )
+
+    changed_paths = scan.changed_paths_from_file(changed)
+    findings, errors = scan.scan_changed_paths(tmp_path, changed_paths)
+
+    assert findings == []
+    assert errors == ["pkg/broken.py:1 could not be parsed: invalid syntax"]
+    report = scan.render_report(findings, errors, checked_count=1)
+    assert "- Result: FAIL" in report
+    assert "Parse errors:" in report
+
+
+def test_missing_changed_file_list_and_main_return_codes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert scan.changed_paths_from_file(tmp_path / "missing.txt") == []
+
+    source = tmp_path / "app.py"
+    source.write_text("def implemented():\n    return 1\n", encoding="utf-8")
+    changed = write_changed_files(tmp_path, "app.py")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "implementation_completeness_scan.py",
+            "--repo-root",
+            str(tmp_path),
+            "--changed-files",
+            str(changed),
+        ],
+    )
+
+    assert scan.main() == 0
+    assert "- Result: PASS" in capsys.readouterr().out
+
+    source.write_text("def missing():\n    pass\n", encoding="utf-8")
+    assert scan.main() == 1
+    assert "pass-only body" in capsys.readouterr().out
