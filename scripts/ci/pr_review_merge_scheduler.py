@@ -1203,6 +1203,23 @@ def direct_merge_can_fallback_to_auto_merge(error: Exception) -> bool:
     return any(marker in text for marker in DIRECT_MERGE_AUTO_FALLBACK_MARKERS)
 
 
+def direct_merge_block_detail(error: Exception) -> str:
+    """Return the concrete GitHub merge refusal detail for scheduler logs."""
+    lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+    detail_lines = [
+        line
+        for line in lines
+        if line.startswith(("X ", "gh:", "{"))
+        or "Repository rule violations found" in line
+        or "required" in line.lower()
+        or "prohibits the merge" in line.lower()
+    ]
+    if not detail_lines:
+        detail_lines = lines[-2:]
+    detail = " ".join(detail_lines)
+    return detail[:600] if detail else "GitHub did not return a merge refusal detail"
+
+
 def disable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Disable auto-merge when the current head no longer has fresh review evidence."""
     number = str(pr["number"])
@@ -1820,17 +1837,20 @@ def inspect_pr(
             except RuntimeError as exc:
                 if merge_mode != "direct_or_auto" or not direct_merge_can_fallback_to_auto_merge(exc):
                     raise
+                block_detail = direct_merge_block_detail(exc)
                 if pr.get("autoMergeRequest"):
                     return decide(
                         "auto_merge",
                         "current head is approved; direct merge was blocked by branch policy, "
-                        "so the existing auto-merge request remains queued with the same head guard evidence",
+                        "so the existing auto-merge request remains queued with the same head guard evidence; "
+                        f"GitHub reported: {block_detail}",
                     )
                 enable_auto_merge(repo, pr, dry_run=dry_run)
                 return decide(
                     "auto_merge",
                     "current head is approved; direct merge was blocked by branch policy, "
-                    "so auto-merge was enabled with the same head guard evidence",
+                    "so auto-merge was enabled with the same head guard evidence; "
+                    f"GitHub reported: {block_detail}",
                 )
             state_note = "" if merge_state == "CLEAN" else f"; GitHub mergeability is {merge_state}"
             return decide(
