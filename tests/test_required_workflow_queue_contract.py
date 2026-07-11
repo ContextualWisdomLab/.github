@@ -264,11 +264,15 @@ def test_security_scan_osv_upload_uses_default_analysis_category() -> None:
     start = workflow.index(step)
     upload_step = workflow[start : workflow.index("\n      - name:", start + len(step))]
 
+    assert "Fetch PR merge ref for OSV SARIF upload" in workflow
+    assert 'merge_ref="refs/pull/${PR_NUMBER}/merge"' in workflow
+    assert "fetch --no-tags --depth=1" in workflow
+    assert "code scanning requires a PR merge commit" in workflow
+    assert "Fetched ${merge_ref} at ${merge_sha}" in workflow
     assert "github/codeql-action/upload-sarif" in upload_step
     assert "sarif_file: results.sarif" in upload_step
-    assert "ref: refs/pull/${{ github.event.pull_request.number }}/head" in upload_step
-    assert "sha: ${{ github.event.pull_request.head.sha }}" in upload_step
-    assert "commit_oid is not a merge commit" in upload_step
+    assert "ref: ${{ steps.pr_merge.outputs.ref }}" in upload_step
+    assert "sha: ${{ steps.pr_merge.outputs.sha }}" in upload_step
     assert "category:" not in upload_step
 
 
