@@ -34,3 +34,6 @@
 ## 2024-07-11 - Iterative JSON Extraction vs Recursion
 **Learning:** In `scripts/ci/opencode_review_normalize_output.py`, deeply recursive nested data processing for extracting JSON dictionaries (such as with LLM outputs where structure is arbitrary) using a recursive `extract_dicts` function causes Python to hit max recursion depth (`RecursionError`) on sufficiently deep structures, and increases runtime overhead due to call stack memory allocations.
 **Action:** When extracting data from arbitrary deeply nested dictionaries and lists in Python, use an iterative stack-based approach with `stack.extend()` or `stack.extend(reversed(...))` instead of recursive functions to eliminate recursion depth limitations and reduce overhead.
+## 2024-07-25 - Pre-calculate and cache environmental file reads
+**Learning:** The `current_changed_files` function in `scripts/ci/opencode_review_normalize_output.py` was being called multiple times per item during JSON structure normalization, leading to redundant I/O reads of `OPENCODE_CHANGED_FILES_FILE`.
+**Action:** Use `@functools.lru_cache(maxsize=1)` and return an immutable `frozenset` when repeatedly reading static contextual files within a script's execution lifecycle.

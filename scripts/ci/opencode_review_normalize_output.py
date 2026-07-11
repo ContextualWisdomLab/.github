@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -307,21 +308,22 @@ def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
     return bool(CHANGED_FILE_EVIDENCE_PATTERN.search(f"{reason}\n{summary}"))
 
 
-def current_changed_files() -> set[str]:
+@lru_cache(maxsize=1)
+def current_changed_files() -> frozenset[str]:
     """Return the exact current-head changed files when the workflow provides them."""
     changed_files_path = os.environ.get("OPENCODE_CHANGED_FILES_FILE")
     if not changed_files_path:
-        return set()
+        return frozenset()
     try:
-        return {
+        return frozenset(
             line.strip()
             for line in Path(changed_files_path)
             .read_text(encoding="utf-8")
             .splitlines()
             if line.strip()
-        }
+        )
     except OSError:
-        return set()
+        return frozenset()
 
 
 def changed_file_is_source_like(path: str) -> bool:
