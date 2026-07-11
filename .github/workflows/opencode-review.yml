@@ -2244,11 +2244,40 @@ jobs:
           mkdir -p "$OPENCODE_REVIEW_WORKDIR"
           if [ -s "$OPENCODE_EVIDENCE_FILE" ]; then
             cp "$OPENCODE_EVIDENCE_FILE" "$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
+            append_evidence_section() {
+              local section_title="$1"
+              local byte_limit="$2"
+              local section_file
+              local section_bytes
+              section_file="$(mktemp)"
+              awk -v wanted="## ${section_title}" '
+                $0 == wanted { emit = 1; print; next }
+                emit && /^## / { exit }
+                emit { print }
+              ' "$OPENCODE_EVIDENCE_FILE" >"$section_file"
+              if [ -s "$section_file" ]; then
+                section_bytes="$(wc -c <"$section_file" | tr -d "[:space:]")"
+                printf '\n\n## Repeated current-head section for models without file reads: %s\n\n' "$section_title"
+                head -c "$byte_limit" "$section_file"
+                if [ "${section_bytes:-0}" -gt "$byte_limit" ]; then
+                  printf '\n\n[Section truncated to first %s of %s bytes; use ./bounded-review-evidence.md for the remaining current-head evidence.]\n' "$byte_limit" "$section_bytes"
+                fi
+              fi
+              rm -f "$section_file"
+            }
             {
               printf '# Current-head bounded evidence excerpt\n\n'
               printf 'Current-head bounded evidence excerpt, inlined to prevent false no-change or no-coverage approvals when tool/file reads are skipped:\n\n'
               printf 'The Current-head authority order section in this excerpt controls historical review and conversation comment excerpts.\n\n'
               head -c 9000 "$OPENCODE_EVIDENCE_FILE"
+              printf '\n\n# Repeated current-head sections for models without file reads\n\n'
+              printf 'If direct tool calls, MCP calls, or file reads are unavailable, use these repeated current-head sections before deciding. Do not emit raw tool-call markup or request changes merely because the full evidence file was not inlined.\n'
+              append_evidence_section "Current-head authority order" 3000
+              append_evidence_section "Other unresolved review thread evidence" 5000
+              append_evidence_section "Failed GitHub Check evidence" 7000
+              append_evidence_section "Coverage execution evidence" 7000
+              append_evidence_section "Changed files" 7000
+              append_evidence_section "Focused changed hunks" 14000
               printf '\n\n[Full evidence is available in ./bounded-review-evidence.md inside the isolated review workspace.]\n'
             } >"$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
           fi
@@ -2333,6 +2362,11 @@ jobs:
           and web_search for bounded external lookups. Bounded evidence is available in
           ./bounded-review-evidence.md. Inspect changed files and focused hunks directly when MCP evidence is
           insufficient. Never return raw tool-call markup, tool-call JSON, or MCP call syntax in the review body.
+          If full-file reads or tool calls do not execute, use the inlined repeated current-head sections for
+          Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and
+          unresolved thread evidence; do not request changes solely because your own tool or file read did not
+          run. Such access gaps are review source limitations unless current-head evidence explicitly reports a
+          materialization failure. REQUEST_CHANGES findings must cite a positive line, never line 0.
           Always return a final control block instead of a progress summary. Do not request rollback of Node 24
           or Python 3.14 solely from model memory. Every blocker needs observable impact, trigger condition,
           minimal fix direction, and exact regression test or verification command. The
@@ -2484,6 +2518,11 @@ jobs:
           and web_search for bounded external lookups. Bounded evidence is available in
           ./bounded-review-evidence.md. Inspect changed files and focused hunks directly when MCP evidence is
           insufficient. Never return raw tool-call markup, tool-call JSON, or MCP call syntax in the review body.
+          If full-file reads or tool calls do not execute, use the inlined repeated current-head sections for
+          Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and
+          unresolved thread evidence; do not request changes solely because your own tool or file read did not
+          run. Such access gaps are review source limitations unless current-head evidence explicitly reports a
+          materialization failure. REQUEST_CHANGES findings must cite a positive line, never line 0.
           Always return a final control block instead of a progress summary. Do not request rollback of Node 24
           or Python 3.14 solely from model memory. Every blocker needs observable impact, trigger condition,
           minimal fix direction, and exact regression test or verification command. The
