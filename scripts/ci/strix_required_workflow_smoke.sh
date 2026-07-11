@@ -107,10 +107,18 @@ for line in lines[jobs_index + 1 :]:
     if line.strip():
         inside_permissions = False
 
-if status_write_jobs != ["strix"]:
+unexpected_status_write_jobs = [job for job in status_write_jobs if job != "strix"]
+if unexpected_status_write_jobs:
     print(
-        "Strix workflow must scope statuses: write only to the strix scan job; found: "
-        + (", ".join(status_write_jobs) if status_write_jobs else "none"),
+        "Strix workflow must scope statuses: write only to the strix scan job; found write scope in: "
+        + ", ".join(unexpected_status_write_jobs),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if "strix" not in status_read_jobs and "strix" not in status_write_jobs:
+    print(
+        "Strix workflow strix job must keep statuses: read or statuses: write for existing status evidence.",
         file=sys.stderr,
     )
     raise SystemExit(1)
