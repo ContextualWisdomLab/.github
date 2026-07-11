@@ -258,19 +258,23 @@ def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(tmp_pat
     assert "marked the code-scanning analysis comprehensive" in result.stdout
 
 
-def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
+def test_security_scan_osv_upload_checks_out_merge_ref_before_upload() -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Upload OSV SARIF to code scanning\n"
     start = workflow.index(step)
     upload_step = workflow[start : workflow.index("\n      - name:", start + len(step))]
 
-    assert "Fetch PR merge ref for OSV SARIF upload" not in workflow
-    assert 'merge_ref="refs/pull/${PR_NUMBER}/merge"' not in workflow
-    assert "commit_oid is not a merge commit" in upload_step
+    assert "Checkout PR merge ref for OSV SARIF upload" in workflow
+    assert 'merge_ref="refs/pull/${PR_NUMBER}/merge"' in workflow
+    assert "fetch --no-tags --depth=1" in workflow
+    assert 'git checkout --progress --force "refs/remotes/pull/${PR_NUMBER}/merge"' in workflow
+    assert "code scanning requires a PR merge commit" in workflow
+    assert "refusing to upload SARIF to the wrong commit" in workflow
+    assert "Checked out ${merge_ref} at ${merge_sha}" in workflow
     assert "github/codeql-action/upload-sarif" in upload_step
     assert "sarif_file: results.sarif" in upload_step
-    assert "ref: refs/pull/${{ github.event.pull_request.number }}/head" in upload_step
-    assert "sha: ${{ github.event.pull_request.head.sha }}" in upload_step
+    assert "ref:" not in upload_step
+    assert "sha:" not in upload_step
     assert "category:" not in upload_step
 
 
