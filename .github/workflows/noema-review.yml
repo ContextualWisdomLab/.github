@@ -142,6 +142,7 @@ jobs:
         env:
           OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
           TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
+          NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -158,6 +159,18 @@ jobs:
             echo "::notice::$message"
             exit 0
           }
+
+          # PAT fallback: when a NOEMA_REVIEW_TOKEN secret is present, use it as
+          # the reviewer identity directly and skip the OIDC app-token exchange.
+          # This lets the independent second reviewer satisfy the two-reviewer
+          # merge rule without deploying the Noema Worker. The secret value is
+          # never emitted as a step output; the review step reads it from secrets.
+          if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+            echo "source=pat" >>"$GITHUB_OUTPUT"
+            echo "::notice::Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity."
+            exit 0
+          fi
 
           if [ -z "${TOKEN_EXCHANGE_URL:-}" ]; then
             mark_unconfigured "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured; Noema review skipped until the exchange service is deployed."
@@ -212,9 +225,9 @@ jobs:
       - name: Run Noema LLM review and submit verdict
         if: env.PR_NUMBER != ''
         env:
-          GH_TOKEN: ${{ steps.noema_app_token.outputs.token }}
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_app_token.outputs.token }}
           NOEMA_APP_TOKEN_AVAILABLE: ${{ steps.noema_app_token.outputs.available }}
-          NOEMA_REVIEW_TOKEN_SOURCE: noema-review-app-oidc
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_app_token.outputs.source == 'pat' && 'noema-review-pat' || 'noema-review-app-oidc' }}
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
           NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || '' }}
