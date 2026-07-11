@@ -286,13 +286,25 @@ jobs:
           print(f"ref={trusted_ref}")
           PY
 
-      - name: Checkout trusted scheduler
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ github.workflow_sha }}
-          fetch-depth: 1
-          persist-credentials: false
+      - name: Materialize trusted scheduler
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TRUSTED_SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Trusted scheduler source ref must resolve to the immutable workflow commit SHA before archive materialization."
+            exit 1
+          fi
+          trusted_archive="${RUNNER_TEMP}/trusted-scheduler-source.tar.gz"
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -o "$trusted_archive" \
+            "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+          tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
+          test -f scripts/ci/pr_review_merge_scheduler.py
 
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
@@ -304,7 +316,7 @@ jobs:
           SCHEDULER_READ_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ github.workflow_sha }}
+          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ steps.trusted_source.outputs.ref }}
           SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail

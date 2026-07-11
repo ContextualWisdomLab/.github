@@ -130,7 +130,10 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "inputs.canonical_ref" not in workflow
         assert "workflow_sha" in workflow
         assert "ref: ${{ steps.trusted_source.outputs.ref }}" not in workflow
-        assert "ref: ${{ github.workflow_sha }}" in workflow
+        assert (
+            "ref: ${{ github.workflow_sha }}" in workflow
+            or "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
+        )
         assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in workflow
         assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
 
@@ -182,11 +185,13 @@ def test_noema_and_scheduler_trusted_checkouts_use_workflow_sha() -> None:
         assert "workflow_sha" in workflow
         assert "workflow_repository" in workflow
         assert "Trusted" in workflow or "trusted" in workflow
-        assert "repository: ContextualWisdomLab/.github" in workflow
+        assert "Materialize trusted" in workflow
+        assert "uses: actions/checkout" not in workflow
+        assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in workflow
+        assert "Trusted" in workflow and "source ref must resolve to the immutable workflow commit SHA" in workflow
+        assert "repository: ContextualWisdomLab/.github" not in workflow
         assert "repository: ${{ steps.trusted_source.outputs.repository }}" not in workflow
-        assert "ref: ${{ steps.trusted_source.outputs.ref }}" not in workflow
-        assert "ref: ${{ github.workflow_sha }}" in workflow
-        assert "persist-credentials: false" in workflow
+        assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
         assert "INPUT_CANONICAL_REF" not in workflow
 
 

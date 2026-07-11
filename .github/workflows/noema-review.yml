@@ -115,14 +115,26 @@ jobs:
           print(f"ref={trusted_ref}")
           PY
 
-      - name: Checkout trusted Noema review gate
+      - name: Materialize trusted Noema review gate
         if: env.PR_NUMBER != ''
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ github.workflow_sha }}
-          fetch-depth: 1
-          persist-credentials: false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TRUSTED_SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Trusted Noema source ref must resolve to the immutable workflow commit SHA before archive materialization."
+            exit 1
+          fi
+          trusted_archive="${RUNNER_TEMP}/trusted-noema-source.tar.gz"
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -o "$trusted_archive" \
+            "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+          tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
+          test -f scripts/ci/noema_review_gate.py
 
       - name: Exchange Noema app token
         if: env.PR_NUMBER != ''
