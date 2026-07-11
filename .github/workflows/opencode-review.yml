@@ -1663,7 +1663,6 @@ jobs:
           done <"$context_env_file"
           printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
-          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"

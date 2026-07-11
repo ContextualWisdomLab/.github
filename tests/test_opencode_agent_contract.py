@@ -161,6 +161,7 @@ def test_opencode_bounded_evidence_context_is_resolved_from_event_payload():
     assert "GITHUB_EVENT_PATH" in step
     assert "Invalid OpenCode review context value for" in step
     assert "Resolved bounded OpenCode review context for %s#%s at %s." in step
+    assert "GITHUB_ENV" not in step
 
 
 def test_opencode_target_coverage_materializes_merge_tree_without_checkout_action():

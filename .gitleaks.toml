@@ -1,0 +1,17 @@
+title = "ContextualWisdomLab central gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "False-positive token-like strings used by scheduler scrubber regression tests only."
+regexTarget = "match"
+paths = [
+  '''^\.gitleaks\.toml$''',
+  '''(^|/)__pycache__/''',
+  '''\.pyc$''',
+]
+regexes = [
+  '''gh[pousr]_(?:1234567890abcdef(?:1234)?|abcdef1234567890abcdef1234567890abcdef|installation_token_value|user_token_value|server_token_value|runner_token_value|placeholder_token_with_underscores_123)''',
+  '''github_pat_11AAAAA_(?:abcdefg|abcdefg1234567890)''',
+]
