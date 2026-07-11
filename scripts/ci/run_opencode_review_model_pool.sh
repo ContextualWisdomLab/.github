@@ -283,13 +283,13 @@ main() {
 			done
 		done
 
-		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the GitHub Actions job timeout is reached.\n'
+		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the configured retry deadline is reached.\n'
 		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
 			printf 'OpenCode model pool reached configured max cycle count %s without a valid control conclusion.\n' "$max_cycles"
 			record_review_model ""
 			exit 1
 		fi
-		printf 'OpenCode retry budget/GitHub Actions job timeout remains the outer guard for provider stalls.\n'
+		printf 'OpenCode retry budget and the workflow step timeout remain the outer guards for provider stalls.\n'
 		cycle_sleep="${OPENCODE_POOL_CYCLE_SLEEP_SECONDS:-60}"
 		if [ "$deadline" -gt 0 ] && [ $((SECONDS + cycle_sleep)) -gt "$deadline" ]; then
 			cycle_sleep=$((deadline - SECONDS))
