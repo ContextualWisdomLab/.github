@@ -1169,7 +1169,7 @@ jobs:
 
           implementation_changed_files="$(mktemp)"
           changed_files_for_coverage >"$implementation_changed_files"
-          run_and_capture "Python implementation completeness scan" \
+          run_and_capture "Implementation completeness scan" \
             python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
               --repo-root . \
               --changed-files "$implementation_changed_files"

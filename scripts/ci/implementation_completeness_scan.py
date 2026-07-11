@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Detect executable Python placeholder implementations in changed runtime code."""
+"""Detect executable placeholder implementations in changed runtime code."""
 
 from __future__ import annotations
 
 import argparse
 import ast
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -105,6 +106,9 @@ def placeholder_reason(
         exc_name = dotted_name(only.exc)
         if exc_name == "NotImplementedError":
             return "raises NotImplementedError"
+    if isinstance(only, ast.Return) and only.value is not None:
+        if dotted_name(only.value) == "NotImplemented":
+            return "returns NotImplemented"
     return None
 
 
@@ -159,6 +163,18 @@ def is_runtime_python_path(path: Path) -> bool:
     return not any(part in RUNTIME_TEST_PARTS for part in path.parts)
 
 
+def is_runtime_rust_path(path: Path) -> bool:
+    """Return whether a path is a runtime Rust file rather than test support."""
+    if path.suffix != ".rs":
+        return False
+    return not any(part in RUNTIME_TEST_PARTS for part in path.parts)
+
+
+def is_runtime_source_path(path: Path) -> bool:
+    """Return whether a path is a supported runtime source file."""
+    return is_runtime_python_path(path) or is_runtime_rust_path(path)
+
+
 def changed_paths_from_file(path: Path) -> list[Path]:
     """Read a newline-delimited changed-file list."""
     if not path.exists():
@@ -181,26 +197,111 @@ def scan_python_file(repo_root: Path, relative_path: Path) -> list[Finding]:
     return visitor.findings
 
 
+def rust_code_lines(source: str) -> list[tuple[int, str]]:
+    """Return Rust source lines with comments and string bodies blanked out."""
+    code_lines: list[tuple[int, str]] = []
+    block_comment_depth = 0
+    in_string = False
+    escaped = False
+    for line_no, line in enumerate(source.splitlines(), start=1):
+        i = 0
+        cleaned: list[str] = []
+        while i < len(line):
+            char = line[i]
+            next_two = line[i : i + 2]
+            if block_comment_depth:
+                if next_two == "/*":
+                    block_comment_depth += 1
+                    i += 2
+                    continue
+                if next_two == "*/":
+                    block_comment_depth -= 1
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if in_string:
+                cleaned.append(" ")
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                i += 1
+                continue
+            if next_two == "//":
+                break
+            if next_two == "/*":
+                block_comment_depth += 1
+                i += 2
+                continue
+            if char == '"':
+                in_string = True
+                cleaned.append(" ")
+                i += 1
+                continue
+            cleaned.append(char)
+            i += 1
+        code_lines.append((line_no, "".join(cleaned)))
+    return code_lines
+
+
+def nearest_rust_symbol(code_lines: list[tuple[int, str]], line_no: int) -> str:
+    """Return the nearest preceding Rust function name for a finding."""
+    fn_pattern = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+    for current_line_no, code in reversed(code_lines):
+        if current_line_no > line_no:
+            continue
+        match = fn_pattern.search(code)
+        if match:
+            return match.group(1)
+    return "rust module"
+
+
+def scan_rust_file(repo_root: Path, relative_path: Path) -> list[Finding]:
+    """Scan one repository-relative Rust file for placeholder macros."""
+    source_path = repo_root / relative_path
+    code_lines = rust_code_lines(source_path.read_text(encoding="utf-8"))
+    findings: list[Finding] = []
+    macro_pattern = re.compile(r"\b(todo|unimplemented)\s*!")
+    for line_no, code in code_lines:
+        for match in macro_pattern.finditer(code):
+            macro_name = match.group(1)
+            findings.append(
+                Finding(
+                    path=relative_path.as_posix(),
+                    line=line_no,
+                    symbol=nearest_rust_symbol(code_lines, line_no),
+                    reason=f"`{macro_name}!` macro placeholder",
+                )
+            )
+    return findings
+
+
 def scan_changed_paths(
     repo_root: Path, changed_paths: Iterable[Path]
 ) -> tuple[list[Finding], list[str]]:
-    """Scan changed runtime Python paths and return findings plus parse errors."""
+    """Scan changed runtime source paths and return findings plus parse errors."""
     findings: list[Finding] = []
     errors: list[str] = []
     seen: set[str] = set()
     for relative_path in changed_paths:
         key = relative_path.as_posix()
-        if key in seen or not is_runtime_python_path(relative_path):
+        if key in seen or not is_runtime_source_path(relative_path):
             continue
         seen.add(key)
         source_path = repo_root / relative_path
         if not source_path.is_file():
             continue
-        try:
-            findings.extend(scan_python_file(repo_root, relative_path))
-        except SyntaxError as exc:
-            line = exc.lineno or 1
-            errors.append(f"{key}:{line} could not be parsed: {exc.msg}")
+        if relative_path.suffix == ".py":
+            try:
+                findings.extend(scan_python_file(repo_root, relative_path))
+            except SyntaxError as exc:
+                line = exc.lineno or 1
+                errors.append(f"{key}:{line} could not be parsed: {exc.msg}")
+        else:
+            findings.extend(scan_rust_file(repo_root, relative_path))
     return findings, errors
 
 
@@ -209,7 +310,7 @@ def render_report(findings: list[Finding], errors: list[str], checked_count: int
     lines = [
         "# Implementation Completeness Scan",
         "",
-        f"- Checked runtime Python files: {checked_count}",
+        f"- Checked runtime source files: {checked_count}",
         "- Declaration handling: typing.Protocol, abc.ABC, @abstractmethod, and @overload placeholders are treated as contracts, not executable missing implementations.",
     ]
     if errors:
@@ -240,7 +341,7 @@ def render_report(findings: list[Finding], errors: list[str], checked_count: int
     lines.extend(
         [
             "- Result: PASS",
-            "- Reason: no executable placeholder implementations were found in changed runtime Python files.",
+            "- Reason: no executable placeholder implementations were found in changed runtime source files.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -258,7 +359,7 @@ def main() -> int:
     runtime_paths = [
         path
         for path in dict.fromkeys(changed_paths)
-        if is_runtime_python_path(path) and (repo_root / path).is_file()
+        if is_runtime_source_path(path) and (repo_root / path).is_file()
     ]
     findings, errors = scan_changed_paths(repo_root, runtime_paths)
     print(render_report(findings, errors, len(runtime_paths)), end="")
