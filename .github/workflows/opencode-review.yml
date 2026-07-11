@@ -1285,7 +1285,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 350
     permissions:
       actions: read
       checks: read
@@ -1541,7 +1541,7 @@ jobs:
           npx -y "$CODEGRAPH_PACKAGE" status
 
       - name: Prepare bounded OpenCode review evidence
-        timeout-minutes: 40
+        timeout-minutes: 12
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
@@ -1554,17 +1554,22 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
-          FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"
-          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
+          FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"
+          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "10"
+          FAILED_CHECK_EVIDENCE_COLLECT_TIMEOUT_SECONDS: "45"
+          FAILED_CHECK_EVIDENCE_KILL_AFTER_SECONDS: "10"
         run: |
           set -euo pipefail
-          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
+          {
+            printf 'OPENCODE_CHANGED_FILES_FILE<<OPENCODE_CHANGED_FILES_FILE_EOF\n'
+            printf '%s\n' "$OPENCODE_CHANGED_FILES_FILE"
+            printf 'OPENCODE_CHANGED_FILES_FILE_EOF\n'
+          } >>"$GITHUB_ENV"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
             local rollup_running
-            local strix_running
 
             # Exclude this OpenCode check run; otherwise the evidence step would
             # wait on itself until the bounded retry budget is exhausted.
@@ -1612,15 +1617,24 @@ jobs:
                       | select((.name // "") != "OpenCode Review")
                       | select((.name // "") != "Required OpenCode Review")
                       | select((.name // "") != "OpenCode PR Review")
+                      | select((.name // "") != "strix")
+                      | select((.name // "") != "Strix")
+                      | select((.name // "") != "Strix Security Scan")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "strix")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "Strix")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "Strix Security Scan")
                       | select((.status // "") != "COMPLETED")
                     elif .__typename == "StatusContext" then
                       select((.context // "") != "opencode-review")
                       | select((.context // "") != "OpenCode Review")
                       | select((.context // "") != "Required OpenCode Review")
                       | select((.context // "") != "OpenCode PR Review")
+                      | select((.context // "") != "strix")
+                      | select((.context // "") != "Strix")
+                      | select((.context // "") != "Strix Security Scan")
                       | select((.state // "" | ascii_upcase) as $s | ["PENDING","EXPECTED"] | index($s))
                     else
                       empty
@@ -1635,25 +1649,26 @@ jobs:
               return 0
             fi
 
-            strix_running="$(
-              env HEAD_SHA="$HEAD_SHA" gh run list \
-                --repo "$GH_REPOSITORY" \
-                --workflow strix.yml \
-                --commit "$HEAD_SHA" \
-                --limit 200 \
-                --json status,event,headSha,workflowName \
-                --jq '
-                  [
-                    .[]
-                    | select((.headSha // "") == env.HEAD_SHA)
-                    | select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
-                    | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
-                    | select((.status // "") != "completed")
-                  ]
-                  | length > 0
-                ' 2>/dev/null || printf 'false'
-            )"
-            printf '%s\n' "$strix_running"
+            printf 'false\n'
+          }
+
+          run_failed_check_evidence_collector() {
+            local evidence_file="$1"
+            local timeout_seconds="${FAILED_CHECK_EVIDENCE_COLLECT_TIMEOUT_SECONDS:-45}"
+            local kill_after_seconds="${FAILED_CHECK_EVIDENCE_KILL_AFTER_SECONDS:-10}"
+
+            if command -v timeout >/dev/null 2>&1; then
+              if timeout --kill-after="${kill_after_seconds}s" "${timeout_seconds}s" scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
+                return 0
+              fi
+              {
+                printf 'Failed-check evidence collector did not complete within %ss.\n' "$timeout_seconds"
+                printf 'OpenCode must treat this as a bounded evidence-collection blocker and re-query current-head GitHub Checks before approving.\n'
+              } >"$evidence_file"
+              return 1
+            fi
+
+            scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
           collect_failed_check_evidence_with_wait() {
@@ -1672,7 +1687,7 @@ jobs:
             fi
 
             while [ "$attempt" -le "$attempts" ]; do
-              if scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
+              if run_failed_check_evidence_collector "$evidence_file"; then
                 if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
                   return 0
                 fi
@@ -1699,7 +1714,7 @@ jobs:
               attempt=$((attempt + 1))
             done
 
-            scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
+            run_failed_check_evidence_collector "$evidence_file"
           }
 
           emit_pr_mergeability_evidence() {
