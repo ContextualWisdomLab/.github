@@ -114,8 +114,10 @@ def change_request_is_autofixable(pr: dict[str, Any]) -> bool:
 def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     """Return whether current-head evidence justifies an autofix attempt."""
     reasons: list[str] = []
-    if has_current_head_changes_requested(pr) and change_request_is_autofixable(pr):
-        reasons.append("current-head OpenCode requested changes")
+    if not (has_current_head_changes_requested(pr) and change_request_is_autofixable(pr)):
+        return False, ()
+
+    reasons.append("current-head OpenCode requested changes")
     unresolved = unresolved_thread_count(pr)
     if unresolved:
         reasons.append(f"{unresolved} active unresolved review thread(s)")
@@ -209,7 +211,7 @@ def inspect_pr(
 
     needs_fix, reasons = needs_autofix(pr)
     if not needs_fix:
-        return "skip", ("no current-head change request or active unresolved review thread",)
+        return "skip", ("no current-head autofixable OpenCode change request",)
 
     if comments is None:
         comments = issue_comments(repo, number)

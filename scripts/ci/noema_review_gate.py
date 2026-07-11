@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import ipaddress
 import json
 import os
@@ -11,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
@@ -35,6 +37,10 @@ IGNORED_RUNNING_CHECKS = {
 FAILED_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 RUNNING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING", "EXPECTED"}
 MAX_DIFF_CHARS = 60000
+MAX_CONTEXT_FILES = 12
+MAX_FILE_CONTEXT_CHARS = 4000
+MAX_REVIEW_CONTEXT_CHARS = 24000
+MAX_THREAD_BODY_CHARS = 1200
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -106,7 +112,18 @@ query($owner: String!, $name: String!, $number: Int!) {
       headRefOid
       reviewDecision
       reviewThreads(first: 100) {
-        nodes { isResolved isOutdated }
+        nodes {
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 20) {
+            nodes {
+              body
+              author { login }
+            }
+          }
+        }
       }
       reviews(last: 100) {
         nodes {
@@ -257,6 +274,137 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     return diff, truncated
 
 
+def truncate_text(text: str, limit: int) -> str:
+    """Return text shortened to limit characters with an explicit truncation note."""
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return f"{text[:limit]}\n[truncated {omitted} characters]"
+
+
+def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
+    """Fetch changed file paths for the pull request."""
+    output = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{number}/files",
+            "--paginate",
+            "--jq",
+            ".[].filename",
+        ]
+    )
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
+    """Fetch a changed file's current-head text content through the GitHub API."""
+    encoded_path = urllib.parse.quote(path, safe="/")
+    encoded_ref = urllib.parse.quote(head_sha, safe="")
+    content = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/contents/{encoded_path}?ref={encoded_ref}",
+            "--jq",
+            ".content // empty",
+        ]
+    )
+    compact = "".join(content.split())
+    if not compact:
+        return ""
+    return base64.b64decode(compact).decode("utf-8", errors="replace")
+
+
+def changed_file_context(repo: str, number: int, head_sha: str) -> str:
+    """Build bounded changed-file context for cross-file review reasoning."""
+    if not head_sha:
+        return "Changed file context unavailable: missing PR head SHA."
+    paths = fetch_changed_file_paths(repo, number)
+    if not paths:
+        return "Changed file context unavailable: PR reported no changed files."
+    sections: list[str] = []
+    for path in paths[:MAX_CONTEXT_FILES]:
+        try:
+            content = fetch_head_file_content(repo, path, head_sha)
+        except RuntimeError as exc:
+            reason = scrub_sensitive_data(str(exc)) or "unknown error"
+            sections.append(f"### {path}\nUnavailable from head content API: {reason}")
+            continue
+        if not content:
+            sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
+            continue
+        sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
+    if len(paths) > MAX_CONTEXT_FILES:
+        sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
+    return "\n\n".join(sections)
+
+
+def review_thread_context(pr: dict[str, Any]) -> str:
+    """Build bounded prior review-thread context so Noema can avoid duplicate comments."""
+    lines: list[str] = []
+    threads = (((pr.get("reviewThreads") or {}).get("nodes")) or [])
+    for thread in threads:
+        comments = (((thread.get("comments") or {}).get("nodes")) or [])
+        if not comments:
+            continue
+        state = "outdated" if thread.get("isOutdated") else "resolved" if thread.get("isResolved") else "open"
+        location = str(thread.get("path") or "unknown")
+        line = thread.get("line")
+        if isinstance(line, int) and line > 0:
+            location = f"{location}:{line}"
+        lines.append(f"- Thread {state} at {location}:")
+        for comment in comments:
+            author = ((comment.get("author") or {}).get("login") or "unknown").strip()
+            body = truncate_text(str(comment.get("body") or "").strip(), MAX_THREAD_BODY_CHARS)
+            if body:
+                lines.append(f"  - {author}: {body}")
+    return "\n".join(lines)
+
+
+def load_codegraph_context() -> str:
+    """Load optional precomputed CodeGraph context for structural review evidence."""
+    path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
+    except OSError as exc:
+        return f"CodeGraph context unavailable: {exc}"
+
+
+def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:
+    """Build bounded non-diff context for the Noema reviewer."""
+    sections: list[str] = []
+    codegraph = load_codegraph_context()
+    if codegraph:
+        sections.append("## CodeGraph context\n" + codegraph)
+    threads = review_thread_context(pr)
+    if threads:
+        sections.append("## Prior review threads\n" + threads)
+    files = changed_file_context(repo, number, str(pr.get("headRefOid") or ""))
+    if files:
+        sections.append("## Changed file context\n" + files)
+    return truncate_text("\n\n".join(sections), MAX_REVIEW_CONTEXT_CHARS)
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """A URL opener handler that refuses to follow redirects to prevent SSRF."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        """Raise an HTTPError instead of following the redirect."""
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response."""
     stripped = text.strip()
@@ -269,17 +417,28 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return json.loads(stripped[start : end + 1])
 
 
-def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: bool) -> dict[str, Any] | None:
+def call_llm(
+    repo: str,
+    number: int,
+    pr: dict[str, Any],
+    diff: str,
+    truncated: bool,
+    review_context: str = "",
+) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
     if not api_url or not api_key:
-        print("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
-        return None
+        raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
+    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https:// to prevent SSRF vulnerabilities"
+        )
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https")
+        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
@@ -304,7 +463,7 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         "content": "\n".join(
             [
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
-                "Review the PR diff for correctness, security, maintainability, and behavioral regressions.",
+                "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
                 '{"decision":"approve|request_changes|comment","summary":"...","findings":[{"severity":"high|medium|low","file":"path","line":1,"message":"..."}]}',
                 "Use request_changes only for blocking, concrete issues. Use approve when no blocking issue is found.",
@@ -313,6 +472,8 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
                 f"Title: {pr.get('title') or ''}",
                 f"Head SHA: {pr.get('headRefOid') or ''}",
                 f"Diff truncated: {truncated}",
+                "Additional context:",
+                review_context or "No additional context was available.",
                 "Diff:",
                 diff,
             ]
@@ -335,7 +496,8 @@ def call_llm(repo: str, number: int, pr: dict[str, Any], diff: str, truncated: b
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    with opener.open(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
@@ -433,9 +595,8 @@ def inspect_and_review(repo: str, number: int) -> int:
             print(f"- {blocker}")
         return 0
     diff, truncated = fetch_diff(repo, number)
-    verdict = call_llm(repo, number, pr, diff, truncated)
-    if verdict is None:
-        return 0
+    review_context = build_review_context(repo, number, pr)
+    verdict = call_llm(repo, number, pr, diff, truncated, review_context)
     submit_review(repo, number, pr, actor, verdict)
     return 0
 
