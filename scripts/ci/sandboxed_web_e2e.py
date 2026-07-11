@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import typing
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -30,6 +31,7 @@ class NoRedirectHandler(urllib.request.HTTPErrorProcessor):
     """Explicitly disable redirects to prevent SSRF bypasses via 301/302 to local IPs."""
 
     def http_response(self, request, response):
+        """Return the response unmodified to prevent following redirects."""
         return response
 
     https_response = http_response

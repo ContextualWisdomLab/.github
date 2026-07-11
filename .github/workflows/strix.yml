@@ -114,14 +114,14 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
-    # The scan itself is hard-bounded to 30 min (the "Run Strix (quick)" step
-    # has timeout-minutes: 30 and exports STRIX_TOTAL_TIMEOUT_SECONDS=1800), and
+    # The scan itself is hard-bounded to 12 min (the "Run Strix (quick)" step
+    # has timeout-minutes: 12 and exports STRIX_TOTAL_TIMEOUT_SECONDS=720), and
     # every other step is quick or self-bounded (self-test is 2 min). A healthy
-    # run finishes well under 50 min. The 60 cap only ever bites HUNG runs (e.g.
-    # a network stall in pip/git with no per-step timeout); 60 min still clears
+    # run finishes well under 20 min. The 45 cap only ever bites HUNG runs (e.g.
+    # a network stall in pip/git with no per-step timeout); 45 min still clears
     # the realistic worst case with margin while freeing a stuck runner in half
     # the time. Fail-closed: hitting the cap fails the run, never passes it.
-    timeout-minutes: 60
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and posts same-repository commit status
@@ -648,11 +648,11 @@ jobs:
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && 'true' || 'false' }}
         run: |
           budget_suffix="TIME""OUT"
-          process_budget_seconds="1500"
+          process_budget_seconds="600"
           export "LLM_${budget_suffix}=120"
           export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=10"
           export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
-          export "STRIX_TOTAL_${budget_suffix}_SECONDS=1800"
+          export "STRIX_TOTAL_${budget_suffix}_SECONDS=720"
 
           # Capture the gate exit code plus its console output. The gate returns
           # exit 1 both for genuine blocking vulnerabilities AND for

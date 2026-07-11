@@ -341,19 +341,7 @@ emit_known_missing_string_finding() {
 	shift 3
 	for preferred_path in "$@"; do
 		if [ -f "${REPO_ROOT%/}/$preferred_path" ]; then
-			if [ "$needle" = "statuses: write" ] && [ "$preferred_path" = ".github/workflows/strix.yml" ]; then
-				match="$(
-					awk '
-						/^jobs:/ { exit }
-						$0 ~ /^[[:space:]]*statuses: write[[:space:]]*$/ {
-							print NR ":" $0
-							exit
-						}
-					' "${REPO_ROOT%/}/$preferred_path" || true
-				)"
-			else
-				match="$(grep -nF -- "$needle" "${REPO_ROOT%/}/$preferred_path" | head -n 1 || true)"
-			fi
+			match="$(grep -nF -- "$needle" "${REPO_ROOT%/}/$preferred_path" | head -n 1 || true)"
 			if [ -n "$match" ]; then
 				path="$preferred_path"
 				line="${match%%:*}"
@@ -390,8 +378,7 @@ emit_known_unexpected_string_finding() {
 	local line=""
 
 	if ! grep -Fq -- "unexpected '$needle'" "$evidence_file" &&
-		! grep -Fq -- "unexpected \"$needle\"" "$evidence_file" &&
-		! grep -Fq -- "must not grant $needle" "$evidence_file"; then
+		! grep -Fq -- "unexpected \"$needle\"" "$evidence_file"; then
 		return 0
 	fi
 
@@ -411,9 +398,9 @@ emit_known_unexpected_string_finding() {
 	if [ -n "$path" ] && [ -n "$line" ]; then
 		printf '### %s. HIGH %s:%s - %s\n' "$finding_index" "$path" "$line" "$title"
 		printf -- '- Problem: Strix failed because the trusted self-test log reported forbidden "%s" in the required workflow.\n' "$needle"
-		printf -- '- Root cause: The required workflow grants a top-level GITHUB_TOKEN permission broader than the smoke-test contract allows; status writes must stay scoped to the Strix scan job that publishes same-repository evidence.\n'
-		printf -- '- Fix: Remove or downgrade `%s` at `%s:%s` so top-level workflow permissions stay read-only.\n' "$needle" "$path" "$line"
-		printf -- '- Regression test: Keep scripts/ci/strix_required_workflow_smoke.sh and scripts/ci/test_strix_quick_gate.sh asserting that top-level Strix workflow permissions do not contain `%s`.\n\n' "$needle"
+		printf -- '- Root cause: The required workflow grants a broader GITHUB_TOKEN permission than the smoke-test contract allows; required PR scans must keep status publication on explicit app/secret tokens.\n'
+		printf -- '- Fix: Remove or downgrade `%s` at `%s:%s` so the required workflow keeps GITHUB_TOKEN status permissions read-only.\n' "$needle" "$path" "$line"
+		printf -- '- Regression test: Keep scripts/ci/strix_required_workflow_smoke.sh and scripts/ci/test_strix_quick_gate.sh asserting that the required Strix workflow does not contain `%s`.\n\n' "$needle"
 		printf -- '- Suggested edit: change `%s:%s` from `%s` to `statuses: read`, or remove the permission if no status read is needed.\n\n' "$path" "$line" "$needle"
 	else
 		printf '### %s. HIGH unknown:1 - %s\n' "$finding_index" "$title"
@@ -985,7 +972,7 @@ emit_known_missing_string_finding \
 emit_known_unexpected_string_finding \
 	"$EVIDENCE_FILE" \
 	"statuses: write" \
-	"Strix required workflow must keep top-level GITHUB_TOKEN statuses read-only" \
+	"Strix required workflow must keep GITHUB_TOKEN statuses read-only" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh" \
 	"scripts/ci/strix_required_workflow_smoke.sh"

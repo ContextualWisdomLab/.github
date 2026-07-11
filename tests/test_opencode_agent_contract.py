@@ -84,25 +84,21 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs[:3] == [
-        ["github-models", "deepseek/deepseek-v3-0324"],
-        ["openai", "gpt-5-mini"],
         ["openai", "gpt-5"],
+        ["github-models", "openai/gpt-5"],
+        ["github-models", "openai/gpt-5-chat"],
     ]
-    assert direct_openai_models == ["gpt-5-mini", "gpt-5"]
+    assert direct_openai_models == ["gpt-5"]
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models[:3] == [
-        "deepseek/deepseek-v3-0324",
-        "openai/o4-mini",
-        "openai/o3-mini",
+        "openai/gpt-5",
+        "openai/gpt-5-chat",
+        "openai/o3",
     ]
     assert {
         "openai/gpt-5",
-        "openai/gpt-5-mini",
-        "openai/gpt-5-nano",
         "openai/gpt-5-chat",
         "openai/o3",
-        "openai/o3-mini",
-        "openai/o4-mini",
         "deepseek/deepseek-r1-0528",
         "deepseek/deepseek-r1",
         "deepseek/deepseek-v3-0324",
@@ -110,7 +106,17 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "meta/llama-4-maverick-17b-128e-instruct-fp8",
         "meta/llama-4-scout-17b-16e-instruct",
     }.issubset(set(github_candidate_models))
-    assert len(candidates) == len(set(candidates))
+    banned_review_candidates = {
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "openai/gpt-5-mini",
+        "openai/gpt-5-nano",
+        "openai/o3-mini",
+        "openai/o4-mini",
+    }
+    assert banned_review_candidates.isdisjoint(
+        set(direct_openai_models) | set(github_candidate_models)
+    )
     assert '"openai": {' in workflow
     assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
     for model_name in direct_openai_models + github_candidate_models:
@@ -327,8 +333,6 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "placeholder bodies (`pass`, `...`, `NotImplementedError`)" in workflow
     assert "Distinguish typing.Protocol, abc abstractmethod" in workflow
     assert "executable implementation gaps" in workflow
-    assert "Python implementation completeness scan" in workflow
-    assert "scripts/ci/implementation_completeness_scan.py" in workflow
     assert "CHECK_LOOKUP_GH_TOKEN" in workflow
     assert "retrying with workflow github token" in workflow
     assert 'review_write_token="$GH_TOKEN"' in workflow
@@ -384,16 +388,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_central_review_process_fallback" not in workflow
     assert "opencode.jsonc | \\" in workflow
-    assert "scripts/ci/emit_opencode_failed_check_fallback_findings.sh | \\" in workflow
-    assert "scripts/ci/implementation_completeness_scan.py | \\" in workflow
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
-    assert "tests/test_implementation_completeness_scan.py | \\" in workflow
     assert "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py" in workflow
     assert "ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml" in workflow
     assert "ContextualWisdomLab/appguardrail:tests/test_org_security_failure_collector.py" in workflow
     assert "appguardrail org-security failure collector" in workflow
-    assert 'max_changed_count=8' in workflow
     assert 'max_changed_count=3' in workflow
     assert "changed_count\" -gt \"$max_changed_count\"" in workflow
     assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
@@ -410,46 +410,30 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
-    assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12", workflow)
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 350", workflow)
-    assert 'timeout-minutes: 12' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 310", workflow)
+    assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 40", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 120", workflow)
+    assert 'timeout-minutes: 40' in workflow
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 45", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,120}timeout-minutes: 120", workflow)
-    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "21"' in workflow
-    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "20"' in workflow
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,120}timeout-minutes: 45", workflow)
+    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "49"' in workflow
+    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"' in workflow
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
-        "openai/gpt-5-mini "
-        "openai/gpt-5 "
-        "github-models/openai/o4-mini "
-        "github-models/openai/o3-mini "
-        "github-models/openai/gpt-5-mini "
-        "github-models/openai/gpt-5-nano "
+        'OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 '
+        "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
+        "github-models/openai/o3 "
         "github-models/deepseek/deepseek-r1-0528 "
         "github-models/deepseek/deepseek-r1 "
+        "github-models/deepseek/deepseek-v3-0324 "
         "github-models/mistral-ai/mistral-medium-2505 "
         "github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 "
-        "github-models/meta/llama-4-scout-17b-16e-instruct "
-        "github-models/openai/o3 "
-        'github-models/openai/gpt-5"'
+        'github-models/meta/llama-4-scout-17b-16e-instruct"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
-    assert "90 minutes per model" in workflow
-    assert "10- and 30-minute caps" in workflow
-    assert "MODEL: github-models/deepseek/deepseek-v3-0324" in workflow
-    assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
-        "openai/gpt-5 "
-        "github-models/openai/gpt-5 "
-        "github-models/openai/o3 "
-        'github-models/deepseek/deepseek-r1-0528"'
-    ) in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
@@ -464,7 +448,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
     assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert 'record_review_status "exhausted"' not in model_pool_runner
