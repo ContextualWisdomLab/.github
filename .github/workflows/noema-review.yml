@@ -94,24 +94,23 @@ jobs:
         id: noema_app_token
         env:
           OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
-          TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || '' }}
+          TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
         run: |
           set -euo pipefail
 
-          mark_unavailable() {
+          fail_unavailable() {
+            local message="$1"
             echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::error::$message"
+            exit 1
           }
 
           if [ -z "${TOKEN_EXCHANGE_URL:-}" ]; then
-            echo "Noema app token exchange unavailable: NOEMA_TOKEN_EXCHANGE_URL is not configured."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured."
           fi
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "Noema app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: OIDC request environment is missing."
           fi
 
           request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
@@ -126,16 +125,12 @@ jobs:
               -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               "${request_url}${separator}audience=${OIDC_AUDIENCE}"
           )"; then
-            echo "Noema app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: OIDC token request did not complete."
           fi
 
           oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
           if [ -z "$oidc_token" ]; then
-            echo "Noema app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: OIDC token response was empty."
           fi
 
           if ! token_response="$(
@@ -146,16 +141,12 @@ jobs:
               --data "$(jq -cn --arg target_repository "$TARGET_REPOSITORY" '{target_repository:$target_repository}')" \
               "${TOKEN_EXCHANGE_URL}"
           )"; then
-            echo "Noema app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: app token request did not complete."
           fi
 
           app_token="$(jq -r '.token // empty' <<<"$token_response")"
           if [ -z "$app_token" ]; then
-            echo "Noema app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: app token response was empty."
           fi
 
           echo "::add-mask::$app_token"
@@ -178,8 +169,8 @@ jobs:
             exit 0
           fi
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::notice::Noema app token is unavailable; review skipped."
-            exit 0
+            echo "::error::Noema app token is unavailable; review cannot submit a verdict."
+            exit 1
           fi
           python3 scripts/ci/noema_review_gate.py \
             --repo "$TARGET_REPOSITORY" \
