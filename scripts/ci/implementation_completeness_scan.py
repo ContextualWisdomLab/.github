@@ -21,6 +21,8 @@ RUNTIME_TEST_PARTS = {
 
 @dataclass(frozen=True)
 class Finding:
+    """A single executable placeholder implementation found in runtime code."""
+
     path: str
     line: int
     symbol: str
@@ -28,12 +30,16 @@ class Finding:
 
 
 class ClassContext:
+    """Track enclosing class metadata needed to exempt declaration contracts."""
+
     def __init__(self, name: str, is_protocol_or_abc: bool) -> None:
+        """Create a class-context frame for the visitor stack."""
         self.name = name
         self.is_protocol_or_abc = is_protocol_or_abc
 
 
 def dotted_name(node: ast.AST) -> str:
+    """Return a dotted identifier for a supported AST expression."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -47,11 +53,13 @@ def dotted_name(node: ast.AST) -> str:
 
 
 def is_protocol_or_abc_base(node: ast.AST) -> bool:
+    """Return whether an AST base expression names Protocol or ABC."""
     name = dotted_name(node)
     return name in {"Protocol", "typing.Protocol", "ABC", "abc.ABC"}
 
 
 def is_abstract_or_overload(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return whether a function is a declaration-only abstract or overload stub."""
     for decorator in node.decorator_list:
         name = dotted_name(decorator)
         if name.endswith(".abstractmethod") or name == "abstractmethod":
@@ -64,6 +72,7 @@ def is_abstract_or_overload(node: ast.FunctionDef | ast.AsyncFunctionDef) -> boo
 def strip_docstring(
     body: list[ast.stmt],
 ) -> list[ast.stmt]:
+    """Remove an initial function docstring statement from an AST body."""
     if not body:
         return body
     first = body[0]
@@ -79,6 +88,7 @@ def strip_docstring(
 def placeholder_reason(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> str | None:
+    """Describe why a function body is an executable placeholder, if it is one."""
     body = strip_docstring(node.body)
     if len(body) != 1:
         return None
@@ -99,24 +109,31 @@ def placeholder_reason(
 
 
 class PlaceholderVisitor(ast.NodeVisitor):
+    """Collect executable placeholder bodies while respecting declaration scopes."""
+
     def __init__(self, path: str) -> None:
+        """Create a visitor for a repository-relative Python file path."""
         self.path = path
         self.class_stack: list[ClassContext] = []
         self.findings: list[Finding] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Visit a class and remember whether its methods are declaration stubs."""
         is_protocol_or_abc = any(is_protocol_or_abc_base(base) for base in node.bases)
         self.class_stack.append(ClassContext(node.name, is_protocol_or_abc))
         self.generic_visit(node)
         self.class_stack.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """Visit a synchronous function definition."""
         self._visit_function(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        """Visit an asynchronous function definition."""
         self._visit_function(node)
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """Record a placeholder function unless it is an allowed declaration."""
         if any(context.is_protocol_or_abc for context in self.class_stack):
             return
         if is_abstract_or_overload(node):
@@ -136,12 +153,14 @@ class PlaceholderVisitor(ast.NodeVisitor):
 
 
 def is_runtime_python_path(path: Path) -> bool:
+    """Return whether a path is a runtime Python file rather than test support."""
     if path.suffix != ".py":
         return False
     return not any(part in RUNTIME_TEST_PARTS for part in path.parts)
 
 
 def changed_paths_from_file(path: Path) -> list[Path]:
+    """Read a newline-delimited changed-file list."""
     if not path.exists():
         return []
     changed_paths: list[Path] = []
@@ -153,6 +172,7 @@ def changed_paths_from_file(path: Path) -> list[Path]:
 
 
 def scan_python_file(repo_root: Path, relative_path: Path) -> list[Finding]:
+    """Scan one repository-relative Python file for placeholder bodies."""
     source_path = repo_root / relative_path
     source = source_path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(relative_path))
@@ -164,6 +184,7 @@ def scan_python_file(repo_root: Path, relative_path: Path) -> list[Finding]:
 def scan_changed_paths(
     repo_root: Path, changed_paths: Iterable[Path]
 ) -> tuple[list[Finding], list[str]]:
+    """Scan changed runtime Python paths and return findings plus parse errors."""
     findings: list[Finding] = []
     errors: list[str] = []
     seen: set[str] = set()
@@ -184,6 +205,7 @@ def scan_changed_paths(
 
 
 def render_report(findings: list[Finding], errors: list[str], checked_count: int) -> str:
+    """Render a markdown report for CI logs and review evidence."""
     lines = [
         "# Implementation Completeness Scan",
         "",
@@ -225,6 +247,7 @@ def render_report(findings: list[Finding], errors: list[str], checked_count: int
 
 
 def main() -> int:
+    """Run the implementation-completeness scanner CLI."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--changed-files", required=True)
