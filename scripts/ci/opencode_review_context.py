@@ -70,20 +70,11 @@ def write_shell_exports(path: Path, values: Mapping[str, str]) -> None:
     )
 
 
-def append_github_env(path: Path, values: Mapping[str, str]) -> None:
-    """Append validated values to a GitHub Actions environment file."""
-    with path.open("a", encoding="utf-8") as handle:
-        for name, value in values.items():
-            handle.write(f"{name}={value}\n")
-
-
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event-path", required=True, type=Path)
     parser.add_argument("--env-file", required=True, type=Path)
-    parser.add_argument("--github-env", type=Path, default=None)
-    parser.add_argument("--changed-files-file", default="")
     parser.add_argument("--default-repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     return parser.parse_args(argv)
 
@@ -94,11 +85,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     event = load_event(args.event_path)
     values = resolve_context(event, args.default_repository)
     write_shell_exports(args.env_file, values)
-    if args.github_env is not None:
-        github_env_values = dict(values)
-        if args.changed_files_file:
-            github_env_values["OPENCODE_CHANGED_FILES_FILE"] = args.changed_files_file
-        append_github_env(args.github_env, github_env_values)
     return 0
 
 

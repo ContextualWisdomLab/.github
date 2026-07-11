@@ -1607,9 +1607,7 @@ jobs:
           context_env_file="${RUNNER_TEMP:-.}/opencode-review-context.env"
           python3 scripts/ci/opencode_review_context.py \
             --event-path "$GITHUB_EVENT_PATH" \
-            --env-file "$context_env_file" \
-            --github-env "$GITHUB_ENV" \
-            --changed-files-file "$OPENCODE_CHANGED_FILES_FILE"
+            --env-file "$context_env_file"
           # shellcheck source=/dev/null
           . "$context_env_file"
           printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \

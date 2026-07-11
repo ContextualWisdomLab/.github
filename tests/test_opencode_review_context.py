@@ -22,8 +22,8 @@ def write_event(tmp_path, payload):
     return path
 
 
-def test_pull_request_event_writes_shell_and_github_env(tmp_path):
-    """Resolve a pull_request_target event into validated shell and GitHub env files."""
+def test_pull_request_event_writes_shell_exports(tmp_path):
+    """Resolve a pull_request_target event into validated shell exports."""
     event_path = write_event(
         tmp_path,
         {
@@ -35,7 +35,6 @@ def test_pull_request_event_writes_shell_and_github_env(tmp_path):
         },
     )
     shell_env = tmp_path / "context.env"
-    github_env = tmp_path / "github.env"
 
     assert (
         context.main(
@@ -44,20 +43,15 @@ def test_pull_request_event_writes_shell_and_github_env(tmp_path):
                 str(event_path),
                 "--env-file",
                 str(shell_env),
-                "--github-env",
-                str(github_env),
-                "--changed-files-file",
-                "/tmp/changed-files.txt",
             ]
         )
         == 0
     )
 
-    assert "export GH_REPOSITORY=ContextualWisdomLab/.github" in shell_env.read_text(encoding="utf-8")
-    github_env_text = github_env.read_text(encoding="utf-8")
-    assert f"PR_BASE_SHA={BASE_SHA}" in github_env_text
-    assert f"HEAD_SHA={HEAD_SHA}" in github_env_text
-    assert "OPENCODE_CHANGED_FILES_FILE=/tmp/changed-files.txt" in github_env_text
+    shell_env_text = shell_env.read_text(encoding="utf-8")
+    assert "export GH_REPOSITORY=ContextualWisdomLab/.github" in shell_env_text
+    assert f"export PR_BASE_SHA={BASE_SHA}" in shell_env_text
+    assert f"export HEAD_SHA={HEAD_SHA}" in shell_env_text
 
 
 def test_workflow_dispatch_inputs_use_default_repository(tmp_path):
