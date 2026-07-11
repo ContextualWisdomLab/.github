@@ -3082,11 +3082,11 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
 def test_scrub_sensitive_data_and_run_error():
     assert sched.scrub_sensitive_data("Authorization: Bearer mytoken123") == "Authorization: Bearer ***"
     assert sched.scrub_sensitive_data("token mytoken123") == "token ***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghp", "1234567890abcdef")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghs", "1234567890abcdef")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("gho", "1234567890abcdef")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghp", "1234567890abcdef1234")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("gho", "1234567890abcdef1234567890extra")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("ghp", "unit_token_primary")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("ghs", "unit_token_server")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("gho", "unit_token_oauth")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("ghp", "unit_token_extended")) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token("gho", "unit_token_oauth_extended")) == "***"
     assert sched.scrub_sensitive_data(fake_github_pat("11AAAAA_abcdefg1234567890")) == "***"
     assert sched.scrub_sensitive_data(fake_github_token("ghp", "placeholder_token_with_underscores_123")) == "***"
     assert sched.scrub_sensitive_data(fake_github_token("gho", "installation_token_value")) == "***"
@@ -3109,7 +3109,7 @@ def test_scrub_sensitive_data_and_run_error():
                 sys.executable,
                 "-c",
                 "import sys; sys.exit(1)",
-                fake_github_token("ghp", "1234567890abcdef1234"),
+                fake_github_token("ghp", "unit_token_extended"),
             ],
             stdin=None,
         )
