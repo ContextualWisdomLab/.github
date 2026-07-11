@@ -26,14 +26,12 @@ from scripts.ci import sandboxed_verify
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 
 
-class NoRedirectHandler(urllib.request.HTTPErrorProcessor):
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Explicitly disable redirects to prevent SSRF bypasses via 301/302 to local IPs."""
 
-    def http_response(self, request, response):
-        """Return the original HTTP response without following redirects."""
-        return response
-
-    https_response = http_response
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Raise an HTTPError instead of following the redirect."""
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
 @dataclass
