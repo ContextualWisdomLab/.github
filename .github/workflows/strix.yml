@@ -124,8 +124,8 @@ jobs:
     timeout-minutes: 45
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) for target-repository status writes.
-    # The workflow GITHUB_TOKEN only reads existing status evidence.
+    # exchanges an OIDC token (id-token) and posts same-repository commit status
+    # fallback from this job; all other jobs keep commit-status read-only.
     permissions:
       actions: read
       contents: read
@@ -739,6 +739,7 @@ jobs:
         if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          GITHUB_STATUS_TOKEN: ${{ github.token }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
@@ -802,6 +803,13 @@ jobs:
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
             exit 0
+          fi
+          if [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
+            if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
+              exit 0
+            fi
+          else
+            echo "::notice::Skipping github-token fallback for cross-repository Strix status publish."
           fi
           echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
 
