@@ -133,12 +133,14 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
 
 def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
-    """Resolve trusted source checkouts from workflow identity, not dispatch input."""
+    """Check out trusted source directly from the workflow identity SHA."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
 
     assert "canonical_ref:" not in workflow
     assert "INPUT_CANONICAL_REF" not in workflow
     assert "github.event.inputs.canonical_ref" not in workflow
+    assert "steps.trusted_source.outputs.ref" not in workflow
+    assert workflow.count("ref: ${{ github.workflow_sha }}") == 2
     assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 2
     assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 2
     assert workflow.count('job_context.get("workflow_sha") or github_context.get("workflow_sha")') == 2
@@ -158,8 +160,10 @@ def test_opencode_bounded_evidence_context_is_resolved_from_event_payload():
     assert "PR_BASE_SHA: ${{ github.event.pull_request" not in step
     assert "PR_HEAD_SHA: ${{ github.event.pull_request" not in step
     assert "HEAD_SHA: ${{ github.event.pull_request" not in step
-    assert "GITHUB_EVENT_PATH" in step
-    assert "Invalid OpenCode review context value for" in step
+    assert "python3 scripts/ci/opencode_review_context.py" in step
+    assert "--event-path \"$GITHUB_EVENT_PATH\"" in step
+    assert "printf -v" not in step
+    assert "event.get(\"pull_request\")" not in step
     assert "Resolved bounded OpenCode review context for %s#%s at %s." in step
 
 

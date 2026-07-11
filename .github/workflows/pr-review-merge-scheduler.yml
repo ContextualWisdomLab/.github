@@ -283,7 +283,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 1
 
       - name: Self-test scheduler
@@ -296,7 +296,7 @@ jobs:
           SCHEDULER_READ_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ steps.trusted_source.outputs.ref }}
+          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ github.workflow_sha }}
           SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail

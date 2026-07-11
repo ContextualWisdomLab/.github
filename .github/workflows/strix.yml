@@ -194,10 +194,10 @@ jobs:
       - name: Checkout trusted Strix source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ${{ steps.trusted_source.outputs.repository }}
+          repository: ContextualWisdomLab/.github
           fetch-depth: 1
           persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: ${{ github.workflow_sha }}
           path: trusted-strix-source
 
       - name: Export trusted Strix source paths

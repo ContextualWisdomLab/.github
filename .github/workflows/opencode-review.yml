@@ -255,7 +255,7 @@ jobs:
           repository: ContextualWisdomLab/.github
           fetch-depth: 1
           persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: ${{ github.workflow_sha }}
 
       - name: Report coverage source materialization failure
         if: needs.coverage-source-tree.result != 'success'
@@ -1375,7 +1375,7 @@ jobs:
           repository: ContextualWisdomLab/.github
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: ${{ github.workflow_sha }}
 
       - name: Exchange OpenCode app token for target repository review reads
         id: review_read_app_token
@@ -1605,65 +1605,15 @@ jobs:
         run: |
           set -euo pipefail
           context_env_file="${RUNNER_TEMP:-.}/opencode-review-context.env"
-          python3 <<'PY' >"$context_env_file"
-          import json
-          import os
-          import re
-          import sys
-
-          event_path = os.environ.get("GITHUB_EVENT_PATH")
-          if not event_path:
-              print("::error::GITHUB_EVENT_PATH is not available for OpenCode review context resolution.", file=sys.stderr)
-              raise SystemExit(1)
-
-          try:
-              with open(event_path, encoding="utf-8") as handle:
-                  event = json.load(handle)
-          except (OSError, json.JSONDecodeError) as exc:
-              print(f"::error::Could not read GitHub event payload for OpenCode review context: {exc}", file=sys.stderr)
-              raise SystemExit(1)
-
-          inputs = event.get("inputs") or {}
-          pull_request = event.get("pull_request") or {}
-          base = pull_request.get("base") or {}
-          head = pull_request.get("head") or {}
-          base_repo = base.get("repo") or {}
-          values = {
-              "GH_REPOSITORY": str(
-                  base_repo.get("full_name") or inputs.get("target_repository") or os.environ.get("GITHUB_REPOSITORY") or ""
-              ).strip(),
-              "PR_NUMBER": str(pull_request.get("number") or inputs.get("pr_number") or "").strip(),
-              "PR_BASE_SHA": str(base.get("sha") or inputs.get("pr_base_sha") or "").strip(),
-              "PR_HEAD_SHA": str(head.get("sha") or inputs.get("pr_head_sha") or "").strip(),
-          }
-          values["HEAD_SHA"] = values["PR_HEAD_SHA"]
-
-          validators = {
-              "GH_REPOSITORY": r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
-              "PR_NUMBER": r"[1-9][0-9]*",
-              "PR_BASE_SHA": r"[0-9a-fA-F]{40}",
-              "PR_HEAD_SHA": r"[0-9a-fA-F]{40}",
-              "HEAD_SHA": r"[0-9a-fA-F]{40}",
-          }
-          for name, pattern in validators.items():
-              if not re.fullmatch(pattern, values[name]):
-                  print(f"::error::Invalid OpenCode review context value for {name}.", file=sys.stderr)
-                  raise SystemExit(1)
-
-          for name, value in values.items():
-              print(f"{name}={value}")
-          PY
-          while IFS='=' read -r name value; do
-            case "$name" in
-              GH_REPOSITORY|PR_NUMBER|PR_BASE_SHA|PR_HEAD_SHA|HEAD_SHA)
-                printf -v "$name" '%s' "$value"
-                export "$name"
-                ;;
-            esac
-          done <"$context_env_file"
+          python3 scripts/ci/opencode_review_context.py \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --env-file "$context_env_file" \
+            --github-env "$GITHUB_ENV" \
+            --changed-files-file "$OPENCODE_CHANGED_FILES_FILE"
+          # shellcheck source=/dev/null
+          . "$context_env_file"
           printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
-          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
