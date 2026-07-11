@@ -278,13 +278,15 @@ main() {
 				if [ "$run_status" -eq 2 ]; then
 					break
 				fi
-				retry_sleep="$(backoff_sleep "$attempt")"
-				if [ "$deadline" -gt 0 ] && [ $((SECONDS + retry_sleep)) -gt "$deadline" ]; then
-					retry_sleep=$((deadline - SECONDS))
-				fi
-				if [ "$retry_sleep" -gt 0 ]; then
-					printf 'Retrying OpenCode after exponential backoff of %ss.\n' "$retry_sleep"
-					sleep "$retry_sleep"
+				if [ "$attempt" -lt "$attempts" ]; then
+					retry_sleep="$(backoff_sleep "$attempt")"
+					if [ "$deadline" -gt 0 ] && [ $((SECONDS + retry_sleep)) -gt "$deadline" ]; then
+						retry_sleep=$((deadline - SECONDS))
+					fi
+					if [ "$retry_sleep" -gt 0 ]; then
+						printf 'Retrying OpenCode after exponential backoff of %ss.\n' "$retry_sleep"
+						sleep "$retry_sleep"
+					fi
 				fi
 			done
 		done
@@ -295,7 +297,7 @@ main() {
 			record_pool_exhausted
 			exit 1
 		fi
-		printf 'OpenCode retry budget/GitHub Actions job timeout remains the outer guard for provider stalls.\n'
+		printf 'OpenCode retry budget and the workflow step timeout remain the outer guards for invalid or unavailable provider output.\n'
 		cycle_sleep="${OPENCODE_POOL_CYCLE_SLEEP_SECONDS:-60}"
 		if [ "$deadline" -gt 0 ] && [ $((SECONDS + cycle_sleep)) -gt "$deadline" ]; then
 			cycle_sleep=$((deadline - SECONDS))

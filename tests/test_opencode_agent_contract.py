@@ -456,8 +456,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
-    assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
+    assert "OPENCODE_POOL_MAX_CYCLES" not in workflow
+    assert 'OPENCODE_POOL_CYCLE_SLEEP_SECONDS: "15"' in workflow
+    assert 'OPENCODE_BACKOFF_MAX_SECONDS: "5"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"' in workflow
@@ -472,7 +473,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
-    assert "retry budget/GitHub Actions job timeout" in model_pool_runner
+    assert "workflow step timeout remain the outer guards for invalid or unavailable provider output" in model_pool_runner
     assert "OpenCode model pool exhausted before producing a valid control conclusion." in model_pool_runner
     assert 'record_review_status "exhausted"' in model_pool_runner
     assert "retry budget exhausted" not in model_pool_runner
