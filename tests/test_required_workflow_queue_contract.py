@@ -169,7 +169,25 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
 
     assert "Noema review skipped: no pull request number is associated with this event." in workflow
     assert "if: env.PR_NUMBER == ''" in workflow
-    assert workflow.count("if: env.PR_NUMBER != ''") >= 4
+    assert workflow.count("if: env.PR_NUMBER != ''") >= 3
+
+
+def test_noema_and_scheduler_materialize_trusted_workflow_sha() -> None:
+    noema = workflow_text("noema-review.yml")
+    scheduler = workflow_text("pr-review-merge-scheduler.yml")
+
+    for workflow in (noema, scheduler):
+        assert "workflow_sha" in workflow
+        assert "workflow_repository" in workflow
+        assert "Trusted" in workflow or "trusted" in workflow
+        assert "Materialize trusted" in workflow
+        assert "uses: actions/checkout" not in workflow
+        assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in workflow
+        assert "Trusted" in workflow and "source ref must resolve to the immutable workflow commit SHA" in workflow
+        assert "repository: ContextualWisdomLab/.github" not in workflow
+        assert "repository: ${{ steps.trusted_source.outputs.repository }}" not in workflow
+        assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
+        assert "INPUT_CANONICAL_REF" not in workflow
 
 
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:

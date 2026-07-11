@@ -98,8 +98,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' }}
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
-# read-only and grant status publication only through exchanged app/secret
-# tokens. GITHUB_TOKEN can read status evidence but must not write it.
+# read-only and scope same-repo status publication to the Strix scan job.
 permissions:
   actions: read
   contents: read
@@ -124,14 +123,14 @@ jobs:
     timeout-minutes: 45
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) and reads commit status evidence here;
-    # publication uses exchanged app/secret tokens below.
+    # exchanges an OIDC token (id-token) and publishes same-repo status evidence
+    # from the scan job only.
     permissions:
       actions: read
       contents: read
       id-token: write
       models: read
-      statuses: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:

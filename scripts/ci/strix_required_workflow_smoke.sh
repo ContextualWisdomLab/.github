@@ -83,7 +83,6 @@ if any(line.strip() == "statuses: write" for line in top_level_permissions):
     print("Strix workflow top-level GITHUB_TOKEN must not grant statuses: write.", file=sys.stderr)
     raise SystemExit(1)
 
-status_read_jobs: list[str] = []
 status_write_jobs: list[str] = []
 current_job = ""
 inside_permissions = False
@@ -99,25 +98,16 @@ for line in lines[jobs_index + 1 :]:
     if not inside_permissions:
         continue
     if line.startswith("      "):
-        if line.strip() == "statuses: read":
-            status_read_jobs.append(current_job)
         if line.strip() == "statuses: write":
             status_write_jobs.append(current_job)
         continue
     if line.strip():
         inside_permissions = False
 
-if status_read_jobs != ["strix"]:
+if status_write_jobs != ["strix"]:
     print(
-        "Strix workflow must scope statuses: read only to the strix scan job; found: "
-        + (", ".join(status_read_jobs) if status_read_jobs else "none"),
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-if status_write_jobs:
-    print(
-        "Strix workflow must not grant GITHUB_TOKEN statuses: write; found: "
-        + ", ".join(status_write_jobs),
+        "Strix workflow must scope statuses: write only to the strix scan job; found: "
+        + (", ".join(status_write_jobs) if status_write_jobs else "none"),
         file=sys.stderr,
     )
     raise SystemExit(1)
