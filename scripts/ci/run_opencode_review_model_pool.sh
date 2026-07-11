@@ -158,8 +158,8 @@ run_one_model_attempt() {
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id
 
-	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
-	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-60}"
+	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
+	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 
 	rm -f "$opencode_json_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
@@ -217,8 +217,8 @@ main() {
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
-	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400}"
+	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
+	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	deadline=0
 	if [ "$budget_seconds" -gt 0 ]; then
@@ -293,7 +293,7 @@ main() {
 			done
 		done
 
-		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the configured retry deadline is reached.\n'
+		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the retry budget/GitHub Actions job timeout is reached.\n'
 		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
 			printf 'OpenCode model pool reached configured max cycle count %s without a valid control conclusion.\n' "$max_cycles"
 			record_pool_exhausted
