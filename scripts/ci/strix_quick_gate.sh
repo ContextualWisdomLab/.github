@@ -3803,6 +3803,10 @@ run_current_target_scan() {
 			fi
 		fi
 
+		if fail_reported_vulnerabilities_before_fallback_success; then
+			return 1
+		fi
+
 		case "$PR_FINDINGS_DECISION" in
 		block_changed | block_unmapped | block_manifest_unverified)
 			return 1

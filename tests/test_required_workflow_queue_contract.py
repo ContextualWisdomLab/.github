@@ -120,6 +120,28 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
         assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
 
 
+def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
+    for filename in ("opencode-review.yml", "noema-review.yml", "pr-review-merge-scheduler.yml"):
+        workflow = workflow_text(filename)
+
+        assert "canonical_ref:" not in workflow
+        assert "INPUT_CANONICAL_REF" not in workflow
+        assert "github.event.inputs.canonical_ref" not in workflow
+        assert "inputs.canonical_ref" not in workflow
+        assert "workflow_sha" in workflow
+        assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in workflow
+        assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
+
+
+def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() -> None:
+    workflow = workflow_text("noema-review.yml")
+    concurrency_contract = workflow.split("permissions:", 1)[0]
+
+    assert "github.repository }}-${{ github.event_name }}-${{" in concurrency_contract
+    assert "github.event_name == 'workflow_run'" in concurrency_contract
+    assert "github.event_name == 'pull_request_target'" in concurrency_contract
+
+
 def test_noema_review_skips_until_exchange_url_is_configured_then_fails_closed() -> None:
     workflow = workflow_text("noema-review.yml")
 
