@@ -6,7 +6,7 @@
 #
 #   osv-scan          HARD  diff-scoped — fails on NEW vulns the PR introduces
 #   dependency-review HARD  diff-scoped — fails on vulnerable/denied deps the PR adds
-#   trivy-fs          HARD  repo-wide   — fails on FIXABLE CRITICAL/HIGH findings
+#   trivy-fs          HARD  repo-wide   — fails on FIXABLE MEDIUM/HIGH/CRITICAL findings
 #   scorecard         SOFT  repo posture — uploaded for visibility, never blocks
 #
 # Gating is by the JOB result (a failed job fails this required workflow ->
@@ -18,12 +18,13 @@
 #
 # NOTE on dependency-review: dependency graph can be unavailable on some repos.
 # Treat that as "not enforceable here" instead of making the required workflow
-# unsatisfiable; keep high-severity dependency findings hard-failing where the
+# unsatisfiable; keep medium-or-higher dependency findings hard-failing where the
 # API is supported.
 #
 # NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
-# CRITICAL/HIGH finding blocks every PR in that repo until it is fixed. Flip its
-# `exit-code` to "0" to make Trivy visibility-only if that is too strict.
+# MEDIUM/HIGH/CRITICAL finding blocks every PR in that repo until it is fixed.
+# Trivy itself exits 0 so SARIF is always available; the following parser prints
+# exact findings and then fails the job.
 name: Security Scan
 
 on:
@@ -32,13 +33,20 @@ on:
     branches: [main, master, develop]
 
 concurrency:
-  group: security-scan-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  group: >-
+    security-scan-${{
+    github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}-${{
+    github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.run_id }}
   cancel-in-progress: true
 
+# Scorecard Token-Permissions (alert #42): workflow-level token stays
+# read-only. Every job that uploads SARIF (osv-scan, trivy-fs, scorecard)
+# already declares security-events:write at job scope, so granting it here as
+# well is redundant and over-broad.
 permissions:
   actions: read
   contents: read
-  security-events: write
 
 jobs:
   cancel-closed-pr-runs:
@@ -49,14 +57,157 @@ jobs:
 
   osv-scan:
     if: github.event.action != 'closed'
-    # ponytail: reuse upstream diff-scoped PR scanner instead of hand-rolling it
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
       security-events: write
-    with:
-      fail-on-vuln: true
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan base with OSV
+        id: osv_base
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=old-results.json
+            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+            --allow-no-lockfiles
+            -r
+            ./
+      - name: Explain base OSV resolver fallback
+        if: steps.osv_base.outcome == 'failure'
+        run: |
+          echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+      - name: Retry base OSV without transitive resolution
+        if: steps.osv_base.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=old-results.json
+            --no-resolve
+            --allow-no-lockfiles
+            -r
+            ./
+      - name: Checkout head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          clean: false
+          persist-credentials: false
+      - name: Scan head with OSV
+        id: osv_head
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=new-results.json
+            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+            --allow-no-lockfiles
+            -r
+            ./
+      - name: Explain head OSV resolver fallback
+        if: steps.osv_head.outcome == 'failure'
+        run: |
+          echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+      - name: Retry head OSV without transitive resolution
+        if: steps.osv_head.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --format=json
+            --output=new-results.json
+            --no-resolve
+            --allow-no-lockfiles
+            -r
+            ./
+      - name: Require OSV scan output
+        run: |
+          set -euo pipefail
+          test -s old-results.json
+          test -s new-results.json
+      - name: Print OSV findings being compared
+        shell: python3 {0}
+        run: |
+          import json
+          from pathlib import Path
+
+          def iter_findings(path):
+              data = json.loads(Path(path).read_text(encoding="utf-8"))
+              for result in data.get("results") or []:
+                  source = result.get("source", {})
+                  source_name = source.get("path") or source.get("name") or "unknown"
+                  for package in result.get("packages", []):
+                      package_info = package.get("package", {})
+                      package_name = package_info.get("name") or "unknown"
+                      package_version = package_info.get("version") or "unknown"
+                      for vulnerability in package.get("vulnerabilities", []):
+                          aliases = ", ".join(vulnerability.get("aliases") or [])
+                          summary = (vulnerability.get("summary") or "").replace("\n", " ").strip()
+                          yield {
+                              "source": source_name,
+                              "package": package_name,
+                              "version": package_version,
+                              "id": vulnerability.get("id") or "unknown",
+                              "aliases": aliases,
+                              "summary": summary,
+                          }
+
+          for label, path in (("base", "old-results.json"), ("head", "new-results.json")):
+              findings = list(iter_findings(path))
+              print(f"OSV {label} scan produced {len(findings)} finding(s) in {path}.")
+              for finding in findings[:50]:
+                  alias_text = f" aliases={finding['aliases']}" if finding["aliases"] else ""
+                  summary_text = f" - {finding['summary']}" if finding["summary"] else ""
+                  print(
+                      f"- {finding['source']}: {finding['package']}@{finding['version']} "
+                      f"{finding['id']}{alias_text}{summary_text}"
+                  )
+              if len(findings) > 50:
+                  print(f"... {len(findings) - 50} additional {label} OSV finding(s) omitted from the log summary.")
+      - name: Report PR-introduced OSV findings
+        uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |
+            --output=results.sarif
+            --old=old-results.json
+            --new=new-results.json
+            --gh-annotations=true
+            --fail-on-vuln=true
+      - name: Upload OSV SARIF to code scanning
+        if: always() && hashFiles('results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: results.sarif
+          category: osv-scanner
+      - name: Upload OSV debug artifacts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v6.0.0
+        with:
+          name: osv-scan-debug
+          path: |
+            old-results.json
+            new-results.json
+            results.sarif
+          if-no-files-found: ignore
+          retention-days: 5
 
   dependency-review:
     if: github.event.action != 'closed'
@@ -108,7 +259,7 @@ jobs:
         if: steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          fail-on-severity: high
+          fail-on-severity: moderate
           comment-summary-in-pr: on-failure
 
   trivy-fs:
@@ -129,11 +280,63 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
-          severity: CRITICAL,HIGH
+          severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
           format: sarif
           output: trivy-results.sarif
-          exit-code: "1"
+          exit-code: "0"
+          # Without this, trivy-action rebuilds the SARIF scan with ALL
+          # severities and the parser below would gate LOW findings too,
+          # contradicting the documented MEDIUM-or-higher gate above.
+          limit-severities-for-sarif: true
+      - name: Require Trivy SARIF output
+        run: |
+          set -euo pipefail
+          if [ ! -s trivy-results.sarif ]; then
+            echo "::error::Trivy did not produce trivy-results.sarif; inspect the Trivy filesystem scan logs above."
+            exit 1
+          fi
+      - name: Print Trivy findings that failed the gate
+        # SARIF-only output otherwise leaves failures as just "exit code 1".
+        shell: python3 {0}
+        run: |
+          import json, pathlib
+
+          sarif = json.loads(pathlib.Path("trivy-results.sarif").read_text(encoding="utf-8"))
+          findings = []
+          for run in sarif.get("runs", []):
+              rules = {r["id"]: r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
+              for result in run.get("results", []):
+                  rule = rules.get(result.get("ruleId", ""), {})
+                  severity = rule.get("properties", {}).get("security-severity", "?")
+                  lines = (result.get("message", {}).get("text") or "").strip().splitlines()
+                  fields = {}
+                  for entry in lines:
+                      key, sep, value = entry.partition(":")
+                      if sep:
+                          fields[key.strip().lower()] = value.strip()
+                  if fields.get("severity"):
+                      severity = f"{fields['severity']} (security-severity={severity})"
+                  message = fields.get("message") or (lines[0] if lines else result.get("ruleId", ""))
+                  locations = result.get("locations", [])
+                  if locations:
+                      phys = locations[0].get("physicalLocation", {})
+                      uri = phys.get("artifactLocation", {}).get("uri", "?")
+                      line = phys.get("region", {}).get("startLine", "?")
+                      where = f"{uri}:{line}"
+                  else:
+                      where = "-"
+                  findings.append((severity, result.get("ruleId", "?"), where, message))
+
+          if not findings:
+              print("Trivy filesystem scan completed with 0 CRITICAL/HIGH/MEDIUM findings in trivy-results.sarif.")
+          else:
+              print(f"Trivy filesystem scan reported {len(findings)} finding(s):")
+              for severity, rule_id, where, message in findings:
+                  print(f"  [{severity}] {rule_id} {where} - {message}")
+              print("")
+              print("Remediate each finding at the shared base branch so open PRs inherit the fix.")
+              raise SystemExit(1)
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
@@ -161,6 +364,46 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: false
+      - name: Filter delegated PR-only Scorecard SARIF findings
+        run: |
+          python3 <<'PY'
+          import json
+          import pathlib
+
+          PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}
+          PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}
+          PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS
+
+          sarif_path = pathlib.Path("results.sarif")
+          sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+          hard_gate_delegated = 0
+          governance_delegated = 0
+          for run in sarif.get("runs", []):
+              kept = []
+              for result in run.get("results", []):
+                  rule_id = result.get("ruleId")
+                  if rule_id in PR_DELEGATED_RULE_IDS:
+                      if rule_id in PR_HARD_GATE_RULE_IDS:
+                          hard_gate_delegated += 1
+                      if rule_id in PR_GOVERNANCE_RULE_IDS:
+                          governance_delegated += 1
+                      continue
+                  kept.append(result)
+              run["results"] = kept
+          filtered_path = sarif_path.with_name(f"{sarif_path.name}.filtered")
+          filtered_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          filtered_path.replace(sarif_path)
+          print(
+              "Delegated "
+              f"{hard_gate_delegated} PR-only Scorecard SAST/vulnerability finding(s) to "
+              "CodeQL, OSV, Trivy, and dependency-review hard gates."
+          )
+          print(
+              "Delegated "
+              f"{governance_delegated} PR-only Scorecard fuzzing posture finding(s) "
+              "to default-branch governance tracking."
+          )
+          PY
       - name: Upload Scorecard SARIF to code scanning
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
