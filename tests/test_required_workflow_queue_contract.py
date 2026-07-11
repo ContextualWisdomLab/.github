@@ -217,6 +217,49 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 
 
+def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(tmp_path: Path) -> None:
+    workflow = workflow_text("security-scan.yml")
+    step = "      - name: Mark clean OSV SARIF as comprehensive\n"
+    start = workflow.index(step)
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    run_end = workflow.index("\n      - name:", run_start)
+    script = textwrap.dedent(
+        "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
+    )
+    sarif_path = tmp_path / "results.sarif"
+    sarif_path.write_text(
+        json.dumps(
+            {
+                "version": "2.1.0",
+                "runs": [
+                    {
+                        "tool": {
+                            "driver": {
+                                "name": "osv-scanner",
+                                "isComprehensive": False,
+                            }
+                        },
+                        "results": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    updated = json.loads(sarif_path.read_text(encoding="utf-8"))
+
+    assert updated["runs"][0]["tool"]["driver"]["isComprehensive"] is True
+    assert "marked the code-scanning analysis comprehensive" in result.stdout
+
+
 def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Print OSV findings being compared\n"

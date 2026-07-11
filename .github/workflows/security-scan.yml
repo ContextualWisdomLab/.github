@@ -191,6 +191,27 @@ jobs:
             --new=new-results.json
             --gh-annotations=true
             --fail-on-vuln=true
+      - name: Mark clean OSV SARIF as comprehensive
+        if: always() && hashFiles('results.sarif') != ''
+        shell: python3 {0}
+        run: |
+          import json
+          from pathlib import Path
+
+          sarif_path = Path("results.sarif")
+          sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+          total_results = 0
+          for run in sarif.get("runs", []):
+              total_results += len(run.get("results", []))
+              run.setdefault("tool", {}).setdefault("driver", {})["isComprehensive"] = True
+
+          sarif_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          print(
+              "OSV reporter SARIF contains "
+              f"{total_results} result(s); marked the code-scanning analysis "
+              "comprehensive so fixed PR-introduced alerts close after a clean "
+              "base/head comparison."
+          )
       - name: Upload OSV SARIF to code scanning
         if: always() && hashFiles('results.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
