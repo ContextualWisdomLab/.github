@@ -1552,7 +1552,7 @@ jobs:
           npx -y "$CODEGRAPH_PACKAGE" status
 
       - name: Prepare bounded OpenCode review evidence
-        timeout-minutes: 40
+        timeout-minutes: 12
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
@@ -1565,8 +1565,10 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
-          FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"
-          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
+          FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"
+          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "10"
+          FAILED_CHECK_EVIDENCE_COLLECT_TIMEOUT_SECONDS: "45"
+          FAILED_CHECK_EVIDENCE_KILL_AFTER_SECONDS: "10"
         run: |
           set -euo pipefail
           printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
@@ -1575,10 +1577,11 @@ jobs:
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
             local rollup_running
-            local strix_running
 
             # Exclude this OpenCode check run; otherwise the evidence step would
-            # wait on itself until the bounded retry budget is exhausted.
+            # wait on itself until the bounded retry budget is exhausted. Also
+            # exclude long-running Strix security scans here; the approval gate
+            # re-queries current-head Strix before publishing any review.
             # shellcheck disable=SC2016
             if ! rollup_running="$(gh api graphql \
               -f owner="$owner" \
@@ -1623,15 +1626,19 @@ jobs:
                       | select((.name // "") != "OpenCode Review")
                       | select((.name // "") != "Required OpenCode Review")
                       | select((.name // "") != "OpenCode PR Review")
+                      | select((.name // "") != "strix")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "Strix Security Scan")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "Strix")
                       | select((.status // "") != "COMPLETED")
                     elif .__typename == "StatusContext" then
                       select((.context // "") != "opencode-review")
                       | select((.context // "") != "OpenCode Review")
                       | select((.context // "") != "Required OpenCode Review")
                       | select((.context // "") != "OpenCode PR Review")
+                      | select((.context // "") != "strix")
                       | select((.state // "" | ascii_upcase) as $s | ["PENDING","EXPECTED"] | index($s))
                     else
                       empty
@@ -1646,25 +1653,34 @@ jobs:
               return 0
             fi
 
-            strix_running="$(
-              env HEAD_SHA="$HEAD_SHA" gh run list \
-                --repo "$GH_REPOSITORY" \
-                --workflow strix.yml \
-                --commit "$HEAD_SHA" \
-                --limit 200 \
-                --json status,event,headSha,workflowName \
-                --jq '
-                  [
-                    .[]
-                    | select((.headSha // "") == env.HEAD_SHA)
-                    | select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
-                    | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
-                    | select((.status // "") != "completed")
-                  ]
-                  | length > 0
-                ' 2>/dev/null || printf 'false'
-            )"
-            printf '%s\n' "$strix_running"
+            printf 'false\n'
+          }
+
+          run_failed_check_evidence_collector() {
+            local evidence_file="$1"
+            local timeout_seconds="${FAILED_CHECK_EVIDENCE_COLLECT_TIMEOUT_SECONDS:-60}"
+            local kill_after_seconds="${FAILED_CHECK_EVIDENCE_KILL_AFTER_SECONDS:-10}"
+            local rc
+
+            printf 'Collecting failed-check evidence with %ss timeout and %ss kill-after budget into %s.\n' \
+              "$timeout_seconds" "$kill_after_seconds" "$evidence_file" >&2
+            set +e
+            timeout --kill-after="${kill_after_seconds}s" "${timeout_seconds}s" \
+              scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf 'Failed-check evidence collector completed within the bounded timeout.\n' >&2
+              return 0
+            fi
+
+            printf 'Failed-check evidence collector exited with %s within the bounded evidence step; continuing with an explicit blocker note.\n' "$rc" >&2
+            {
+              printf 'Failed-check evidence collector did not complete within %ss (exit %s).\n' "$timeout_seconds" "$rc"
+              printf 'The approval gate will re-query current-head GitHub Checks before publishing any review.\n'
+              printf 'If this persists, inspect the failed-check collector GitHub API calls and the current-head peer check rollup.\n'
+            } >"$evidence_file"
+            return "$rc"
           }
 
           collect_failed_check_evidence_with_wait() {
@@ -1672,6 +1688,7 @@ jobs:
             local attempts="${FAILED_CHECK_EVIDENCE_ATTEMPTS:-19}"
             local sleep_seconds="${FAILED_CHECK_EVIDENCE_SLEEP_SECONDS:-10}"
             local attempt=1
+            local peer_checks_running
 
             if [ ! -x scripts/ci/collect_failed_check_evidence.sh ]; then
               {
@@ -1683,8 +1700,11 @@ jobs:
             fi
 
             while [ "$attempt" -le "$attempts" ]; do
-              if scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
-                if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
+              if run_failed_check_evidence_collector "$evidence_file"; then
+                peer_checks_running="$(current_peer_checks_still_running 2>/dev/null || printf 'false')"
+                printf 'Failed-check evidence attempt %s/%s completed; non-Strix peer checks still running: %s.\n' \
+                  "$attempt" "$attempts" "$peer_checks_running" >&2
+                if [ "$peer_checks_running" != "true" ]; then
                   return 0
                 fi
                 if ! grep -Fq "No completed failed GitHub Checks were present" "$evidence_file" &&
@@ -1701,7 +1721,10 @@ jobs:
               fi
 
               if [ "$attempt" -lt "$attempts" ]; then
-                if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
+                peer_checks_running="$(current_peer_checks_still_running 2>/dev/null || printf 'false')"
+                printf 'Failed-check evidence attempt %s/%s failed; non-Strix peer checks still running: %s.\n' \
+                  "$attempt" "$attempts" "$peer_checks_running" >&2
+                if [ "$peer_checks_running" != "true" ]; then
                   break
                 fi
                 printf 'Failed-check evidence attempt %s/%s could not collect evidence while peer checks are still running; retrying in %ss before model review.\n' "$attempt" "$attempts" "$sleep_seconds" >&2
@@ -1710,7 +1733,8 @@ jobs:
               attempt=$((attempt + 1))
             done
 
-            scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
+            printf 'Failed-check evidence bounded wait ended after %s attempts; proceeding with one final bounded collector run before model review.\n' "$attempts" >&2
+            run_failed_check_evidence_collector "$evidence_file"
           }
 
           emit_pr_mergeability_evidence() {
@@ -2089,6 +2113,7 @@ jobs:
             if collect_failed_check_evidence_with_wait "$OPENCODE_FAILED_CHECK_EVIDENCE_FILE"; then
               emit_file_prefix "$OPENCODE_FAILED_CHECK_EVIDENCE_FILE" 4500
             else
+              emit_file_prefix "$OPENCODE_FAILED_CHECK_EVIDENCE_FILE" 4500
               printf 'Failed GitHub Check evidence could not be collected. OpenCode must treat check lookup failure as a review blocker unless later gate evidence proves checks passed.\n'
             fi
             printf '\n'
@@ -3231,7 +3256,7 @@ jobs:
 
       - name: Publish OpenCode review outcome
         if: always()
-        timeout-minutes: 120
+        timeout-minutes: 45
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
