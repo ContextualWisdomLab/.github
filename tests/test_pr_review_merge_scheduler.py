@@ -1948,6 +1948,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     blocked_auto_decision = inspect(blocked_auto)
     assert blocked_auto_decision.action == "wait"
     assert "GitHub mergeability is BLOCKED" in blocked_auto_decision.reason
+    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_auto_decision.reason
+    assert "required approving review" in blocked_auto_decision.reason
     assert "rerun the scheduler" in blocked_auto_decision.reason
 
     stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
@@ -2786,6 +2788,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert blocked_already_auto.action == "wait"
     assert "auto-merge is already enabled" in blocked_already_auto.reason
     assert "GitHub mergeability is BLOCKED" in blocked_already_auto.reason
+    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_already_auto.reason
+    assert "required approving review" in blocked_already_auto.reason
     assert direct_merges == [
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),

@@ -1622,7 +1622,7 @@ def conflict_changed_files_text(pr: dict[str, Any], *, limit: int = 10) -> str:
     return " | ".join(paths) + suffix
 
 
-def auto_merge_wait_reason(merge_state: str) -> str:
+def auto_merge_wait_reason(merge_state: str, pr: dict[str, Any] | None = None) -> str:
     """Explain why an approved PR with auto-merge enabled is still waiting."""
     if merge_state == "CLEAN":
         return "current head is approved; auto-merge already enabled"
@@ -1631,9 +1631,16 @@ def auto_merge_wait_reason(merge_state: str) -> str:
             "current head is approved and auto-merge is already enabled, "
             "but conflict repair is required before GitHub can merge it"
         )
+    review_decision = str((pr or {}).get("reviewDecision") or "").upper()
+    review_policy_note = ""
+    if merge_state == "BLOCKED" and review_decision and review_decision != "APPROVED":
+        review_policy_note = (
+            f" and GitHub reviewDecision is {review_decision}; required approving review, "
+            "code-owner review, or last-push approval policy is still unsatisfied"
+        )
     return (
         "current head is approved and auto-merge is already enabled, "
-        f"but GitHub mergeability is {merge_state}; wait for required workflows, rulesets, "
+        f"but GitHub mergeability is {merge_state}{review_policy_note}; wait for required workflows, rulesets, "
         "or branch freshness to clear, then rerun the scheduler if GitHub does not merge it"
     )
 
@@ -1760,7 +1767,7 @@ def inspect_pr(
         conflict_reason = merge_conflict_guidance(pr, merge_state)
         if current_head_approved:
             if auto_merge_enabled:
-                return decide("wait", f"{auto_merge_wait_reason(merge_state)}; {conflict_reason}")
+                return decide("wait", f"{auto_merge_wait_reason(merge_state, pr)}; {conflict_reason}")
             if not same_repository_head(repo, pr):
                 return decide("wait", f"{external_head_merge_reason(repo, pr)}; {conflict_reason}")
             if enable_auto_merge_flag and merge_mode in {"auto", "direct_or_auto"}:
@@ -1825,11 +1832,11 @@ def inspect_pr(
             return decide("wait", external_head_merge_reason(repo, pr))
         if not enable_auto_merge_flag:
             if pr.get("autoMergeRequest"):
-                return decide("wait", auto_merge_wait_reason(merge_state))
+                return decide("wait", auto_merge_wait_reason(merge_state, pr))
             return decide("wait", "current head is approved; auto-merge disabled by scheduler inputs")
         if merge_mode == "disabled":
             if pr.get("autoMergeRequest"):
-                return decide("wait", auto_merge_wait_reason(merge_state))
+                return decide("wait", auto_merge_wait_reason(merge_state, pr))
             return decide("wait", "current head is approved; merge mode disabled by scheduler inputs")
         if merge_mode in {"direct", "direct_or_auto"}:
             try:
@@ -1861,7 +1868,7 @@ def inspect_pr(
         if merge_mode != "auto":
             return decide("wait", f"current head is approved; unsupported merge mode: {merge_mode}")
         if pr.get("autoMergeRequest"):
-            return decide("wait", auto_merge_wait_reason(merge_state))
+            return decide("wait", auto_merge_wait_reason(merge_state, pr))
         enable_auto_merge(repo, pr, dry_run=dry_run)
         return decide("auto_merge", "current head is approved; auto-merge enabled")
 
@@ -1928,7 +1935,7 @@ def inspect_pr(
 
     if current_head_approved:
         if pr.get("autoMergeRequest"):
-            return decide("wait", auto_merge_wait_reason(merge_state))
+            return decide("wait", auto_merge_wait_reason(merge_state, pr))
         if not same_repository_head(repo, pr):
             return decide("wait", external_head_merge_reason(repo, pr))
         if not enable_auto_merge_flag:
