@@ -21,34 +21,28 @@ if [ ! -s "$FAILED_CHECKS_FILE" ]; then
 fi
 
 review_text="$(
-  python3 - "$CONTROL_JSON_FILE" <<'PY'
-from __future__ import annotations
-
-import json
-import sys
-from pathlib import Path
-
-control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-parts = [str(control.get("summary") or ""), str(control.get("reason") or "")]
-for finding in control.get("findings") or []:
-    parts.append(
-        "\n".join(
-            str(finding.get(field) or "")
-            for field in (
-                "path",
-                "line",
-                "severity",
-                "title",
-                "problem",
-                "root_cause",
-                "fix_direction",
-                "regression_test_direction",
-                "suggested_diff",
-            )
-        )
-    )
-print("\n".join(parts))
-PY
+  jq -r '
+    [
+      (.summary // ""),
+      (.reason // ""),
+      (
+        .findings[]?
+        | [
+            (.path // ""),
+            ((.line // "") | tostring),
+            (.severity // ""),
+            (.title // ""),
+            (.problem // ""),
+            (.root_cause // ""),
+            (.fix_direction // ""),
+            (.regression_test_direction // ""),
+            (.suggested_diff // "")
+          ]
+        | join("\n")
+      )
+    ]
+    | join("\n")
+  ' "$CONTROL_JSON_FILE"
 )"
 
 contains_review_text() {
@@ -174,36 +168,23 @@ extract_strix_report_model_markers() {
 }
 
 count_strix_review_findings() {
-  python3 - "$CONTROL_JSON_FILE" <<'PY'
-from __future__ import annotations
-
-import json
-import re
-import sys
-from pathlib import Path
-
-control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-pattern = re.compile(
-    r"strix|github[-_]models/|deepseek/|openai/gpt-|vertex_ai/|Vulnerability Report",
-    re.IGNORECASE,
-)
-count = 0
-for finding in control.get("findings") or []:
-    text = "\n".join(
-        str(finding.get(field) or "")
-        for field in (
-            "title",
-            "problem",
-            "root_cause",
-            "fix_direction",
-            "regression_test_direction",
-            "suggested_diff",
-        )
-    )
-    if pattern.search(text):
-        count += 1
-print(count)
-PY
+  jq -r '
+    [
+      (.findings // [])[]
+      | [
+          .title,
+          .problem,
+          .root_cause,
+          .fix_direction,
+          .regression_test_direction,
+          .suggested_diff
+        ]
+        | map(. // "")
+        | join("\n")
+      | select(test("strix|github[-_]models/|deepseek/|openai/gpt-|vertex_ai/|Vulnerability Report"; "i"))
+    ]
+    | length
+  ' "$CONTROL_JSON_FILE"
 }
 
 validate_distinct_strix_report_findings() {
@@ -231,28 +212,26 @@ location_re = re.compile(
     r"(?:Code\s+)?Locations?(?:\s+[0-9]+)?\s*:\s*(.+?:[0-9]+(?:-[0-9]+)?)",
     re.IGNORECASE,
 )
-clean_prefix_pipe_re = re.compile(r"^.*?│\s*")
-clean_suffix_pipe_re = re.compile(r"\s*│.*$")
-clean_prefix_z_re = re.compile(r"^.*?[0-9]Z\s+")
-clean_whitespace_re = re.compile(r"\s+")
-new_field_re = re.compile(r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b", re.IGNORECASE)
-window_model_re = re.compile(r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)", re.IGNORECASE)
-continuation_border_re = re.compile(r"^[╭╰─]+$")
-field_title_re = re.compile(r"^Title:\s+(.+)", re.IGNORECASE)
-field_severity_re = re.compile(r"^Severity:\s+(CRITICAL|HIGH|MEDIUM|LOW|NONE)\b", re.IGNORECASE)
-field_endpoint_re = re.compile(r"^Endpoint:\s+(.+)", re.IGNORECASE)
-field_method_re = re.compile(r"^Method:\s+(.+)", re.IGNORECASE)
-field_target_re = re.compile(r"^Target:\s+(.+)", re.IGNORECASE)
+
+# ⚡ Bolt: Pre-compile regexes used in tight parsing loops
+clean_pipe_start_re = re.compile(r"^.*?│\s*")
+clean_pipe_end_re = re.compile(r"\s*│.*$")
+clean_timestamp_re = re.compile(r"^.*?[0-9]Z\s+")
+clean_spaces_re = re.compile(r"\s+")
+new_field_re = re.compile(
+    r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b",
+    re.IGNORECASE,
+)
 
 
 def clean(raw_line: str) -> str:
     line = ansi_re.sub("", raw_line).replace("\r", "")
     if "│" in line:
-        line = clean_prefix_pipe_re.sub("", line)
-        line = clean_suffix_pipe_re.sub("", line)
+        line = clean_pipe_start_re.sub("", line)
+        line = clean_pipe_end_re.sub("", line)
     else:
-        line = clean_prefix_z_re.sub("", line)
-    line = clean_whitespace_re.sub(" ", line).strip()
+        line = clean_timestamp_re.sub("", line)
+    line = clean_spaces_re.sub(" ", line).strip()
     return line
 
 
@@ -296,7 +275,11 @@ class ReportParser:
         self.finish_report()
         self.in_window = True
         self.window_model = ""
-        match = window_model_re.search(line)
+        match = re.search(
+            r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)",
+            line,
+            re.IGNORECASE,
+        )
         if match:
             self.window_model = match.group(1)
             self.current_model = match.group(1)
@@ -317,7 +300,7 @@ class ReportParser:
             return False
         if not line:
             self.continuation = ""
-        elif not starts_new_field(line) and not continuation_border_re.match(line) and line.lower() != "vulnerability report":
+        elif not starts_new_field(line) and not re.match(r"^[╭╰─]+$", line) and line.lower() != "vulnerability report":
             if self.continuation == "title":
                 self.title = f"{self.title} {line}".strip()
             elif self.continuation == "endpoint":
@@ -330,28 +313,28 @@ class ReportParser:
         return False
 
     def _parse_field(self, line: str) -> None:
-        field_match = field_title_re.match(line)
+        field_match = re.match(r"^Title:\s+(.+)", line, re.IGNORECASE)
         if field_match:
             self.finish_report()
             self.title = field_match.group(1)
             self.report_model = self.window_model
             self.continuation = "title"
             return
-        field_match = field_severity_re.match(line)
+        field_match = re.match(r"^Severity:\s+(CRITICAL|HIGH|MEDIUM|LOW|NONE)\b", line, re.IGNORECASE)
         if field_match:
             self.severity = field_match.group(1).upper()
             return
-        field_match = field_endpoint_re.match(line)
+        field_match = re.match(r"^Endpoint:\s+(.+)", line, re.IGNORECASE)
         if field_match:
             self.endpoint = field_match.group(1)
             self.continuation = "endpoint"
             return
-        field_match = field_method_re.match(line)
+        field_match = re.match(r"^Method:\s+(.+)", line, re.IGNORECASE)
         if field_match:
             self.method = field_match.group(1)
             self.continuation = ""
             return
-        field_match = field_target_re.match(line)
+        field_match = re.match(r"^Target:\s+(.+)", line, re.IGNORECASE)
         if field_match:
             self.target = field_match.group(1)
             self.continuation = "target"

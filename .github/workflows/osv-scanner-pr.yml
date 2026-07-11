@@ -10,19 +10,14 @@ on:
     branches: [main, master, develop]
 
 concurrency:
-  group: >-
-    osv-scanner-pr-${{
-    github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  group: osv-scanner-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
-  # Scorecard Token-Permissions (alert #41): keep the workflow-level token
-  # read-only. SARIF upload needs security-events:write, but the osv-scan job
-  # below already grants it at job scope, so it is redundant (and over-broad)
-  # here.
+  # Upload SARIF to Security > Code Scanning. See github/codeql-action#2117.
   actions: read
   contents: read
+  security-events: write
 
 jobs:
   cancel-closed-pr-runs:
@@ -34,28 +29,12 @@ jobs:
   osv-scan:
     if: github.event.action != 'closed'
     # ponytail: use upstream reusable PR workflow, don't hand-roll the diff scan
-    # Pinned to v2.3.8 + 1 commit (3a7550f) which gates the JSON job outputs
-    # behind the new `export-results` input (default false). v2.3.8 dumped the
-    # full old/new osv-scanner JSON into job outputs unconditionally, tripping
-    # GitHub's 1,048,576-byte job-outputs cap and failing the run. Same nested
-    # action pins as v2.3.8; only the Export step is now conditional.
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@3a7550f43ba5b58905a821ce3a0ed24c4858b3f4 # v2.3.8 + export-results gate
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     permissions:
       actions: read
       contents: read
       security-events: write
     with:
-      # Keep the PR code-scanning upload deterministic: direct manifest
-      # vulnerabilities are uploaded, but public registry rate limits cannot
-      # make the required upload check fail before SARIF reaches GitHub.
-      # The security-scan workflow still performs the full base/head OSV pass
-      # first and logs its --no-resolve fallback reason when registries are
-      # transiently unavailable.
-      scan-args: |-
-        --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-        --no-resolve
-        -r
-        ./
       # Merge gating is done by the org code_scanning ruleset rule
       # (medium_or_higher), not by failing this check. Keep the check green
       # so it only supplies the analysis; the ruleset decides blocking.

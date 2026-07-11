@@ -106,39 +106,6 @@ is_context_overflow_failure() {
 	grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file"
 }
 
-is_direct_openai_candidate() {
-	case "$1" in
-	openai/*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-is_low_sensitivity_candidate() {
-	case "$1" in
-	openai/*-mini | openai/*-nano | \
-		github-models/openai/*-mini | github-models/openai/*-nano)
-		return 0
-		;;
-	*)
-		return 1
-		;;
-	esac
-}
-
-should_skip_model_candidate() {
-	local model_candidate="$1"
-
-	if is_low_sensitivity_candidate "$model_candidate"; then
-		printf 'Skipping OpenCode %s because mini/nano review models are disabled for high-sensitivity security review.\n' "$model_candidate"
-		return 0
-	fi
-	if is_direct_openai_candidate "$model_candidate" && [ -z "${OPENAI_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because OPENAI_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
-		return 0
-	fi
-	return 1
-}
-
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -150,7 +117,7 @@ run_one_model_attempt() {
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id
 
-	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
+	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-180}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-60}"
 
 	rm -f "$opencode_json_file" "$opencode_export_file" "$candidate_output_file"
@@ -165,9 +132,6 @@ run_one_model_attempt() {
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
-		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
-			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
-		fi
 		if is_context_overflow_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
@@ -205,13 +169,12 @@ run_one_model_attempt() {
 
 main() {
 	local attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
-	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
+	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
-	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400}"
-	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
+	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-900}"
+	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}"
 	deadline=0
 	if [ "$budget_seconds" -gt 0 ]; then
 		deadline=$((SECONDS + budget_seconds))
@@ -229,9 +192,6 @@ main() {
 	while :; do
 		printf 'Starting OpenCode model pool cycle %s.\n' "$cycle"
 		for model_candidate in "${model_candidates[@]}"; do
-			if should_skip_model_candidate "$model_candidate"; then
-				continue
-			fi
 			assert_reasoning_effort_for_candidate "$model_candidate"
 			safe_model="${model_candidate//\//-}"
 			prompt_file="${RUNNER_TEMP}/opencode-review-${safe_model}-prompt.md"
@@ -255,7 +215,6 @@ main() {
 					OPENCODE_RUN_TIMEOUT_SECONDS="$remaining"
 				fi
 				export OPENCODE_RUN_TIMEOUT_SECONDS
-				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"
 				agent="${OPENCODE_AGENT:-ci-review-fallback}"
 				if [ "$attempt" -eq 1 ] && [ -n "${OPENCODE_FIRST_ATTEMPT_AGENT:-}" ]; then
 					agent="$OPENCODE_FIRST_ATTEMPT_AGENT"
@@ -283,13 +242,7 @@ main() {
 			done
 		done
 
-		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the configured retry deadline is reached.\n'
-		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
-			printf 'OpenCode model pool reached configured max cycle count %s without a valid control conclusion.\n' "$max_cycles"
-			record_review_model ""
-			exit 1
-		fi
-		printf 'OpenCode retry budget and the workflow step timeout remain the outer guards for provider stalls.\n'
+		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the GitHub Actions job timeout is reached.\n'
 		cycle_sleep="${OPENCODE_POOL_CYCLE_SLEEP_SECONDS:-60}"
 		if [ "$deadline" -gt 0 ] && [ $((SECONDS + cycle_sleep)) -gt "$deadline" ]; then
 			cycle_sleep=$((deadline - SECONDS))

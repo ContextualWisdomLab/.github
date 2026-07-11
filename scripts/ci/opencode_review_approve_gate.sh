@@ -71,118 +71,18 @@ if [ -z "$CONTROL_JSON" ]; then
 fi
 
 TMP_JSON="$(mktemp)"
-TMP_FIELDS="$(mktemp)"
-trap 'rm -f "$TMP_JSON" "$TMP_FIELDS"' EXIT
+trap 'rm -f "$TMP_JSON"' EXIT
 printf '%s\n' "$CONTROL_JSON" >"$TMP_JSON"
 
-if ! python3 - "$TMP_JSON" >"$TMP_FIELDS" <<'PY'
-from __future__ import annotations
-
-import json
-import math
-import sys
-from pathlib import Path
-
-
-def reject(reason: str) -> None:
-    print(f"Reason: {reason}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-control_path = Path(sys.argv[1])
-try:
-    control = json.loads(control_path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError) as exc:
-    reject(f"control JSON is invalid: {exc}")
-
-if not isinstance(control, dict):
-    reject("control JSON must be an object")
-
-
-def nonempty_string(value: object) -> bool:
-    return isinstance(value, str) and len(value) > 0
-
-
-def required_string(field: str) -> str:
-    value = control.get(field)
-    if not nonempty_string(value):
-        reject(f"{field} must be a non-empty string")
-    return str(value)
-
-
-def validate_finding(index: int, finding: object) -> None:
-    if not isinstance(finding, dict):
-        reject(f"finding {index} must be an object")
-    path = finding.get("path")
-    if not nonempty_string(path):
-        reject(f"finding {index} path must be a non-empty string")
-    if str(path).casefold() in {"n/a", "unknown"}:
-        reject(f"finding {index} path must name a source file")
-    line = finding.get("line")
-    if (
-        isinstance(line, bool)
-        or not isinstance(line, (int, float))
-        or not math.isfinite(float(line))
-        or line <= 0
-        or math.floor(float(line)) != float(line)
-    ):
-        reject(f"finding {index} line must be a positive integer")
-    for field in (
-        "severity",
-        "title",
-        "problem",
-        "root_cause",
-        "fix_direction",
-        "regression_test_direction",
-        "suggested_diff",
-    ):
-        if not nonempty_string(finding.get(field)):
-            reject(f"finding {index} field {field} must be a non-empty string")
-    suggested_diff = str(finding.get("suggested_diff", "")).casefold()
-    if suggested_diff.startswith("n/a") or suggested_diff.startswith("cannot provide diff"):
-        reject(f"finding {index} suggested_diff must be concrete")
-
-
-head_sha = required_string("head_sha")
-run_id = required_string("run_id")
-run_attempt = required_string("run_attempt")
-required_string("reason")
-required_string("summary")
-
-result = control.get("result")
-if result not in {"APPROVE", "REQUEST_CHANGES"}:
-    reject("result must be APPROVE or REQUEST_CHANGES")
-
-findings = control.get("findings")
-if result == "REQUEST_CHANGES":
-    if not isinstance(findings, list) or len(findings) == 0:
-        reject("REQUEST_CHANGES requires at least one finding")
-elif findings is not None and (not isinstance(findings, list) or len(findings) != 0):
-    reject("APPROVE requires findings to be empty")
-
-for index, finding in enumerate(findings or [], start=1):
-    validate_finding(index, finding)
-
-print(head_sha)
-print(run_id)
-print(run_attempt)
-print(result)
-PY
-then
+if ! jq -e . "$TMP_JSON" >/dev/null 2>&1; then
   echo "NO_CONCLUSION"
   exit 4
 fi
 
-mapfile -t CONTROL_FIELDS <"$TMP_FIELDS"
-if [ "${#CONTROL_FIELDS[@]}" -ne 4 ]; then
-  echo "NO_CONCLUSION"
-  exit 4
-fi
-
-CONTROL_HEAD_SHA="${CONTROL_FIELDS[0]%$'\r'}"
-CONTROL_RUN_ID="${CONTROL_FIELDS[1]%$'\r'}"
-CONTROL_RUN_ATTEMPT="${CONTROL_FIELDS[2]%$'\r'}"
-RESULT="${CONTROL_FIELDS[3]%$'\r'}"
+CONTROL_HEAD_SHA="$(jq -r '.head_sha // empty' "$TMP_JSON")"
+CONTROL_RUN_ID="$(jq -r '.run_id // empty' "$TMP_JSON")"
+CONTROL_RUN_ATTEMPT="$(jq -r '.run_attempt // empty' "$TMP_JSON")"
+RESULT="$(jq -r '.result // empty' "$TMP_JSON")"
 
 if [ "$CONTROL_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
   echo "SHA_MISMATCH"
@@ -197,6 +97,37 @@ fi
 if [ "$EXPECTED_RUN_ATTEMPT" != "-" ] && [ "$CONTROL_RUN_ATTEMPT" != "$EXPECTED_RUN_ATTEMPT" ]; then
   echo "MISSING_SENTINEL"
   exit 2
+fi
+
+if ! jq -e '
+  type == "object"
+  and (.head_sha | type == "string" and length > 0)
+  and (.run_id | type == "string" and length > 0)
+  and (.run_attempt | type == "string" and length > 0)
+  and (.result == "APPROVE" or .result == "REQUEST_CHANGES")
+  and (.reason | type == "string" and length > 0)
+  and (.summary | type == "string" and length > 0)
+  and (
+    if .result == "REQUEST_CHANGES" then (.findings | type == "array" and length > 0)
+    else ((.findings == null) or (.findings | type == "array" and length == 0))
+    end
+  )
+  and all((.findings // [])[];
+    (.path | type == "string" and length > 0)
+    and ((.path | ascii_downcase) as $p | ($p != "n/a" and $p != "unknown"))
+    and (.line | type == "number" and . > 0 and floor == .)
+    and (.severity | type == "string" and length > 0)
+    and (.title | type == "string" and length > 0)
+    and (.problem | type == "string" and length > 0)
+    and (.root_cause | type == "string" and length > 0)
+    and (.fix_direction | type == "string" and length > 0)
+    and (.regression_test_direction | type == "string" and length > 0)
+    and (.suggested_diff | type == "string" and length > 0)
+    and ((.suggested_diff | ascii_downcase) as $d | (($d | startswith("n/a")) | not) and (($d | startswith("cannot provide diff")) | not))
+  )
+' "$TMP_JSON" >/dev/null; then
+  echo "NO_CONCLUSION"
+  exit 4
 fi
 
 if ! python3 "$NORMALIZER" --check-structural-approval "$TMP_JSON" >/dev/null; then
@@ -354,33 +285,7 @@ then
 fi
 
 if [ -n "$NORMALIZED_JSON_FILE" ]; then
-  if ! python3 - "$TMP_JSON" "$NORMALIZED_JSON_FILE" <<'PY'
-from __future__ import annotations
-
-import json
-import sys
-from pathlib import Path
-
-
-control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-normalized = {
-    "head_sha": control["head_sha"],
-    "run_id": control["run_id"],
-    "run_attempt": control["run_attempt"],
-    "result": control["result"],
-    "reason": control["reason"],
-    "summary": control["summary"],
-    "findings": control.get("findings") or [],
-}
-Path(sys.argv[2]).write_text(
-    json.dumps(normalized, separators=(",", ":")) + "\n",
-    encoding="utf-8",
-)
-PY
-  then
-    echo "NO_CONCLUSION"
-    exit 4
-  fi
+  jq -c '{head_sha, run_id, run_attempt, result, reason, summary, findings:(.findings // [])}' "$TMP_JSON" >"$NORMALIZED_JSON_FILE"
 fi
 
 echo "$RESULT"

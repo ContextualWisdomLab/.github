@@ -134,17 +134,6 @@ between PR intent, code, docs, tests, schemas, generated files, UI rendering,
 and consumers. For changed scrolling, animation, transition, or motion behavior,
 verify that `prefers-reduced-motion: reduce` users are not forced through smooth
 scrolling or animated motion.
-
-Implementation completeness is mandatory. Inspect changed runtime code and
-connected call sites for placeholder bodies such as `pass`, `...`,
-`NotImplementedError`, TODO-only branches, fake or constant returns, and
-unimplemented interface adapters. Distinguish `typing.Protocol`,
-`@abc.abstractmethod`, overload declarations, and Pydantic `Field(...)`
-declarations from executable implementation gaps before requesting changes or
-approving. New user-visible or callable behavior needs a concrete
-implementation, tests or verification, and documentation or contract updates
-unless the code is explicitly abstract by design.
-
 When a PR replaces placeholder output, inferred output, or best-effort-generated
 output with concrete mapped values, trace each producer and fallback path for
 that mapping. Flag silent drops or regressions for legacy inputs, manual
