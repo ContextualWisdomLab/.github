@@ -458,6 +458,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"' in workflow
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
     assert "OpenCode model pool did not produce a successful current-head control block" in workflow
+    assert "Repeated current-head sections for models without file reads" in workflow
+    assert "append_evidence_section" in workflow
+    assert "Focused changed hunks\" 14000" in workflow
+    assert "do not request changes solely because your own tool or file read did not" in workflow
     assert "while :" in model_pool_runner
     assert "should_skip_model_candidate" in model_pool_runner
     assert "is_low_sensitivity_candidate" in model_pool_runner
@@ -470,6 +474,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "workflow step timeout remain the outer guards for invalid or unavailable provider output" in model_pool_runner
     assert "OpenCode model pool exhausted before producing a valid control conclusion." in model_pool_runner
     assert 'record_review_status "exhausted"' in model_pool_runner
+    assert "Never emit raw tool-call markup" in model_pool_runner
+    assert "Do not request changes solely because your tool call" in model_pool_runner
+    assert "never use line 0" in model_pool_runner
     assert "retry budget exhausted" not in model_pool_runner
     assert 'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     assert (
@@ -493,6 +500,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Context7" in prompt_template
     assert "web_search" in prompt_template
     assert "Playwright visual" in prompt_template
+    assert "Never print raw tool-call markup" in prompt_template
+    assert "Do not request changes solely because your tool call" in prompt_template
+    assert "never use line 0" in prompt_template
     assert "Current-head authority order" in workflow
     assert "historical context only" in workflow
     assert "Do not infer active failed checks" in workflow
