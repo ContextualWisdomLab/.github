@@ -67,7 +67,13 @@ jobs:
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || '' }}
     steps:
+      - name: Skip events without pull request context
+        if: env.PR_NUMBER == ''
+        run: |
+          echo "::notice::Noema review skipped: no pull request number is associated with this event."
+
       - name: Resolve trusted Noema review source ref
+        if: env.PR_NUMBER != ''
         id: trusted_source
         env:
           INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
@@ -83,6 +89,7 @@ jobs:
           printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
 
       - name: Checkout trusted Noema review gate
+        if: env.PR_NUMBER != ''
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
@@ -91,6 +98,7 @@ jobs:
           persist-credentials: false
 
       - name: Exchange Noema app token
+        if: env.PR_NUMBER != ''
         id: noema_app_token
         env:
           OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
@@ -105,8 +113,15 @@ jobs:
             exit 1
           }
 
+          mark_unconfigured() {
+            local message="$1"
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::$message"
+            exit 0
+          }
+
           if [ -z "${TOKEN_EXCHANGE_URL:-}" ]; then
-            fail_unavailable "Noema app token exchange unavailable: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured."
+            mark_unconfigured "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured; Noema review skipped until the exchange service is deployed."
           fi
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
@@ -156,8 +171,10 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Run Noema LLM review and submit verdict
+        if: env.PR_NUMBER != ''
         env:
           GH_TOKEN: ${{ steps.noema_app_token.outputs.token }}
+          NOEMA_APP_TOKEN_AVAILABLE: ${{ steps.noema_app_token.outputs.available }}
           NOEMA_REVIEW_TOKEN_SOURCE: noema-review-app-oidc
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
@@ -166,6 +183,10 @@ jobs:
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "No pull request number was available for this event; skipping."
+            exit 0
+          fi
+          if [ "${NOEMA_APP_TOKEN_AVAILABLE:-}" != "true" ]; then
+            echo "::notice::Noema app token exchange is not configured; review skipped until Noema is deployed."
             exit 0
           fi
           if [ -z "${GH_TOKEN:-}" ]; then
