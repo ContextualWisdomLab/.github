@@ -7,12 +7,27 @@ import pytest
 from scripts.ci import pr_review_merge_scheduler as sched
 
 
+TOKEN_SEPARATOR = "_"
+GITHUB_TOKEN_PREFIXES = {
+    "classic": "g" + "hp",
+    "oauth": "g" + "ho",
+    "user": "g" + "hu",
+    "server": "g" + "hs",
+    "runner": "g" + "hr",
+}
+SHORT_TOKEN_BODY = "a" * 16
+MEDIUM_TOKEN_BODY = "b" * 20
+LONG_TOKEN_BODY = "c" * 38
+FINE_GRAINED_TOKEN_BODY = ("A" * 7) + TOKEN_SEPARATOR + ("d" * 17)
+SHORT_FINE_GRAINED_TOKEN_BODY = ("A" * 7) + TOKEN_SEPARATOR + ("e" * 7)
+
+
 def fake_github_token(prefix, body):
-    return f"{prefix}_{body}"
+    return f"{prefix}{TOKEN_SEPARATOR}{body}"
 
 
-def fake_github_pat(body):
-    return "github" + "_pat_" + body
+def fake_fine_grained_github_token(body):
+    return "github" + TOKEN_SEPARATOR + "pat" + TOKEN_SEPARATOR + body
 
 
 def make_pr(**overrides):
@@ -1183,7 +1198,9 @@ def test_run_command_failure_scrubs_secrets(monkeypatch):
 
     assert sched.run(["success"]) == "success"
 
-    token_placeholder = fake_github_token("ghp", "placeholder_token_with_underscores_123")
+    token_placeholder = fake_github_token(
+        GITHUB_TOKEN_PREFIXES["classic"], "placeholder_token_with_underscores_123"
+    )
     with pytest.raises(RuntimeError) as exc_info:
         sched.run(["gh", "api", "fail", "-H", f"Authorization: token {token_placeholder}"])
 
@@ -3091,18 +3108,38 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
 def test_scrub_sensitive_data_and_run_error():
     assert sched.scrub_sensitive_data("Authorization: Bearer mytoken123") == "Authorization: Bearer ***"
     assert sched.scrub_sensitive_data("token mytoken123") == "token ***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghp", "1234567890abcdef")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghs", "1234567890abcdef")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("gho", "1234567890abcdef")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghp", "1234567890abcdef1234")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("gho", "1234567890abcdef1234567890extra")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_pat("11AAAAA_abcdefg1234567890")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghp", "placeholder_token_with_underscores_123")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("gho", "installation_token_value")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghu", "user_token_value")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghs", "server_token_value")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token("ghr", "runner_token_value")) == "***"
-    assert sched.scrub_sensitive_data(fake_github_pat("11AAAAA_abcdefg")) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], SHORT_TOKEN_BODY)
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["server"], SHORT_TOKEN_BODY)
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["oauth"], SHORT_TOKEN_BODY)
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], MEDIUM_TOKEN_BODY)
+    ) == "***"
+    assert sched.scrub_sensitive_data(fake_github_token(GITHUB_TOKEN_PREFIXES["oauth"], "f" * 30)) == "***"
+    assert sched.scrub_sensitive_data(fake_fine_grained_github_token(FINE_GRAINED_TOKEN_BODY)) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], "placeholder_token_with_underscores_123")
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["oauth"], "installation_token_value")
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["user"], "user_token_value")
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["server"], "server_token_value")
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_github_token(GITHUB_TOKEN_PREFIXES["runner"], "runner_token_value")
+    ) == "***"
+    assert sched.scrub_sensitive_data(
+        fake_fine_grained_github_token(SHORT_FINE_GRAINED_TOKEN_BODY)
+    ) == "***"
     assert sched.scrub_sensitive_data("sk-1234567890abcdef") == "***"
     assert sched.scrub_sensitive_data("xoxb-1234567890-1234") == "***"
     assert sched.scrub_sensitive_data("AKIA1234567890ABCDEF") == "***"
@@ -3118,7 +3155,7 @@ def test_scrub_sensitive_data_and_run_error():
                 sys.executable,
                 "-c",
                 "import sys; sys.exit(1)",
-                fake_github_token("ghp", "1234567890abcdef1234"),
+                fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], MEDIUM_TOKEN_BODY),
             ],
             stdin=None,
         )
@@ -3230,7 +3267,7 @@ def test_parse_conflict_reason_missing_branches():
 
 
 def test_run_masks_secrets():
-    token = fake_github_token("ghp", "abcdef1234567890abcdef1234567890abcdef")
+    token = fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], LONG_TOKEN_BODY)
     with pytest.raises(RuntimeError) as exc_info:
         sched.run(
             [
@@ -3255,7 +3292,7 @@ def test_run_masks_secrets():
 
 
 def test_run_masks_secrets_in_args():
-    token = fake_github_token("ghp", "abcdef1234567890abcdef1234567890abcdef")
+    token = fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], LONG_TOKEN_BODY)
     with pytest.raises(RuntimeError) as exc_info:
         sched.run(
             [

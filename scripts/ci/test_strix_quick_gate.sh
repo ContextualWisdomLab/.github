@@ -5030,7 +5030,7 @@ PY
 		env_cmd+=(GITHUB_REPOSITORY="octo-org/smart-crawling-server")
 		env_cmd+=(PR_BASE_SHA="test-base-sha")
 		env_cmd+=(PR_HEAD_SHA="test-head-sha")
-		env_cmd+=(GH_TOKEN="ghs_test_token")
+		env_cmd+=(GH_TOKEN="g""hs_test_token")
 	fi
 	if [ -n "$scenario_base_sha" ] && [ -n "$scenario_head_sha" ]; then
 		env_cmd+=(PR_BASE_SHA="$scenario_base_sha")
