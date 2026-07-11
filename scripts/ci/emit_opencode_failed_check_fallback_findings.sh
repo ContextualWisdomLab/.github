@@ -418,15 +418,12 @@ emit_missing_strix_status_write_scope_finding() {
 	local line=""
 	local match=""
 
-	if ! grep -Fq -- "Strix workflow must scope statuses: write only to the strix scan job; found: none" "$evidence_file"; then
+	if ! grep -Fq -- "Strix workflow must scope statuses: read only to the strix scan job; found: none" "$evidence_file"; then
 		return 0
 	fi
 
 	if [ -f "${REPO_ROOT%/}/$path" ]; then
-		match="$(grep -nF -- "statuses: read" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
-		if [ -z "$match" ]; then
-			match="$(grep -nF -- "models: read" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
-		fi
+		match="$(grep -nF -- "permissions:" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
 	fi
 	if [ -n "$match" ]; then
 		line="${match%%:*}"
@@ -435,15 +432,15 @@ emit_missing_strix_status_write_scope_finding() {
 	fi
 
 	finding_index=$((finding_index + 1))
-	printf '### %s. HIGH %s:%s - Strix scan job must keep same-repository status write fallback\n' "$finding_index" "$path" "$line"
-	printf -- '- Problem: Strix failed because the trusted self-test found no job-scoped `statuses: write` permission on the Strix scan job.\n'
-	printf -- '- Root cause: The scan job cannot publish the same-repository `strix` commit-status fallback when app or central status tokens are unavailable, so the required-workflow smoke test fails closed.\n'
-	printf -- '- Fix: Set the Strix scan job permission to `statuses: write` while keeping top-level workflow permissions free of `statuses: write`.\n'
-	printf -- '- Regression test: Keep scripts/ci/strix_required_workflow_smoke.sh asserting that only the `strix` job has `statuses: write`.\n\n'
+	printf '### %s. HIGH %s:%s - Strix scan job must keep same-head status read scope\n' "$finding_index" "$path" "$line"
+	printf -- '- Problem: Strix failed because the trusted self-test found no job-scoped `statuses: read` permission on the Strix scan job.\n'
+	printf -- '- Root cause: The scan job cannot read same-head manual Strix status evidence while the smoke contract also forbids GITHUB_TOKEN `statuses: write`, so required-workflow evidence fails closed.\n'
+	printf -- '- Fix: Set the Strix scan job permission to `statuses: read` and keep all GITHUB_TOKEN `statuses: write` grants out of the workflow.\n'
+	printf -- '- Regression test: Keep scripts/ci/strix_required_workflow_smoke.sh asserting that only the `strix` job has `statuses: read` and no job has `statuses: write`.\n\n'
 	if [ "$line" != "1" ]; then
-		printf -- '- Suggested edit: change `%s:%s` from `statuses: read` to `statuses: write`, or add `statuses: write` in that job permissions block.\n\n' "$path" "$line"
+		printf -- '- Suggested edit: add `statuses: read` to the `strix` job permissions block near `%s:%s`.\n\n' "$path" "$line"
 	else
-		printf -- '- Suggested edit: add `statuses: write` to the `strix` job permissions block in `%s`.\n\n' "$path"
+		printf -- '- Suggested edit: add `statuses: read` to the `strix` job permissions block in `%s`.\n\n' "$path"
 	fi
 }
 

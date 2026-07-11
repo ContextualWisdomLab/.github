@@ -792,16 +792,17 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'Manual workflow_dispatch Strix evidence passed' "opencode approval requires an explicit manual Strix evidence status description"
 	assert_file_contains "$workflow_file" 'last // empty' "opencode approval checks the latest strix status before accepting manual success evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'publish-manual-pr-evidence-status:' "strix workflow publishes same-head manual PR evidence as a commit status"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix scan job can publish same-repository status fallback"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'GITHUB_STATUS_TOKEN: ${{ github.token }}' "strix scan job keeps an explicit same-repository GitHub token fallback"
-	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'Strix workflow must scope statuses: write only to the strix scan job' "strix smoke keeps status write scoped to the scan job"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: read' "strix scan job can read same-head status evidence without status-writing GITHUB_TOKEN"
+	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" 'GITHUB_STATUS_TOKEN: ${{ github.token }}' "strix scan job does not keep a same-repository GITHUB_TOKEN status writer"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'Strix workflow must scope statuses: read only to the strix scan job' "strix smoke keeps status reads scoped to the scan job"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'Strix workflow must not grant GITHUB_TOKEN statuses: write' "strix smoke rejects status-writing GITHUB_TOKEN grants"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}' "strix manual evidence status publishes to the requested target repository"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'context="strix"' "strix manual evidence status uses the status context consumed by OpenCode"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}' "strix manual evidence status does not post private-target evidence to .github by mistake"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '"'"''"'"' }}' "strix manual evidence status can publish cross-repo evidence with the central mutation credential"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"' "strix manual evidence status retries the central mutation credential when the target app token cannot write statuses"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"' "strix manual evidence status retries the approval credential before declaring status publication unavailable"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"' "strix manual evidence status can publish same-repository status evidence when app tokens are unavailable"
+	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"' "strix manual evidence status does not reintroduce a status-writing GITHUB_TOKEN fallback"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"' "strix manual evidence status uses the target app token first"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'Manual workflow_dispatch Strix evidence failed' "strix manual evidence status records failed reruns so older success cannot mask newer failure"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'Could not publish manual Strix status from scan job' "strix scan evidence does not fail solely because target status publication is unavailable"
@@ -2674,7 +2675,6 @@ jobs:
   strix:
     permissions:
       contents: read
-      statuses: read
 EOF
 
 	cat >"$evidence_file" <<'EOF'
@@ -2684,7 +2684,7 @@ EOF
 
 ```text
 strix	Self-test Strix required workflow contract	Running bounded Strix required-workflow smoke test.
-strix	Self-test Strix required workflow contract	FAIL: Strix workflow must scope statuses: write only to the strix scan job; found: none
+strix	Self-test Strix required workflow contract	FAIL: Strix workflow must scope statuses: read only to the strix scan job; found: none
 strix	Self-test Strix required workflow contract	Strix required workflow smoke test failed with 1 failure(s).
 ```
 EOF
@@ -2692,9 +2692,9 @@ EOF
 	bash "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" \
 		"$evidence_file" "$fixture_repo" >"$output_file"
 
-	assert_file_contains "$output_file" "Strix scan job must keep same-repository status write fallback" "fallback maps Strix smoke permission failure"
-	assert_file_contains "$output_file" ".github/workflows/strix.yml:6" "fallback cites the exact statuses read line"
-	assert_file_contains "$output_file" 'change `.github/workflows/strix.yml:6` from `statuses: read` to `statuses: write`' "fallback gives a concrete status-permission repair"
+	assert_file_contains "$output_file" "Strix scan job must keep same-head status read scope" "fallback maps Strix smoke permission failure"
+	assert_file_contains "$output_file" ".github/workflows/strix.yml:4" "fallback cites the nearest permissions line"
+	assert_file_contains "$output_file" 'add `statuses: read` to the `strix` job permissions block' "fallback gives a concrete status-permission repair"
 	assert_file_not_contains "$output_file" "No source-backed failed-check fallback finding matched" "fallback does not leave Strix smoke failure undiagnosed"
 
 	rm -rf "$tmp_dir"
