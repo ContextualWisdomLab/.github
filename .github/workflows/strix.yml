@@ -124,14 +124,14 @@ jobs:
     timeout-minutes: 45
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) and keeps commit status writes scoped
-    # to this scan job; publication still prefers exchanged app/secret tokens below.
+    # exchanges an OIDC token (id-token) and keeps GITHUB_TOKEN read-only for
+    # commit statuses; status publication uses exchanged app/secret tokens below.
     permissions:
       actions: read
       contents: read
       id-token: write
       models: read
-      statuses: write
+      statuses: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
