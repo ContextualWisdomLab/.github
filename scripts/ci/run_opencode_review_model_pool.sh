@@ -11,6 +11,12 @@ record_review_model() {
 	printf 'review_model=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
 
+record_pool_exhausted() {
+	printf 'OpenCode model pool exhausted before producing a valid control conclusion.\n'
+	record_review_model ""
+	record_review_status "exhausted"
+}
+
 normalize_opencode_output() {
 	local output_file="$1"
 
@@ -221,7 +227,7 @@ main() {
 	read -r -a model_candidates <<<"${OPENCODE_MODEL_CANDIDATES:-}"
 	if [ "${#model_candidates[@]}" -eq 0 ]; then
 		printf 'OpenCode model pool has no configured model candidates.\n'
-		record_review_model ""
+		record_pool_exhausted
 		exit 1
 	fi
 
@@ -243,7 +249,7 @@ main() {
 				now="$SECONDS"
 				if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then
 					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$attempts"
-					record_review_model ""
+					record_pool_exhausted
 					exit 1
 				fi
 				remaining="$original_run_timeout"
@@ -286,7 +292,7 @@ main() {
 		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the configured retry deadline is reached.\n'
 		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
 			printf 'OpenCode model pool reached configured max cycle count %s without a valid control conclusion.\n' "$max_cycles"
-			record_review_model ""
+			record_pool_exhausted
 			exit 1
 		fi
 		printf 'OpenCode retry budget and the workflow step timeout remain the outer guards for provider stalls.\n'
@@ -295,7 +301,7 @@ main() {
 			cycle_sleep=$((deadline - SECONDS))
 			if [ "$cycle_sleep" -le 0 ]; then
 				printf 'OpenCode model pool retry deadline elapsed after cycle %s.\n' "$cycle"
-				record_review_model ""
+				record_pool_exhausted
 				exit 1
 			fi
 		fi
