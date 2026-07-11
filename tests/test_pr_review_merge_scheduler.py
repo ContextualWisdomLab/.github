@@ -1940,6 +1940,9 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert same_head_auto_decision.action == "wait"
     assert same_head_auto_decision.reason == "current head is approved; auto-merge already enabled"
     assert disabled == []
+    dirty_auto_reason = sched.auto_merge_wait_reason("DIRTY")
+    assert "auto-merge is already enabled" in dirty_auto_reason
+    assert "conflict repair is required before GitHub can merge it" in dirty_auto_reason
     blocked_auto = make_pr(
         restMergeableState="blocked",
         autoMergeRequest={"enabledAt": "now"},
