@@ -414,10 +414,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'cd "$OPENCODE_REVIEW_WORKDIR"' "opencode review runs from the isolated OpenCode workspace"
 	assert_file_contains "$workflow_file" "failed-check-evidence.md" "opencode review copies full failed-check evidence into the isolated workspace"
 	assert_file_contains "$workflow_file" "Resolve trusted OpenCode source ref" "opencode required workflow resolves the central trusted source ref"
-	assert_file_contains "$workflow_file" "github.workflow_ref" "opencode required workflow can reuse the required-workflow source ref"
-	assert_file_contains "$workflow_file" 'if [ -n "$INPUT_CANONICAL_REF" ]; then' "opencode manual dispatch canonical_ref overrides the workflow source ref for PR-head bootstrap"
-	assert_file_contains "$workflow_file" 'trusted_ref="$INPUT_CANONICAL_REF"' "opencode manual dispatch can force a trusted branch ref before checkout"
-	assert_file_not_contains "$workflow_file" 'trusted_ref="${INPUT_CANONICAL_REF:-main}"' "opencode canonical_ref must not be overwritten by github.workflow_ref when explicitly provided"
+	assert_file_contains "$workflow_file" "workflow_ref" "opencode required workflow can reuse the required-workflow source ref"
+	assert_file_contains "$workflow_file" "workflow_sha" "opencode trusted source ref prefers the immutable workflow commit when available"
+	assert_file_not_contains "$workflow_file" "INPUT_CANONICAL_REF" "opencode trusted source checkout must not be controlled by workflow_dispatch input"
+	assert_file_not_contains "$workflow_file" "canonical_ref:" "opencode no longer exposes a checkout-ref override input"
+	assert_file_contains "$workflow_file" "Trusted OpenCode workflow ref resolved to an invalid value" "opencode trusted source ref is validated before checkout"
 	assert_file_contains "$workflow_file" "Checkout trusted OpenCode review workflow" "opencode review checks out central trusted workflow scripts before processing PR data"
 	assert_file_contains "$workflow_file" "Checkout trusted OpenCode coverage contract" "opencode coverage job uses central trusted coverage tooling instead of target-repo copies"
 	assert_file_contains "$workflow_file" 'R_LIBS_USER="${RUNNER_TEMP}/R-library"' "opencode R coverage installs packages into a writable runner user library"
@@ -791,8 +792,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'Manual workflow_dispatch Strix evidence passed' "opencode approval requires an explicit manual Strix evidence status description"
 	assert_file_contains "$workflow_file" 'last // empty' "opencode approval checks the latest strix status before accepting manual success evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'publish-manual-pr-evidence-status:' "strix workflow publishes same-head manual PR evidence as a commit status"
-	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix GITHUB_TOKEN status permission stays read-only"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: read' "strix GITHUB_TOKEN can read existing status evidence"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix scan job can publish same-repo manual status evidence"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'status_write_jobs != ["strix"]' "strix smoke keeps status write permission scoped to the scan job"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}' "strix manual evidence status publishes to the requested target repository"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'context="strix"' "strix manual evidence status uses the status context consumed by OpenCode"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}' "strix manual evidence status does not post private-target evidence to .github by mistake"
@@ -1155,10 +1156,14 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_not_contains "$workflow_file" 'review_dispatch_limit="0"' "scheduler must not silently suppress eligible review dispatches on base-branch push events"
 	assert_file_contains "$workflow_file" "--review-dispatch-limit" "scheduler passes the dispatch budget to the canonical script"
 	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ github.token }}' "scheduler uses the caller workflow token so mutations are attributed to GitHub Actions in the target repository"
-	assert_file_contains "$workflow_file" "Resolve trusted scheduler source ref" "scheduler required workflow resolves the central trusted source ref"
-	assert_file_contains "$workflow_file" "github.workflow_ref" "scheduler required workflow can reuse the required-workflow source ref"
+	assert_file_not_contains "$workflow_file" "Resolve trusted scheduler source ref" "scheduler required workflow avoids dynamic trusted-ref checkout in privileged events"
+	assert_file_not_contains "$workflow_file" "INPUT_CANONICAL_REF" "scheduler trusted source checkout must not be controlled by workflow input"
+	assert_file_not_contains "$workflow_file" "inputs.canonical_ref" "scheduler no longer accepts checkout-ref override input"
+	assert_file_not_contains "$workflow_file" "workflow_ref" "scheduler required workflow does not derive a checkout ref from event context"
 	assert_file_contains "$workflow_file" 'repository: ContextualWisdomLab/.github' "scheduler checks out the canonical implementation instead of relying on repo-local copies"
-	assert_file_contains "$workflow_file" 'ref: ${{ steps.trusted_source.outputs.ref }}' "scheduler checks out the resolved central ref"
+	assert_file_not_contains "$workflow_file" 'repository: ${{ steps.trusted_source.outputs.repository }}' "scheduler does not pass a dynamic repository expression to privileged checkout"
+	assert_file_contains "$workflow_file" 'ref: main' "scheduler checks out the canonical main implementation with a static ref"
+	assert_file_contains "$workflow_file" "persist-credentials: false" "scheduler trusted checkout does not persist workflow credentials into the checkout"
 	assert_file_contains "$workflow_file" "contents: write" "scheduler has write permission for GitHub Actions bot branch updates"
 	assert_file_contains "$workflow_file" "pull-requests: write" "scheduler has pull-request write permission for update-branch and auto-merge"
 	assert_file_contains "$workflow_file" "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" "scheduler scopes required-workflow concurrency to the active pull request head"
@@ -5121,6 +5126,17 @@ PY
 			"scenario=$scenario does not rewrite logs through symlinked report directories"
 	fi
 
+	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
+		assert_file_contains \
+			"$output_log" \
+			"GitHub Models rate limit detected for model 'openai/gpt-5'; skipping same-model retry and moving directly to fallback models or current-head neutral classification." \
+			"scenario=$scenario logs why same-model retry was skipped"
+		assert_file_not_contains \
+			"$output_log" \
+			"Retrying model 'openai/gpt-5' due to rate limit" \
+			"scenario=$scenario does not sleep in same-model retry after GitHub Models rate limiting"
+	fi
+
 	if [ "$scenario" = "pr-changed-scope-full-set" ]; then
 		assert_internal_pr_scope_targets "$target_log" "$repo_root_dir" "$expected_calls"
 	fi
@@ -5268,6 +5284,37 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			"frontend/src/components/CalendarLayout.tsx"
+		;;
+	github-models-primary-ratelimit-fallback-success)
+		run_gate_case "github-models-primary-ratelimit-fallback-success" \
+			"openai/gpt-5" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-r1-0528' in [0-9]+s\\." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"2" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
 		;;
 	github-models-fallback-baseline-vulnerability-before-next-success-continues)
 		run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
@@ -8239,9 +8286,9 @@ run_gate_case "github-models-primary-ratelimit-fallback-success" \
 	"" \
 	"0" \
 	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-r1-0528' in [0-9]+s\\." \
-	"4" \
-	"openai/gpt-5|openai/gpt-5|openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
-	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
 	"openai" \
 	"https://models.github.ai/inference" \
 	"" \

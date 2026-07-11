@@ -2550,6 +2550,18 @@ is_transient_same_model_retry_error() {
 	return 1
 }
 
+github_models_rate_limit_should_skip_same_model_retry() {
+	local model="$1"
+
+	if ! is_rate_limit_error; then
+		return 1
+	fi
+	if ! is_github_models_api_compatible_model "$model"; then
+		return 1
+	fi
+	github_models_api_base_is_active
+}
+
 run_strix_with_transient_retry() {
 	local model="$1"
 	local max_attempts=$((STRIX_TRANSIENT_RETRY_PER_MODEL + 1))
@@ -2575,6 +2587,11 @@ run_strix_with_transient_retry() {
 		if [ "$STRIX_TOTAL_TIMEOUT_SECONDS" -gt 0 ] && [ "$(remaining_total_budget)" -le 0 ]; then
 			TOTAL_TIMEOUT_EXCEEDED=1
 			printf "Strix quick scan exceeded total timeout of %ss.\n" "$STRIX_TOTAL_TIMEOUT_SECONDS" | tee "$STRIX_LOG" >&2
+			return 1
+		fi
+
+		if github_models_rate_limit_should_skip_same_model_retry "$model"; then
+			echo "GitHub Models rate limit detected for model '$model'; skipping same-model retry and moving directly to fallback models or current-head neutral classification." >&2
 			return 1
 		fi
 
