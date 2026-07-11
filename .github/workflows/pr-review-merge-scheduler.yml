@@ -609,9 +609,20 @@ jobs:
               continue
             fi
 
+            # The scheduler requires --project-flow. Derive it per target the
+            # same way the single-repository job does: main/master default
+            # branches are GitHub Flow, develop is Git Flow, anything else
+            # defaults to GitHub Flow.
+            case "$default_branch" in
+              main|master) project_flow="github-flow" ;;
+              develop) project_flow="git-flow" ;;
+              *) project_flow="github-flow" ;;
+            esac
+
             args=(
               --repo "$repo_full_name"
               --base-branch "$default_branch"
+              --project-flow "$project_flow"
               --max-prs "$ORG_SWEEP_MAX_PRS"
               --review-workflow "Required OpenCode Review"
               --review-dispatch-limit "$ORG_SWEEP_REVIEW_DISPATCH_LIMIT"
