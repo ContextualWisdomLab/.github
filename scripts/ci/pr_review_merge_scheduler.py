@@ -109,7 +109,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
 OPEN_PRS_PAGE_SIZE = 25
-# Must exceed the opencode-review job timeout (360 min) plus typical runner-queue
+# Must exceed the opencode-review job timeout (120 min) plus typical runner-queue
 # wait. QUEUED counts as running and the age clock starts at check creation, so a
 # 45-minute threshold marked every queued/long review "stale" and re-dispatched
 # it; each re-dispatch went to the back of the runner queue and itself went
@@ -537,6 +537,29 @@ def workflow_dispatch_target(repo: str, base_ref: str) -> tuple[str, str, list[s
     )
     extra_inputs = [] if dispatch_repo == target_repo else ["-f", f"target_repository={target_repo}"]
     return dispatch_repo, dispatch_ref, extra_inputs
+
+
+def env_flag_enabled(name: str) -> bool:
+    """Return whether an environment flag is explicitly truthy."""
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def workflow_dispatch_wait_reason(repo: str, workflow: str) -> str | None:
+    """Explain why cross-repository required workflow dispatch should wait."""
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    if not dispatch_repo:
+        return None
+    dispatch_repo = validate_github_repository(dispatch_repo)
+    if dispatch_repo == target_repo or env_flag_enabled("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH"):
+        return None
+    return (
+        f"{workflow} dispatch waits for central required workflow materialization; "
+        f"required workflow source is {dispatch_repo}, but this scheduler run has no "
+        "cross-repository workflow-dispatch credential. Wait for the organization required "
+        "workflow to materialize, or rerun the same-head target-repository job after GitHub "
+        "exposes it in the PR check rollup."
+    )
 
 
 TRANSIENT_GITHUB_API_ERRORS = (
@@ -1083,23 +1106,52 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return failing check or status context names from the PR rollup."""
     failed: list[str] = []
+    latest_check_runs: dict[
+        tuple[str, str],
+        tuple[datetime | None, int, dict[str, Any]],
+    ] = {}
+    status_contexts: list[dict[str, Any]] = []
+    for index, node in enumerate(context_nodes(pr)):
+        if node.get("__typename") != "CheckRun":
+            status_contexts.append(node)
+            continue
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, node.get("name") or "check-run")
+        started_at = parse_github_datetime(node.get("startedAt"))
+        previous = latest_check_runs.get(key)
+        if previous is None:
+            latest_check_runs[key] = (started_at, index, node)
+            continue
+        previous_started_at, previous_index, _ = previous
+        if started_at is None and previous_started_at is not None:
+            continue
+        if previous_started_at is None and started_at is not None:
+            latest_check_runs[key] = (started_at, index, node)
+            continue
+        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
+            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
+            previous_index,
+        ):
+            latest_check_runs[key] = (started_at, index, node)
+
     successful_status_contexts = {
         node.get("context")
-        for node in context_nodes(pr)
-        if node.get("__typename") != "CheckRun"
-        and (node.get("state") or "").upper() == "SUCCESS"
+        for node in status_contexts
+        if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for node in context_nodes(pr):
-        if node.get("__typename") == "CheckRun":
-            conclusion = (node.get("conclusion") or "").upper()
-            if conclusion in FAILED_CHECK_CONCLUSIONS:
-                if is_strix_context(node) and "strix" in successful_status_contexts:
-                    continue
-                failed.append(node.get("name") or "check-run")
-        else:
-            state = (node.get("state") or "").upper()
-            if state in {"FAILURE", "ERROR"}:
-                failed.append(node.get("context") or "status-context")
+    for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
+        conclusion = (node.get("conclusion") or "").upper()
+        if conclusion in FAILED_CHECK_CONCLUSIONS:
+            if is_strix_context(node) and "strix" in successful_status_contexts:
+                continue
+            failed.append(node.get("name") or "check-run")
+    for node in status_contexts:
+        state = (node.get("state") or "").upper()
+        if state in {"FAILURE", "ERROR"}:
+            failed.append(node.get("context") or "status-context")
     return failed
 
 
@@ -1149,6 +1201,23 @@ def direct_merge_can_fallback_to_auto_merge(error: Exception) -> bool:
     """Return whether a direct merge failure should queue auto-merge instead."""
     text = str(error).lower()
     return any(marker in text for marker in DIRECT_MERGE_AUTO_FALLBACK_MARKERS)
+
+
+def direct_merge_block_detail(error: Exception) -> str:
+    """Return the concrete GitHub merge refusal detail for scheduler logs."""
+    lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+    detail_lines = [
+        line
+        for line in lines
+        if line.startswith(("X ", "gh:", "{"))
+        or "Repository rule violations found" in line
+        or "required" in line.lower()
+        or "prohibits the merge" in line.lower()
+    ]
+    if not detail_lines:
+        detail_lines = lines[-2:]
+    detail = " ".join(detail_lines)
+    return detail[:600] if detail else "GitHub did not return a merge refusal detail"
 
 
 def disable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -1263,6 +1332,9 @@ def post_update_branch_followup(
 
     strix_state = strix_evidence_state(updated_pr)
     if strix_state == "missing":
+        wait_reason = workflow_dispatch_wait_reason(repo, security_workflow)
+        if wait_reason:
+            return f"{head_note}; {wait_reason}"
         dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
         return (
             f"{head_note}; same-head Strix evidence dispatched because workflow-token branch updates "
@@ -1275,6 +1347,9 @@ def post_update_branch_followup(
     if opencode_state == "running":
         return f"{head_note}; same-head OpenCode review is already running"
 
+    wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+    if wait_reason:
+        return f"{head_note}; {wait_reason}"
     dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
     return f"{head_note}; same-head Strix evidence is complete, so OpenCode review was dispatched"
 
@@ -1351,10 +1426,10 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
-def active_workflow_runs(repo: str) -> list[dict[str, Any]]:
-    """Return queued and in-progress workflow runs for a repository."""
+def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
+    """Return active workflow runs for a repository."""
     runs: list[dict[str, Any]] = []
-    for status in ("queued", "in_progress"):
+    for status in statuses:
         payload = json.loads(
             run_github_actions(
                 [
@@ -1379,13 +1454,19 @@ def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
     return any(pr.get("number") == pr_number for pr in run_data.get("pull_requests") or [])
 
 
-def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list[str]:
-    """Return active OpenCode run ids for older heads of the same pull request."""
+def stale_pr_run_ids(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    workflow: str | None = None,
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> list[str]:
+    """Return active run ids for older heads of the same pull request."""
     head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
     stale: list[str] = []
-    for run_data in active_workflow_runs(repo):
-        if run_data.get("name") != workflow:
+    for run_data in active_workflow_runs(repo, statuses):
+        if workflow is not None and run_data.get("name") != workflow:
             continue
         if str(run_data.get("head_sha") or "").lower() == head:
             continue
@@ -1397,14 +1478,15 @@ def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list
     return stale
 
 
-def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
-    if dry_run:
-        return []
-    require_github_actions_control_actor("force-cancel-stale-opencode-review")
-    run_ids = stale_opencode_run_ids(repo, workflow, pr)
+def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list[str]:
+    """Return active OpenCode run ids for older heads of the same pull request."""
+    return stale_pr_run_ids(repo, pr, workflow=workflow)
+
+
+def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
+    """Force-cancel workflow runs by id."""
     if not run_ids:
-        return []
+        return
     if len(run_ids) <= 1:  # pragma: no cover
         for run_id in run_ids:  # pragma: no cover
             run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"])  # pragma: no cover
@@ -1415,6 +1497,25 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
                 lambda run_id: run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"]),
                 run_ids
             ))
+
+
+def cancel_stale_pr_queued_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel queued runs for older heads of the same PR."""
+    if dry_run:
+        return []
+    require_github_actions_control_actor("force-cancel-stale-pr-queued-runs")
+    run_ids = stale_pr_run_ids(repo, pr, statuses=("queued",))
+    force_cancel_workflow_runs(repo, run_ids)
+    return run_ids
+
+
+def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
+    if dry_run:
+        return []
+    require_github_actions_control_actor("force-cancel-stale-opencode-review")
+    run_ids = stale_opencode_run_ids(repo, workflow, pr)
+    force_cancel_workflow_runs(repo, run_ids)
     return run_ids
 
 
@@ -1567,6 +1668,7 @@ def inspect_pr(
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
+    cancel_stale_pr_queued_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these
@@ -1575,6 +1677,9 @@ def inspect_pr(
         # feature-branch merges.
         opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
         if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
+            wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+            if wait_reason:
+                return Decision(number, "wait", f"stacked PR onto {base_ref}; {wait_reason}")
             dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
             return Decision(
                 number,
@@ -1732,17 +1837,20 @@ def inspect_pr(
             except RuntimeError as exc:
                 if merge_mode != "direct_or_auto" or not direct_merge_can_fallback_to_auto_merge(exc):
                     raise
+                block_detail = direct_merge_block_detail(exc)
                 if pr.get("autoMergeRequest"):
                     return decide(
                         "auto_merge",
                         "current head is approved; direct merge was blocked by branch policy, "
-                        "so the existing auto-merge request remains queued with the same head guard evidence",
+                        "so the existing auto-merge request remains queued with the same head guard evidence; "
+                        f"GitHub reported: {block_detail}",
                     )
                 enable_auto_merge(repo, pr, dry_run=dry_run)
                 return decide(
                     "auto_merge",
                     "current head is approved; direct merge was blocked by branch policy, "
-                    "so auto-merge was enabled with the same head guard evidence",
+                    "so auto-merge was enabled with the same head guard evidence; "
+                    f"GitHub reported: {block_detail}",
                 )
             state_note = "" if merge_state == "CLEAN" else f"; GitHub mergeability is {merge_state}"
             return decide(
@@ -1868,6 +1976,9 @@ def inspect_pr(
                     "wait",
                     "current head has no completed Strix evidence; review dispatch limit reached",
                 )
+            wait_reason = workflow_dispatch_wait_reason(repo, security_workflow)
+            if wait_reason:
+                return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
             dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
             return decide(
                 "security_dispatch",
@@ -1882,6 +1993,9 @@ def inspect_pr(
                 "wait",
                 "current head has completed Strix evidence; review dispatch limit reached",
             )
+        wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+        if wait_reason:
+            return decide("wait", f"current head has completed Strix evidence; {wait_reason}")
         dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
         return decide(
             "review_dispatch",
@@ -1937,6 +2051,12 @@ def print_summary(
 def markdown_cell(value: object) -> str:
     """Escape a value for a compact GitHub Actions summary table cell."""
     return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+
+def markdown_code_span(value: object) -> str:
+    """Escape a value for a compact Markdown inline code span."""
+    escaped = str(value).replace("`", "\\`")
+    return f"`{escaped}`"
 
 
 def write_actions_summary(
@@ -2065,7 +2185,7 @@ def conflict_repair_summary(decisions: list[Decision]) -> list[str]:
                 [
                     "",
                     "Changed files to inspect first:",
-                    *(f"- `{path.replace('`', '\\`')}`" for path in changed_files),
+                    *(f"- {markdown_code_span(path)}" for path in changed_files),
                 ]
             )
     return lines

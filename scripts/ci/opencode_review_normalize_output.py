@@ -91,8 +91,6 @@ CHANGED_FILE_EVIDENCE_PATTERN = re.compile(
     r"(?![A-Za-z0-9_])"
     r"|(?<![A-Za-z0-9_])(?:Dockerfile|Makefile|README|LICENSE|AGENTS\.md)(?![A-Za-z0-9_])"
 )
-
-# ⚡ Bolt: Pre-compile regex for deep scanning loops
 BULLET_PREFIX_PATTERN = re.compile(r"^[-*+]\s+")
 
 APPROVAL_VERIFICATION_LABELS = (

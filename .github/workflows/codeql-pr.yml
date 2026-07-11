@@ -11,7 +11,10 @@ on:
     branches: [main, master, develop]
 
 concurrency:
-  group: codeql-pr-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number }}
+  group: >-
+    codeql-pr-${{
+    github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -50,6 +53,10 @@ jobs:
           fi
           if find . -type f -name '*.py' -not -path './.git/*' | head -1 | grep -q .; then
             matrix=$(echo "$matrix" | jq -c '. + [{"language":"python","build-mode":"none"}]')
+          fi
+          if find . -type f \( -name '*.java' -o -name '*.kt' -o -name '*.kts' \) \
+            -not -path './.git/*' | head -1 | grep -q .; then
+            matrix=$(echo "$matrix" | jq -c '. + [{"language":"java-kotlin","build-mode":"none"}]')
           fi
           if [ "$(echo "$matrix" | jq 'length')" -eq 0 ]; then
             matrix='[{"language":"actions","build-mode":"none"}]'

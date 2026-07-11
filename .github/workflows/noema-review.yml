@@ -17,19 +17,17 @@ on:
         required: false
         default: ""
         type: string
-      canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for trusted review scripts
-        required: false
-        default: main
-        type: string
 
 concurrency:
   group: >-
-    noema-review-${{ github.event_name }}-${{
-    github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
+    noema-review-${{
+    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
+    github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
+    github.repository }}-${{ github.event_name }}-${{
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
-    github.event.inputs.pr_number || github.run_id }}
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
+    github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -64,51 +62,109 @@ jobs:
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || '' }}
     steps:
+      - name: Skip events without pull request context
+        if: env.PR_NUMBER == ''
+        run: |
+          echo "::notice::Noema review skipped: no pull request number is associated with this event."
+
       - name: Resolve trusted Noema review source ref
+        if: env.PR_NUMBER != ''
         id: trusted_source
         env:
-          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
+          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
         run: |
           set -euo pipefail
-          trusted_ref="${INPUT_CANONICAL_REF:-main}"
-          case "$WORKFLOW_REF" in
-            ContextualWisdomLab/.github/.github/workflows/noema-review.yml@*)
-              trusted_ref="${WORKFLOW_REF##*@}"
-              ;;
-          esac
-          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
+          python3 <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
 
-      - name: Checkout trusted Noema review gate
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ steps.trusted_source.outputs.ref }}
-          fetch-depth: 1
-          persist-credentials: false
+          try:
+              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
+              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+
+          trusted_repository = str(
+              job_context.get("workflow_repository") or "ContextualWisdomLab/.github"
+          ).strip()
+          trusted_ref = str(
+              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
+          ).strip()
+          workflow_ref = str(
+              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
+          ).strip()
+
+          if not trusted_ref:
+              trusted_ref = "main"
+              prefix = "ContextualWisdomLab/.github/.github/workflows/noema-review.yml@"
+              if workflow_ref.startswith(prefix):
+                  trusted_ref = workflow_ref.split("@", 1)[1]
+
+          if trusted_repository != "ContextualWisdomLab/.github":
+              print("::error::Trusted Noema workflow repository resolved outside ContextualWisdomLab/.github.", file=sys.stderr)
+              raise SystemExit(1)
+          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
+              print("::error::Trusted Noema workflow ref resolved to an invalid value.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"repository={trusted_repository}")
+          print(f"ref={trusted_ref}")
+          PY
+
+      - name: Materialize trusted Noema review gate
+        if: env.PR_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TRUSTED_SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Trusted Noema source ref must resolve to the immutable workflow commit SHA before archive materialization."
+            exit 1
+          fi
+          trusted_archive="${RUNNER_TEMP}/trusted-noema-source.tar.gz"
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -o "$trusted_archive" \
+            "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+          tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
+          test -f scripts/ci/noema_review_gate.py
 
       - name: Exchange Noema app token
+        if: env.PR_NUMBER != ''
         id: noema_app_token
         env:
           OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
-          TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || '' }}
+          TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
         run: |
           set -euo pipefail
 
-          mark_unavailable() {
+          fail_unavailable() {
+            local message="$1"
             echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::error::$message"
+            exit 1
+          }
+
+          mark_unconfigured() {
+            local message="$1"
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::$message"
+            exit 0
           }
 
           if [ -z "${TOKEN_EXCHANGE_URL:-}" ]; then
-            echo "Noema app token exchange unavailable: NOEMA_TOKEN_EXCHANGE_URL is not configured."
-            mark_unavailable
-            exit 0
+            mark_unconfigured "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured; Noema review skipped until the exchange service is deployed."
           fi
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "Noema app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: OIDC request environment is missing."
           fi
 
           request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
@@ -123,16 +179,12 @@ jobs:
               -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               "${request_url}${separator}audience=${OIDC_AUDIENCE}"
           )"; then
-            echo "Noema app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: OIDC token request did not complete."
           fi
 
           oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
           if [ -z "$oidc_token" ]; then
-            echo "Noema app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: OIDC token response was empty."
           fi
 
           if ! token_response="$(
@@ -143,16 +195,12 @@ jobs:
               --data "$(jq -cn --arg target_repository "$TARGET_REPOSITORY" '{target_repository:$target_repository}')" \
               "${TOKEN_EXCHANGE_URL}"
           )"; then
-            echo "Noema app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: app token request did not complete."
           fi
 
           app_token="$(jq -r '.token // empty' <<<"$token_response")"
           if [ -z "$app_token" ]; then
-            echo "Noema app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
+            fail_unavailable "Noema app token exchange unavailable: app token response was empty."
           fi
 
           echo "::add-mask::$app_token"
@@ -162,8 +210,10 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Run Noema LLM review and submit verdict
+        if: env.PR_NUMBER != ''
         env:
           GH_TOKEN: ${{ steps.noema_app_token.outputs.token }}
+          NOEMA_APP_TOKEN_AVAILABLE: ${{ steps.noema_app_token.outputs.available }}
           NOEMA_REVIEW_TOKEN_SOURCE: noema-review-app-oidc
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
@@ -174,9 +224,13 @@ jobs:
             echo "No pull request number was available for this event; skipping."
             exit 0
           fi
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::notice::Noema app token is unavailable; review skipped."
+          if [ "${NOEMA_APP_TOKEN_AVAILABLE:-}" != "true" ]; then
+            echo "::notice::Noema app token exchange is not configured; review skipped until Noema is deployed."
             exit 0
+          fi
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema app token is unavailable; review cannot submit a verdict."
+            exit 1
           fi
           python3 scripts/ci/noema_review_gate.py \
             --repo "$TARGET_REPOSITORY" \

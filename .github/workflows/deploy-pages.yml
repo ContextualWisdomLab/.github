@@ -1,0 +1,112 @@
+# Reusable Cloudflare Pages deploy (workflow_call).
+#
+# Any product repo in the org can call this to publish a static site to
+# Cloudflare Pages and (optionally) attach a custom domain, using the org
+# secrets CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID. The token stays inside
+# GitHub Actions — callers pass `secrets: inherit`.
+#
+# Example caller (.github/workflows/site.yml in a product repo):
+#
+#   name: Publish marketing site
+#   on:
+#     push:
+#       branches: [main]
+#   jobs:
+#     deploy:
+#       uses: ContextualWisdomLab/.github/.github/workflows/deploy-pages.yml@main
+#       with:
+#         project_name: keyverse-marketing     # Cloudflare Pages project (snake/kebab ok)
+#         build_dir: ./public                   # directory of built static assets
+#         custom_domain: keyverse.io            # optional; must have a CF zone first
+#       secrets: inherit
+#
+name: Deploy Cloudflare Pages
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: "Cloudflare Pages project name (created on first deploy if absent)"
+        required: true
+        type: string
+      build_dir:
+        description: "Directory containing the built static assets to publish"
+        required: true
+        type: string
+      custom_domain:
+        description: "Optional custom domain to attach to the Pages project (zone must exist)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  deploy_pages:
+    name: Deploy ${{ inputs.project_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Guard secrets present
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CF_API_TOKEN}" ] || [ -z "${CF_ACCOUNT_ID}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not available. Caller must use 'secrets: inherit'."
+            exit 1
+          fi
+
+      - name: Deploy to Cloudflare Pages (wrangler)
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Creates the project on first run; publishes the build_dir to production.
+          command: pages deploy ${{ inputs.build_dir }} --project-name=${{ inputs.project_name }}
+
+      - name: Attach custom domain (idempotent)
+        if: ${{ inputs.custom_domain != '' }}
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT_NAME: ${{ inputs.project_name }}
+          CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          base="${api}/accounts/${CF_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}/domains"
+
+          existing="$(curl -sS "${base}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            | jq -r --arg d "${CUSTOM_DOMAIN}" '(.result // [])[] | select(.name==$d) | .name')"
+
+          if [ "${existing}" = "${CUSTOM_DOMAIN}" ]; then
+            echo "Custom domain ${CUSTOM_DOMAIN} already attached to ${PROJECT_NAME}."
+          else
+            echo "Attaching ${CUSTOM_DOMAIN} to Pages project ${PROJECT_NAME}..."
+            resp="$(curl -sS -X POST "${base}" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -nc --arg n "${CUSTOM_DOMAIN}" '{name:$n}')")"
+            if [ "$(printf '%s' "${resp}" | jq -r '.success // false')" = "true" ]; then
+              echo "Attached ${CUSTOM_DOMAIN}."
+            else
+              echo "::warning::Could not attach ${CUSTOM_DOMAIN}: $(printf '%s' "${resp}" | jq -c '.errors // .')"
+            fi
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Cloudflare Pages deploy"
+            echo ""
+            echo "- **Project:** \`${{ inputs.project_name }}\`"
+            echo "- **Build dir:** \`${{ inputs.build_dir }}\`"
+            echo "- **Custom domain:** \`${{ inputs.custom_domain || '(none)' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

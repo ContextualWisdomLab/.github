@@ -26,78 +26,57 @@ on:
         description: Pull request head SHA
         required: true
         type: string
-      canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for trusted review scripts
-        required: false
-        default: main
-        type: string
 
 concurrency:
   group: >-
-    opencode-review-${{ github.event_name }}-${{
-    github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
-    github.event.inputs.pr_number != '' && github.event.inputs.pr_head_sha != '' && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
-    github.event.inputs.pr_number || github.run_id }}
+    opencode-review-${{
+    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
+    github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
+    github.repository }}-${{
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
+    github.run_id }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  required-workflow-bootstrap:
+    name: required-workflow-bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Required OpenCode workflow run materialized for this PR event."
+
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
-  coverage-evidence:
-    name: coverage-evidence
+  coverage-source-tree:
+    name: coverage-source-tree
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
         github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
-        && github.event.pull_request.head.repo.full_name == github.repository
+        && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
       )
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-    outputs:
-      coverage_summary: ${{ steps.measure.outputs.coverage_summary }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Resolve trusted OpenCode source ref
-        id: trusted_source
-        env:
-          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: |
-          set -euo pipefail
-          if [ -n "$INPUT_CANONICAL_REF" ]; then
-            trusted_ref="$INPUT_CANONICAL_REF"
-          else
-            trusted_ref="main"
-            case "$WORKFLOW_REF" in
-              ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@*)
-                trusted_ref="${WORKFLOW_REF##*@}"
-                ;;
-            esac
-          fi
-          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
-
-      - name: Checkout trusted OpenCode coverage contract
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ContextualWisdomLab/.github
-          fetch-depth: 1
-          persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
-
       - name: Exchange OpenCode app token for target repository coverage reads
-        id: coverage_app_token
+        id: coverage_read_app_token
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.target_repository != ''
+          && github.event.inputs.target_repository != github.repository
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
@@ -162,18 +141,157 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Checkout pull request head for coverage measurement
+      - name: Materialize pull request merge tree for coverage measurement
+        env:
+          GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
+          COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-source.tar
+        run: |
+          set -euo pipefail
+          fetch_dir="${RUNNER_TEMP}/opencode-coverage-fetch"
+          rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR" "$COVERAGE_SOURCE_ARCHIVE"
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Coverage merge tree materialization requires a GitHub token."
+            exit 1
+          fi
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git init "$fetch_dir"
+          git -C "$fetch_dir" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
+          if ! git -C "$fetch_dir" \
+            -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"; then
+            echo "::error::Coverage fetch could not authenticate to ${TARGET_REPOSITORY} or read base/head SHAs ${PR_BASE_SHA}/${PR_HEAD_SHA}; check token permissions, target repository access, and SHA visibility."
+            exit 1
+          fi
+          git -C "$fetch_dir" checkout --detach "$PR_BASE_SHA"
+          git -C "$fetch_dir" config user.name "github-actions[bot]"
+          git -C "$fetch_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git -C "$fetch_dir" merge --no-ff --no-edit "$PR_HEAD_SHA"; then
+            echo "::error::Coverage merge tree could not be materialized for base ${PR_BASE_SHA} and head ${PR_HEAD_SHA}; resolve merge conflicts or rerun after GitHub can synthesize the PR merge commit."
+            exit 1
+          fi
+          mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
+          mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
+          git -C "$COVERAGE_SOURCE_WORKDIR" status --short
+          tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
+
+      - name: Upload materialized pull request merge tree
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opencode-coverage-source
+          path: ${{ runner.temp }}/opencode-coverage-source.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage-evidence:
+    name: coverage-evidence
+    needs: [coverage-source-tree]
+    if: >-
+      always()
+      && needs.coverage-source-tree.result != 'cancelled'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (
+          github.event_name == 'pull_request_target'
+          && github.event.action != 'closed'
+          && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+        )
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      coverage_summary: ${{ steps.measure.outputs.coverage_summary }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Resolve trusted OpenCode source ref
+        id: trusted_source
+        env:
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
+          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
+
+          try:
+              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
+              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+
+          trusted_ref = str(
+              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
+          ).strip()
+          workflow_ref = str(
+              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
+          ).strip()
+
+          if not trusted_ref:
+              trusted_ref = "main"
+              prefix = "ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@"
+              if workflow_ref.startswith(prefix):
+                  trusted_ref = workflow_ref.split("@", 1)[1]
+
+          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
+              print("::error::Trusted OpenCode workflow ref resolved to an invalid value.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"ref={trusted_ref}")
+          PY
+
+      - name: Checkout trusted OpenCode coverage contract
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          fetch-depth: 0
+          repository: ContextualWisdomLab/.github
+          fetch-depth: 1
           persist-credentials: false
-          token: ${{ steps.coverage_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          path: pr-head
+          ref: ${{ github.workflow_sha }}
+
+      - name: Report coverage source materialization failure
+        if: needs.coverage-source-tree.result != 'success'
+        run: |
+          echo "::error::Coverage source tree could not be materialized; see the coverage-source-tree job log for the exact target repository, base SHA, head SHA, and fetch or merge failure."
+          exit 1
+
+      - name: Download materialized pull request merge tree
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: opencode-coverage-source
+          path: ${{ runner.temp }}/opencode-coverage-artifact
+
+      - name: Prepare pull request merge tree for coverage measurement
+        env:
+          COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+        run: |
+          set -euo pipefail
+          rm -rf "$COVERAGE_SOURCE_WORKDIR"
+          mkdir -p "$COVERAGE_SOURCE_WORKDIR"
+          tar -xf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR"
+          git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
       - name: Install Python coverage measurement tools
-        run: python3 -m pip install --disable-pip-version-check -r requirements-opencode-review-ci.txt
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Cache R coverage tooling library
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ${{ runner.temp }}/R-library
+          key: r-coverage-lib-${{ runner.os }}-covr-testthat-v1
+          restore-keys: |
+            r-coverage-lib-${{ runner.os }}-
 
       - name: Measure test and docstring evidence
         id: measure
@@ -192,6 +310,28 @@ jobs:
             printf '%s\n' "$*" >>"$summary_file"
           }
 
+          append_command() {
+            printf '$ ' >>"$summary_file"
+            printf '%q ' "$@" >>"$summary_file"
+            printf '\n' >>"$summary_file"
+          }
+
+          emit_captured_log() {
+            local log_file="$1"
+            local line_count
+            line_count="$(wc -l <"$log_file" | tr -d '[:space:]')"
+            if [ "${line_count:-0}" -le 260 ]; then
+              cat "$log_file" >>"$summary_file"
+              return
+            fi
+
+            sed -n '1,140p' "$log_file" >>"$summary_file"
+            append ""
+            append "... output truncated: showing first 140 and last 180 of ${line_count} lines ..."
+            append ""
+            tail -n 180 "$log_file" >>"$summary_file"
+          }
+
           run_and_capture() {
             local label="$1"
             shift
@@ -200,16 +340,42 @@ jobs:
             append "### ${label}"
             append ""
             append '```text'
+            append_command "$@"
             set +e
             timeout 900 "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
-            sed -n '1,220p' "$log_file" >>"$summary_file"
+            emit_captured_log "$log_file"
             append '```'
             append ""
             if [ "$rc" -ne 0 ]; then
               append "- Result: FAIL (exit ${rc})"
               failures=$((failures + 1))
+            else
+              append "- Result: PASS"
+            fi
+            append ""
+            rm -f "$log_file"
+          }
+
+          run_and_capture_advisory() {
+            local label="$1"
+            shift
+            local log_file
+            log_file="$(mktemp)"
+            append "### ${label}"
+            append ""
+            append '```text'
+            append_command "$@"
+            set +e
+            timeout 900 "$@" >"$log_file" 2>&1
+            local rc=$?
+            set -e
+            emit_captured_log "$log_file"
+            append '```'
+            append ""
+            if [ "$rc" -ne 0 ]; then
+              append "- Result: ADVISORY (exit ${rc})"
             else
               append "- Result: PASS"
             fi
@@ -284,7 +450,7 @@ jobs:
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
-                python3 -m pip install --disable-pip-version-check -r requirements.txt
+                uv run --with-requirements requirements.txt python -c 'import sys; print("requirements resolved with", sys.executable)'
             fi
 
             while IFS= read -r project_dir; do
@@ -302,11 +468,11 @@ jobs:
                 fi
                 if [ -f "${project_dir}/requirements.txt" ]; then
                   run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
-                    uv pip install --project "$project_dir" -r "${project_dir}/requirements.txt"
+                    bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
                 fi
               elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
                 run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check -r requirements.txt' bash "$project_dir"
+                  bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
           }
@@ -363,16 +529,19 @@ jobs:
             elif [ -f "${project_dir}/pyproject.toml" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
+            elif [ -f "${project_dir}/requirements.txt" ]; then
+              run_and_capture "Python coverage with missing-line report (${project_dir})" \
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'python3 -m pip install --disable-pip-version-check coverage pytest >/dev/null && PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
+                  bash -c 'PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest && uv run --with coverage coverage report --show-missing'
               elif python3 -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -405,6 +574,9 @@ jobs:
                 if [ -f "${project_dir}/pyproject.toml" ]; then
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. uv run pytest tests/test_docstrings.py' bash "$project_dir"
+                elif [ -f "${project_dir}/requirements.txt" ]; then
+                  run_and_capture "Python docstring coverage (${project_dir})" \
+                    bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
                 else
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
@@ -435,6 +607,136 @@ jobs:
                 run_and_capture "JavaScript/TypeScript dependencies (yarn install)" yarn install --immutable
                 ;;
             esac
+          }
+
+          ensure_tauri_frontend_dist() {
+            local manifest="$1"
+            local crate_dir
+            local config_path
+            local frontend_dist
+            local dist_path
+            local package_dir
+            local package_runner
+            local package_name
+
+            crate_dir="$(dirname "$manifest")"
+            config_path="${crate_dir}/tauri.conf.json"
+            if [ ! -f "$config_path" ]; then
+              return 0
+            fi
+
+            frontend_dist="$(
+              jq -er '(.build.frontendDist // .build.distDir // empty) | select(type == "string")' "$config_path" 2>/dev/null || true
+            )"
+            if [ -z "$frontend_dist" ]; then
+              return 0
+            fi
+            case "$frontend_dist" in
+              http://*|https://*)
+                append "### Tauri frontendDist"
+                append ""
+                append "- Result: PASS"
+                append "- Reason: ${config_path} uses external frontendDist \`${frontend_dist}\`; no local dist directory is required before Rust coverage."
+                append ""
+                return 0
+                ;;
+            esac
+
+            dist_path="${crate_dir}/${frontend_dist}"
+            if [ -e "$dist_path" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: ${config_path} frontendDist already exists at \`${dist_path}\` before Rust coverage."
+              append ""
+              return 0
+            fi
+
+            package_dir="$(dirname "$crate_dir")"
+            if [ ! -f "${package_dir}/package.json" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: ${config_path} requires local frontendDist \`${frontend_dist}\`, but ${package_dir}/package.json was not found, so the frontend cannot be built before Rust coverage."
+              append "- Fix: add the Tauri frontend package manifest or commit/generated build output before running \`cargo llvm-cov --manifest-path ${manifest}\`."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+
+            if ! jq -e '.scripts.build // empty' "${package_dir}/package.json" >/dev/null; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: ${config_path} requires local frontendDist \`${frontend_dist}\`, but ${package_dir}/package.json has no build script."
+              append "- Fix: add a frontend build script that creates \`${frontend_dist}\` before Rust coverage runs."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+
+            package_runner="$(select_package_runner)"
+            if [ -z "$package_runner" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: ${config_path} requires local frontendDist \`${frontend_dist}\`, but no supported package runner is available to build ${package_dir}."
+              append "- Fix: make npm, pnpm, or yarn available on the coverage runner."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+
+            install_package_dependencies "$package_runner"
+            package_name="$(jq -r '.name // empty' "${package_dir}/package.json")"
+            # A named package is not necessarily a workspace member: the default
+            # single-package Tauri layout (root package.json + src-tauri/) has a
+            # name but no workspaces, and `npm run build --workspace <name>`
+            # fails there with "No workspaces found". Use workspace-addressed
+            # builds only when the repo root actually declares workspaces;
+            # otherwise build inside the package directory, which works for
+            # standalone packages and workspace members alike.
+            case "$package_runner" in
+              npm)
+                if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
+                  run_and_capture "Tauri frontendDist build (${package_dir})" npm run build --workspace "$package_name"
+                else
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && npm run build' bash "$package_dir"
+                fi
+                ;;
+              pnpm)
+                if [ -n "$package_name" ] && [ -f pnpm-workspace.yaml ]; then
+                  run_and_capture "Tauri frontendDist build (${package_dir})" pnpm --filter "$package_name" run build
+                else
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && pnpm run build' bash "$package_dir"
+                fi
+                ;;
+              yarn)
+                if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
+                  run_and_capture "Tauri frontendDist build (${package_dir})" yarn workspace "$package_name" build
+                else
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && yarn build' bash "$package_dir"
+                fi
+                ;;
+            esac
+
+            if [ -e "$dist_path" ]; then
+              append "### Tauri frontendDist"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: ${config_path} frontendDist was built at \`${dist_path}\` before Rust coverage."
+              append ""
+              return 0
+            fi
+
+            append "### Tauri frontendDist"
+            append ""
+            append "- Result: FAIL"
+            append "- Reason: ${config_path} still requires missing local frontendDist \`${frontend_dist}\` after the frontend build command completed."
+            append "- Fix: make the frontend build write to \`${dist_path}\` or update ${config_path} to the actual build output path."
+            append ""
+            failures=$((failures + 1))
+            return 1
           }
 
           check_javascript_coverage_thresholds() {
@@ -583,7 +885,7 @@ jobs:
             export R_LIBS_USER="${RUNNER_TEMP}/R-library"
             mkdir -p "$R_LIBS_USER"
             run_and_capture "R coverage tooling (covr/testthat)" \
-              bash -c 'Rscript -e '\''repos <- "https://cloud.r-project.org"; lib <- Sys.getenv("R_LIBS_USER"); install_deps <- c("Depends", "Imports", "LinkingTo"); dir.create(lib, recursive = TRUE, showWarnings = FALSE); .libPaths(c(lib, .libPaths())); required <- c("covr", "testthat"); if (file.exists("DESCRIPTION")) { desc <- read.dcf("DESCRIPTION")[1, , drop = FALSE]; fields <- intersect(c("Depends", "Imports", "LinkingTo", "Suggests"), colnames(desc)); values <- as.character(desc[, fields, drop = TRUE]); values <- values[!is.na(values)]; package_deps <- trimws(gsub("\\s*\\([^)]*\\)", "", unlist(strsplit(paste(values, collapse = ","), ","), use.names = FALSE))); package_deps <- setdiff(package_deps[nzchar(package_deps)], "R"); required <- unique(c(required, package_deps)); }; for (pkg in required) if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, repos = repos, lib = lib, dependencies = install_deps); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("R coverage tooling packages unavailable after install: ", paste(missing, collapse = ", "))'\'' || { echo "R coverage tooling install unavailable in coverage runner; deferring to required peer R CMD check evidence."; exit 0; }'
+              bash -c 'timeout 780 Rscript -e '\''user_repo <- "https://cloud.r-project.org"; codename <- tryCatch({ os <- readLines("/etc/os-release", warn = FALSE); v <- grep("^VERSION_CODENAME=", os, value = TRUE); if (length(v)) sub("^VERSION_CODENAME=", "", v[1]) else "" }, error = function(e) ""); binary_repo <- if (nzchar(codename)) sprintf("https://packagemanager.posit.co/cran/__linux__/%s/latest", codename) else "https://packagemanager.posit.co/cran/latest"; repos <- c(binary_repo, user_repo); options(HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(), paste(getRversion(), R.version$platform, R.version$arch, R.version$os))); message("R package repositories: ", paste(repos, collapse = ", "), " (binary packages preferred via Posit Public Package Manager)"); lib <- Sys.getenv("R_LIBS_USER"); install_deps <- c("Depends", "Imports", "LinkingTo"); dir.create(lib, recursive = TRUE, showWarnings = FALSE); .libPaths(c(lib, .libPaths())); required <- c("covr", "testthat"); if (file.exists("DESCRIPTION")) { desc <- read.dcf("DESCRIPTION")[1, , drop = FALSE]; fields <- intersect(c("Depends", "Imports", "LinkingTo"), colnames(desc)); values <- as.character(desc[, fields, drop = TRUE]); values <- values[!is.na(values)]; package_deps <- trimws(gsub("\\s*\\([^)]*\\)", "", unlist(strsplit(paste(values, collapse = ","), ","), use.names = FALSE))); package_deps <- setdiff(package_deps[nzchar(package_deps)], "R"); required <- unique(c(required, package_deps)); }; for (pkg in required) if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, repos = repos, lib = lib, dependencies = install_deps); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("R coverage tooling packages unavailable after install from ", paste(repos, collapse = ", "), ": ", paste(missing, collapse = ", "))'\'' || { echo "R coverage tooling install did not complete or exceeded 780 seconds (see log above for repositories used and any install error); deferring to required peer R CMD check evidence."; exit 0; }'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
                 run_and_capture "R package testthat suite" \
@@ -597,7 +899,7 @@ jobs:
                 append ""
                 failures=$((failures + 1))
               fi
-              run_and_capture "R package coverage with missing-line report (advisory)" \
+              run_and_capture_advisory "R package coverage with missing-line report (advisory)" \
                 bash -c 'Rscript -e '\''lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); cov <- covr::package_coverage(); print(cov); zero <- covr::zero_coverage(cov); if (NROW(zero) > 0) { print(zero); stop("R coverage below 100%; add tests for the listed files/lines.") }'\'' || { echo "covr package_coverage unavailable after package tests; treating missing-line report as advisory."; exit 0; }'
             elif [ -d tests/testthat ]; then
               run_and_capture "R testthat suite" \
@@ -613,6 +915,68 @@ jobs:
             fi
           }
 
+          ensure_rust_gpu_adapter() {
+            # Provide a CPU software Vulkan adapter (Mesa lavapipe) so wgpu-based
+            # GPGPU code paths execute — and are therefore coverable — on the
+            # GPU-less coverage runner. This mirrors how wgpu's own CI exercises
+            # compute shaders headlessly. Best-effort: if provisioning fails the
+            # coverage command still runs and reports any uncovered GPU lines
+            # exactly as before, so Rust repositories without GPU code are
+            # unaffected and no gate is weakened.
+            if ! ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
+              run_and_capture "Software Vulkan adapter (Mesa lavapipe) for GPGPU coverage" \
+                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools || true'
+            fi
+            if ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
+              lvp_icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1)"
+              export VK_ICD_FILENAMES="$lvp_icd"
+              export VK_DRIVER_FILES="$lvp_icd"
+              export WGPU_BACKEND=vulkan
+              export LIBGL_ALWAYS_SOFTWARE=1
+              append "### Rust GPGPU coverage adapter"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: using Mesa lavapipe software Vulkan adapter at \`${lvp_icd}\` so wgpu GPGPU code paths are exercised on the GPU-less runner."
+              append ""
+            else
+              append "### Rust GPGPU coverage adapter"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: no software Vulkan adapter available; wgpu GPU code paths cannot be exercised on this runner and remain the caller's coverage responsibility."
+              append ""
+            fi
+          }
+
+          ensure_rust_desktop_deps() {
+            # Install the GTK/WebKitGTK system libraries that Tauri (wry/tao)
+            # links on Linux so desktop-app crates compile — and are therefore
+            # coverable — on the headless coverage runner. Mirrors the
+            # ensure_rust_gpu_adapter pattern above. Detection-gated and
+            # best-effort: repositories without a Tauri config are unaffected
+            # and no gate is weakened — if provisioning fails the coverage
+            # command still runs and reports the compile failure as before.
+            if ! find . -name tauri.conf.json -not -path '*/node_modules/*' -not -path '*/target/*' -print -quit 2>/dev/null | grep -q .; then
+              return 0
+            fi
+            if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+              run_and_capture "Tauri Linux system libraries (WebKitGTK/GTK3) for desktop coverage" \
+                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev || true'
+            fi
+            if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+              append "### Tauri desktop coverage dependencies"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: Tauri configuration detected; WebKitGTK/GTK3 development libraries are available so the desktop crate can compile under coverage."
+              append ""
+            else
+              append "### Tauri desktop coverage dependencies"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: Tauri configuration detected but WebKitGTK/GTK3 libraries could not be provisioned; the coverage command will surface the compile failure as before."
+              append ""
+            fi
+          }
+
           ensure_rust_toolchain() {
             if ! command -v cargo >/dev/null 2>&1; then
               run_and_capture "Rust toolchain install (rustup minimal)" \
@@ -623,9 +987,69 @@ jobs:
             if command -v cargo >/dev/null 2>&1 && ! cargo llvm-cov --version >/dev/null 2>&1; then
               run_and_capture "Rust coverage tooling (cargo-llvm-cov)" cargo install cargo-llvm-cov --locked
             fi
+            ensure_rust_gpu_adapter
+            ensure_rust_desktop_deps
+          }
+
+          rust_coverage_manifests() {
+            if [ -f Cargo.toml ]; then
+              printf '%s\n' Cargo.toml
+              return 0
+            fi
+            changed_files_for_coverage \
+              | while IFS= read -r changed_path; do
+                  case "$changed_path" in
+                    Cargo.toml|Cargo.lock|*.rs) ;;
+                    *) continue ;;
+                  esac
+                  candidate_dir="$(dirname "$changed_path")"
+                  while [ "$candidate_dir" != "." ] && [ "$candidate_dir" != "/" ]; do
+                    if [ -f "${candidate_dir}/Cargo.toml" ]; then
+                      printf '%s\n' "${candidate_dir}/Cargo.toml"
+                      break
+                    fi
+                    next_dir="$(dirname "$candidate_dir")"
+                    if [ "$next_dir" = "$candidate_dir" ]; then
+                      break
+                    fi
+                    candidate_dir="$next_dir"
+                  done
+                done \
+              | sort -u
+          }
+
+          rust_coverage_fail_under_lines() {
+            local manifest="$1"
+            python3 - "$manifest" <<'PY'
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          manifest = Path(sys.argv[1])
+          metadata = (
+              tomllib.loads(manifest.read_text(encoding="utf-8"))
+              .get("package", {})
+              .get("metadata", {})
+              .get("opencode", {})
+              .get("coverage", {})
+          )
+          value = metadata.get("minimum_lines")
+          if value is None:
+              sys.exit(0)
+          if isinstance(value, bool) or not isinstance(value, (int, float)):
+              raise SystemExit(
+                  "package.metadata.opencode.coverage.minimum_lines must be a number from 0 to 100"
+              )
+          if not 0 <= float(value) <= 100:
+              raise SystemExit(
+                  "package.metadata.opencode.coverage.minimum_lines must be between 0 and 100"
+              )
+          print(f"{float(value):g}")
+          PY
           }
 
           run_rust_test_coverage() {
+            local manifests
             ensure_rust_toolchain
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust test coverage"
@@ -635,17 +1059,50 @@ jobs:
               append "- Fix: make the Rust toolchain available, then run \`cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines\`."
               append ""
               failures=$((failures + 1))
-            elif [ -f Cargo.toml ]; then
-              run_and_capture "Rust coverage with missing-line report" \
-                cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines
             else
-              append "### Rust test coverage"
-              append ""
-              append "- Result: FAIL"
-              append "- Reason: Rust files changed, but no root Cargo.toml was found."
-              append "- Fix: add or point to the Cargo workspace manifest and run cargo coverage from that workspace."
-              append ""
-              failures=$((failures + 1))
+              manifests="$(rust_coverage_manifests)"
+              if [ -n "$manifests" ]; then
+                while IFS= read -r manifest; do
+                  local threshold
+                  if ! threshold="$(rust_coverage_fail_under_lines "$manifest")"; then
+                    append "### Rust coverage threshold (${manifest})"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: ${manifest} defines an invalid package.metadata.opencode.coverage.minimum_lines value."
+                    append "- Fix: set package.metadata.opencode.coverage.minimum_lines to a numeric line-coverage percentage from 0 to 100."
+                    append ""
+                    failures=$((failures + 1))
+                    continue
+                  fi
+                  if [ -z "$threshold" ]; then
+                    threshold=100
+                  else
+                    append "### Rust coverage threshold (${manifest})"
+                    append ""
+                    append "- Result: PASS"
+                    append "- Reason: ${manifest} sets package.metadata.opencode.coverage.minimum_lines to ${threshold}%, so Rust coverage enforces the repository-owned baseline instead of the central default."
+                    append ""
+                  fi
+                  if ! ensure_tauri_frontend_dist "$manifest"; then
+                    continue
+                  fi
+                  if [ "$manifest" = "Cargo.toml" ]; then
+                    run_and_capture "Rust coverage with missing-line report (${manifest})" \
+                      cargo llvm-cov --workspace --all-features --fail-under-lines "$threshold" --show-missing-lines
+                  else
+                    run_and_capture "Rust coverage with missing-line report (${manifest})" \
+                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines "$threshold" --show-missing-lines
+                  fi
+                done <<<"$manifests"
+              else
+                append "### Rust test coverage"
+                append ""
+                append "- Result: FAIL"
+                append "- Reason: Rust files changed, but no Cargo.toml was found at the repo root or above the changed Rust files."
+                append "- Fix: add a Cargo workspace/package manifest near the Rust files or point the repository coverage command at the nested manifest."
+                append ""
+                failures=$((failures + 1))
+              fi
             fi
           }
 
@@ -676,7 +1133,22 @@ jobs:
               tag_suffix="$(printf '%s' "$dockerfile" | tr '[:upper:]' '[:lower:]' | tr '/.' '--' | tr -cd '[:alnum:]-' | cut -c1-80)"
               image_tag="opencode-review-${PR_HEAD_SHA:-head}-${tag_suffix}"
               run_and_capture "Docker build (${dockerfile})" \
-                docker build --pull=false -f "$dockerfile" -t "$image_tag" "$docker_context"
+                bash -c '
+                  set -euo pipefail
+                  dockerfile="$1"
+                  image_tag="$2"
+                  docker_context="$3"
+                  if docker build --pull=false -f "$dockerfile" -t "$image_tag" "$docker_context"; then
+                    exit 0
+                  fi
+                  if [ "$docker_context" != "." ]; then
+                    echo "Docker build failed with context ${docker_context}; retrying with repository root context so nested Dockerfiles that COPY repo-root paths can provide actionable evidence."
+                    docker build --pull=false -f "$dockerfile" -t "$image_tag" .
+                    exit 0
+                  fi
+                  echo "Docker build failed with repository root context; no fallback context remains."
+                  exit 1
+                ' bash "$dockerfile" "$image_tag" "$docker_context"
             done <"$changed_dockerfiles"
             if has_changed_tracked_files 'docker-compose.yml' 'docker-compose.yaml' 'compose.yml' 'compose.yaml'; then
               for compose_file in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
@@ -834,6 +1306,7 @@ jobs:
     needs: [coverage-evidence]
     if: >-
       always()
+      && needs.coverage-evidence.result != 'cancelled'
       && (
         github.event_name == 'workflow_dispatch'
         || (
@@ -842,38 +1315,59 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
     permissions:
-      actions: write
+      actions: read
       checks: read
       id-token: write
-      contents: write
+      contents: read
       models: read
       statuses: read
       deployments: read
       pull-requests: write
-      issues: read
+      issues: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Resolve trusted OpenCode source ref
         id: trusted_source
         env:
-          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
+          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
         run: |
           set -euo pipefail
-          if [ -n "$INPUT_CANONICAL_REF" ]; then
-            trusted_ref="$INPUT_CANONICAL_REF"
-          else
-            trusted_ref="main"
-            case "$WORKFLOW_REF" in
-              ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@*)
-                trusted_ref="${WORKFLOW_REF##*@}"
-                ;;
-            esac
-          fi
-          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
+          python3 <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
+
+          try:
+              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
+              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+
+          trusted_ref = str(
+              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
+          ).strip()
+          workflow_ref = str(
+              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
+          ).strip()
+
+          if not trusted_ref:
+              trusted_ref = "main"
+              prefix = "ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@"
+              if workflow_ref.startswith(prefix):
+                  trusted_ref = workflow_ref.split("@", 1)[1]
+
+          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
+              print("::error::Trusted OpenCode workflow ref resolved to an invalid value.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"ref={trusted_ref}")
+          PY
 
       - name: Checkout trusted OpenCode review workflow
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -881,7 +1375,7 @@ jobs:
           repository: ContextualWisdomLab/.github
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ steps.trusted_source.outputs.ref }}
+          ref: ${{ github.workflow_sha }}
 
       - name: Exchange OpenCode app token for target repository review reads
         id: review_read_app_token
@@ -1101,11 +1595,6 @@ jobs:
         timeout-minutes: 40
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
-          GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -1115,7 +1604,14 @@ jobs:
           FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
         run: |
           set -euo pipefail
-          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
+          context_env_file="${RUNNER_TEMP:-.}/opencode-review-context.env"
+          python3 scripts/ci/opencode_review_context.py \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --env-file "$context_env_file"
+          # shellcheck source=/dev/null
+          . "$context_env_file"
+          printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \
+            "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
@@ -1757,6 +2253,11 @@ jobs:
           cross-file compatibility, repository conventions, and regression risk. Compare repository-local DX/UX patterns before judging a change: preserve helpful automation, review, setup, documentation, and product-flow patterns from sibling repositories, and flag patterns that add noise, false failures, misleading status, repeated waiting, or URL-only diagnostics. For schema, migration,
           database, API, workflow, security, or compliance changes, compare against nearby implementation,
           code conventions, reserved words, naming rules, object naming, and applicable standards before approving.
+          Implementation completeness is mandatory: inspect changed runtime code and connected call sites for
+          placeholder bodies (`pass`, `...`, `NotImplementedError`), TODO-only branches, fake or constant
+          returns, and unimplemented interface adapters. Distinguish typing.Protocol, abc abstractmethod,
+          overload, and Pydantic Field(...) declarations from executable implementation gaps before requesting
+          changes or approving.
           For database/API/config/code objects, prefer repository convention but flag ambiguous single-word names
           such as id, name, type, value, data, user, order, group, or key when a two-word snake_case,
           camelCase, PascalCase, or local-equivalent name would prevent reserved-word, ORM, serialization,
@@ -1770,8 +2271,8 @@ jobs:
           Approval sufficiency:, Verification posture:, Linter/static:, TDD/regression:, Coverage:,
           Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:,
           Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:,
-          Performance:, Developer experience:, User experience:, Visual/DOM:, Accessibility/i18n:,
-          Supply-chain/license:, Packaging:, Security/privacy:.
+          Implementation completeness:, Performance:, Developer experience:, User experience:, Visual/DOM:,
+          Accessibility/i18n:, Supply-chain/license:, Packaging:, Security/privacy:.
           Review contract reminders: perform a general-purpose and meticulous review; actively consult
           CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs,
           and web_search for bounded external lookups. Bounded evidence is available in
@@ -1816,6 +2317,7 @@ jobs:
           Exact gate phrases: when result is APPROVE the JSON findings value must be exactly [].
           Exact gate phrases: never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files.
           Exact gate phrases: Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix, string-only change, no verification needed, or no tests needed.
+          Exact gate phrases: Implementation completeness is mandatory: distinguish Protocol/abstract/type-declaration placeholders from executable implementation gaps.
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
@@ -1904,6 +2406,11 @@ jobs:
           skewed, boundary, degenerate, deterministic-seed, numerical-tolerance, convergence-failure, and
           published-example/prior-version parity cases before approving.
           Do not approve when only one happy-path test supports a parameter-recovery or robustness claim.
+          Implementation completeness is mandatory: inspect changed runtime code and connected call sites for
+          placeholder bodies (`pass`, `...`, `NotImplementedError`), TODO-only branches, fake or constant
+          returns, and unimplemented interface adapters. Distinguish typing.Protocol, abc abstractmethod,
+          overload, and Pydantic Field(...) declarations from executable implementation gaps before requesting
+          changes or approving.
           If host tooling is missing, use Docker, Docker Compose, a devcontainer, Nix, or a temporary
           package-install sandbox to run the augmented verification. Do not spend the session listing every changed path before reviewing;
           inspect the highest-risk evidence first and always return a final control block instead of a progress
@@ -1915,8 +2422,8 @@ jobs:
           Approval sufficiency:, Verification posture:, Linter/static:, TDD/regression:, Coverage:,
           Docstring coverage:, DAG:, PoC/execution:, DDD/domain:, CDD/context:, Similar issues:,
           Claim/concept check:, Standards search:, Compatibility/convention:, Breaking-change/backcompat:,
-          Performance:, Developer experience:, User experience:, Visual/DOM:, Accessibility/i18n:,
-          Supply-chain/license:, Packaging:, Security/privacy:.
+          Implementation completeness:, Performance:, Developer experience:, User experience:, Visual/DOM:,
+          Accessibility/i18n:, Supply-chain/license:, Packaging:, Security/privacy:.
           Review contract reminders: perform a general-purpose and meticulous review; actively consult
           CodeGraph MCP for structural checks, DeepWiki for repo docs, Context7 for current library/API docs,
           and web_search for bounded external lookups. Bounded evidence is available in
@@ -1961,6 +2468,7 @@ jobs:
           Exact gate phrases: when result is APPROVE the JSON findings value must be exactly [].
           Exact gate phrases: never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files.
           Exact gate phrases: Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix, string-only change, no verification needed, or no tests needed.
+          Exact gate phrases: Implementation completeness is mandatory: distinguish Protocol/abstract/type-declaration placeholders from executable implementation gaps.
           Only mergeStateStatus DIRTY or CONFLICTING means a merge conflict. mergeStateStatus BLOCKED is a branch policy, review, or check state, not conflict guidance. When the PR mergeability evidence reports mergeStateStatus DIRTY or CONFLICTING, include a merge-conflict repair
           direction that names the base/head branch relationship, instructs the author to merge or rebase the
           latest base branch into the PR branch, resolve conflict markers in changed files, rerun focused checks,
@@ -2006,7 +2514,7 @@ jobs:
             "$schema": "https://opencode.ai/config.json",
             "model": "github-models/deepseek/deepseek-r1-0528",
             "small_model": "github-models/deepseek/deepseek-v3-0324",
-            "enabled_providers": ["github-models"],
+            "enabled_providers": ["openai", "github-models"],
             "lsp": true,
             "mcp": {
               "codegraph": {
@@ -2132,6 +2640,50 @@ jobs:
               }
             },
             "provider": {
+              "openai": {
+                "npm": "@ai-sdk/openai",
+                "name": "OpenAI (direct)",
+                "options": {
+                  "baseURL": "https://api.openai.com/v1",
+                  "apiKey": "{env:OPENAI_API_KEY}"
+                },
+                "models": {
+                  "gpt-5": {
+                    "name": "OpenAI GPT-5 (direct)",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
+                    "limit": {
+                      "context": 400000,
+                      "output": 128000
+                    }
+                  },
+                  "gpt-5-mini": {
+                    "name": "OpenAI GPT-5 Mini (direct)",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
+                    "limit": {
+                      "context": 400000,
+                      "output": 128000
+                    }
+                  }
+                }
+              },
               "github-models": {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "GitHub Models",
@@ -2335,37 +2887,44 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 350
+        timeout-minutes: 12
+        continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          # Native OpenAI backend for the lead review model. GitHub Models
+          # rate-limits every request and caps bodies at ~4000 tokens, so the
+          # rate-starved shared pool never returned a verdict; hitting
+          # api.openai.com directly with the org OPENAI_API_KEY gives the lead
+          # model a working, un-throttled backend. Resolves {env:OPENAI_API_KEY}
+          # in the opencode.jsonc "openai" provider block.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           USE_GITHUB_TOKEN: "true"
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # Ordered contract-reliability first, then quota, with the rate-starved
-          # flagships last. The mini reasoning models (o4-mini, o3-mini, gpt-5-
-          # mini/nano/chat) reliably emit the strict review contract — every
-          # required label and only source-backed findings — so they lead. The
-          # high-quota non-reasoning models (deepseek-v3, mistral, llama-4) emit
-          # bare or hallucinated reviews the publish/approve gates reject, so
-          # they are fallbacks only. gpt-5/o3 ("Reasoning" tier, 8-12 req/day)
-          # stay last: first-placing them stalled every review until timeout
-          # because a rate-limited/hung flagship never fell back.
-          OPENCODE_MODEL_CANDIDATES: "github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
+          # High-sensitivity review candidates only. Mini/nano/o*-mini models
+          # previously consumed the whole job on context-window timeouts before
+          # the pool reached stronger reviewers, so the default pool now starts
+          # with GPT-5/o3-class models, keeps provider-diverse full-size
+          # fallbacks, and bounds provider stalls so the org queue releases with
+          # a visible MODEL_OUTPUT_UNAVAILABLE reason.
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 min per model — generous for a deep tool-using review, but bounded
-          # so a rate-limited model yields to the next one instead of eating the
-          # 350-min step. (20400s = 340min gave one model the entire budget with
-          # no fallback; 600s was too short for a proper review.)
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "0"
-          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
-          OPENCODE_BACKOFF_MAX_SECONDS: "30"
+          # Three minutes per model is enough for healthy providers to emit the
+          # required control block and short enough to avoid queue pileups when a
+          # provider stalls silently.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"
+          # Stop after one catalog pass; the retry budget should fail closed
+          # with visible diagnostics before the 350-min job timeout.
+          OPENCODE_POOL_MAX_CYCLES: "1"
+          OPENCODE_BACKOFF_INITIAL_SECONDS: "5"
+          OPENCODE_BACKOFF_MAX_SECONDS: "5"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
@@ -2491,16 +3050,16 @@ jobs:
 
           warn_gh_publication_failure() {
             local action="$1" error_file="$2"
-            printf 'OpenCode could not publish %s; continuing without review side effect.\n' "$action" >&2
+            printf 'OpenCode could not publish %s; the requested GitHub side effect is unavailable.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
+              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
+                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
+              fi
+              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
+                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
+              fi
             fi
-          }
-
-          gh_error_is_rate_limited() {
-            local error_file="$1"
-            [ -s "$error_file" ] || return 1
-            grep -Eiq '(API rate limit exceeded|rate limit exceeded|secondary rate limit)' "$error_file"
           }
 
                     emit_change_flow_mermaid_graph() {
@@ -2719,19 +3278,17 @@ jobs:
             fi
           fi
 
-      - name: Approve PR if OpenCode review passed
-        if: >-
-          always()
-          && (
-            needs.coverage-evidence.result != 'success'
-            || steps.opencode_review_model_pool.outcome == 'success'
-          )
-        timeout-minutes: 75
+      - name: Publish OpenCode review outcome
+        if: always()
+        timeout-minutes: 45
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          # Exposed so the "openai" provider in opencode.jsonc resolves during the
+          # failed-check diagnosis opencode run that shares this config.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -2756,10 +3313,24 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "81"
-          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "49"
+          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
+          REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
+          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"
+          OPENCODE_MODEL_ATTEMPTS: "1"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "180"
+          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
+          OPENCODE_BACKOFF_MAX_SECONDS: "30"
+          OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
+          OPENCODE_AGENT: ci-review-fallback
+          OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"
+          OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"
+          OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"
         run: |
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
@@ -2784,12 +3355,22 @@ jobs:
             review_write_token="$OPENCODE_APP_TOKEN"
             review_write_token_source="opencode-app"
           elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ]; then
-            review_write_token="$CHECK_LOOKUP_GH_TOKEN"
-            review_write_token_source="github-token"
+            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
+              review_write_token="$configured_review_write_token"
+              if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
+                review_write_token_source="opencode-app"
+              else
+                review_write_token_source="configured"
+              fi
+              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
+            else
+              review_write_token="$CHECK_LOOKUP_GH_TOKEN"
+              review_write_token_source="github-token"
+            fi
           elif [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
             review_write_token_source="opencode-app"
           fi
-          if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
+          if [ -z "${review_write_fallback_token:-}" ] && [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
             review_write_fallback_token="$configured_review_write_token"
           fi
           overview_comment_token="$review_write_token"
@@ -2805,13 +3386,65 @@ jobs:
             printf 'OpenCode could not publish %s; continuing without review side effect.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
+              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
+                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
+              fi
+              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
+                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
+              fi
             fi
           }
 
-          gh_error_is_rate_limited() {
+          gh_error_is_retryable_publication_failure() {
             local error_file="$1"
             [ -s "$error_file" ] || return 1
-            grep -Eiq '(API rate limit exceeded|rate limit exceeded|secondary rate limit)' "$error_file"
+            grep -Eiq 'API rate limit exceeded|secondary rate limit|You have exceeded a secondary rate limit|abuse detection|Try again later|retry later|timed out after [0-9]+ seconds' "$error_file"
+          }
+
+          review_publish_retry_sleep_seconds() {
+            local token_value="$1" default_sleep="$2"
+            local rate_json remaining reset_epoch now delay
+
+            rate_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$token_value" gh api rate_limit 2>/dev/null || true)"
+            remaining="$(printf '%s' "$rate_json" | jq -r '.resources.core.remaining // empty' 2>/dev/null || true)"
+            reset_epoch="$(printf '%s' "$rate_json" | jq -r '.resources.core.reset // empty' 2>/dev/null || true)"
+            if [ "$remaining" = "0" ] && [ -n "$reset_epoch" ] && [[ "$reset_epoch" =~ ^[0-9]+$ ]]; then
+              now="$(date +%s)"
+              delay=$((reset_epoch - now + 5))
+              if [ "$delay" -gt 0 ] && [ "$delay" -le 900 ]; then
+                printf '%s\n' "$delay"
+                return 0
+              fi
+            fi
+            printf '%s\n' "$default_sleep"
+          }
+
+          post_pull_review_with_retry() {
+            local token_label="$1" token_value="$2" review_payload_file="$3" error_file="$4"
+            local attempts default_sleep attempt sleep_seconds api_timeout publish_status
+
+            attempts="${REVIEW_PUBLISH_RETRY_ATTEMPTS:-3}"
+            default_sleep="${REVIEW_PUBLISH_RETRY_SLEEP_SECONDS:-30}"
+            api_timeout="${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}"
+            attempt=1
+            while :; do
+              : >"$error_file"
+              timeout "${api_timeout}s" env GH_TOKEN="$token_value" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$error_file"
+              publish_status=$?
+              if [ "$publish_status" -eq 0 ]; then
+                return 0
+              fi
+              if [ "$publish_status" -eq 124 ]; then
+                printf 'GitHub pull review publication with %s token timed out after %s seconds.\n' "$token_label" "$api_timeout" >>"$error_file"
+              fi
+              if ! gh_error_is_retryable_publication_failure "$error_file" || [ "$attempt" -ge "$attempts" ]; then
+                return 1
+              fi
+              sleep_seconds="$(review_publish_retry_sleep_seconds "$token_value" "$default_sleep")"
+              printf 'OpenCode pull review publication with %s token hit a retryable GitHub API throttle; retrying attempt %s/%s after %s seconds.\n' "$token_label" "$((attempt + 1))" "$attempts" "$sleep_seconds" >&2
+              sleep "$sleep_seconds"
+              attempt=$((attempt + 1))
+            done
           }
 
                     emit_change_flow_mermaid_graph() {
@@ -2984,7 +3617,7 @@ jobs:
             } >"$overview_body_file"
 
             if ! overview_comment_id="$(
-              env GH_TOKEN="$overview_comment_token" \
+              timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                 gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
                 --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
                 2>"$gh_error_file"
@@ -2996,14 +3629,14 @@ jobs:
             if [ -n "$overview_comment_id" ]; then
               : >"$gh_error_file"
               if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
-                env GH_TOKEN="$overview_comment_token" \
+                timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                   gh api -X PATCH "repos/${GH_REPOSITORY}/issues/comments/${overview_comment_id}" --input - >/dev/null 2>"$gh_error_file"; then
                 warn_gh_publication_failure "review overview update" "$gh_error_file"
               fi
             else
               : >"$gh_error_file"
               if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
-                env GH_TOKEN="$overview_comment_token" \
+                timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                   gh api -X POST "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - >/dev/null 2>"$gh_error_file"; then
                 warn_gh_publication_failure "review overview comment" "$gh_error_file"
               fi
@@ -3024,37 +3657,39 @@ jobs:
               --arg body "$body" \
               --arg commit_id "$HEAD_SHA" \
               '{event: $event, body: $body, commit_id: $commit_id}' >"$review_payload_file"
-            if ! env GH_TOKEN="$review_write_token" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$gh_error_file"; then
+            if ! post_pull_review_with_retry "primary review" "$review_write_token" "$review_payload_file" "$gh_error_file"; then
               warn_gh_publication_failure "pull review with primary review token" "$gh_error_file"
               if [ -n "${review_write_fallback_token:-}" ]; then
-                : >"$gh_error_file"
-                if env GH_TOKEN="$review_write_fallback_token" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$gh_error_file"; then
+                if post_pull_review_with_retry "fallback review" "$review_write_fallback_token" "$review_payload_file" "$gh_error_file"; then
                   rm -f "$gh_error_file" "$review_payload_file"
                   update_review_overview "$event" "$body"
                   return 0
                 fi
                 warn_gh_publication_failure "pull review with fallback review token" "$gh_error_file"
               fi
-              if [ "$event" = "APPROVE" ] && gh_error_is_rate_limited "$gh_error_file"; then
-                rm -f "$gh_error_file" "$review_payload_file"
-                update_review_overview "$event" "$body" || true
-                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                  {
-                    printf '## OpenCode approve review publication skipped\n\n'
-                    printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
-                    printf -- '- Workflow run: %s\n' "$RUN_ID"
-                    printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
-                    printf 'OpenCode completed the approval gate, but GitHub rejected the pull-review write due to API rate limiting. The required workflow remains successful because failed checks, mergeability, and unresolved review threads were already gated before approval.\n\n'
-                    printf '%s\n' "$body"
-                  } >>"$GITHUB_STEP_SUMMARY"
-                fi
-                printf '::warning::OpenCode could not publish the APPROVE pull review for head %s because the GitHub API rate limit was exceeded; keeping the successful approval gate result because pre-approval source, check, mergeability, and review-thread gates passed.\n' "$HEAD_SHA"
-                return 0
-              fi
               rm -f "$gh_error_file" "$review_payload_file"
               update_review_overview "$event" "$body" || true
+              if [ "$event" = "APPROVE" ]; then
+                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                  {
+                    printf '## OpenCode approve review publication failed\n\n'
+                    printf 'OpenCode produced a source-backed current-head APPROVE gate result, but GitHub rejected the pull review publication. The workflow fails closed so branch protection cannot observe an approval gate without a matching GitHub pull review.\n\n'
+                    printf -- "- Result: \`APPROVE_PUBLICATION_FAILED\`\n"
+                    printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
+                    printf -- '- Workflow run: %s\n' "$RUN_ID"
+                    printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
+                    printf -- '- Review state: unchanged because GitHub rejected the review API write.\n'
+                    printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
+                  } >>"$GITHUB_STEP_SUMMARY"
+                fi
+                printf '::error::OpenCode approve review publication failed for head %s; branch protection still lacks the required GitHub review. Failing closed after logging the GitHub API error above.\n' "$HEAD_SHA"
+                echo "::endgroup::"
+                exit 1
+              fi
               printf '::error::OpenCode could not publish the pull review for head %s, so the review state was not changed.\n' "$HEAD_SHA"
-              echo "::endgroup::"
+              case "$event" in
+                REQUEST_CHANGES | INLINE_COMMENT_PUBLISH_FAILED) echo "::endgroup::" ;;
+              esac
               exit 1
             fi
             rm -f "$gh_error_file" "$review_payload_file"
@@ -4025,7 +4660,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-240}s" opencode run "$(cat "$prompt_file")" \
+            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-600}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \
@@ -4071,6 +4706,7 @@ jobs:
             if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+                printf 'Strix workflow is not installed on %s; skipping optional current-head Strix workflow-run lookup.\n' "$GH_REPOSITORY" >&2
                 : >"$output_file"
                 rm -f "$runs_json" "$workflow_lookup_err"
                 return 0
@@ -4110,6 +4746,7 @@ jobs:
                       | select((.status // "") == "completed")
                       | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
                       | select(((.event // "") == "workflow_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
+                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and $newest_success_run_id > 0) | not)
                       | select((.databaseId // .id // 0) > $newest_success_run_id)
                       | "- Strix Security Scan/strix workflow run: " + (.conclusion // "unknown") + (if (.url // .html_url // "") != "" then " (" + (.url // .html_url) + ")" else "" end)
                     )
@@ -4160,9 +4797,11 @@ jobs:
                   | group_by(.name // "")
                   | map(last)
                   | .[]?
-                  | select((.name // "") != "opencode-review")
+                  | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence"] | index($n)) | not)
                   | select((.status // "") == "completed")
                   | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
+                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
+                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review") | not)
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.conclusion // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
                 '
                 ;;
@@ -4173,7 +4812,7 @@ jobs:
                   | group_by(.name // "")
                   | map(last)
                   | .[]?
-                  | select((.name // "") != "opencode-review")
+                  | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence"] | index($n)) | not)
                   | select((.status // "") != "completed")
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.status // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
                 '
@@ -4277,7 +4916,22 @@ jobs:
 
           latest_current_head_manual_strix_run() {
             local runs_json
+            local workflow_lookup_err
             runs_json="$(mktemp)"
+            workflow_lookup_err="$(mktemp)"
+
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+              --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
+              if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
+                printf 'Strix workflow is not installed on %s; skipping optional manual Strix run lookup.\n' "$GH_REPOSITORY" >&2
+                rm -f "$runs_json" "$workflow_lookup_err"
+                return 0
+              fi
+              cat "$workflow_lookup_err" >&2
+              rm -f "$runs_json" "$workflow_lookup_err"
+              return 1
+            fi
+            rm -f "$workflow_lookup_err"
 
             if ! gh run list \
               --repo "$GH_REPOSITORY" \
@@ -4332,6 +4986,9 @@ jobs:
               while IFS= read -r rollup_line; do
                 case "$rollup_line" in
                   "- Strix Security Scan/"*|"- strix:"*)
+                    if printf '%s' "$rollup_line" | grep -Fqi "cancelled"; then
+                      continue
+                    fi
                     failed_strix_run_id="$(printf '%s' "$rollup_line" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
                     if [ -z "$failed_strix_run_id" ] ||
                       [ -z "$manual_strix_success_run_id" ] ||
@@ -4452,6 +5109,8 @@ jobs:
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "metadata-only gate evaluation" and (.workflow // "") == "PR Governance") | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.workflow // "") == "CodeQL") | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")) | not)
+                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
+                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review" and ((.workflow // "") == "Noema Review" or (.workflow // "") == "Required Noema Review")) | not)
                       | "- " + (.label // "check") + ": " + (.conclusion // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
                     elif .kind == "status" then
                       select(((.label // "") | ascii_downcase | contains("opencode-review")) | not)
@@ -4730,6 +5389,64 @@ jobs:
             scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
+          rekick_model_pool_on_exhaustion() {
+            local rekick_attempt=1
+            local rekick_output outcome model rekick_status
+            local sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS:-15}"
+            local max_sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS:-300}"
+            local max_total_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS:-4200}"
+            local started_at now elapsed
+
+            started_at="$(date +%s)"
+
+            while [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" = "exhausted" ]; do
+              if [ "$max_total_seconds" -gt 0 ]; then
+                now="$(date +%s)"
+                elapsed="$((now - started_at))"
+                if [ "$elapsed" -ge "$max_total_seconds" ]; then
+                  printf 'OpenCode model pool remained exhausted for %s seconds; stopping re-kicks and continuing with fail-closed handling.\n' "$elapsed" >&2
+                  break
+                fi
+              fi
+              printf 'OpenCode model pool exhausted; re-kicking model pool (attempt %s).\n' "$rekick_attempt"
+              rekick_output="$(mktemp)"
+              rekick_status=0
+              GITHUB_OUTPUT="$rekick_output" OPENCODE_OUTPUT_FILE="$OPENCODE_MODEL_POOL_OUTPUT_FILE" \
+                bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh" || rekick_status=$?
+              if [ "$rekick_status" -ne 0 ]; then
+                printf 'OpenCode model pool re-kick command exited with status %s; continuing with fail-closed handling.\n' "$rekick_status" >&2
+              fi
+              outcome="$(awk -F= '/^review_status=/{v=$2} END{print v}' "$rekick_output")"
+              model="$(awk -F= '/^review_model=/{v=$2} END{print v}' "$rekick_output")"
+              rm -f "$rekick_output"
+
+              if [ -z "$outcome" ]; then
+                printf 'OpenCode model pool re-kick produced no review_status output; treating outcome as exhausted.\n' >&2
+                outcome="exhausted"
+              fi
+              OPENCODE_MODEL_POOL_OUTCOME="$outcome"
+              OPENCODE_MODEL_POOL_MODEL="$model"
+              if [ "$outcome" = "success" ]; then
+                if [ -z "$model" ]; then
+                  printf 'OpenCode model pool re-kick succeeded but published an empty review_model.\n' >&2
+                fi
+                printf 'OpenCode model pool re-kick recovered with model: %s\n' "${model:-unknown}"
+                break
+              fi
+              if [ "$sleep_seconds" -gt 0 ]; then
+                printf 'OpenCode model pool still exhausted after re-kick attempt %s; retrying in %s seconds.\n' "$rekick_attempt" "$sleep_seconds"
+                sleep "$sleep_seconds"
+              fi
+              if [ "$sleep_seconds" -lt "$max_sleep_seconds" ]; then
+                sleep_seconds=$((sleep_seconds * 2))
+                if [ "$sleep_seconds" -gt "$max_sleep_seconds" ]; then
+                  sleep_seconds="$max_sleep_seconds"
+                fi
+              fi
+              rekick_attempt=$((rekick_attempt + 1))
+            done
+          }
+
           live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           if [ "$live_head_sha" != "$HEAD_SHA" ]; then
             echo "stale OpenCode run: event head=${HEAD_SHA}, live head=${live_head_sha}; skipping review side effects."
@@ -4741,8 +5458,12 @@ jobs:
             request_changes_for_coverage_evidence_failure
           fi
 
+          rekick_model_pool_on_exhaustion
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
 
+          # The model pool uses continue-on-error so this final step can publish
+          # diagnostics. Do not read model output or change PR review state unless
+          # the pool explicitly emitted a valid current-head control block.
           if [ "$opencode_review_outcome" != "success" ]; then
             stop_without_review_after_model_unavailable
           fi
@@ -5065,7 +5786,7 @@ jobs:
         env:
           GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
-          SCHEDULER_READ_TOKEN: ${{ github.token }}
+          SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'missing' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.inputs.pr_base_ref || '' }}
