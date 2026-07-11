@@ -5127,6 +5127,17 @@ PY
 			"scenario=$scenario does not rewrite logs through symlinked report directories"
 	fi
 
+	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
+		assert_file_contains \
+			"$output_log" \
+			"GitHub Models rate limit detected for model 'openai/gpt-5'; skipping same-model retry and moving directly to fallback models or current-head neutral classification." \
+			"scenario=$scenario logs why same-model retry was skipped"
+		assert_file_not_contains \
+			"$output_log" \
+			"Retrying model 'openai/gpt-5' due to rate limit" \
+			"scenario=$scenario does not sleep in same-model retry after GitHub Models rate limiting"
+	fi
+
 	if [ "$scenario" = "pr-changed-scope-full-set" ]; then
 		assert_internal_pr_scope_targets "$target_log" "$repo_root_dir" "$expected_calls"
 	fi
@@ -5274,6 +5285,37 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			"frontend/src/components/CalendarLayout.tsx"
+		;;
+	github-models-primary-ratelimit-fallback-success)
+		run_gate_case "github-models-primary-ratelimit-fallback-success" \
+			"openai/gpt-5" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-r1-0528' in [0-9]+s\\." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"2" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
 		;;
 	github-models-fallback-baseline-vulnerability-before-next-success-continues)
 		run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
@@ -8245,9 +8287,9 @@ run_gate_case "github-models-primary-ratelimit-fallback-success" \
 	"" \
 	"0" \
 	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-r1-0528' in [0-9]+s\\." \
-	"4" \
-	"openai/gpt-5|openai/gpt-5|openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
-	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
 	"openai" \
 	"https://models.github.ai/inference" \
 	"" \
