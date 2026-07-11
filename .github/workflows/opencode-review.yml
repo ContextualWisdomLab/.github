@@ -3719,9 +3719,9 @@ jobs:
               if [ "$event" = "APPROVE" ]; then
                 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                   {
-                    printf '## OpenCode approve review publication failed\n\n'
-                    printf 'OpenCode produced a source-backed current-head APPROVE gate result, but GitHub rejected the pull review publication. The workflow fails closed so branch protection cannot observe an approval gate without a matching GitHub pull review.\n\n'
-                    printf -- "- Result: \`APPROVE_PUBLICATION_FAILED\`\n"
+                    printf '## OpenCode approve review publication skipped\n\n'
+                    printf 'OpenCode produced a source-backed current-head APPROVE gate result, but GitHub rejected the pull review publication. The required workflow keeps the successful approval gate result because the PR review write is a GitHub side effect, not source evidence. Branch protection and rulesets remain authoritative if a matching GitHub pull review is required.\n\n'
+                    printf -- "- Result: \`APPROVE_PUBLICATION_SKIPPED\`\n"
                     printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
                     printf -- '- Workflow run: %s\n' "$RUN_ID"
                     printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
@@ -3729,9 +3729,8 @@ jobs:
                     printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
                   } >>"$GITHUB_STEP_SUMMARY"
                 fi
-                printf '::error::OpenCode approve review publication failed for head %s; branch protection still lacks the required GitHub review. Failing closed after logging the GitHub API error above.\n' "$HEAD_SHA"
-                echo "::endgroup::"
-                exit 1
+                printf '::warning::OpenCode approve review publication skipped after successful gate; keeping the successful approval gate result for head %s after logging the GitHub API error above. Branch protection remains authoritative for any required GitHub review.\n' "$HEAD_SHA"
+                return 0
               fi
               printf '::error::OpenCode could not publish the pull review for head %s, so the review state was not changed.\n' "$HEAD_SHA"
               case "$event" in
