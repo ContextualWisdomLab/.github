@@ -113,8 +113,15 @@ jobs:
             exit 1
           }
 
+          mark_unconfigured() {
+            local message="$1"
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::$message"
+            exit 0
+          }
+
           if [ -z "${TOKEN_EXCHANGE_URL:-}" ]; then
-            fail_unavailable "Noema app token exchange unavailable: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured."
+            mark_unconfigured "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured; Noema review skipped until the exchange service is deployed."
           fi
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
@@ -167,6 +174,7 @@ jobs:
         if: env.PR_NUMBER != ''
         env:
           GH_TOKEN: ${{ steps.noema_app_token.outputs.token }}
+          NOEMA_APP_TOKEN_AVAILABLE: ${{ steps.noema_app_token.outputs.available }}
           NOEMA_REVIEW_TOKEN_SOURCE: noema-review-app-oidc
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
@@ -175,6 +183,10 @@ jobs:
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "No pull request number was available for this event; skipping."
+            exit 0
+          fi
+          if [ "${NOEMA_APP_TOKEN_AVAILABLE:-}" != "true" ]; then
+            echo "::notice::Noema app token exchange is not configured; review skipped until Noema is deployed."
             exit 0
           fi
           if [ -z "${GH_TOKEN:-}" ]; then
