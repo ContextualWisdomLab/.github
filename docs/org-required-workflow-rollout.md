@@ -104,6 +104,9 @@ The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the
 
 Do not centralize the scheduler by running a `.github` scheduled job against other repositories with the `.github` repository token. That would either fail permission checks or use the wrong mutation actor. The central path is a required workflow executed in each target repository context.
 
+- Heartbeat fallback posture: event-driven target-repository runs stop retrying once their triggering event is consumed, so a PR that becomes mergeable AFTER its last event (approval published after the scheduler pass, merge-preview checks landing late, a temporary base-branch policy blocker clearing) has no later trigger and sits approved-but-unmerged. The `org-queue-sweep` job in the central scheduler workflow closes this gap: it runs hourly (`17 * * * *`) only in `ContextualWisdomLab/.github`, re-runs the same trusted scheduler script against every non-archived organization repository, and merges/updates through the identical guarded contract. It never uses the `.github` repository `github.token` for sibling mutations — it requires `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the exchanged OpenCode app token, and fails with a visible `::error` reason when no cross-repository mutation credential is available instead of silently no-opping. Every swept repository prints its per-PR decision log, so an unmerged PR always has a concrete logged reason at most one hour old.
+- Queue hygiene posture: during the sweep, workflow runs still `queued` after `ORG_SWEEP_STALE_QUEUE_HOURS` (default 24h) are cancelled with their run id, workflow name, head branch, and age logged. A run queued that long belongs to a head that PR events will never revisit (closed PR, force-pushed branch, or a previous runner outage), and leaving it keeps the Actions queue holding non-current-head work.
+
 ## Scope
 
 The active ruleset no longer maintains a repository-name allowlist. Live
