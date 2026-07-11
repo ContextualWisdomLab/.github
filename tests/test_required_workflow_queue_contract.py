@@ -136,6 +136,14 @@ def test_noema_review_fails_closed_when_required_configuration_is_missing() -> N
     assert "Noema app token is unavailable; review skipped." not in workflow
 
 
+def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
+    workflow = workflow_text("noema-review.yml")
+
+    assert "Noema review skipped: no pull request number is associated with this event." in workflow
+    assert "if: env.PR_NUMBER == ''" in workflow
+    assert workflow.count("if: env.PR_NUMBER != ''") >= 4
+
+
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
