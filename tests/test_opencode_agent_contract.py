@@ -84,16 +84,16 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs[:3] == [
-        ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5"],
         ["github-models", "openai/gpt-5"],
+        ["github-models", "openai/gpt-5-chat"],
     ]
     assert direct_openai_models == ["gpt-5"]
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models[:3] == [
-        "deepseek/deepseek-v3-0324",
         "openai/gpt-5",
         "openai/gpt-5-chat",
+        "openai/o3",
     ]
     assert {
         "openai/gpt-5",
@@ -419,21 +419,21 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "49"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"' in workflow
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
-        "openai/gpt-5 "
+        'OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 '
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
         "github-models/deepseek/deepseek-r1-0528 "
         "github-models/deepseek/deepseek-r1 "
+        "github-models/deepseek/deepseek-v3-0324 "
         "github-models/mistral-ai/mistral-medium-2505 "
         "github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 "
         'github-models/meta/llama-4-scout-17b-16e-instruct"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
@@ -448,7 +448,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-2400' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
     assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert 'record_review_status "exhausted"' not in model_pool_runner
