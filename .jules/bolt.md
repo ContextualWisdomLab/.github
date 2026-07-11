@@ -31,3 +31,6 @@
 ## 2026-06-25 - Python Embedded Regex Compilation
 **Learning:** Even when Python is embedded inside a shell script via `cat << 'EOF' | python3`, pre-compiling regular expressions using `re.compile()` at the module level (rather than inline via `re.match`/`re.sub`) remains a valuable micro-optimization because it avoids dictionary lookups in the internal regex cache for frequently called functions processing large text files.
 **Action:** Extract inline regular expressions to module-level variables when refactoring embedded Python scripts that parse large CI artifacts or logs.
+## 2024-07-11 - Iterative JSON Extraction vs Recursion
+**Learning:** In `scripts/ci/opencode_review_normalize_output.py`, deeply recursive nested data processing for extracting JSON dictionaries (such as with LLM outputs where structure is arbitrary) using a recursive `extract_dicts` function causes Python to hit max recursion depth (`RecursionError`) on sufficiently deep structures, and increases runtime overhead due to call stack memory allocations.
+**Action:** When extracting data from arbitrary deeply nested dictionaries and lists in Python, use an iterative stack-based approach with `stack.extend()` or `stack.extend(reversed(...))` instead of recursive functions to eliminate recursion depth limitations and reduce overhead.
