@@ -1138,6 +1138,14 @@ jobs:
           append "- Required docstring evidence: repository-owned docstring gates must pass when configured; otherwise docstring coverage is advisory."
           append ""
 
+          implementation_changed_files="$(mktemp)"
+          changed_files_for_coverage >"$implementation_changed_files"
+          run_and_capture "Python implementation completeness scan" \
+            python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
+              --repo-root . \
+              --changed-files "$implementation_changed_files"
+          rm -f "$implementation_changed_files"
+
           measured_any=0
 
           if has_changed_tracked_files '*.py'; then
@@ -1476,7 +1484,7 @@ jobs:
           case "$GH_REPOSITORY" in
             ContextualWisdomLab/.github)
               scope_label="central OpenCode/Strix review-process"
-              max_changed_count=6
+              max_changed_count=8
               ;;
             ContextualWisdomLab/appguardrail)
               scope_label="appguardrail org-security failure collector"
@@ -1490,9 +1498,12 @@ jobs:
               ContextualWisdomLab/.github:.github/workflows/opencode-review.yml | \
               ContextualWisdomLab/.github:.github/workflows/strix.yml | \
               ContextualWisdomLab/.github:opencode.jsonc | \
+              ContextualWisdomLab/.github:scripts/ci/emit_opencode_failed_check_fallback_findings.sh | \
+              ContextualWisdomLab/.github:scripts/ci/implementation_completeness_scan.py | \
               ContextualWisdomLab/.github:scripts/ci/run_opencode_review_model_pool.sh | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_normalize_output.py | \
               ContextualWisdomLab/.github:scripts/ci/validate_opencode_failed_check_review.sh | \
+              ContextualWisdomLab/.github:tests/test_implementation_completeness_scan.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
               ContextualWisdomLab/.github:scripts/ci/test_strix_quick_gate.sh | \
               ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml | \
@@ -2851,20 +2862,20 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. Mini/nano/o*-mini models
-          # previously consumed the whole job on context-window timeouts before
-          # the pool reached stronger reviewers, so the default pool now starts
-          # with GPT-5/o3-class models, keeps provider-diverse full-size
-          # fallbacks, and bounds provider stalls so the org queue releases with
-          # a visible MODEL_OUTPUT_UNAVAILABLE reason.
+          # DeepSeek V3 has been the most reliable lead reviewer in the org
+          # backlog. Keep it first, keep provider-diverse full-size fallbacks,
+          # and let the runner skip compact low-sensitivity catalog entries.
+          # Provider stalls still emit a visible MODEL_OUTPUT_UNAVAILABLE
+          # reason instead of silently consuming the whole org queue.
           OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5-mini openai/gpt-5 github-models/openai/o4-mini github-models/openai/o3-mini github-models/openai/gpt-5-mini github-models/openai/gpt-5-nano github-models/openai/gpt-5-chat github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct github-models/openai/o3 github-models/openai/gpt-5"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Ten minutes per model is enough for healthy providers to emit the
-          # required control block and short enough to avoid queue pileups when a
-          # provider stalls silently.
+          # 90 minutes per model is intentionally longer than the historical
+          # 10- and 30-minute caps; deep tool-using reviews routinely need more
+          # time, while the total budget and job timeout still bound stale
+          # provider calls.
           OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
@@ -3222,7 +3233,7 @@ jobs:
 
       - name: Publish OpenCode review outcome
         if: always()
-        timeout-minutes: 12
+        timeout-minutes: 120
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3239,7 +3250,7 @@ jobs:
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
-          MODEL: github-models/deepseek/deepseek-r1-0528
+          MODEL: github-models/deepseek/deepseek-v3-0324
           USE_GITHUB_TOKEN: "true"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -3261,11 +3272,11 @@ jobs:
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
-          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
           OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "180"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review

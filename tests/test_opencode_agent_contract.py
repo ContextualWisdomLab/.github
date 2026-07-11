@@ -327,6 +327,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "placeholder bodies (`pass`, `...`, `NotImplementedError`)" in workflow
     assert "Distinguish typing.Protocol, abc abstractmethod" in workflow
     assert "executable implementation gaps" in workflow
+    assert "Python implementation completeness scan" in workflow
+    assert "scripts/ci/implementation_completeness_scan.py" in workflow
     assert "CHECK_LOOKUP_GH_TOKEN" in workflow
     assert "retrying with workflow github token" in workflow
     assert 'review_write_token="$GH_TOKEN"' in workflow
@@ -382,12 +384,16 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_central_review_process_fallback" not in workflow
     assert "opencode.jsonc | \\" in workflow
+    assert "scripts/ci/emit_opencode_failed_check_fallback_findings.sh | \\" in workflow
+    assert "scripts/ci/implementation_completeness_scan.py | \\" in workflow
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
+    assert "tests/test_implementation_completeness_scan.py | \\" in workflow
     assert "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py" in workflow
     assert "ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml" in workflow
     assert "ContextualWisdomLab/appguardrail:tests/test_org_security_failure_collector.py" in workflow
     assert "appguardrail org-security failure collector" in workflow
+    assert 'max_changed_count=8' in workflow
     assert 'max_changed_count=3' in workflow
     assert "changed_count\" -gt \"$max_changed_count\"" in workflow
     assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
@@ -409,6 +415,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'timeout-minutes: 12' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 310", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,120}timeout-minutes: 120", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "21"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "20"' in workflow
     assert (
@@ -432,6 +439,17 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
+    assert "90 minutes per model" in workflow
+    assert "10- and 30-minute caps" in workflow
+    assert "MODEL: github-models/deepseek/deepseek-v3-0324" in workflow
+    assert (
+        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "openai/gpt-5 "
+        "github-models/openai/gpt-5 "
+        "github-models/openai/o3 "
+        'github-models/deepseek/deepseek-r1-0528"'
+    ) in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
