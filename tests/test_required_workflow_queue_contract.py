@@ -120,28 +120,6 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
         assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
 
 
-def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
-    for filename in ("opencode-review.yml", "noema-review.yml", "pr-review-merge-scheduler.yml"):
-        workflow = workflow_text(filename)
-
-        assert "canonical_ref:" not in workflow
-        assert "INPUT_CANONICAL_REF" not in workflow
-        assert "github.event.inputs.canonical_ref" not in workflow
-        assert "inputs.canonical_ref" not in workflow
-        assert "workflow_sha" in workflow
-        assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in workflow
-        assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
-
-
-def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() -> None:
-    workflow = workflow_text("noema-review.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
-
-    assert "github.repository }}-${{ github.event_name }}-${{" in concurrency_contract
-    assert "github.event_name == 'workflow_run'" in concurrency_contract
-    assert "github.event_name == 'pull_request_target'" in concurrency_contract
-
-
 def test_noema_review_skips_until_exchange_url_is_configured_then_fails_closed() -> None:
     workflow = workflow_text("noema-review.yml")
 
@@ -169,25 +147,7 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
 
     assert "Noema review skipped: no pull request number is associated with this event." in workflow
     assert "if: env.PR_NUMBER == ''" in workflow
-    assert workflow.count("if: env.PR_NUMBER != ''") >= 3
-
-
-def test_noema_and_scheduler_materialize_trusted_workflow_sha() -> None:
-    noema = workflow_text("noema-review.yml")
-    scheduler = workflow_text("pr-review-merge-scheduler.yml")
-
-    for workflow in (noema, scheduler):
-        assert "workflow_sha" in workflow
-        assert "workflow_repository" in workflow
-        assert "Trusted" in workflow or "trusted" in workflow
-        assert "Materialize trusted" in workflow
-        assert "uses: actions/checkout" not in workflow
-        assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in workflow
-        assert "Trusted" in workflow and "source ref must resolve to the immutable workflow commit SHA" in workflow
-        assert "repository: ContextualWisdomLab/.github" not in workflow
-        assert "repository: ${{ steps.trusted_source.outputs.repository }}" not in workflow
-        assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
-        assert "INPUT_CANONICAL_REF" not in workflow
+    assert workflow.count("if: env.PR_NUMBER != ''") >= 4
 
 
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:

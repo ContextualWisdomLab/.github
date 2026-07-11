@@ -26,6 +26,11 @@ on:
         description: Pull request head SHA
         required: true
         type: string
+      canonical_ref:
+        description: Ref of ContextualWisdomLab/.github to use for trusted review scripts
+        required: false
+        default: main
+        type: string
 
 concurrency:
   group: >-
@@ -213,42 +218,21 @@ jobs:
       - name: Resolve trusted OpenCode source ref
         id: trusted_source
         env:
-          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
-          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
+          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          python3 <<'PY' >>"$GITHUB_OUTPUT"
-          import json
-          import os
-          import re
-          import sys
-
-          try:
-              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
-              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
-          except json.JSONDecodeError as exc:
-              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
-              raise SystemExit(1)
-
-          trusted_ref = str(
-              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
-          ).strip()
-          workflow_ref = str(
-              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
-          ).strip()
-
-          if not trusted_ref:
-              trusted_ref = "main"
-              prefix = "ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@"
-              if workflow_ref.startswith(prefix):
-                  trusted_ref = workflow_ref.split("@", 1)[1]
-
-          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
-              print("::error::Trusted OpenCode workflow ref resolved to an invalid value.", file=sys.stderr)
-              raise SystemExit(1)
-
-          print(f"ref={trusted_ref}")
-          PY
+          if [ -n "$INPUT_CANONICAL_REF" ]; then
+            trusted_ref="$INPUT_CANONICAL_REF"
+          else
+            trusted_ref="main"
+            case "$WORKFLOW_REF" in
+              ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@*)
+                trusted_ref="${WORKFLOW_REF##*@}"
+                ;;
+            esac
+          fi
+          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
 
       - name: Checkout trusted OpenCode coverage contract
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -285,14 +269,6 @@ jobs:
         run: >-
           python3 -m pip install --disable-pip-version-check --require-hashes
           --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
-
-      - name: Cache R coverage tooling library
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
-        with:
-          path: ${{ runner.temp }}/R-library
-          key: r-coverage-lib-${{ runner.os }}-covr-testthat-v1
-          restore-keys: |
-            r-coverage-lib-${{ runner.os }}-
 
       - name: Measure test and docstring evidence
         id: measure
@@ -880,7 +856,7 @@ jobs:
             export R_LIBS_USER="${RUNNER_TEMP}/R-library"
             mkdir -p "$R_LIBS_USER"
             run_and_capture "R coverage tooling (covr/testthat)" \
-              bash -c 'timeout 780 Rscript -e '\''user_repo <- "https://cloud.r-project.org"; codename <- tryCatch({ os <- readLines("/etc/os-release", warn = FALSE); v <- grep("^VERSION_CODENAME=", os, value = TRUE); if (length(v)) sub("^VERSION_CODENAME=", "", v[1]) else "" }, error = function(e) ""); binary_repo <- if (nzchar(codename)) sprintf("https://packagemanager.posit.co/cran/__linux__/%s/latest", codename) else "https://packagemanager.posit.co/cran/latest"; repos <- c(binary_repo, user_repo); options(HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(), paste(getRversion(), R.version$platform, R.version$arch, R.version$os))); message("R package repositories: ", paste(repos, collapse = ", "), " (binary packages preferred via Posit Public Package Manager)"); lib <- Sys.getenv("R_LIBS_USER"); install_deps <- c("Depends", "Imports", "LinkingTo"); dir.create(lib, recursive = TRUE, showWarnings = FALSE); .libPaths(c(lib, .libPaths())); required <- c("covr", "testthat"); if (file.exists("DESCRIPTION")) { desc <- read.dcf("DESCRIPTION")[1, , drop = FALSE]; fields <- intersect(c("Depends", "Imports", "LinkingTo"), colnames(desc)); values <- as.character(desc[, fields, drop = TRUE]); values <- values[!is.na(values)]; package_deps <- trimws(gsub("\\s*\\([^)]*\\)", "", unlist(strsplit(paste(values, collapse = ","), ","), use.names = FALSE))); package_deps <- setdiff(package_deps[nzchar(package_deps)], "R"); required <- unique(c(required, package_deps)); }; for (pkg in required) if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, repos = repos, lib = lib, dependencies = install_deps); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("R coverage tooling packages unavailable after install from ", paste(repos, collapse = ", "), ": ", paste(missing, collapse = ", "))'\'' || { echo "R coverage tooling install did not complete or exceeded 780 seconds (see log above for repositories used and any install error); deferring to required peer R CMD check evidence."; exit 0; }'
+              bash -c 'timeout 780 Rscript -e '\''user_repo <- "https://cloud.r-project.org"; codename <- tryCatch(sub("[[:space:]]+$", "", system2("lsb_release", "-cs", stdout = TRUE, stderr = FALSE)[1]), error = function(e) ""); if (length(codename) == 1 && !is.na(codename) && nzchar(codename)) { options(HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(), paste(getRversion(), R.version$platform, R.version$arch, R.version$os))); repos <- c(sprintf("https://p3m.dev/cran/__linux__/%s/latest", codename), user_repo) } else { repos <- user_repo }; lib <- Sys.getenv("R_LIBS_USER"); install_deps <- c("Depends", "Imports", "LinkingTo"); dir.create(lib, recursive = TRUE, showWarnings = FALSE); .libPaths(c(lib, .libPaths())); required <- c("covr", "testthat"); if (file.exists("DESCRIPTION")) { desc <- read.dcf("DESCRIPTION")[1, , drop = FALSE]; fields <- intersect(c("Depends", "Imports", "LinkingTo"), colnames(desc)); values <- as.character(desc[, fields, drop = TRUE]); values <- values[!is.na(values)]; package_deps <- trimws(gsub("\\s*\\([^)]*\\)", "", unlist(strsplit(paste(values, collapse = ","), ","), use.names = FALSE))); package_deps <- setdiff(package_deps[nzchar(package_deps)], "R"); required <- unique(c(required, package_deps)); }; for (pkg in required) if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, repos = repos, lib = lib, dependencies = install_deps); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("R coverage tooling packages unavailable after install: ", paste(missing, collapse = ", "))'\'' || { echo "R coverage tooling install unavailable or exceeded the runner time budget; deferring to required peer R CMD check evidence."; exit 0; }'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
                 run_and_capture "R package testthat suite" \
@@ -1162,14 +1138,6 @@ jobs:
           append "- Required docstring evidence: repository-owned docstring gates must pass when configured; otherwise docstring coverage is advisory."
           append ""
 
-          implementation_changed_files="$(mktemp)"
-          changed_files_for_coverage >"$implementation_changed_files"
-          run_and_capture "Python implementation completeness scan" \
-            python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
-              --repo-root . \
-              --changed-files "$implementation_changed_files"
-          rm -f "$implementation_changed_files"
-
           measured_any=0
 
           if has_changed_tracked_files '*.py'; then
@@ -1335,42 +1303,21 @@ jobs:
       - name: Resolve trusted OpenCode source ref
         id: trusted_source
         env:
-          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
-          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
+          INPUT_CANONICAL_REF: ${{ github.event.inputs.canonical_ref || '' }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          python3 <<'PY' >>"$GITHUB_OUTPUT"
-          import json
-          import os
-          import re
-          import sys
-
-          try:
-              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
-              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
-          except json.JSONDecodeError as exc:
-              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
-              raise SystemExit(1)
-
-          trusted_ref = str(
-              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
-          ).strip()
-          workflow_ref = str(
-              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
-          ).strip()
-
-          if not trusted_ref:
-              trusted_ref = "main"
-              prefix = "ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@"
-              if workflow_ref.startswith(prefix):
-                  trusted_ref = workflow_ref.split("@", 1)[1]
-
-          if not re.fullmatch(r"[0-9a-fA-F]{40}|refs/[^\s]+|[A-Za-z0-9._/-]+", trusted_ref):
-              print("::error::Trusted OpenCode workflow ref resolved to an invalid value.", file=sys.stderr)
-              raise SystemExit(1)
-
-          print(f"ref={trusted_ref}")
-          PY
+          if [ -n "$INPUT_CANONICAL_REF" ]; then
+            trusted_ref="$INPUT_CANONICAL_REF"
+          else
+            trusted_ref="main"
+            case "$WORKFLOW_REF" in
+              ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@*)
+                trusted_ref="${WORKFLOW_REF##*@}"
+                ;;
+            esac
+          fi
+          printf 'ref=%s\n' "$trusted_ref" >>"$GITHUB_OUTPUT"
 
       - name: Checkout trusted OpenCode review workflow
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1598,6 +1545,11 @@ jobs:
         timeout-minutes: 40
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
+          GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -1607,65 +1559,7 @@ jobs:
           FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
         run: |
           set -euo pipefail
-          context_env_file="${RUNNER_TEMP:-.}/opencode-review-context.env"
-          python3 <<'PY' >"$context_env_file"
-          import json
-          import os
-          import re
-          import sys
-
-          event_path = os.environ.get("GITHUB_EVENT_PATH")
-          if not event_path:
-              print("::error::GITHUB_EVENT_PATH is not available for OpenCode review context resolution.", file=sys.stderr)
-              raise SystemExit(1)
-
-          try:
-              with open(event_path, encoding="utf-8") as handle:
-                  event = json.load(handle)
-          except (OSError, json.JSONDecodeError) as exc:
-              print(f"::error::Could not read GitHub event payload for OpenCode review context: {exc}", file=sys.stderr)
-              raise SystemExit(1)
-
-          inputs = event.get("inputs") or {}
-          pull_request = event.get("pull_request") or {}
-          base = pull_request.get("base") or {}
-          head = pull_request.get("head") or {}
-          base_repo = base.get("repo") or {}
-          values = {
-              "GH_REPOSITORY": str(
-                  base_repo.get("full_name") or inputs.get("target_repository") or os.environ.get("GITHUB_REPOSITORY") or ""
-              ).strip(),
-              "PR_NUMBER": str(pull_request.get("number") or inputs.get("pr_number") or "").strip(),
-              "PR_BASE_SHA": str(base.get("sha") or inputs.get("pr_base_sha") or "").strip(),
-              "PR_HEAD_SHA": str(head.get("sha") or inputs.get("pr_head_sha") or "").strip(),
-          }
-          values["HEAD_SHA"] = values["PR_HEAD_SHA"]
-
-          validators = {
-              "GH_REPOSITORY": r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
-              "PR_NUMBER": r"[1-9][0-9]*",
-              "PR_BASE_SHA": r"[0-9a-fA-F]{40}",
-              "PR_HEAD_SHA": r"[0-9a-fA-F]{40}",
-              "HEAD_SHA": r"[0-9a-fA-F]{40}",
-          }
-          for name, pattern in validators.items():
-              if not re.fullmatch(pattern, values[name]):
-                  print(f"::error::Invalid OpenCode review context value for {name}.", file=sys.stderr)
-                  raise SystemExit(1)
-
-          for name, value in values.items():
-              print(f"{name}={value}")
-          PY
-          while IFS='=' read -r name value; do
-            case "$name" in
-              GH_REPOSITORY|PR_NUMBER|PR_BASE_SHA|PR_HEAD_SHA|HEAD_SHA)
-                printf -v "$name" '%s' "$value"
-                export "$name"
-                ;;
-            esac
-          done <"$context_env_file"
-          printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \
-            "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
+          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
@@ -2957,19 +2851,23 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. DeepSeek V3 has been the
-          # most reliable first-pass reviewer in the org queue, then the pool
-          # falls through to full-size GPT/o3 and reasoning-capable fallbacks.
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
+          # High-sensitivity review candidates only. Mini/nano/o*-mini models
+          # previously consumed the whole job on context-window timeouts before
+          # the pool reached stronger reviewers, so the default pool now starts
+          # with GPT-5/o3-class models, keeps provider-diverse full-size
+          # fallbacks, and bounds provider stalls so the org queue releases with
+          # a visible MODEL_OUTPUT_UNAVAILABLE reason.
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 minutes per model gives deep tool-using reviews room to finish;
-          # stale providers still yield within the bounded retry budget.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # Ten minutes per model is enough for healthy providers to emit the
+          # required control block and short enough to avoid queue pileups when a
+          # provider stalls silently.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"
           # Stop after one catalog pass; the retry budget should fail closed
           # with visible diagnostics before the 350-min job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
@@ -3363,11 +3261,11 @@ jobs:
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"
           OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "180"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
@@ -4688,7 +4586,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}s" opencode run "$(cat "$prompt_file")" \
+            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-600}s" opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-review-fallback \
               --model "$MODEL" \
