@@ -38,7 +38,8 @@ concurrency:
     github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
     github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event_name == 'pull_request_target' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) ||
+    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && github.event.inputs.pr_head_sha && format('pr-{0}-{1}', github.event.inputs.pr_number, github.event.inputs.pr_head_sha) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
     github.run_id }}
@@ -1285,7 +1286,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 120
     permissions:
       actions: read
       checks: read
@@ -1541,7 +1542,7 @@ jobs:
           npx -y "$CODEGRAPH_PACKAGE" status
 
       - name: Prepare bounded OpenCode review evidence
-        timeout-minutes: 12
+        timeout-minutes: 40
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
@@ -1554,22 +1555,17 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
-          FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"
-          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "10"
-          FAILED_CHECK_EVIDENCE_COLLECT_TIMEOUT_SECONDS: "45"
-          FAILED_CHECK_EVIDENCE_KILL_AFTER_SECONDS: "10"
+          FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"
+          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
         run: |
           set -euo pipefail
-          {
-            printf 'OPENCODE_CHANGED_FILES_FILE<<OPENCODE_CHANGED_FILES_FILE_EOF\n'
-            printf '%s\n' "$OPENCODE_CHANGED_FILES_FILE"
-            printf 'OPENCODE_CHANGED_FILES_FILE_EOF\n'
-          } >>"$GITHUB_ENV"
+          printf 'OPENCODE_CHANGED_FILES_FILE=%s\n' "$OPENCODE_CHANGED_FILES_FILE" >>"$GITHUB_ENV"
 
           current_peer_checks_still_running() {
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
             local rollup_running
+            local strix_running
 
             # Exclude this OpenCode check run; otherwise the evidence step would
             # wait on itself until the bounded retry budget is exhausted.
@@ -1617,24 +1613,15 @@ jobs:
                       | select((.name // "") != "OpenCode Review")
                       | select((.name // "") != "Required OpenCode Review")
                       | select((.name // "") != "OpenCode PR Review")
-                      | select((.name // "") != "strix")
-                      | select((.name // "") != "Strix")
-                      | select((.name // "") != "Strix Security Scan")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
-                      | select((.checkSuite.workflowRun.workflow.name // "") != "strix")
-                      | select((.checkSuite.workflowRun.workflow.name // "") != "Strix")
-                      | select((.checkSuite.workflowRun.workflow.name // "") != "Strix Security Scan")
                       | select((.status // "") != "COMPLETED")
                     elif .__typename == "StatusContext" then
                       select((.context // "") != "opencode-review")
                       | select((.context // "") != "OpenCode Review")
                       | select((.context // "") != "Required OpenCode Review")
                       | select((.context // "") != "OpenCode PR Review")
-                      | select((.context // "") != "strix")
-                      | select((.context // "") != "Strix")
-                      | select((.context // "") != "Strix Security Scan")
                       | select((.state // "" | ascii_upcase) as $s | ["PENDING","EXPECTED"] | index($s))
                     else
                       empty
@@ -1649,26 +1636,25 @@ jobs:
               return 0
             fi
 
-            printf 'false\n'
-          }
-
-          run_failed_check_evidence_collector() {
-            local evidence_file="$1"
-            local timeout_seconds="${FAILED_CHECK_EVIDENCE_COLLECT_TIMEOUT_SECONDS:-45}"
-            local kill_after_seconds="${FAILED_CHECK_EVIDENCE_KILL_AFTER_SECONDS:-10}"
-
-            if command -v timeout >/dev/null 2>&1; then
-              if timeout --kill-after="${kill_after_seconds}s" "${timeout_seconds}s" scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
-                return 0
-              fi
-              {
-                printf 'Failed-check evidence collector did not complete within %ss.\n' "$timeout_seconds"
-                printf 'OpenCode must treat this as a bounded evidence-collection blocker and re-query current-head GitHub Checks before approving.\n'
-              } >"$evidence_file"
-              return 1
-            fi
-
-            scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
+            strix_running="$(
+              env HEAD_SHA="$HEAD_SHA" gh run list \
+                --repo "$GH_REPOSITORY" \
+                --workflow strix.yml \
+                --commit "$HEAD_SHA" \
+                --limit 200 \
+                --json status,event,headSha,workflowName \
+                --jq '
+                  [
+                    .[]
+                    | select((.headSha // "") == env.HEAD_SHA)
+                    | select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
+                    | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+                    | select((.status // "") != "completed")
+                  ]
+                  | length > 0
+                ' 2>/dev/null || printf 'false'
+            )"
+            printf '%s\n' "$strix_running"
           }
 
           collect_failed_check_evidence_with_wait() {
@@ -1687,7 +1673,7 @@ jobs:
             fi
 
             while [ "$attempt" -le "$attempts" ]; do
-              if run_failed_check_evidence_collector "$evidence_file"; then
+              if scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
                 if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
                   return 0
                 fi
@@ -1714,7 +1700,7 @@ jobs:
               attempt=$((attempt + 1))
             done
 
-            run_failed_check_evidence_collector "$evidence_file"
+            scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
           emit_pr_mergeability_evidence() {
@@ -2849,7 +2835,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 12
+        timeout-minutes: 45
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2871,22 +2857,22 @@ jobs:
           # with GPT-5/o3-class models, keeps provider-diverse full-size
           # fallbacks, and bounds provider stalls so the org queue releases with
           # a visible MODEL_OUTPUT_UNAVAILABLE reason.
-          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
+          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/deepseek/deepseek-v3-0324 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Three minutes per model is enough for healthy providers to emit the
+          # Ten minutes per model is enough for healthy providers to emit the
           # required control block and short enough to avoid queue pileups when a
           # provider stalls silently.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "2400"
           # Stop after one catalog pass; the retry budget should fail closed
           # with visible diagnostics before the 350-min job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
-          OPENCODE_BACKOFF_INITIAL_SECONDS: "5"
-          OPENCODE_BACKOFF_MAX_SECONDS: "5"
+          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
+          OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
@@ -3015,12 +3001,6 @@ jobs:
             printf 'OpenCode could not publish %s; the requested GitHub side effect is unavailable.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
-              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
-                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
-              fi
-              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
-                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
-              fi
             fi
           }
 
@@ -3281,11 +3261,11 @@ jobs:
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
-          OPENCODE_MODEL_CANDIDATES: "openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"
           OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "180"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
@@ -3317,22 +3297,12 @@ jobs:
             review_write_token="$OPENCODE_APP_TOKEN"
             review_write_token_source="opencode-app"
           elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ]; then
-            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
-              review_write_token="$configured_review_write_token"
-              if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
-                review_write_token_source="opencode-app"
-              else
-                review_write_token_source="configured"
-              fi
-              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
-            else
-              review_write_token="$CHECK_LOOKUP_GH_TOKEN"
-              review_write_token_source="github-token"
-            fi
+            review_write_token="$CHECK_LOOKUP_GH_TOKEN"
+            review_write_token_source="github-token"
           elif [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
             review_write_token_source="opencode-app"
           fi
-          if [ -z "${review_write_fallback_token:-}" ] && [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
+          if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
             review_write_fallback_token="$configured_review_write_token"
           fi
           overview_comment_token="$review_write_token"
@@ -3348,12 +3318,6 @@ jobs:
             printf 'OpenCode could not publish %s; continuing without review side effect.\n' "$action" >&2
             if [ -s "$error_file" ]; then
               sed 's/^/gh: /' "$error_file" >&2 || true
-              if grep -Eiq 'Unprocessable Entity.*HTTP 422' "$error_file"; then
-                printf 'gh: GitHub returned HTTP 422 for this review write; likely causes are token/event policy, a non-reviewable commit_id, or duplicate actor review state.\n' >&2
-              fi
-              if grep -Eiq 'API rate limit exceeded for installation ID|secondary rate limit|You have exceeded a secondary rate limit' "$error_file"; then
-                printf 'gh: GitHub rate-limited the review write token; retry after the reported reset window or use a less-contended review token.\n' >&2
-              fi
             fi
           }
 

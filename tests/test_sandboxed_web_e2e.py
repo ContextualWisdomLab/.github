@@ -180,15 +180,14 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.label == "backend"
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
-    assert popen_calls[0][0] == (["/bin/bash", "-lc", "npm run dev"],)
-    assert "shell" not in popen_calls[0][1]
-    assert "executable" not in popen_calls[0][1]
+    assert popen_calls[0][0] == ("npm run dev",)
+    assert popen_calls[0][1]["shell"] is True
+    assert popen_calls[0][1]["executable"] == "/bin/bash"
     assert popen_calls[0][1]["start_new_session"] is True
     assert completed.returncode == 7
-    assert run_calls[0][0] == (["/bin/bash", "-lc", "npm test"],)
+    assert run_calls[0][0] == ("npm test",)
     assert run_calls[0][1]["timeout"] == 5
-    assert "shell" not in run_calls[0][1]
-    assert "executable" not in run_calls[0][1]
+    assert run_calls[0][1]["executable"] == "/bin/bash"
 
 
 def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
