@@ -107,12 +107,16 @@ for line in lines[jobs_index + 1 :]:
     if line.strip():
         inside_permissions = False
 
-if status_write_jobs != ["strix"]:
+if status_write_jobs:
     print(
-        "Strix workflow must scope statuses: write only to the strix scan job; found: "
-        + (", ".join(status_write_jobs) if status_write_jobs else "none"),
+        "Strix workflow must keep GITHUB_TOKEN status permissions read-only; found write scope in: "
+        + ", ".join(status_write_jobs),
         file=sys.stderr,
     )
+    raise SystemExit(1)
+
+if "strix" not in status_read_jobs:
+    print("Strix workflow strix job must keep statuses: read for existing status evidence.", file=sys.stderr)
     raise SystemExit(1)
 PY
 	)"; then
