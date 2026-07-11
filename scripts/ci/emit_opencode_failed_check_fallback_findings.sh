@@ -715,6 +715,9 @@ emit_strix_cancelled_without_log_finding() {
 		if [ -z "$match" ]; then
 			match="$(grep -nF -- "cancel-in-progress: false" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
 		fi
+		if [ -z "$match" ]; then
+			match="$(grep -nF -- "cancel-in-progress: true" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
+		fi
 		if [ -n "$match" ]; then
 			line="${match%%:*}"
 		fi
@@ -732,7 +735,7 @@ emit_strix_cancelled_without_log_finding() {
 		printf -- '- Fix: Do not approve from this cancelled run. Re-run the current-head Strix Security Scan after stale runs complete or are cancelled, then review the resulting job log; keep the workflow concurrency line at %s:%s so stale runs do not silently replace current-head evidence.\n' "$path" "$line"
 		printf -- '- Regression test: Keep failed-check evidence collection explicit for cancelled workflow runs with no job log so reviewers see that the blocker is missing scanner evidence.\n\n'
 	fi
-	printf -- '- Suggested edit: preserve `%s:%s` with normal PR/manual Strix cancellation disabled, cancel only closed-PR cleanup or superseded non-current-head runs when needed, and rerun current-head Strix until logs exist.\n\n' "$path" "$line"
+	printf -- '- Suggested edit: preserve `%s:%s` with event-separated Strix concurrency, so workflow_dispatch evidence cannot cancel the required pull_request_target context while same-event stale runs still collapse to current-head evidence; rerun current-head Strix until logs exist.\n\n' "$path" "$line"
 }
 
 extract_supply_chain_records() {
