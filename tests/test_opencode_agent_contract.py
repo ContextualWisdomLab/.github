@@ -683,7 +683,11 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "python3 scripts/ci/pr_review_merge_scheduler.py" in workflow
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
     assert "github.event_name == 'pull_request_target'" in workflow
-    assert "&& github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token" in workflow
+    assert (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
+        "github.token }}"
+    ) in workflow
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
     assert (
         "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || "
@@ -692,7 +696,12 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
         "steps.opencode_app_token.outputs.token }}"
     ) in workflow
-    assert "&& 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN" in workflow
+    assert (
+        "SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && "
+        "'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && "
+        "'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && "
+        "'opencode-app' || 'github-token' }}"
+    ) in workflow
     assert "--no-trigger-reviews" in workflow
     assert "--enable-auto-merge" in workflow
     assert "--no-update-branches" in workflow

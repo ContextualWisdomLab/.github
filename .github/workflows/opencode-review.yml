@@ -6028,10 +6028,10 @@ jobs:
       - name: Run merge scheduler after approval
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
           SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
-          SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'missing' }}
+          SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.inputs.pr_base_ref || '' }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number || '' }}
