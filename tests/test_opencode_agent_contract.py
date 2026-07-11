@@ -348,6 +348,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'review_write_token="$GH_TOKEN"' in workflow
     assert 'review_write_token="$OPENCODE_APP_TOKEN"' in workflow
     assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
+    assert 'review_write_token="$configured_review_write_token"' in workflow
+    assert 'review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-$GH_TOKEN}"' not in workflow
     assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"' in workflow
     assert "gh_error_is_retryable_publication_failure()" in workflow
@@ -355,6 +357,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'post_pull_review_with_retry "primary review"' in workflow
     assert 'post_pull_review_with_retry "fallback review"' in workflow
     assert "hit a retryable GitHub API throttle; retrying attempt" in workflow
+    assert "GitHub returned HTTP 422 for this review write; likely causes are token/event policy" in workflow
+    assert "GitHub rate-limited the review write token; retry after the reported reset window" in workflow
     assert "Review execution contracts" in workflow
     assert "Accessibility/i18n:" in workflow
     assert "Supply-chain/license:" in workflow
