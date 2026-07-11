@@ -412,6 +412,41 @@ emit_known_unexpected_string_finding() {
 	fi
 }
 
+emit_missing_strix_status_write_scope_finding() {
+	local evidence_file="$1"
+	local path=".github/workflows/strix.yml"
+	local line=""
+	local match=""
+
+	if ! grep -Fq -- "Strix workflow must scope statuses: write only to the strix scan job; found: none" "$evidence_file"; then
+		return 0
+	fi
+
+	if [ -f "${REPO_ROOT%/}/$path" ]; then
+		match="$(grep -nF -- "statuses: read" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
+		if [ -z "$match" ]; then
+			match="$(grep -nF -- "models: read" "${REPO_ROOT%/}/$path" | head -n 1 || true)"
+		fi
+	fi
+	if [ -n "$match" ]; then
+		line="${match%%:*}"
+	else
+		line="1"
+	fi
+
+	finding_index=$((finding_index + 1))
+	printf '### %s. HIGH %s:%s - Strix scan job must keep same-repository status write fallback\n' "$finding_index" "$path" "$line"
+	printf -- '- Problem: Strix failed because the trusted self-test found no job-scoped `statuses: write` permission on the Strix scan job.\n'
+	printf -- '- Root cause: The scan job cannot publish the same-repository `strix` commit-status fallback when app or central status tokens are unavailable, so the required-workflow smoke test fails closed.\n'
+	printf -- '- Fix: Set the Strix scan job permission to `statuses: write` while keeping top-level workflow permissions free of `statuses: write`.\n'
+	printf -- '- Regression test: Keep scripts/ci/strix_required_workflow_smoke.sh asserting that only the `strix` job has `statuses: write`.\n\n'
+	if [ "$line" != "1" ]; then
+		printf -- '- Suggested edit: change `%s:%s` from `statuses: read` to `statuses: write`, or add `statuses: write` in that job permissions block.\n\n' "$path" "$line"
+	else
+		printf -- '- Suggested edit: add `statuses: write` to the `strix` job permissions block in `%s`.\n\n' "$path"
+	fi
+}
+
 all_failed_check_blocks_have_billing_lock() {
 	local evidence_file="$1"
 
@@ -965,17 +1000,11 @@ emit_known_missing_string_finding \
 	"scripts/ci/test_strix_quick_gate.sh"
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"MODEL: github-models/openai/gpt-5" \
-	"OpenCode review must try GitHub Models GPT-5 first" \
+	"MODEL: github-models/deepseek/deepseek-v3-0324" \
+	"OpenCode review must keep DeepSeek V3 as the lead model" \
 	".github/workflows/opencode-review.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"
-emit_known_unexpected_string_finding \
-	"$EVIDENCE_FILE" \
-	"statuses: write" \
-	"Strix required workflow must keep GITHUB_TOKEN statuses read-only" \
-	".github/workflows/strix.yml" \
-	"scripts/ci/test_strix_quick_gate.sh" \
-	"scripts/ci/strix_required_workflow_smoke.sh"
+emit_missing_strix_status_write_scope_finding "$EVIDENCE_FILE"
 
 emit_github_billing_lock_finding
 emit_pytest_failure_findings "$EVIDENCE_FILE"
