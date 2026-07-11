@@ -178,6 +178,32 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
     assert workflow.count("if: env.PR_NUMBER != ''") >= 3
 
 
+def test_noema_review_supports_review_token_pat_fallback() -> None:
+    """Guard the NOEMA_REVIEW_TOKEN PAT fallback that activates the second reviewer.
+
+    The two-reviewer merge rule needs a second approving-review identity. Rather
+    than forcing a Worker deployment, a NOEMA_REVIEW_TOKEN secret must be usable
+    directly as the reviewer identity: when it is present the OIDC app-token
+    exchange is skipped, and the review step must prefer it. The secret value is
+    never emitted as a step output.
+    """
+    workflow = workflow_text("noema-review.yml")
+
+    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+    assert 'if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then' in workflow
+    assert "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity." in workflow
+    # The review step must prefer the PAT over the exchanged app token.
+    assert (
+        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_app_token.outputs.token }}"
+        in workflow
+    )
+    # The unconfigured-exchange notice stays for the no-PAT, no-exchange-URL case.
+    assert (
+        "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or "
+        "NOEMA_EXCHANGE_URL is not configured" in workflow
+    )
+
+
 def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
     noema = workflow_text("noema-review.yml")
     scheduler = workflow_text("pr-review-merge-scheduler.yml")
@@ -200,6 +226,40 @@ def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> N
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "github.event.workflow_run.pull_requests[0].number" in workflow
+
+
+def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
+    """Guard the org-wide approved-PR fallback sweep contract.
+
+    Target repositories only receive scheduler runs on PR events, so a PR that
+    becomes mergeable after its last event sits approved-but-unmerged forever.
+    The sweep job must exist, run only from the central repository on its own
+    cron, use a cross-repository mutation credential (never the repository
+    github.token silently), skip the central repository itself, and fail with a
+    visible reason when it cannot mutate sibling repositories.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert "org-queue-sweep:" in workflow
+    assert "- cron: \"17 * * * *\"" in workflow
+    assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
+    assert "github.event.schedule == '17 * * * *'" in workflow
+    assert "inputs.org_sweep == true" in workflow
+    # The single-repository scan must not double-run on the sweep cron.
+    assert "github.event.schedule != '17 * * * *'" in workflow
+    assert "inputs.org_sweep != true" in workflow
+    # The sweep must never silently no-op with the repository-scoped token.
+    assert (
+        "Organization queue sweep has no cross-repository mutation credential."
+        in workflow
+    )
+    assert 'select(.full_name != "ContextualWisdomLab/.github")' in workflow
+    assert "select(.archived == false and .disabled == false)" in workflow
+    # Every repository failure must leave a concrete logged reason.
+    assert "see the decision log above for the concrete per-PR reason" in workflow
+    # Queue hygiene: stale queued runs are cancelled with a logged identity.
+    assert "ORG_SWEEP_STALE_QUEUE_HOURS" in workflow
+    assert "/actions/runs?status=queued&per_page=100" in workflow
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
@@ -253,6 +313,9 @@ def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
 def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> None:
     workflow = workflow_text("security-scan.yml")
 
+    assert "timeout-minutes: 25" in workflow
+    assert "Explain OSV scan mode and timeout budget" in workflow
+    assert "external transitive registry resolver stalls cannot hold the required-check queue indefinitely" in workflow
     assert "id: osv_base" in workflow
     assert "id: osv_head" in workflow
     assert "steps.osv_base.outcome == 'failure'" in workflow
@@ -261,10 +324,10 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "Retry head OSV without transitive resolution" in workflow
     assert workflow.count("timeout-minutes: 8") == 2
     assert workflow.count("timeout-minutes: 4") == 2
-    assert workflow.count("\n            --no-resolve\n") == 2
-    assert workflow.count("Maven Central 429") == 2
+    assert workflow.count("\n            --no-resolve\n") == 4
     assert workflow.count("failed or timed out before reporter output was trusted") == 2
     assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
+    assert "external transitive registry resolution is intentionally avoided" in workflow
     assert "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true" in workflow
     assert "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true" in workflow
     assert "--output=old-results.json" in workflow
