@@ -3604,7 +3604,7 @@ jobs:
                     printf -- '- Workflow run: %s\n' "$RUN_ID"
                     printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
                     printf -- '- Review state: unchanged because GitHub rejected the review API write.\n'
-                    printf -- '- Branch protection remains authoritative for required reviews and peer checks.\n\n'
+                    printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
                   } >>"$GITHUB_STEP_SUMMARY"
                 fi
                 printf '::error::OpenCode approve review publication failed for head %s; branch protection still lacks the required GitHub review. Failing closed after logging the GitHub API error above.\n' "$HEAD_SHA"
