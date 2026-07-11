@@ -441,7 +441,7 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
         assert alert_id in runbook
 
     assert "Medium-or-higher governance findings" in runbook
-    assert "code owner review" in runbook
+    assert "current-head OpenCode review evidence" in runbook
     assert "review thread resolution" in runbook
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
