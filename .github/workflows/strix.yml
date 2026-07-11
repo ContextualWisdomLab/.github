@@ -947,4 +947,5 @@ jobs:
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
             exit 0
           fi
-          echo "::warning::Could not publish manual Strix status from follow-up job; scan job publishes the authoritative status when target credentials are available."
+          echo "::error::Could not publish manual Strix status from follow-up job after all configured credentials failed; the target PR head is missing required Strix status evidence. See the preceding notices for token-specific reasons."
+          exit 1
