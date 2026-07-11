@@ -2845,7 +2845,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 310
+        timeout-minutes: 20
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -2861,22 +2861,23 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. DeepSeek V3 has been the
-          # most reliable lead reviewer in the org backlog, so keep it first,
-          # keep provider-diverse full-size fallbacks, and leave mini/nano/o*-mini
-          # entries disabled by the model-pool runner.
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1 github-models/mistral-ai/mistral-medium-2505 github-models/meta/llama-4-maverick-17b-128e-instruct-fp8 github-models/meta/llama-4-scout-17b-16e-instruct"
+          # High-sensitivity review candidates only. Keep the reliable DeepSeek
+          # V3 lead plus full-size GPT-5/o3/R1 reasoning fallbacks, but do not
+          # let a broad catalog consume the org queue when providers stall. If
+          # these capable models cannot emit a current-head control block within
+          # the bounded budget, the publish gate fails closed with a visible
+          # MODEL_OUTPUT_UNAVAILABLE reason.
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/o3 github-models/deepseek/deepseek-r1-0528"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 minutes per model is intentionally longer than the historical
-          # 10- and 30-minute caps; deep tool-using reviews routinely need more
-          # time, while the total budget and job timeout still bound stale
-          # provider calls.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          # Four minutes per model is enough for healthy providers to emit the
+          # required control block on the bounded evidence packet and short
+          # enough to release the org queue when a provider stalls silently.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "240"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "90"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "900"
           # Stop after one catalog pass; the retry budget should fail closed
           # with visible diagnostics before the 350-min job timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
@@ -3614,7 +3615,7 @@ jobs:
                     printf -- '- Workflow run: %s\n' "$RUN_ID"
                     printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
                     printf -- '- Review state: unchanged because GitHub rejected the review API write.\n'
-                    printf -- '- Branch protection remains authoritative for required reviews and peer checks.\n\n'
+                    printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
                   } >>"$GITHUB_STEP_SUMMARY"
                 fi
                 printf '::error::OpenCode approve review publication failed for head %s; branch protection still lacks the required GitHub review. Failing closed after logging the GitHub API error above.\n' "$HEAD_SHA"
