@@ -57,11 +57,15 @@ jobs:
   osv-scan:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       actions: read
       contents: read
       security-events: write
     steps:
+      - name: Explain OSV scan mode and timeout budget
+        run: |
+          echo "::notice::OSV hard gate scans direct manifest and lockfile evidence with --no-resolve so external transitive registry resolver stalls cannot hold the required-check queue indefinitely. The job is capped at 25 minutes; if this budget is exceeded, rerun after the upstream registry/service recovers or inspect the uploaded debug artifacts."
       - name: Checkout base
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -79,13 +83,14 @@ jobs:
             --format=json
             --output=old-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+            --no-resolve
             --allow-no-lockfiles
             -r
             ./
       - name: Explain base OSV resolver fallback
         if: steps.osv_base.outcome == 'failure'
         run: |
-          echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+          echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry base OSV without transitive resolution
         if: steps.osv_base.outcome == 'failure'
         continue-on-error: true
@@ -117,13 +122,14 @@ jobs:
             --format=json
             --output=new-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+            --no-resolve
             --allow-no-lockfiles
             -r
             ./
       - name: Explain head OSV resolver fallback
         if: steps.osv_head.outcome == 'failure'
         run: |
-          echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying with --no-resolve to avoid transient transitive registry resolution failures such as Maven Central 429. Direct manifest and lockfile vulnerability evidence remains enforced."
+          echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry head OSV without transitive resolution
         if: steps.osv_head.outcome == 'failure'
         continue-on-error: true
