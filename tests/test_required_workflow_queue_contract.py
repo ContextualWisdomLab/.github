@@ -101,6 +101,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
     strix_workflow = workflow_text("strix.yml")
     assert "cancel-in-progress: true" in strix_workflow
+    assert "PR-number scope keeps the queue on the current HEAD" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
@@ -112,6 +113,7 @@ def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
     assert "did not return valid JSON after 4 attempts" in workflow
     assert "leaving it open because metadata could not be read" in workflow
     assert "exit 0" in workflow
+
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
@@ -175,7 +177,7 @@ def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -
 
     assert "Noema review skipped: no pull request number is associated with this event." in workflow
     assert "if: env.PR_NUMBER == ''" in workflow
-    assert workflow.count("if: env.PR_NUMBER != ''") >= 3
+    assert workflow.count("if: env.PR_NUMBER != ''") >= 4
 
 
 def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:

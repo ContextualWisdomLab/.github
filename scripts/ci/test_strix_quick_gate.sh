@@ -429,7 +429,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'install_deps <- c("Depends", "Imports", "LinkingTo")' "opencode R coverage avoids installing oversized suggested dependencies"
 	assert_file_contains "$workflow_file" 'read.dcf("DESCRIPTION")' "opencode R coverage installs target package dependencies from DESCRIPTION"
 	assert_file_contains "$workflow_file" "R package testthat suite" "opencode R package coverage requires package testthat evidence"
-	assert_file_contains "$workflow_file" "R coverage tooling install unavailable or exceeded the runner time budget; deferring to required peer R CMD check evidence." "opencode R coverage defers runner package-install failures to required peer R checks"
+	assert_file_contains "$workflow_file" "R coverage tooling install did not complete or exceeded 780 seconds" "opencode R coverage defers runner package-install failures to required peer R checks"
 	assert_file_contains "$workflow_file" "testthat unavailable in coverage runner; deferring to required peer R CMD check evidence." "opencode R package tests defer only when testthat cannot be installed in the coverage runner"
 	assert_file_contains "$workflow_file" "covr package_coverage unavailable after package tests; treating missing-line report as advisory." "opencode R package coverage does not block on covr installation reproduction after tests pass"
 	assert_file_contains "$workflow_file" "R coverage tooling packages unavailable after install" "opencode R coverage verifies covr/testthat are loadable after installation"
@@ -1091,6 +1091,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "MODEL: github-models/gpt-4.1" "opencode review must not fall back to GPT-4.1"
 	assert_file_contains "$workflow_file" "github-models/openai/gpt-5-chat" "opencode review includes GitHub Models GPT-5 chat as a catalog fallback"
 	assert_file_not_contains "$workflow_file" "github-models/openai/gpt-4.1-mini" "opencode review does not fall back to GPT-4.1 mini review evidence"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-5" "opencode review includes GitHub Models GPT-5 as a catalog fallback"
 	assert_file_not_contains "$workflow_file" "github-models/openai/gpt-5-mini" "opencode review excludes GitHub Models GPT-5 mini from the high-sensitivity review pool"
 
 	assert_file_contains "$opencode_config" '"mcp"' "opencode config declares MCP servers"
