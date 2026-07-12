@@ -79,16 +79,18 @@ def run_failed_model(
 
 def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: Path) -> None:
     """Provider JSON/stderr reasons remain useful without leaking credentials."""
+    fake_openai_token = "sk" + "-dangerous123456"
+    fake_github_token = "github" + "_pat_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
     result = run_failed_model(
         tmp_path,
         json_line=(
             '{"type":"error","error":{"name":"ProviderAuthError","data":'
             '{"message":"HTTP 401 authorization Bearer secret-value; '
-            'api_key=sk-dangerous123456"}}}'
+            f'api_key={fake_openai_token}"' + "}}}"
         ),
         stderr_line=(
-            "request failed token=github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456 "
-            "because provider authentication was denied"
+            f"request failed token={fake_github_token} because provider "
+            "authentication was denied"
         ),
     )
 
@@ -97,8 +99,8 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: P
     assert "OpenCode provider failure detail: stderr: request failed" in result.stdout
     assert result.stdout.count("[REDACTED]") >= 3
     assert "secret-value" not in result.stdout
-    assert "sk-dangerous123456" not in result.stdout
-    assert "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456" not in result.stdout
+    assert fake_openai_token not in result.stdout
+    assert fake_github_token not in result.stdout
     assert "secret-value" not in result.stderr
 
 
