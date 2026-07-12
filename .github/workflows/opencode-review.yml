@@ -1402,7 +1402,7 @@ jobs:
                 else
                   case "$package_runner" in
                     npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test -- --coverage ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm run test --coverage ;;
                     yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
                   esac
                 fi
