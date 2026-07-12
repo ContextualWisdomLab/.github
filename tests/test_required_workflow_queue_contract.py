@@ -1,9 +1,12 @@
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -292,6 +295,10 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
 
 def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
     """The Current-HEAD cancellation evidence must be valid jq, not just valid Bash."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required for the executable workflow filter regression test")
+
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     jq_line = next(
         line.strip()
@@ -312,7 +319,7 @@ def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
     ]
 
     result = subprocess.run(
-        ["jq", "-r", jq_filter],
+        [jq, "-r", jq_filter],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
