@@ -3469,7 +3469,7 @@ jobs:
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
-          MODEL: github-models/deepseek/deepseek-r1-0528
+          MODEL: github-models/deepseek/deepseek-v3-0324
           USE_GITHUB_TOKEN: "true"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -3493,10 +3493,10 @@ jobs:
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
           REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "60"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"
-          # A second model catalog pass is deliberately forbidden here. This
-          # timeout is only for a focused failed-check diagnosis after the
-          # primary model result and peer-check evidence disagree.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
+          # A second model catalog pass is deliberately forbidden here, but the
+          # focused diagnosis still needs the same deep-review room as the main
+          # pass when failed-check evidence is large or tool-heavy.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
         run: |
           set -euo pipefail
@@ -4448,8 +4448,8 @@ jobs:
               ".github/workflows/strix.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
             emit_known_missing_string_finding \
-              "MODEL: github-models/deepseek/deepseek-r1-0528" \
-              "OpenCode failed-check diagnosis must keep DeepSeek R1" \
+              "MODEL: github-models/deepseek/deepseek-v3-0324" \
+              "OpenCode failed-check diagnosis must prefer DeepSeek V3" \
               ".github/workflows/opencode-review.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
 

@@ -530,7 +530,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "      - name: Run merge scheduler after approval", 1
     )[0]
     assert 'REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"' in publish_step
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in publish_step
+    assert "MODEL: github-models/deepseek/deepseek-v3-0324" in publish_step
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in publish_step
     assert (
         'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"'
         in publish_step
