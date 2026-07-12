@@ -1767,20 +1767,23 @@ def inspect_pr(
         conflict_reason = merge_conflict_guidance(pr, merge_state)
         if current_head_approved:
             if auto_merge_enabled:
-                return decide("wait", f"{auto_merge_wait_reason(merge_state, pr)}; {conflict_reason}")
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason=(
+                            "current head is approved but merge conflict repair is required before auto-merge "
+                            f"can be queued; {conflict_reason}"
+                        ),
+                    )
+                )
             if not same_repository_head(repo, pr):
                 return decide("wait", f"{external_head_merge_reason(repo, pr)}; {conflict_reason}")
-            if enable_auto_merge_flag and merge_mode in {"auto", "direct_or_auto"}:
-                enable_auto_merge(repo, pr, dry_run=dry_run)
-                return decide(
-                    "auto_merge",
-                    "current head is approved; auto-merge enabled and queued while conflict repair remains required; "
-                    f"{conflict_reason}",
-                )
             return decide(
-                "wait",
-                "current head is approved; auto-merge is not queued because scheduler auto-merge "
-                f"is disabled or merge mode is {merge_mode}; {conflict_reason}",
+                "block",
+                "current head is approved, but auto-merge is not queued until merge conflict repair is pushed; "
+                f"{conflict_reason}",
             )
         if auto_merge_enabled:
             return finish(
@@ -2499,8 +2502,8 @@ def self_test() -> None:
         security_workflow="Strix Security Scan",
         base_branch="main",
     )
-    assert decision.action == "wait"
-    assert "auto-merge is already enabled" in decision.reason
+    assert decision.action == "disable_auto_merge"
+    assert "merge conflict repair is required before auto-merge can be queued" in decision.reason
     assert "merge conflict: DIRTY" in decision.reason
     sample["restMergeableState"] = "UNKNOWN"
     sample["autoMergeRequest"] = None
@@ -2745,8 +2748,8 @@ def self_test() -> None:
         security_workflow="Strix Security Scan",
         base_branch="main",
     )
-    assert decision.action == "wait"
-    assert "auto-merge is already enabled" in decision.reason
+    assert decision.action == "disable_auto_merge"
+    assert "merge conflict repair is required before auto-merge can be queued" in decision.reason
     assert "merge conflict: DIRTY" in decision.reason
     conflict_guidance = decision_guidance(decision)
     assert conflict_guidance
@@ -2763,8 +2766,8 @@ def self_test() -> None:
         security_workflow="Strix Security Scan",
         base_branch="main",
     )
-    assert decision.action == "auto_merge"
-    assert "auto-merge enabled and queued while conflict repair remains required" in decision.reason
+    assert decision.action == "block"
+    assert "auto-merge is not queued until merge conflict repair is pushed" in decision.reason
     sample["reviews"]["nodes"][0]["commit"]["oid"] = "old"
     decision = inspect_pr(
         "owner/repo",
