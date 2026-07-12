@@ -1372,6 +1372,36 @@ jobs:
             exit 1
           fi
 
+      - name: Enforce changed-file syntax gate
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+        run: |
+          set -euo pipefail
+          # Deterministic per-file syntax check on the PR's changed files. The
+          # LLM reviewer reads diffs and the test suite only exercises imported
+          # files, so a syntax error in a changed file that no test imports (or
+          # in a language with no wired-in runner) could otherwise be approved.
+          changed_files_file="${RUNNER_TEMP}/opencode-syntax-changed-files.txt"
+          if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --name-only "$PR_BASE_SHA" HEAD >"$changed_files_file" 2>/dev/null; then
+            : >"$changed_files_file"
+          fi
+          syntax_report="${RUNNER_TEMP}/opencode-syntax-report.txt"
+          syntax_status=0
+          ( cd "$COVERAGE_SOURCE_WORKDIR" && python3 "${GITHUB_WORKSPACE}/scripts/ci/changed_file_syntax_gate.py" --changed-files-file "$changed_files_file" ) >"$syntax_report" 2>&1 || syntax_status=$?
+          cat "$syntax_report"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              printf '## Changed-file syntax gate\n\n```text\n'
+              cat "$syntax_report"
+              printf '\n```\n'
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$syntax_status" -ne 0 ]; then
+            echo "::error::A changed file has a syntax error; OpenCode approval is blocked until it parses on the current head."
+            exit 1
+          fi
+
   opencode-review-target:
     name: opencode-review
     needs: [coverage-evidence]

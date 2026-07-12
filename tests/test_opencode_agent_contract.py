@@ -811,6 +811,33 @@ def test_opencode_review_language_signal_is_throttle_proof():
     assert "grep -Eq '[가-힣]'" in workflow
 
 
+def test_opencode_changed_file_syntax_gate_is_wired_into_coverage_evidence():
+    """A changed file that does not parse must block OpenCode approval.
+
+    The reviewer reads diffs and the coverage-evidence job only exercises
+    imported files, so a deterministic per-file syntax check on the PR's
+    changed files runs in the coverage-evidence job (whose result gates
+    approval) and fails the job on any syntax error.
+    """
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "- name: Enforce changed-file syntax gate" in workflow
+    assert (
+        "scripts/ci/changed_file_syntax_gate.py" in workflow
+    )
+    assert re.search(
+        r"Enforce changed-file syntax gate[\s\S]{0,1400}"
+        r"changed_file_syntax_gate\.py[\s\S]{0,1200}exit 1",
+        workflow,
+    )
+    # The gate script itself must exist and be executable as a CLI.
+    gate = Path("scripts/ci/changed_file_syntax_gate.py").read_text(encoding="utf-8")
+    assert "--changed-files-file" in gate
+    assert "def check_python" in gate
+
+
 def test_opencode_jq_filters_do_not_embed_literal_expression_openers():
     """Literal '${{' inside run scripts is parsed as a GitHub expression opener."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
