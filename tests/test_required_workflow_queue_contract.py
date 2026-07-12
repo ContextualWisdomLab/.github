@@ -1,4 +1,5 @@
 import json
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -285,6 +286,38 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "--project-flow" in workflow
     assert 'main|master) project_flow="github-flow"' in workflow
     assert 'develop) project_flow="git-flow"' in workflow
+
+
+def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
+    """The Current-HEAD cancellation evidence must be valid jq, not just valid Bash."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    jq_line = next(
+        line.strip()
+        for line in workflow.splitlines()
+        if "closed-or-no-open-pr" in line and "jq -r" in line
+    )
+    jq_filter = shlex.split(jq_line)[2]
+    payload = [
+        {
+            "id": 42,
+            "name": "Required OpenCode Review",
+            "status": "in_progress",
+            "event": "pull_request_target",
+            "head_branch": "old-head",
+            "run_head": "deadbeef",
+            "current_head": None,
+        }
+    ]
+
+    result = subprocess.run(
+        ["jq", "-r", jq_filter],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "current_head=closed-or-no-open-pr" in result.stdout
 
 
 def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None:
