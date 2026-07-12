@@ -3493,10 +3493,10 @@ jobs:
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
           REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "60"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"
-          # A second model catalog pass is deliberately forbidden here, but the
-          # focused diagnosis still needs the same deep-review room as the main
-          # pass when failed-check evidence is large or tool-heavy.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # A second model catalog pass is deliberately forbidden here. Give a
+          # focused failed-check diagnosis the same 15-minute per-model budget
+          # as the main pool so it finishes inside this step's 35-minute cap.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
         run: |
           set -euo pipefail

@@ -636,6 +636,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "gate result from Review Overview comment" "opencode approval step distinguishes overview-comment gate results"
 	assert_file_contains "$workflow_file" "gate result from selected OpenCode output" "opencode approval step can recover from an invalid overview by validating the selected successful output"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 35' "opencode approval step has a bounded wall-clock timeout that prevents duplicate model runs from holding the queue"
+	assert_file_contains "$workflow_file" 'focused failed-check diagnosis the same 15-minute per-model budget' "opencode failed-check diagnosis finishes inside the bounded publication step"
 	assert_file_not_contains "$workflow_file" "rekick_model_pool_on_exhaustion" "opencode publication must not rerun the exhausted model catalog after the model-pool step"
 	assert_file_contains "$workflow_file" "publish stage performs no duplicate model-catalog pass" "opencode publication logs that exhausted model retries are delegated to the scheduler"
 	assert_file_contains "$workflow_file" 'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"' "opencode failed-check diagnosis bounds export so the publication gate cannot hang silently"
