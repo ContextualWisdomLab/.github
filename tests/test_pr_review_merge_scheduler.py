@@ -1375,6 +1375,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     assert "target_repository=owner/repo" in opencode_call
     assert "pr_base_ref=develop" in opencode_call
     assert f"pr_base_sha={base_sha}" in opencode_call
+    assert "pr_head_ref=feature" in opencode_call
     assert f"pr_head_sha={head_sha}" in opencode_call
 
 

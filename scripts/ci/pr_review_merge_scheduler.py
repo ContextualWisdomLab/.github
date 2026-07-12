@@ -1579,6 +1579,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     if dry_run:
         return "dry_run"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
+    head_ref = validate_git_ref(pr["headRefName"])
     dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
     run_github_actions(
         [
@@ -1597,6 +1598,8 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             f"pr_base_ref={base_ref}",
             "-f",
             f"pr_base_sha={base_sha}",
+            "-f",
+            f"pr_head_ref={head_ref}",
             "-f",
             f"pr_head_sha={head_sha}",
         ]

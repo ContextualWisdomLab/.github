@@ -22,6 +22,10 @@ on:
         description: Pull request base SHA
         required: true
         type: string
+      pr_head_ref:
+        description: Pull request head branch for current-head code-scanning verification
+        required: true
+        type: string
       pr_head_sha:
         description: Pull request head SHA
         required: true
@@ -331,7 +335,7 @@ jobs:
           --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
       - name: Cache R coverage tooling library
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/R-library
           key: r-coverage-lib-${{ runner.os }}-covr-testthat-v1
