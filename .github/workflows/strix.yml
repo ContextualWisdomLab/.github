@@ -883,6 +883,7 @@ jobs:
       - name: Publish same-head manual Strix status
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          GITHUB_STATUS_READ_TOKEN: ${{ github.token }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
@@ -938,6 +939,58 @@ jobs:
             return 1
           }
 
+          existing_current_run_success_status() {
+            if [ "$state" != "success" ]; then
+              return 1
+            fi
+            target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+            check_existing_status() {
+              token_label="$1"
+              token="$2"
+              if [ -z "$token" ]; then
+                return 1
+              fi
+              status_response="$(mktemp)"
+              status_error="$(mktemp)"
+              if GH_TOKEN="$token" gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses" \
+                >"$status_response" 2>"$status_error"; then
+                if jq -e --arg target_url "$target_url" \
+                  'any(.[]; .context == "strix" and .state == "success" and ((.target_url // "") == $target_url))' \
+                  "$status_response" >/dev/null; then
+                  rm -f "$status_response" "$status_error"
+                  echo "Existing current-run Strix success status is already present on ${TARGET_REPOSITORY}@${PR_HEAD_SHA}; follow-up status publication is complete."
+                  return 0
+                fi
+                rm -f "$status_response" "$status_error"
+                echo "::notice::No current-run Strix success status was visible using ${token_label}."
+                return 1
+              fi
+              error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
+              rm -f "$status_response" "$status_error"
+              if [ -n "$error_summary" ]; then
+                echo "::notice::Could not inspect existing Strix status using ${token_label}: ${error_summary}"
+              else
+                echo "::notice::Could not inspect existing Strix status using ${token_label}."
+              fi
+              return 1
+            }
+
+            if check_existing_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
+              return 0
+            fi
+            if check_existing_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"; then
+              return 0
+            fi
+            if check_existing_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
+              return 0
+            fi
+            if check_existing_status "github-token" "$GITHUB_STATUS_READ_TOKEN"; then
+              return 0
+            fi
+            return 1
+          }
+
           if post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
             exit 0
           fi
@@ -945,6 +998,9 @@ jobs:
             exit 0
           fi
           if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if existing_current_run_success_status; then
             exit 0
           fi
           echo "::error::Could not publish manual Strix status from follow-up job after all configured credentials failed; the target PR head is missing required Strix status evidence. See the preceding notices for token-specific reasons."
