@@ -144,6 +144,7 @@ assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_REQUIRED_SMOKE"' "St
 assert_file_contains "$workflow_file" "timeout-minutes: 2" "Strix required-path smoke test has a short timeout"
 assert_status_permissions_scoped
 assert_file_contains "$workflow_file" 'context="strix"' "Strix workflow publishes the strix commit status context"
+assert_file_contains "$workflow_file" "Existing current-run Strix success status is already present" "Strix manual follow-up status publisher accepts already-published same-run evidence"
 assert_file_not_contains "$workflow_file" 'repository: ${{ github.repository }}' "Strix workflow must not checkout target repository with actions/checkout in privileged context"
 assert_file_not_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE_TEST"' "Strix required path must not execute the full long-form gate harness"
 assert_file_contains "$gate_script" "STRIX_REPO_ROOT" "Strix gate consumes explicit target root"
