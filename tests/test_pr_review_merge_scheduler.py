@@ -1470,19 +1470,55 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
 
-    sched.dispatch_opencode_review(
+    result = sched.dispatch_opencode_review(
         "owner/repo",
         "OpenCode Review",
         make_pr(baseRefOid=base_sha, headRefOid=head_sha),
         dry_run=False,
     )
 
+    assert result == "already_running"
     assert ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert not any("9004/force-cancel" in " ".join(call) for call in calls)
-    assert calls[-1][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+    assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
+
+
+def test_dispatch_opencode_review_deduplicates_current_head_workflow_dispatch(monkeypatch, capsys):
+    calls = []
+    head_sha = "a" * 40
+    current_dispatch = {
+        "id": 9100,
+        "name": "Required OpenCode Review",
+        "event": "workflow_dispatch",
+        "head_sha": head_sha,
+        "pull_requests": [],
+    }
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+            if "status=queued" in args:
+                return json.dumps({"workflow_runs": [current_dispatch]})
+            return json.dumps({"workflow_runs": []})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+
+    result = sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+        dry_run=False,
+    )
+
+    assert result == "already_running"
+    assert "active same-head workflow run(s) 9100" in capsys.readouterr().out
+    assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
 
 
 def test_cancel_stale_pr_queued_runs_force_cancels_same_pr_old_head_runs(monkeypatch):
