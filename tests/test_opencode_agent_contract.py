@@ -511,7 +511,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'timeout-minutes: 12' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 210", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,420}timeout-minutes: 120", workflow)
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,420}timeout-minutes: 60", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
@@ -546,7 +546,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         not in publish_step
     )
     assert "MODEL: github-models/deepseek/deepseek-v3-0324" in publish_step
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in publish_step
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "3000"' in publish_step
     assert (
         'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"'
         in publish_step
