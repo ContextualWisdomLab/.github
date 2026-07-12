@@ -238,17 +238,19 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     The sweep job must exist, run only from the central repository on its own
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
-    visible reason when it cannot mutate sibling repositories.
+    visible reason when it cannot mutate sibling repositories. The sweep runs
+    every 15 minutes so an approval that lands after a PR's last event is
+    auto-updated/merged within ~15 minutes instead of idling for up to an hour.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert "- cron: \"17 * * * *\"" in workflow
+    assert "- cron: \"*/15 * * * *\"" in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.event.schedule == '17 * * * *'" in workflow
+    assert "github.event.schedule == '*/15 * * * *'" in workflow
     assert "inputs.org_sweep == true" in workflow
     # The single-repository scan must not double-run on the sweep cron.
-    assert "github.event.schedule != '17 * * * *'" in workflow
+    assert "github.event.schedule != '*/15 * * * *'" in workflow
     assert "inputs.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (
