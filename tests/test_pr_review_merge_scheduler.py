@@ -1774,6 +1774,19 @@ def test_resolve_outdated_review_threads_uses_github_actions_actor(monkeypatch):
 
 def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypatch):
     exact_head = "a" * 40
+    unapproved = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "b" * 40),
+                    "databaseId": 200,
+                }
+            ]
+        },
+    )
+    assert sched.dismiss_stale_opencode_change_requests("owner/repo", unapproved, dry_run=False) == 0
+
     pr = make_pr(
         headRefOid=exact_head,
         reviews={
