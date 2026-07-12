@@ -270,6 +270,38 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert 'develop) project_flow="git-flow"' in workflow
 
 
+def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None:
+    """A repository the sweep credential cannot read must not fail the sweep.
+
+    When the OpenCode app is not installed on a sibling repository (or the
+    PR_REVIEW_MERGE_TOKEN does not cover it), every read returns HTTP 403
+    "Resource not accessible by integration". That is an access-grant fact the
+    automation can never resolve, so those repositories are reported as skipped,
+    non-fatal "unavailable" repositories rather than hard failures — otherwise a
+    handful of un-enrolled repositories keeps the hourly sweep permanently red
+    and masks a genuinely new repository that starts failing.
+
+    The sweep stays fail-closed two ways: any non-403 scheduler failure still
+    increments ``failures`` and fails the job, and if MORE than
+    ``ORG_SWEEP_MAX_UNAVAILABLE`` repositories become unreachable at once (a
+    credential-scope regression, not a few un-enrolled repos) the job fails.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    # The 403 signal is classified as a skipped, non-fatal "unavailable" repo.
+    assert "ORG_SWEEP_MAX_UNAVAILABLE" in workflow
+    assert 'grep -qF "Resource not accessible by integration"' in workflow
+    assert "unavailable=$((unavailable + 1))" in workflow
+    assert 'unavailable_repos+=("$repo_full_name")' in workflow
+    assert "the sweep credential lacks access (HTTP 403" in workflow
+    # A non-403 failure must still be a hard failure (fail-closed preserved).
+    assert "failures=$((failures + 1))" in workflow
+    assert "see the decision log above for the concrete per-PR reason" in workflow
+    # Widespread inaccessibility is a credential regression and must fail loudly.
+    assert 'if [ "$unavailable" -gt "$ORG_SWEEP_MAX_UNAVAILABLE" ]; then' in workflow
+    assert "indicates a credential-scope regression" in workflow
+
+
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     workflow = workflow_text("pr-review-fix-scheduler.yml")
 
