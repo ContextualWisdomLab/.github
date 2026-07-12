@@ -360,7 +360,11 @@ assert_strix_gate_target_scope_separated() {
 	assert_file_not_contains "$GATE_SCRIPT" "or generated PR scope directories" "strix gate keeps user target validation separate from internal PR scopes"
 	assert_file_contains "$GATE_SCRIPT" "TARGET_PATH_IS_INTERNAL_PR_SCOPE" "strix gate marks internally generated PR scan scopes explicitly"
 	assert_file_contains "$GATE_SCRIPT" "PR_SCOPE_TARGET_SENTINEL=\"__PR_SCOPE__\"" "strix gate supports an explicit PR-scope target sentinel"
-	assert_file_contains "$GATE_SCRIPT" 'git diff --name-only "$base_sha" "$head_sha"' "strix gate falls back to explicit manual PR-scope diff when merge-base is unavailable"
+	assert_file_contains "$GATE_SCRIPT" 'git -c core.quotepath=false diff --name-only "$base_sha" "$head_sha"' "strix gate emits literal UTF-8 paths in explicit manual PR-scope diffs"
+	assert_file_contains "$GATE_SCRIPT" 'git -c core.quotepath=false diff --name-only "$base_sha...$head_sha"' "strix gate emits literal UTF-8 paths in merge-base PR-scope diffs"
+	assert_file_contains "$GATE_SCRIPT" 'git -c core.quotepath=false diff --name-only "$base_sha..$head_sha"' "strix gate emits literal UTF-8 paths in direct fallback PR-scope diffs"
+	assert_file_contains "$GATE_SCRIPT" 'git -c core.quotepath=false ls-tree "$head_sha" -- "$relative_path"' "strix gate emits literal UTF-8 paths when validating a PR-head blob"
+	assert_file_contains "$GATE_SCRIPT" 'git -c core.quotepath=false ls-tree -r --full-tree "$head_sha"' "strix gate emits literal UTF-8 paths when materializing a PR-head tree"
 }
 
 assert_changed_file_membership_uses_cached_normalized_paths() {
@@ -6468,14 +6472,14 @@ EOF
 		git init -q
 		git config user.name 'Strix Test'
 		git config user.email 'strix-test@example.invalid'
-		mkdir -p src
-		printf '%s\n' 'BASE_CONTENT' >src/app.py
+		mkdir -p '한글 경로'
+		printf '%s\n' 'BASE_CONTENT' >'한글 경로/app.py'
 		git add .
 		git commit -qm 'base commit'
-		printf '%s\n' 'MID_CONTENT' >src/app.py
+		printf '%s\n' 'MID_CONTENT' >'한글 경로/app.py'
 		git add .
 		git commit -qm 'mid commit'
-		printf '%s\n' 'HEAD_CONTENT' >src/app.py
+		printf '%s\n' 'HEAD_CONTENT' >'한글 경로/app.py'
 		git add .
 		git commit -qm 'head commit'
 	)
@@ -6524,6 +6528,10 @@ EOF
 	local rc=$?
 	set -e
 
+	if [ "$rc" -ne 0 ]; then
+		echo "case=pull-request-target-shallow-head gate output:" >&2
+		sed -n '1,240p' "$output_log" >&2
+	fi
 	assert_equals "0" "$rc" "case=pull-request-target-shallow-head exit code"
 	assert_file_contains "$output_log" "falling back to direct base/head diff" "case=pull-request-target-shallow-head output"
 
@@ -7937,6 +7945,14 @@ run_pull_request_target_rejects_unsafe_changed_path_case \
 run_pull_request_target_rejects_unsafe_changed_path_case \
 	"pull-request-target-leading-space-changed-path-fails-closed" \
 	" src/evil.py"
+
+run_pull_request_target_rejects_unsafe_changed_path_case \
+	"pull-request-target-unicode-slash-lookalike-fails-closed" \
+	"src／evil.py"
+
+run_pull_request_target_rejects_unsafe_changed_path_case \
+	"pull-request-target-bidi-control-fails-closed" \
+	$'src/evil\u202epy'
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-disabled-pr-scoping-nested-file-uses-head-blob" \
