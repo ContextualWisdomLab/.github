@@ -278,6 +278,27 @@ def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
     assert "return" in declared_pnpm_block
 
 
+def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
+    """An existing coverage flag/tool must run once instead of receiving a duplicate flag."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
+    assert "javascript_test_script_collects_coverage()" in measure_step
+    assert "if javascript_test_script_collects_coverage; then" in measure_step
+    assert (
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;'
+        in measure_step
+    )
+    assert (
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;'
+        in measure_step
+    )
+    assert 'test("(^|[[:space:]])--coverage([.=[:space:]]|$)' in measure_step
+    assert '|c8([[:space:]]|$)|nyc([[:space:]]|$)")' in measure_step
+
+
 def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
     """A changed JS file must select its nearest nested package.json for coverage."""
     bash = shutil.which("bash")
