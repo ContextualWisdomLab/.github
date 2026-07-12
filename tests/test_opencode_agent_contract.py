@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -275,6 +276,65 @@ def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
     declared_pnpm_block = select_function[declared_pnpm_start:declared_pnpm_end]
     assert 'printf \'%s\\n\' "pnpm"' in declared_pnpm_block
     assert "return" in declared_pnpm_block
+
+
+def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
+    """A changed JS file must select its nearest nested package.json for coverage."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
+    changed_start = measure_step.index("          changed_files_for_coverage() {\n")
+    changed_end = measure_step.index(
+        "\n\n          has_changed_tracked_files()", changed_start
+    )
+    discovery_start = measure_step.index(
+        "          javascript_coverage_package_dirs() {\n"
+    )
+    discovery_end = measure_step.index(
+        "\n\n          declared_package_manager()", discovery_start
+    )
+    shell = "\n".join(
+        (
+            "set -euo pipefail",
+            textwrap.dedent(measure_step[changed_start:changed_end]),
+            textwrap.dedent(measure_step[discovery_start:discovery_end]),
+            "javascript_coverage_package_dirs",
+        )
+    )
+
+    repo = tmp_path / "repo"
+    package = repo / "ADFS samples" / "Node App"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text('{"scripts":{"test":"node --test"}}\n')
+    source = package / "index.js"
+    source.write_text("module.exports = 1;\n")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Coverage Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "coverage@example.invalid"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    base_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    source.write_text("module.exports = 2;\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "head"], cwd=repo, check=True)
+    head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    env = os.environ.copy()
+    env.update({"PR_BASE_SHA": base_sha, "PR_HEAD_SHA": head_sha})
+
+    result = subprocess.run(
+        ["bash", "-c", shell],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["ADFS samples/Node App"]
 
 
 def test_opencode_runtime_pin_supports_reasoning_options():
