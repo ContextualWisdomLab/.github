@@ -42,6 +42,7 @@ def test_opencode_review_run_blocks_are_valid_bash():
     for step_name in (
         "Materialize pull request merge tree for coverage measurement",
         "Prepare bounded OpenCode review evidence",
+        "Enforce changed-file syntax gate",
         "Publish OpenCode review outcome",
     ):
         script = _extract_run_block(workflow_text, step_name)
