@@ -561,6 +561,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "approve_low_risk_review_fallback_after_model_exhaustion" not in workflow
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_current_head_after_model_unavailable" in workflow
+    assert "ContextualWisdomLab/.github:ci-review-prompt.md | \\" in workflow
+    assert "ContextualWisdomLab/.github:code-reviewer-prompt.md | \\" in workflow
     assert "opencode.jsonc | \\" in workflow
     assert "ContextualWisdomLab/.github:.jules/bolt.md | \\" in workflow
     assert "ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \\" in workflow
@@ -576,6 +578,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "central_review_process_core_changed=false" in workflow
     assert "central_review_process_core_changed=true" in workflow
     assert 'central_review_process_core_changed" != "true"' in workflow
+    assert "Fallback ineligibility reasons:" in workflow
+    assert "disallowed changed file:" in workflow
+    assert "gh pr diff failed for %s#%s" in workflow
+    assert "no central OpenCode/Strix core file changed" in workflow
     assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
     assert workflow.index("Detect central review-process scope") < workflow.index(
         "Initialize CodeGraph index for OpenCode"
