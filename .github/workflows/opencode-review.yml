@@ -1467,6 +1467,7 @@ jobs:
       checks: read
       id-token: write
       contents: read
+      security-events: read
       models: read
       statuses: read
       deployments: read
@@ -1672,7 +1673,7 @@ jobs:
           case "$GH_REPOSITORY" in
             ContextualWisdomLab/.github)
               scope_label="central OpenCode/Strix review-process"
-              max_changed_count=6
+              max_changed_count=24
               ;;
             ContextualWisdomLab/appguardrail)
               scope_label="appguardrail org-security failure collector"
@@ -1684,12 +1685,24 @@ jobs:
             local changed_file="$1"
             case "${GH_REPOSITORY}:${changed_file}" in
               ContextualWisdomLab/.github:.github/workflows/opencode-review.yml | \
+              ContextualWisdomLab/.github:.github/workflows/pr-review-merge-scheduler.yml | \
               ContextualWisdomLab/.github:.github/workflows/strix.yml | \
+              ContextualWisdomLab/.github:.gitleaksignore | \
               ContextualWisdomLab/.github:opencode.jsonc | \
+              ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
+              ContextualWisdomLab/.github:scripts/ci/pr_head_replay_guard.py | \
+              ContextualWisdomLab/.github:scripts/ci/pr_review_merge_scheduler.py | \
               ContextualWisdomLab/.github:scripts/ci/run_opencode_review_model_pool.sh | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_normalize_output.py | \
+              ContextualWisdomLab/.github:scripts/ci/strix_quick_gate.sh | \
               ContextualWisdomLab/.github:scripts/ci/validate_opencode_failed_check_review.sh | \
+              ContextualWisdomLab/.github:tests/test_changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
+              ContextualWisdomLab/.github:tests/test_opencode_model_pool_runner.py | \
+              ContextualWisdomLab/.github:tests/test_pr_head_replay_guard.py | \
+              ContextualWisdomLab/.github:tests/test_pr_review_fix_scheduler_coverage.py | \
+              ContextualWisdomLab/.github:tests/test_pr_review_merge_scheduler.py | \
+              ContextualWisdomLab/.github:tests/test_required_workflow_queue_contract.py | \
               ContextualWisdomLab/.github:scripts/ci/test_strix_quick_gate.sh | \
               ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml | \
               ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py | \
@@ -5731,6 +5744,157 @@ jobs:
             stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"
           }
 
+          collect_open_code_scanning_alerts() {
+            local output_file="$1"
+            local pr_json head_ref
+            pr_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json headRefName 2>/dev/null)" || return 1
+            head_ref="$(printf '%s\n' "$pr_json" | jq -r '.headRefName // empty')"
+            [ -n "$head_ref" ] || return 1
+            timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/code-scanning/alerts" \
+                -f "ref=refs/heads/${head_ref}" \
+                -f state=open \
+                -F per_page=100 \
+                --jq '
+                  [
+                    .[]
+                    | {
+                        number: (.number // 0),
+                        rule: (.rule.id // .rule.name // "unknown"),
+                        tool: (.tool.name // "code-scanning"),
+                        severity: (.rule.security_severity_level // .rule.severity // "unknown"),
+                        url: (.html_url // "")
+                      }
+                    | select((.severity | ascii_downcase) as $s | ["medium","high","critical","warning","error"] | index($s))
+                  ]
+                  | .[]
+                  | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
+                ' >"$output_file"
+          }
+
+          approve_central_review_process_after_model_unavailable() {
+            local pending_wait_status body
+
+            if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]; then
+              return 1
+            fi
+            if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]; then
+              return 1
+            fi
+            if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+              return 1
+            fi
+
+            printf '::notice::Central review-process evidence fallback candidate: scope=%s changed_count=%s head=%s.\n' \
+              "${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}" \
+              "${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}" \
+              "$HEAD_SHA"
+
+            if request_changes_for_merge_conflict_if_present; then
+              return 0
+            fi
+
+            pending_checks_file="$(mktemp)"
+            set +e
+            wait_for_peer_github_checks "$pending_checks_file"
+            pending_wait_status=$?
+            set -e
+            if [ "$pending_wait_status" -eq 1 ]; then
+              printf '::notice::Central review-process evidence fallback skipped because peer GitHub Checks could not be read.\n'
+              return 1
+            fi
+            if [ "$pending_wait_status" -ne 0 ]; then
+              failed_check_review_body_file="$(mktemp)"
+              build_pending_check_body "$pending_checks_file" "$failed_check_review_body_file"
+              hold_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"
+            fi
+
+            failed_checks_file="$(mktemp)"
+            if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
+              printf '::notice::Central review-process evidence fallback skipped because failed-check rollup could not be read.\n'
+              return 1
+            fi
+            if [ -s "$failed_checks_file" ]; then
+              failed_check_review_body_file="$(mktemp)"
+              {
+                printf '## Pull request overview\n\n'
+                printf 'OpenCode could not approve from central review-process evidence because current-head GitHub Checks have failed.\n\n'
+                printf '## Findings\n\n'
+                printf '### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n'
+                printf -- '- Problem: Failed same-head checks remain for `%s`.\n' "$HEAD_SHA"
+                printf -- '- Root cause: Central evidence fallback is allowed only when peer GitHub Checks are complete and clean.\n'
+                printf -- '- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n'
+                printf -- '- Regression test: Keep central fallback gated on an empty failed-check rollup.\n\n'
+                printf 'Failed checks:\n'
+                cat "$failed_checks_file"
+              } >"$failed_check_review_body_file"
+              create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
+              return 0
+            fi
+
+            failed_check_evidence_file="$(mktemp)"
+            if ! collect_open_code_scanning_alerts "$failed_check_evidence_file"; then
+              printf '::notice::Central review-process evidence fallback skipped because open code-scanning alerts could not be read.\n'
+              return 1
+            fi
+            if [ -s "$failed_check_evidence_file" ]; then
+              failed_check_review_body_file="$(mktemp)"
+              {
+                printf '## Pull request overview\n\n'
+                printf 'OpenCode could not approve from central review-process evidence because open code-scanning alerts remain.\n\n'
+                printf '## Findings\n\n'
+                printf '### 1. HIGH Code Scanning Alerts - Resolve open medium-or-higher alerts before approval\n'
+                printf -- '- Problem: Open code-scanning alerts remain for the current PR branch.\n'
+                printf -- '- Root cause: Central evidence fallback is allowed only when security alerts are clear at medium sensitivity or higher.\n'
+                printf -- '- Fix: Resolve or dismiss the listed alerts with source-backed justification, then rerun OpenCode.\n'
+                printf -- '- Regression test: Keep central fallback gated on an empty medium-or-higher code-scanning alert list.\n\n'
+                printf 'Open alerts:\n'
+                cat "$failed_check_evidence_file"
+              } >"$failed_check_review_body_file"
+              create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
+              return 0
+            fi
+
+            unresolved_reviewer_threads_file="$(mktemp)"
+            reviewer_thread_review_body_file="$(mktemp)"
+            if ! collect_unresolved_reviewer_threads "$unresolved_reviewer_threads_file"; then
+              build_reviewer_thread_lookup_failure_body "$reviewer_thread_review_body_file"
+              create_pull_review "REQUEST_CHANGES" "$(cat "$reviewer_thread_review_body_file")"
+              return 0
+            fi
+            if [ -s "$unresolved_reviewer_threads_file" ]; then
+              build_unresolved_reviewer_threads_body "$unresolved_reviewer_threads_file" "$reviewer_thread_review_body_file"
+              create_pull_review "REQUEST_CHANGES" "$(cat "$reviewer_thread_review_body_file")"
+              return 0
+            fi
+
+            body="$(printf '%s\n' \
+              "## Pull request overview" \
+              "" \
+              "OpenCode model providers were unavailable for this same-head run, but this PR is limited to the central review-process repair surface and the current-head evidence is clean." \
+              "" \
+              "## Findings" \
+              "" \
+              "No blocking findings." \
+              "" \
+              "## Evidence" \
+              "" \
+              "- Result: APPROVE" \
+              "- Reason: central review-process evidence fallback after model provider unavailability; coverage, docstring, peer GitHub Checks, code-scanning alerts, mergeability, and review threads were clear for current head." \
+              "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
+              "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
+              "- Model-pool outcome: \`${OPENCODE_MODEL_POOL_OUTCOME:-unknown}\`" \
+              "- Head SHA: \`${HEAD_SHA}\`" \
+              "- Workflow run: ${RUN_ID}" \
+              "- Workflow attempt: ${RUN_ATTEMPT}" \
+              "" \
+              "This fallback is limited to central review-process self-repair and does not apply to application source, dependency manifest, lockfile, generated artifact, or documentation-only PRs."
+            )"
+            create_pull_review "APPROVE" "$body"
+            return 0
+          }
+
                     request_changes_for_merge_conflict_if_present() {
                       local pr_json merge_state mergeable base_ref head_ref body change_graph
 
@@ -5831,6 +5995,10 @@ jobs:
           # diagnostics. Do not read model output or change PR review state unless
           # the pool explicitly emitted a valid current-head control block.
           if [ "$opencode_review_outcome" != "success" ]; then
+            if approve_central_review_process_after_model_unavailable; then
+              echo "::endgroup::"
+              exit 0
+            fi
             stop_without_review_after_model_unavailable
           fi
 

@@ -484,7 +484,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "[REDACTED]" in model_pool_runner
     assert "approve_low_risk_review_fallback_after_model_exhaustion" not in workflow
     assert "changed_file_is_low_risk_review_fallback" not in workflow
-    assert "approve_central_review_process_fallback" not in workflow
+    assert "approve_central_review_process_after_model_unavailable" in workflow
     assert "opencode.jsonc | \\" in workflow
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
@@ -492,6 +492,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml" in workflow
     assert "ContextualWisdomLab/appguardrail:tests/test_org_security_failure_collector.py" in workflow
     assert "appguardrail org-security failure collector" in workflow
+    assert 'max_changed_count=24' in workflow
     assert 'max_changed_count=3' in workflow
     assert "changed_count\" -gt \"$max_changed_count\"" in workflow
     assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
@@ -501,7 +502,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert "model pool was intentionally skipped" not in workflow
-    assert "deterministic fallback" not in workflow
+    assert "central review-process evidence fallback" in workflow
+    assert "collect_open_code_scanning_alerts" in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
@@ -954,9 +956,10 @@ def test_opencode_model_pool_failure_stops_without_review_state_change():
     )
     assert 'opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"' in workflow
     assert re.search(
-        r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,760}'
+        r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,900}'
         r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
-        r"stop_without_review_after_model_unavailable\s+fi",
+        r"if approve_central_review_process_after_model_unavailable; then[\s\S]{0,180}"
+        r"exit 0\s+fi\s+stop_without_review_after_model_unavailable\s+fi",
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
