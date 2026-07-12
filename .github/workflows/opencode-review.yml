@@ -638,6 +638,11 @@ jobs:
               | sort -u
           }
 
+          javascript_test_script_collects_coverage() {
+            jq -e '(.scripts.test // "") | test("(^|[[:space:]])--coverage([.=[:space:]]|$)|c8([[:space:]]|$)|nyc([[:space:]]|$)")' \
+              package.json >/dev/null 2>&1
+          }
+
           declared_package_manager() {
             if [ -f package.json ]; then
               jq -r '.packageManager // "" | split("@")[0]' package.json 2>/dev/null || true
@@ -1388,11 +1393,19 @@ jobs:
                 run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
-                case "$package_runner" in
-                  npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                  pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test -- --coverage ;;
-                  yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
-                esac
+                if javascript_test_script_collects_coverage; then
+                  case "$package_runner" in
+                    npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test ;;
+                    yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
+                  esac
+                else
+                  case "$package_runner" in
+                    npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test -- --coverage ;;
+                    yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
+                  esac
+                fi
                 javascript_coverage_ran=1
               else
                 append "### JavaScript/TypeScript test coverage"
