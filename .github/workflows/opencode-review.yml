@@ -3505,10 +3505,11 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "18"
-          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
-          CHECK_LOOKUP_RETRY_ATTEMPTS: "3"
-          CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "6"
+          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "5"
+          CHECK_LOOKUP_RETRY_ATTEMPTS: "1"
+          CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "2"
+          CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "2"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "10"
           REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"
@@ -3583,6 +3584,10 @@ jobs:
 
           app_token_limited_check_lookup() {
             [ "${check_lookup_token_source:-}" = "opencode-app" ] && [ -n "${OPENCODE_APP_TOKEN:-}" ]
+          }
+
+          check_lookup_api_timeout_seconds() {
+            printf '%s\n' "${CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS:-${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}}"
           }
 
           warn_gh_publication_failure() {
@@ -4926,7 +4931,7 @@ jobs:
 
             runs_json="$(mktemp)"
             workflow_lookup_err="$(mktemp)"
-            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
               gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
@@ -4941,7 +4946,7 @@ jobs:
             fi
             rm -f "$workflow_lookup_err"
 
-            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
               env HEAD_SHA="$HEAD_SHA" gh run list \
               --repo "$GH_REPOSITORY" \
               --workflow strix.yml \
@@ -5047,7 +5052,7 @@ jobs:
                 ;;
             esac
 
-            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+            timeout "$(check_lookup_api_timeout_seconds)s" \
               gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
               -f per_page=100 \
               --paginate \
@@ -5063,7 +5068,7 @@ jobs:
             local manual_run_url
 
             status_target="$(
-            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+            timeout "$(check_lookup_api_timeout_seconds)s" \
               gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
               --jq '
                 (.statuses // [])
@@ -5094,7 +5099,7 @@ jobs:
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
 
-            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
+            timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5147,7 +5152,7 @@ jobs:
             runs_json="$(mktemp)"
             workflow_lookup_err="$(mktemp)"
 
-            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
               gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
@@ -5161,7 +5166,7 @@ jobs:
             fi
             rm -f "$workflow_lookup_err"
 
-            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh run list \
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" gh run list \
               --repo "$GH_REPOSITORY" \
               --workflow strix.yml \
               --commit "$HEAD_SHA" \
@@ -5245,7 +5250,7 @@ jobs:
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             filtered_rollup_file="$(mktemp)"
-            if ! pr_node_id="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
+            if ! pr_node_id="$(timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5258,7 +5263,7 @@ jobs:
               : >"$rollup_file"
             else
             # shellcheck disable=SC2016
-            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5388,7 +5393,7 @@ jobs:
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             # shellcheck disable=SC2016
-            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
