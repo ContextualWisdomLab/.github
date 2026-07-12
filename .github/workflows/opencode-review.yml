@@ -496,6 +496,14 @@ jobs:
           PY
           }
 
+          run_python_uv_lock_check() {
+            local project_dir="$1"
+            if [ -f "${project_dir}/uv.lock" ]; then
+              run_and_capture "Python uv lockfile consistency (${project_dir})" \
+                bash -c 'cd "$1" && uv lock --check' bash "$project_dir"
+            fi
+          }
+
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
@@ -505,6 +513,7 @@ jobs:
             while IFS= read -r project_dir; do
               pyproject_file="${project_dir}/pyproject.toml"
               if [ -f "$pyproject_file" ]; then
+                run_python_uv_lock_check "$project_dir"
                 if pyproject_has_dev_dependency_group "$pyproject_file"; then
                   run_and_capture "Python project dependencies (${project_dir})" \
                     uv sync --project "$project_dir" --group dev

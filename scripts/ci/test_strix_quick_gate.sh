@@ -778,6 +778,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "uv run --with-requirements requirements.txt" "opencode coverage evidence resolves repository Python requirements before pytest"
 	assert_file_contains "$workflow_file" "'requirements.txt' '*/requirements.txt'" "opencode coverage evidence discovers nested requirements-only Python test projects"
 	assert_file_contains "$workflow_file" "Python project dependencies (\${project_dir}/requirements.txt)" "opencode coverage evidence installs nested requirements-only Python project dependencies"
+	assert_file_contains "$workflow_file" "Python uv lockfile consistency (\${project_dir})" "opencode coverage evidence logs uv lockfile drift before installing uv-managed Python dependencies"
+	assert_file_contains "$workflow_file" "uv lock --check" "opencode coverage evidence rejects stale uv lockfiles before pytest"
 	assert_file_contains "$workflow_file" "uv sync --project" "opencode coverage evidence installs uv-managed Python project dependencies before pytest"
 	assert_file_contains "$workflow_file" 'cd "$1" && uv run --with-requirements requirements.txt' "opencode coverage evidence resolves requirements inside uv-managed project environments"
 	assert_file_contains "$workflow_file" "--extra dev" "opencode coverage evidence installs pyproject optional dev extras when repositories do not use dependency-groups"

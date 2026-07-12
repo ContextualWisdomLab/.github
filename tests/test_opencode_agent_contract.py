@@ -249,6 +249,12 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "rust_coverage_fail_under_lines()" in measure_step
     assert "package.metadata.opencode.coverage.minimum_lines" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
+    assert "run_python_uv_lock_check()" in measure_step
+    assert "Python uv lockfile consistency (${project_dir})" in measure_step
+    assert "uv lock --check" in measure_step
+    assert measure_step.index('run_python_uv_lock_check "$project_dir"') < measure_step.index(
+        'uv sync --project "$project_dir" --group dev'
+    )
 
 
 def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
