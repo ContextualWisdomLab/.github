@@ -59,6 +59,14 @@ def resolve_context(event: Mapping[str, object], default_repository: str) -> dic
         if not pattern.fullmatch(values[name]):
             print(f"::error::Invalid OpenCode review context value for {name}.", file=sys.stderr)
             raise SystemExit(1)
+    # Free-text PR metadata for the review-language signal. It is arbitrary
+    # author text, so it is not pattern-validated; it stays shell-safe because
+    # write_shell_exports quotes every value with shlex.quote and consumers only
+    # grep it as data. Sourcing this here (from the event payload, no API call)
+    # keeps the preferred-language marker present even when gh pr view is
+    # throttled, so the review-language contract can no longer fail open.
+    values["PR_TITLE_FOR_LANGUAGE"] = str(pull_request.get("title") or "").strip()
+    values["PR_BODY_FOR_LANGUAGE"] = str(pull_request.get("body") or "").strip()
     return values
 
 

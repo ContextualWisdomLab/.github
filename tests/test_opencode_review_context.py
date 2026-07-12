@@ -29,6 +29,8 @@ def test_pull_request_event_writes_shell_exports(tmp_path):
         {
             "pull_request": {
                 "number": 380,
+                "title": "🛡️ Sentinel: 업로드 DoS 취약점 수정",
+                "body": "이 PR은 보안 문제를 고칩니다; $(rm -rf /) `id`",
                 "base": {"sha": BASE_SHA, "repo": {"full_name": "ContextualWisdomLab/.github"}},
                 "head": {"sha": HEAD_SHA},
             }
@@ -52,6 +54,13 @@ def test_pull_request_event_writes_shell_exports(tmp_path):
     assert "export GH_REPOSITORY=ContextualWisdomLab/.github" in shell_env_text
     assert f"export PR_BASE_SHA={BASE_SHA}" in shell_env_text
     assert f"export HEAD_SHA={HEAD_SHA}" in shell_env_text
+    # The Korean review-language signal is carried through the event payload.
+    assert "export PR_TITLE_FOR_LANGUAGE=" in shell_env_text
+    assert "수정" in shell_env_text
+    # Untrusted PR body is shlex-quoted (single-quoted), so shell
+    # metacharacters like $(...) and backticks stay inert when the file is
+    # sourced.
+    assert "export PR_BODY_FOR_LANGUAGE='" in shell_env_text
 
 
 def test_workflow_dispatch_inputs_use_default_repository(tmp_path):
@@ -85,6 +94,10 @@ def test_workflow_dispatch_inputs_use_default_repository(tmp_path):
     shell_env_text = shell_env.read_text(encoding="utf-8")
     assert "export GH_REPOSITORY=ContextualWisdomLab/example" in shell_env_text
     assert "export PR_NUMBER=12" in shell_env_text
+    # No pull_request payload: the language signal is empty, so the shell falls
+    # back to the retrying gh pr view path.
+    assert "export PR_TITLE_FOR_LANGUAGE=''" in shell_env_text
+    assert "export PR_BODY_FOR_LANGUAGE=''" in shell_env_text
 
 
 def test_invalid_context_value_fails_closed(tmp_path):

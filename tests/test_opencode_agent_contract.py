@@ -747,6 +747,43 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
     assert 'stop_approval_without_review "CHECKS_LOOKUP_FAILED"' in workflow
 
 
+def test_opencode_review_language_signal_is_throttle_proof():
+    """The PR review-language signal must not depend on a throttleable API call.
+
+    The normalizer enforces Korean review prose only when the bounded evidence
+    carries a ``Preferred review language: `Korean``` marker; if the marker is
+    absent the language contract fails open and a Korean PR receives an English
+    review. Sourcing the signal from the GitHub event payload (no API call)
+    keeps the marker present even when ``gh pr view`` is rate-limited.
+    """
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    # Event-payload primary source, resolved from the event JSON by the context
+    # script (shlex-quoted, never ${{ }}-inlined) so untrusted PR text is only
+    # ever grepped as data.
+    assert "PR_TITLE_FOR_LANGUAGE: ${{" not in workflow
+    assert 'title="${PR_TITLE_FOR_LANGUAGE:-}"' in workflow
+    assert 'body="${PR_BODY_FOR_LANGUAGE:-}"' in workflow
+    context_script = Path("scripts/ci/opencode_review_context.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"PR_TITLE_FOR_LANGUAGE"' in context_script
+    assert '"PR_BODY_FOR_LANGUAGE"' in context_script
+
+    # The gh pr view fallback (cross-repo workflow_dispatch) retries so a
+    # transient throttle does not drop the marker.
+    assert re.search(
+        r'while \[ "\$attempt" -le 3 \]; do[\s\S]{0,400}'
+        r"gh pr view \"\$PR_NUMBER\" --repo \"\$GH_REPOSITORY\" --json title,body",
+        workflow,
+    )
+    # The preferred-language marker and its Korean/English detection remain.
+    assert "- Preferred review language: `%s`" in workflow
+    assert "grep -Eq '[가-힣]'" in workflow
+
+
 def test_opencode_jq_filters_do_not_embed_literal_expression_openers():
     """Literal '${{' inside run scripts is parsed as a GitHub expression opener."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(

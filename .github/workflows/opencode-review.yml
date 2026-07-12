@@ -1787,14 +1787,36 @@ jobs:
           }
 
           emit_review_language_evidence() {
-            local pr_json title body language_signal
-            if ! pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json title,body 2>/dev/null)"; then
+            local pr_json title body language_signal attempt
+            title=""
+            body=""
+            # Prefer the GitHub event payload (no API call, cannot be throttled).
+            if [ -n "${PR_TITLE_FOR_LANGUAGE:-}" ] || [ -n "${PR_BODY_FOR_LANGUAGE:-}" ]; then
+              title="${PR_TITLE_FOR_LANGUAGE:-}"
+              body="${PR_BODY_FOR_LANGUAGE:-}"
+            else
+              # Fallback for cross-repository workflow_dispatch runs, where the
+              # event payload has no pull_request: read title/body via the API,
+              # retrying so a transient GitHub throttle does not drop the marker.
+              attempt=1
+              while [ "$attempt" -le 3 ]; do
+                if pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json title,body 2>/dev/null)"; then
+                  title="$(printf '%s\n' "$pr_json" | jq -r '.title // ""')"
+                  body="$(printf '%s\n' "$pr_json" | jq -r '.body // ""')"
+                  break
+                fi
+                attempt=$((attempt + 1))
+                if [ "$attempt" -le 3 ]; then
+                  sleep 5
+                fi
+              done
+            fi
+
+            if [ -z "$title" ] && [ -z "$body" ]; then
               printf 'PR title/body language evidence could not be collected. Use English only when the PR metadata and changed prose are not primarily Korean.\n'
               return 0
             fi
 
-            title="$(printf '%s\n' "$pr_json" | jq -r '.title // ""')"
-            body="$(printf '%s\n' "$pr_json" | jq -r '.body // ""')"
             if printf '%s\n%s\n' "$title" "$body" | grep -Eq '[가-힣]'; then
               language_signal="Korean"
             elif printf '%s\n%s\n' "$title" "$body" | grep -Eq '[A-Za-z]'; then
