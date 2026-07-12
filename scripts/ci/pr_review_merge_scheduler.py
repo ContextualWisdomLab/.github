@@ -109,13 +109,11 @@ query($owner: String!, $name: String!, $number: Int!) {
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
 OPEN_PRS_PAGE_SIZE = 25
-# Must exceed the opencode-review job timeout (120 min) plus typical runner-queue
-# wait. QUEUED counts as running and the age clock starts at check creation, so a
-# 45-minute threshold marked every queued/long review "stale" and re-dispatched
-# it; each re-dispatch went to the back of the runner queue and itself went
-# stale, multiplying load until the org queue saturated. 420 only recovers
-# genuinely zombie checks that outlive any legitimate run.
-DEFAULT_STALE_OPENCODE_MINUTES = 420
+# Must exceed the 45-minute OpenCode job cap plus typical runner-queue wait.
+# QUEUED counts as running and the age clock starts at check creation, so this
+# remains deliberately larger than the job cap while recovering genuine zombie
+# checks in the same operating window instead of leaving them for seven hours.
+DEFAULT_STALE_OPENCODE_MINUTES = 90
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}

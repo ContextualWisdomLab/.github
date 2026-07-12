@@ -496,6 +496,14 @@ jobs:
           PY
           }
 
+          run_python_uv_lock_check() {
+            local project_dir="$1"
+            if [ -f "${project_dir}/uv.lock" ]; then
+              run_and_capture "Python uv lockfile consistency (${project_dir})" \
+                bash -c 'cd "$1" && uv lock --check' bash "$project_dir"
+            fi
+          }
+
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
@@ -505,6 +513,7 @@ jobs:
             while IFS= read -r project_dir; do
               pyproject_file="${project_dir}/pyproject.toml"
               if [ -f "$pyproject_file" ]; then
+                run_python_uv_lock_check "$project_dir"
                 if pyproject_has_dev_dependency_group "$pyproject_file"; then
                   run_and_capture "Python project dependencies (${project_dir})" \
                     uv sync --project "$project_dir" --group dev
@@ -1519,7 +1528,11 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 420
+    # Coverage and current-head evidence are prepared before the model pool.
+    # The model pool has a 25-minute retry budget and its publish gate has an
+    # 8-minute cap, so 45 minutes releases genuinely hung runners without
+    # truncating the bounded multi-provider review path.
+    timeout-minutes: 45
     permissions:
       actions: read
       checks: read
@@ -3221,7 +3234,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 210
+        timeout-minutes: 30
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3245,17 +3258,29 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 minutes gives DeepSeek V3 enough room for deep tool-using review.
-          # The retry budget still bounds queue impact: DeepSeek gets a full
-          # window, then one strong fallback can run before publish fails closed
-          # with visible provider/check evidence.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # A provider gets ten minutes for a tool-using review before the pool
+          # advances by default. Dynamic cadence below shortens small PRs and
+          # lengthens larger ones only within the 30-minute model step cap, so
+          # one stalled endpoint cannot occupy the org queue indefinitely.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"
-          # Allow one retry catalog pass for transient provider/model-output
-          # failures; the retry budget still fails closed with visible
-          # diagnostics before the 210-minute step timeout.
-          OPENCODE_POOL_MAX_CYCLES: "2"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "1500"
+          # Visit the high-sensitivity candidate catalog once. Per-provider
+          # failures and timeouts are logged before the publish gate evaluates
+          # the current-head result and fails closed when no verdict exists.
+          OPENCODE_POOL_MAX_CYCLES: "1"
+          OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
+          OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
+          OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "300"
+          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "900"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "1500"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "900"
+          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "1500"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "1500"
+          OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "300"
@@ -3266,6 +3291,7 @@ jobs:
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-model-pool.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head

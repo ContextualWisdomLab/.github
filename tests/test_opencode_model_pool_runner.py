@@ -62,6 +62,8 @@ def run_failed_model(
     json_line: str = "",
     stderr_line: str = "",
     evidence_excerpt: str = "",
+    changed_files: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
     model_candidates: str = "github-models/openai/gpt-5",
     prompt_capture: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -77,6 +79,9 @@ def run_failed_model(
     shutil.copy2(ROOT / "opencode.jsonc", review_dir / "opencode.jsonc")
     evidence_file = tmp_path / "evidence.md"
     evidence_file.write_text("bounded current-head evidence\n", encoding="utf-8")
+    changed_files_file = tmp_path / "changed-files.txt"
+    if changed_files is not None:
+        changed_files_file.write_text("\n".join(changed_files) + "\n", encoding="utf-8")
     if evidence_excerpt:
         (review_dir / "bounded-review-evidence-excerpt.md").write_text(
             evidence_excerpt, encoding="utf-8"
@@ -108,6 +113,7 @@ def run_failed_model(
             "GITHUB_OUTPUT": bash_path(github_output),
             "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "1" * 40,
+            "OPENCODE_CHANGED_FILES_FILE": bash_path(changed_files_file),
             "OPENCODE_EVIDENCE_FILE": bash_path(evidence_file),
             "OPENCODE_MODEL_ATTEMPTS": "1",
             "OPENCODE_MODEL_CANDIDATES": model_candidates,
@@ -124,6 +130,8 @@ def run_failed_model(
             "RUN_ID": "29189945378",
         }
     )
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [command, bash_path(RUNNER)],
         cwd=ROOT,
@@ -172,6 +180,30 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
         "OpenCode provider failure supplied no structured JSON or stderr reason "
         "(json-bytes=0, stderr-bytes=0)."
     ) in result.stdout
+
+
+def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> None:
+    """Small PRs fail through hung/unavailable providers quickly with a visible budget reason."""
+    result = run_failed_model(
+        tmp_path,
+        changed_files=["pyproject.toml", "uv.lock"],
+        extra_env={
+            "OPENCODE_DYNAMIC_REVIEW_CADENCE": "true",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "99",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "99",
+            "OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS": "7",
+            "OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS": "11",
+            "OPENCODE_DYNAMIC_MAX_CYCLES": "1",
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode dynamic review cadence selected 7s per attempt and 11s total budget "
+        "for 2 changed file(s); max-cycles=1."
+    ) in result.stdout
+    assert "OpenCode github-models/openai/gpt-5 attempt 1/1 using 7s run timeout" in result.stdout
+    assert "retry budget remaining." in result.stdout
 
 
 def test_github_models_openai_prompt_references_evidence_without_inlining(tmp_path: Path) -> None:
