@@ -3260,10 +3260,12 @@ record_paths = {
 if not record_paths:
     raise SystemExit(1)
 
+# ⚡ Bolt: Pre-compile regex for path normalization to optimize inner loop scanning
+location_suffix_re = re.compile(r":\d+(?:-\d+)?$")
 
 def normalize_report_path(raw: str) -> str | None:
     value = raw.strip().strip("`").replace("\\", "/")
-    value = re.sub(r":\d+(?:-\d+)?$", "", value)
+    value = location_suffix_re.sub("", value)
     for record_path in record_paths:
         if value == record_path or value.endswith("/" + record_path):
             return record_path
