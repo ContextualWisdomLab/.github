@@ -3768,6 +3768,9 @@ run_current_target_scan() {
 
 	case "$PR_FINDINGS_DECISION" in
 	block_changed | block_unmapped | block_manifest_unverified)
+		if [ "$strict_primary_provider_fallback" -eq 1 ]; then
+			fail_reported_vulnerabilities_before_fallback_success || true
+		fi
 		return 1
 		;;
 	esac
@@ -3838,6 +3841,9 @@ run_current_target_scan() {
 
 		case "$PR_FINDINGS_DECISION" in
 		block_changed | block_unmapped | block_manifest_unverified)
+			if [ "$strict_fallback_provider_signal" -eq 1 ]; then
+				fail_reported_vulnerabilities_before_fallback_success || true
+			fi
 			return 1
 			;;
 		esac

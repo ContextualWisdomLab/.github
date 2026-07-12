@@ -51,6 +51,8 @@ assert_file_contains() {
 
 	if ! grep -Fq -- "$needle" "$file_path"; then
 		record_failure "$message (missing '$needle')"
+		echo "Assertion source (first 240 lines): $file_path" >&2
+		sed -n '1,240p' "$file_path" | sed 's/^/  | /' >&2
 	fi
 }
 
@@ -61,6 +63,8 @@ assert_file_matches() {
 
 	if ! grep -Eq -- "$pattern" "$file_path"; then
 		record_failure "$message (missing pattern '$pattern')"
+		echo "Assertion source (first 240 lines): $file_path" >&2
+		sed -n '1,240p' "$file_path" | sed 's/^/  | /' >&2
 	fi
 }
 
@@ -5493,6 +5497,23 @@ run_filtered_gate_case_if_requested() {
 			"pull_request" \
 			"backend/app/api/snapshots.py"
 		;;
+	pull-request-target-modified-file-pr-head-tree-lookup-failure)
+		run_pull_request_target_aborts_on_pr_head_blob_failure_case \
+			"pull-request-target-modified-file-pr-head-tree-lookup-failure" \
+			"src/existing.py" \
+			"BASE_CONTENT_MUST_NOT_BE_USED_AFTER_HEAD_LOOKUP_FAILURE" \
+			"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
+			"ls-tree" \
+			"1"
+		;;
+	pull-request-target-changed-file-list-diff-failure)
+		run_pull_request_target_aborts_on_pr_head_blob_failure_case \
+			"pull-request-target-changed-file-list-diff-failure" \
+			"src/existing.py" \
+			"BASE_CONTENT_MUST_NOT_BE_USED_AFTER_DIFF_FAILURE" \
+			"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
+			"diff"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -5505,8 +5526,6 @@ run_filtered_gate_case_if_requested() {
 
 	exit 0
 }
-
-run_filtered_gate_case_if_requested
 
 run_pull_request_target_head_scope_case() {
 	local case_name="$1"
@@ -6587,7 +6606,26 @@ cat >"$fake_git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 fake_git_fail_command="${FAKE_GIT_FAIL_COMMAND:-}"
-if [ -n "$fake_git_fail_command" ] && [ "${1:-}" = "$fake_git_fail_command" ]; then
+git_command=""
+skip_global_option_value=0
+for arg in "$@"; do
+	if [ "$skip_global_option_value" -eq 1 ]; then
+		skip_global_option_value=0
+		continue
+	fi
+	case "$arg" in
+	-c | -C | --git-dir | --work-tree)
+		skip_global_option_value=1
+		;;
+	-*)
+		;;
+	*)
+		git_command="$arg"
+		break
+		;;
+	esac
+done
+if [ -n "$fake_git_fail_command" ] && [ "$git_command" = "$fake_git_fail_command" ]; then
 	printf 'PARTIAL_PR_HEAD_BLOB_SHOULD_BE_DISCARDED'
 	exit 1
 fi
@@ -7898,6 +7936,8 @@ assert_opencode_failed_check_fallback_handles_split_code_location_lines
 assert_opencode_failed_check_fallback_does_not_anchor_unmapped_strix_reports_to_workflow
 
 assert_opencode_failed_check_fallback_maps_strix_status_permission_smoke_failure
+
+run_filtered_gate_case_if_requested
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-modified-file-uses-head-blob" \
