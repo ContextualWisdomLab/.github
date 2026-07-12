@@ -88,11 +88,13 @@ def test_check_with_command_detail_fallbacks(tmp_path, monkeypatch):
     assert "reported a syntax error" in detail
 
 
-def test_check_shell_uses_bash_n(tmp_path):
+def test_check_shell_uses_bash_n(tmp_path, monkeypatch):
     """A real bash -n check flags a broken shell script when bash exists."""
     bad = write(tmp_path, "bad.sh", "if then fi\n")
-    if gate.shutil.which("bash") is None:  # pragma: no cover - CI always has bash
+    bash = gate.shutil.which("bash")
+    if bash is None:  # pragma: no cover - CI always has bash
         pytest.skip("bash not available")
+    monkeypatch.setattr(gate, "COMMAND_TIMEOUT_SECONDS", 3)
     result, detail = gate.check_shell(bad)
     if result == gate.SKIPPED and "timed out after" in detail:
         pytest.skip(detail)
