@@ -556,11 +556,74 @@ jobs:
             fi
           }
 
+          declared_package_manager() {
+            if [ -f package.json ]; then
+              jq -r '.packageManager // "" | split("@")[0]' package.json 2>/dev/null || true
+            fi
+          }
+
+          declared_package_manager_spec() {
+            if [ -f package.json ]; then
+              jq -r '.packageManager // ""' package.json 2>/dev/null || true
+            fi
+          }
+
+          ensure_corepack_runner() {
+            local runner="$1"
+            local spec="$2"
+
+            if command -v "$runner" >/dev/null 2>&1; then
+              return 0
+            fi
+            if ! command -v corepack >/dev/null 2>&1; then
+              printf 'Coverage package runner %s is required, but neither %s nor corepack is available; not falling back to npm.\n' "$runner" "$runner" >&2
+              return 1
+            fi
+
+            corepack enable >&2 || true
+            case "$spec" in
+              "$runner"@*)
+                corepack prepare "$spec" --activate >&2 || true
+                ;;
+              *)
+                corepack prepare "${runner}@latest" --activate >&2 || true
+                ;;
+            esac
+            if command -v "$runner" >/dev/null 2>&1; then
+              return 0
+            fi
+
+            printf 'Coverage package runner %s could not be activated through corepack; not falling back to npm.\n' "$runner" >&2
+            return 1
+          }
+
           select_package_runner() {
-            if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
-              printf '%s\n' "pnpm"
-            elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
-              printf '%s\n' "yarn"
+            local declared_runner
+            local declared_spec
+
+            declared_runner="$(declared_package_manager)"
+            declared_spec="$(declared_package_manager_spec)"
+            case "$declared_runner" in
+              pnpm)
+                ensure_corepack_runner pnpm "$declared_spec" && printf '%s\n' "pnpm"
+                return
+                ;;
+              yarn)
+                ensure_corepack_runner yarn "$declared_spec" && printf '%s\n' "yarn"
+                return
+                ;;
+              npm)
+                command -v npm >/dev/null 2>&1 && printf '%s\n' "npm"
+                return
+                ;;
+            esac
+
+            if [ -f pnpm-lock.yaml ]; then
+              ensure_corepack_runner pnpm "$declared_spec" && printf '%s\n' "pnpm"
+              return
+            elif [ -f yarn.lock ]; then
+              ensure_corepack_runner yarn "$declared_spec" && printf '%s\n' "yarn"
+              return
             elif command -v npm >/dev/null 2>&1; then
               printf '%s\n' "npm"
             fi
