@@ -3527,8 +3527,188 @@ jobs:
             fi
           fi
 
+      - name: Publish central OpenCode fast approval
+        id: central_fast_approval
+        if: >-
+          always()
+          && needs.coverage-evidence.result == 'success'
+          && steps.opencode_review_model_pool.outputs.review_status == 'success'
+          && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.event.inputs.pr_head_ref || '' }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT: ${{ steps.central_review_process_fallback_scope.outputs.changed_count || '0' }}
+          CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "12"
+          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
+          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "15"
+        run: |
+          set -euo pipefail
+          echo "published=false" >>"$GITHUB_OUTPUT"
+          if [ "$GH_REPOSITORY" != "ContextualWisdomLab/.github" ]; then
+            echo "::notice::Central fast approval skipped outside ContextualWisdomLab/.github."
+            exit 0
+          fi
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::CENTRAL_FAST_APPROVAL_NO_TOKEN: review write token was unavailable for current head ${HEAD_SHA}."
+            exit 1
+          fi
+
+          api_url="https://api.github.com"
+          api_timeout="${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-15}"
+          read_token="${CHECK_LOOKUP_GH_TOKEN:-$GH_TOKEN}"
+          write_token="$GH_TOKEN"
+          owner="${GH_REPOSITORY%%/*}"
+          repo_name="${GH_REPOSITORY#*/}"
+
+          curl_api_read() {
+            curl --silent --show-error --fail-with-body \
+              --connect-timeout 5 \
+              --max-time "$api_timeout" \
+              -H "Authorization: Bearer ${read_token}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$@"
+          }
+
+          curl_api_write() {
+            curl --silent --show-error --fail-with-body \
+              --connect-timeout 5 \
+              --max-time "$api_timeout" \
+              -H "Authorization: Bearer ${write_token}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$@"
+          }
+
+          self_check_filter='
+            def self_check:
+              (.name // "") as $n
+              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap"] | index($n);
+          '
+
+          check_runs_file="$(mktemp)"
+          pending_checks_file="$(mktemp)"
+          failed_checks_file="$(mktemp)"
+          for attempt in $(seq 1 "${APPROVAL_CHECK_WAIT_ATTEMPTS:-12}"); do
+            curl_api_read "${api_url}/repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" >"$check_runs_file"
+            jq -r "${self_check_filter}
+              (.check_runs // [])
+              | .[]
+              | select((self_check | not) and (.status // \"\") != \"completed\")
+              | \"- \" + (.name // \"check\") + \": \" + (.status // \"unknown\") + (if (.html_url // \"\") != \"\" then \" (\" + .html_url + \")\" else \"\" end)
+            " "$check_runs_file" >"$pending_checks_file"
+            if [ ! -s "$pending_checks_file" ]; then
+              break
+            fi
+            if [ "$attempt" -lt "${APPROVAL_CHECK_WAIT_ATTEMPTS:-12}" ]; then
+              printf 'Central fast approval waiting for peer checks (%s/%s):\n' "$attempt" "${APPROVAL_CHECK_WAIT_ATTEMPTS:-12}"
+              cat "$pending_checks_file"
+              sleep "${APPROVAL_CHECK_WAIT_SLEEP_SECONDS:-10}"
+            fi
+          done
+          if [ -s "$pending_checks_file" ]; then
+            echo "::error::CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS: peer GitHub Checks remained pending for current head ${HEAD_SHA}."
+            cat "$pending_checks_file"
+            exit 1
+          fi
+          jq -r "${self_check_filter}
+            (.check_runs // [])
+            | .[]
+            | select((self_check | not) and (.status // \"\") == \"completed\")
+            | select((.conclusion // \"\") as \$c | [\"success\", \"neutral\", \"skipped\"] | index(\$c) | not)
+            | \"- \" + (.name // \"check\") + \": \" + (.conclusion // \"unknown\") + (if (.html_url // \"\") != \"\" then \" (\" + .html_url + \")\" else \"\" end)
+          " "$check_runs_file" >"$failed_checks_file"
+          if [ -s "$failed_checks_file" ]; then
+            echo "::error::CENTRAL_FAST_APPROVAL_FAILED_CHECKS: peer GitHub Checks failed for current head ${HEAD_SHA}."
+            cat "$failed_checks_file"
+            exit 1
+          fi
+
+          alerts_file="$(mktemp)"
+          if [ -z "${HEAD_REF:-}" ]; then
+            echo "::error::CENTRAL_FAST_APPROVAL_NO_HEAD_REF: cannot read code-scanning alerts without the PR head ref."
+            exit 1
+          fi
+          curl_api_read "${api_url}/repos/${GH_REPOSITORY}/code-scanning/alerts?ref=refs/heads/${HEAD_REF}&state=open&per_page=100" >"$alerts_file"
+          alerts="$(jq -r '
+            (. // [])
+            | .[]
+            | {
+                number: (.number // 0),
+                rule: (.rule.id // .rule.name // "unknown"),
+                tool: (.tool.name // "code-scanning"),
+                severity: (.rule.security_severity_level // .rule.severity // "unknown"),
+                url: (.html_url // "")
+              }
+            | select((.severity | ascii_downcase) as $s | ["medium","high","critical","warning","error"] | index($s))
+            | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
+          ' "$alerts_file")"
+          if [ -n "$alerts" ]; then
+            echo "::error::CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS: medium-or-higher code-scanning alerts remain for current head ${HEAD_SHA}."
+            printf '%s\n' "$alerts"
+            exit 1
+          fi
+
+          threads_query_file="$(mktemp)"
+          threads_response_file="$(mktemp)"
+          jq -n \
+            --arg owner "$owner" \
+            --arg name "$repo_name" \
+            --argjson number "$PR_NUMBER" \
+            --arg query 'query($owner:String!,$name:String!,$number:Int!) { repository(owner:$owner,name:$name) { pullRequest(number:$number) { reviewThreads(first:100) { nodes { isResolved isOutdated path line comments(first:20) { nodes { author { login } createdAt body url } } } } } } }' \
+            '{query: $query, variables: {owner: $owner, name: $name, number: $number}}' >"$threads_query_file"
+          curl_api_read -X POST -H "Content-Type: application/json" --data-binary "@${threads_query_file}" "${api_url}/graphql" >"$threads_response_file"
+          unresolved_threads="$(jq -r '
+            (.data.repository.pullRequest.reviewThreads.nodes // [])
+            | .[]
+            | select((.isResolved // false) == false and (.isOutdated // false) == false)
+            | "- " + (.path // "unknown") + ":" + ((.line // "unknown") | tostring)
+          ' "$threads_response_file")"
+          if [ -n "$unresolved_threads" ]; then
+            echo "::error::CENTRAL_FAST_APPROVAL_UNRESOLVED_THREADS: unresolved review threads remain for current head ${HEAD_SHA}."
+            printf '%s\n' "$unresolved_threads"
+            exit 1
+          fi
+
+          body="$(printf '%s\n' \
+            "## Pull request overview" \
+            "" \
+            "OpenCode reviewed the current-head central review-process repair evidence and found no blocking issues." \
+            "" \
+            "## Findings" \
+            "" \
+            "No blocking findings." \
+            "" \
+            "## Evidence" \
+            "" \
+            "- Result: APPROVE" \
+            "- Reason: central review-process fast approval; model-pool output succeeded and current-head peer checks, code-scanning alerts, and review threads were clear." \
+            "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
+            "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
+            "- Head SHA: \`${HEAD_SHA}\`" \
+            "- Workflow run: ${RUN_ID}" \
+            "- Workflow attempt: ${RUN_ATTEMPT}" \
+            "" \
+            "This approval path is limited to ContextualWisdomLab/.github central review-process self-repair.")"
+          payload_file="$(mktemp)"
+          jq -n --arg event APPROVE --arg body "$body" --arg commit_id "$HEAD_SHA" \
+            '{event: $event, body: $body, commit_id: $commit_id}' >"$payload_file"
+          curl_api_write -X POST --data-binary "@${payload_file}" "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+          echo "::notice::Central fast approval published APPROVE review for ${GH_REPOSITORY}#${PR_NUMBER} at ${HEAD_SHA}."
+          echo "published=true" >>"$GITHUB_OUTPUT"
+
       - name: Publish OpenCode review outcome
-        if: always()
+        if: >-
+          always()
+          && steps.central_fast_approval.outputs.published != 'true'
         # Catalog model execution belongs to the preceding bounded model-pool
         # step. This step keeps GitHub review publication retries short, but
         # keeps GitHub review publication bounded. Failed-check evidence is

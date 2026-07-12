@@ -530,7 +530,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'timeout-minutes: 12' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 210", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,420}timeout-minutes: 8", workflow)
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 8", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
@@ -830,6 +830,11 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
         "OpenCode APPROVE review skips the non-authoritative changed-file graph before publication"
         in workflow
     )
+    assert "Publish central OpenCode fast approval" in workflow
+    assert "steps.central_fast_approval.outputs.published != 'true'" in workflow
+    assert "CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS" in workflow
+    assert "CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS" in workflow
+    assert "Central fast approval published APPROVE review" in workflow
     assert (
         "Branch protection and rulesets remain authoritative if a matching GitHub pull review is required"
         in workflow
