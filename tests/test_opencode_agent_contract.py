@@ -293,6 +293,37 @@ def test_opencode_runtime_pin_supports_reasoning_options():
         assert 'OPENCODE_VERSION: "1.16.0"' not in workflow
 
 
+def test_autofix_worker_resolves_merge_conflicts_fail_closed():
+    """The autofix worker gains a fail-closed merge-conflict resolution mode.
+
+    An approved same-repository conflicting PR is dispatched with
+    resolve_conflict=true; the worker merges the base into the head, resolves
+    markers with OpenCode, refuses to push if any conflict marker remains, and
+    the pushed head is re-reviewed before it can merge.
+    """
+    worker = Path(".github/workflows/pr-review-autofix.yml").read_text(encoding="utf-8")
+
+    assert "resolve_conflict:" in worker
+    assert "RESOLVE_CONFLICT: ${{ inputs.resolve_conflict }}" in worker
+    # The review-feedback fix steps do not run in conflict mode.
+    assert worker.count("if: inputs.resolve_conflict != 'true'") >= 3
+    # The dedicated conflict step exists and is fail-closed.
+    assert "- name: Merge base branch and resolve conflicts with OpenCode" in worker
+    assert "if: inputs.resolve_conflict == 'true'" in worker
+    assert 'git merge --no-commit --no-ff "$PR_BASE_SHA"' in worker
+    assert re.search(
+        r'grep -qi "conflict marker"[\s\S]{0,200}refusing to push[\s\S]{0,200}exit 1',
+        worker,
+    )
+    assert 'git push origin "HEAD:${PR_HEAD_REF}"' in worker
+
+    # The fix scheduler dispatches the mode only for approved conflicting PRs.
+    scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(encoding="utf-8")
+    assert "def needs_conflict_resolution" in scheduler
+    assert "has_current_head_approval" in scheduler
+    assert "resolve_conflict" in scheduler
+
+
 def test_code_reviewer_prompt_preserves_review_only_policy():
     """Guard the reviewer-only behavior and output rubric in the prompt."""
     prompt = Path("code-reviewer-prompt.md").read_text(encoding="utf-8")

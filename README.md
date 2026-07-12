@@ -29,10 +29,16 @@ the OpenCode app token, otherwise it leaves the separate scheduler required
 workflow and schedule authoritative.
 That `update_branch` path is deliberately not used for `DIRTY` or
 `CONFLICTING` PRs: GitHub cannot synthesize a safe conflict resolution for the
-author, so the review must give the author a repair path instead of pretending
-the bot can fix it. A current-head approved PR may still keep or queue native
+author, so the merge scheduler must give the author a repair path instead of pretending
+the merger can fix it. A current-head approved PR may still keep or queue native
 GitHub auto-merge while the conflict is repaired; queued auto-merge is a wait
-state, not evidence that the conflict is solved.
+state, not evidence that the conflict is solved. Separately, the edit-capable
+autofix flow (`scripts/ci/pr_review_fix_scheduler.py` →
+`.github/workflows/pr-review-autofix.yml`) may, for an approved
+same-repository-head PR, merge the base into the head and resolve the conflict
+markers with OpenCode, then push the resolved head; that head is fully
+re-reviewed and re-checked before it can merge, so a wrong resolution cannot
+merge unreviewed.
 When GitHub reports `DIRTY` or `CONFLICTING`, the scheduler does not pretend to
 fix the branch. It blocks the PR with repair guidance: merge or rebase the
 latest base branch into the PR branch, resolve conflict markers in that PR

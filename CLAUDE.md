@@ -38,9 +38,13 @@ evidence-gated (changed files, CodeGraph evidence, Change Flow DAG, test/coverag
 an actually-executed PoC via `scripts/ci/sandboxed_verify.py` or `scripts/ci/sandboxed_web_e2e.py`,
 split `Developer experience:` / `User experience:` sections). The scheduler updates a PR branch only
 when the latest review is approved, no current-head check has failed, and GitHub reports the PR as
-behind; `DIRTY`/`CONFLICTING` PRs get repair guidance, never a synthesized fix. Old approvals and old
-checks are not merge evidence after the head SHA changes. Details: `README.md` and
-`PR_GOVERNANCE_AUDIT.md`.
+behind. The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
+PRs repair guidance. A separate edit-capable autofix flow
+(`scripts/ci/pr_review_fix_scheduler.py` → `.github/workflows/pr-review-autofix.yml`) may, for an
+approved same-repository-head PR, merge the base into the head and resolve the conflict markers; the
+resulting head is fully re-reviewed and re-checked before it can merge, so a wrong resolution cannot
+merge unreviewed. Old approvals and old checks are not merge evidence after the head SHA changes.
+Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
 
 ## Structure
 
