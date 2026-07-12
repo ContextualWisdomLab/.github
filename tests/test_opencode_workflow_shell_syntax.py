@@ -95,3 +95,13 @@ def test_opencode_review_workflow_avoids_unsupported_gh_slurp_jq_combo():
         and "--jq" in command.split()
     ]
     assert offenders == []
+
+
+def test_opencode_model_pool_runner_enforces_runtime_floor():
+    runner = (REPO_ROOT / "scripts/ci/run_opencode_review_model_pool.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "minimum_seconds()" in runner
+    assert 'minimum_seconds "${OPENCODE_RUN_TIMEOUT_SECONDS:-900}" 1200' in runner
+    assert 'minimum_seconds "${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}" 4200' in runner

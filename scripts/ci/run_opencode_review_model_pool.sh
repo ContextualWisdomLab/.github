@@ -11,6 +11,19 @@ record_review_model() {
 	printf 'review_model=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
 
+minimum_seconds() {
+	local value="$1"
+	local floor="$2"
+
+	case "$value" in
+		"" | *[!0-9]*) value="$floor" ;;
+	esac
+	if [ "$value" -lt "$floor" ]; then
+		value="$floor"
+	fi
+	printf '%s\n' "$value"
+}
+
 normalize_opencode_output() {
 	local output_file="$1"
 
@@ -146,11 +159,12 @@ run_one_model_attempt() {
 
 main() {
 	local attempts deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
-	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status
+	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout total_retry_budget run_status
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-900}"
-	deadline=$((SECONDS + ${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}))
+	original_run_timeout="$(minimum_seconds "${OPENCODE_RUN_TIMEOUT_SECONDS:-900}" 1200)"
+	total_retry_budget="$(minimum_seconds "${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}" 4200)"
+	deadline=$((SECONDS + total_retry_budget))
 	: >"$OPENCODE_OUTPUT_FILE"
 	cd "$OPENCODE_REVIEW_WORKDIR"
 
