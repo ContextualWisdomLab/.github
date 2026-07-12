@@ -283,6 +283,32 @@ jobs:
           tar -xf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
+      - name: Enforce post-merge stale agent replay guard
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+        run: |
+          set -euo pipefail
+          replay_report="${RUNNER_TEMP}/pr-head-replay-guard.txt"
+          replay_status=0
+          python3 "$GITHUB_WORKSPACE/scripts/ci/pr_head_replay_guard.py" \
+            --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+            --base-sha "$PR_BASE_SHA" \
+            --head-sha "$PR_HEAD_SHA" >"$replay_report" 2>&1 || replay_status=$?
+          cat "$replay_report"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              printf '## PR head replay guard\n\n```text\n'
+              cat "$replay_report"
+              printf '\n```\n'
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$replay_status" -ne 0 ]; then
+            echo "::error::Current HEAD discarded a prior base merge or replay evidence could not be evaluated; see the exact SHAs and deletion counts above."
+            exit "$replay_status"
+          fi
+
       - name: Install Python coverage measurement tools
         run: >-
           python3 -m pip install --disable-pip-version-check --require-hashes
