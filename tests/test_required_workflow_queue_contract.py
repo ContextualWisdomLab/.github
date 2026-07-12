@@ -280,8 +280,9 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     "Resource not accessible by integration". That is an access-grant fact the
     automation can never resolve, so those repositories are reported as skipped,
     non-fatal "unavailable" repositories rather than hard failures — otherwise a
-    handful of un-enrolled repositories keeps the hourly sweep permanently red
-    and masks a genuinely new repository that starts failing.
+    handful of un-enrolled repositories keeps the scheduled sweep (the
+    ``*/15 * * * *`` cron) permanently red and masks a genuinely new repository
+    that starts failing.
 
     The sweep stays fail-closed two ways: any non-403 scheduler failure still
     increments ``failures`` and fails the job, and if MORE than
@@ -302,6 +303,11 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     # Widespread inaccessibility is a credential regression and must fail loudly.
     assert 'if [ "$unavailable" -gt "$ORG_SWEEP_MAX_UNAVAILABLE" ]; then' in workflow
     assert "indicates a credential-scope regression" in workflow
+    # The ceiling must be validated as a non-negative integer BEFORE the numeric
+    # test, or a misconfigured non-integer would make "[ -gt ]" error inside an
+    # if condition (which set -e does not trap) and silently skip the guard.
+    assert '"$ORG_SWEEP_MAX_UNAVAILABLE" =~ ^[0-9]+$' in workflow
+    assert "ORG_SWEEP_MAX_UNAVAILABLE must be a non-negative integer" in workflow
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:

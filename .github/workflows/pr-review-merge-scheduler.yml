@@ -587,6 +587,16 @@ jobs:
           fi
           echo "Sweep mutation token source: $SCHEDULER_MUTATION_TOKEN_SOURCE"
 
+          # Validate the fail-closed ceiling before it is used in a numeric test.
+          # A non-integer would make "[ ... -gt ... ]" error out inside an if
+          # condition, which set -e does not trap, silently skipping the
+          # regression guard. Fail loudly instead so a misconfigured
+          # ORG_SWEEP_MAX_UNAVAILABLE can never quietly disable fail-closed.
+          if ! [[ "$ORG_SWEEP_MAX_UNAVAILABLE" =~ ^[0-9]+$ ]]; then
+            echo "::error::ORG_SWEEP_MAX_UNAVAILABLE must be a non-negative integer; got '${ORG_SWEEP_MAX_UNAVAILABLE}'. Fix the ORG_SWEEP_MAX_UNAVAILABLE repository variable."
+            exit 1
+          fi
+
           repositories_json="$(
             gh api \
               -H "Accept: application/vnd.github+json" \
