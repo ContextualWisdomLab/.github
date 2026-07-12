@@ -1521,6 +1521,34 @@ def test_dispatch_opencode_review_deduplicates_current_head_workflow_dispatch(mo
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
 
 
+def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
+    runs = [
+        {
+            "id": 9200,
+            "name": "Strix Security Scan",
+            "head_sha": "old-head",
+            "pull_requests": [{"number": 1}],
+        },
+        {
+            "id": 9201,
+            "name": "OpenCode Review",
+            "head_sha": "head",
+            "pull_requests": [{"number": 2}],
+        },
+    ]
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses: runs)
+
+    pr = make_pr()
+    assert sched.stale_pr_run_ids("owner/repo", pr, workflow="OpenCode Review") == []
+    assert sched.active_opencode_run_ids("owner/repo", "OpenCode Review", pr) == ([], [])
+    assert sched.cancel_stale_opencode_runs(
+        "owner/repo",
+        "OpenCode Review",
+        pr,
+        dry_run=True,
+    ) == []
+
+
 def test_cancel_stale_pr_queued_runs_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -2555,6 +2583,18 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
     )
     assert opencode_dispatched == [("owner/repo", "OpenCode Review", "new-head", False)]
 
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    assert "same-head OpenCode workflow run is already active" in followup(
+        make_pr(
+            headRefOid="new-head",
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        )
+    )
+
 
 def test_post_update_branch_followup_waits_for_central_strix_without_dispatch_credential(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
@@ -2916,6 +2956,39 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     missing_approval_auto = inspect(make_pr(autoMergeRequest={"enabledAt": "now"}), trigger_reviews=False)
     assert missing_approval_auto.action == "disable_auto_merge"
     assert "no OpenCode approval" in missing_approval_auto.reason
+
+
+def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch):
+    monkeypatch.setattr(sched, "workflow_dispatch_wait_reason", lambda repo, workflow: None)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+    assert stacked.action == "wait"
+    assert "stacked PR onto develop; same-head OpenCode workflow run is already active" == stacked.reason
+
+    stale = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(started_at="2026-06-25T07:00:00Z"),
+                    strix_check(),
+                ]
+            }
+        }
+    )
+    stale_decision = inspect(stale, stale_opencode_minutes=0)
+    assert stale_decision.action == "wait"
+    assert "same-head workflow run is already active" in stale_decision.reason
+
+    completed_strix = inspect(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
+    )
+    assert completed_strix.action == "wait"
+    assert "completed Strix evidence; same-head OpenCode workflow run is already active" in completed_strix.reason
 
 
 def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direct_merge(monkeypatch):
