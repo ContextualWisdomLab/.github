@@ -787,7 +787,7 @@ jobs:
             superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
             if [ "$superseded_count" -gt 0 ]; then
               echo "Cancelling ${superseded_count} queued/in-progress run(s) that do not match an open PR or default-branch Current HEAD:"
-              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) current_head=\(.current_head // \"closed-or-no-open-pr\")"' <<<"$superseded_runs_json"
+              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) current_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
               if [ "$DRY_RUN" != "true" ]; then
                 while IFS= read -r run_id; do
                   if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
