@@ -280,6 +280,14 @@ def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
 
 def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
     """A changed JS file must select its nearest nested package.json for coverage."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required for the extracted workflow function regression test")
+    try:
+        subprocess.run([bash, "--version"], capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"bash is not usable for this regression test: {exc}")
+
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
     measure_end = workflow.index("\n      - name:", measure_start + 1)
@@ -325,13 +333,17 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
     env = os.environ.copy()
     env.update({"PR_BASE_SHA": base_sha, "PR_HEAD_SHA": head_sha})
 
-    result = subprocess.run(
-        ["bash", "-c", shell],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [bash, "-c", shell],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(f"nested JavaScript package discovery did not finish: {exc}")
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["ADFS samples/Node App"]
