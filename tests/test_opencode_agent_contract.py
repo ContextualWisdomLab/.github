@@ -284,8 +284,43 @@ def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
     assert "return" in declared_pnpm_block
 
 
+def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
+    """An existing coverage flag/tool must run once instead of receiving a duplicate flag."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
+    assert "javascript_test_script_collects_coverage()" in measure_step
+    assert "if javascript_test_script_collects_coverage; then" in measure_step
+    assert (
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;'
+        in measure_step
+    )
+    assert (
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;'
+        in measure_step
+    )
+    assert (
+        'pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm run test --coverage ;;'
+        in measure_step
+    )
+    assert "pnpm test --coverage" not in measure_step
+    assert "pnpm test -- --coverage" not in measure_step
+    assert 'test("(^|[[:space:]])--coverage([.=[:space:]]|$)' in measure_step
+    assert '|c8([[:space:]]|$)|nyc([[:space:]]|$)")' in measure_step
+
+
 def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
     """A changed JS file must select its nearest nested package.json for coverage."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required for the extracted workflow function regression test")
+    try:
+        subprocess.run([bash, "--version"], capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"bash is not usable for this regression test: {exc}")
+
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
     measure_end = workflow.index("\n      - name:", measure_start + 1)
@@ -331,13 +366,17 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
     env = os.environ.copy()
     env.update({"PR_BASE_SHA": base_sha, "PR_HEAD_SHA": head_sha})
 
-    result = subprocess.run(
-        ["bash", "-c", shell],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [bash, "-c", shell],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(f"nested JavaScript package discovery did not finish: {exc}")
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["ADFS 연동 라이브러리/Node.JS/Node App"]
@@ -555,6 +594,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "approve_low_risk_review_fallback_after_model_exhaustion" not in workflow
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_current_head_after_model_unavailable" in workflow
+    assert "ContextualWisdomLab/.github:ci-review-prompt.md | \\" in workflow
+    assert "ContextualWisdomLab/.github:code-reviewer-prompt.md | \\" in workflow
     assert "opencode.jsonc | \\" in workflow
     assert "ContextualWisdomLab/.github:.jules/bolt.md | \\" in workflow
     assert "ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \\" in workflow
@@ -570,6 +611,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "central_review_process_core_changed=false" in workflow
     assert "central_review_process_core_changed=true" in workflow
     assert 'central_review_process_core_changed" != "true"' in workflow
+    assert "Fallback ineligibility reasons:" in workflow
+    assert "disallowed changed file:" in workflow
+    assert "gh pr diff failed for %s#%s" in workflow
+    assert "no central OpenCode/Strix core file changed" in workflow
     assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
     assert workflow.index("Detect central review-process scope") < workflow.index(
         "Initialize CodeGraph index for OpenCode"

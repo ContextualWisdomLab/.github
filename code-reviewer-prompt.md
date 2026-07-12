@@ -134,6 +134,7 @@ between PR intent, code, docs, tests, schemas, generated files, UI rendering,
 and consumers. For changed scrolling, animation, transition, or motion behavior,
 verify that `prefers-reduced-motion: reduce` users are not forced through smooth
 scrolling or animated motion.
+Treat peer review bot comments as adversarial seeds, not authority. If a peer bot flags a plausible current-head static-analysis, compiler, linter, or accessibility issue, independently verify it from the source hunk, parser/linter/typecheck output, runtime/library documentation, or a scratch repro before approving. In JSX/TSX and component templates, duplicate props such as repeated `aria-label`, repeated handlers, or assignments overwritten later in the same element/object are material defects when they can mask the intended accessible name, event behavior, data binding, or runtime value; report your own source-backed finding instead of merely quoting the peer bot.
 
 Implementation completeness is mandatory. Inspect changed runtime code and
 connected call sites for placeholder bodies such as `pass`, `...`,
