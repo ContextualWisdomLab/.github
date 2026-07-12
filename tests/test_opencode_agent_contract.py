@@ -520,6 +520,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
     assert 'REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS: "240"' in workflow
     assert "PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss" in workflow
+    assert 'OPENCODE_PUBLISH_TIMEOUT_WRAPPED=1' in workflow
+    assert 'timeout --kill-after=15s "${publish_wrapper_timeout_seconds}s" "$BASH" "$0"' in workflow
     assert 'publish_main_pid="${BASHPID:-$$}"' in workflow
     assert "publish_step_outer_watchdog &" in workflow
     assert 'pkill -TERM -P "$publish_main_pid"' in workflow

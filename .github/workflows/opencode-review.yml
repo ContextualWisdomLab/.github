@@ -3567,6 +3567,31 @@ jobs:
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
+          publish_wrapper_timeout_seconds="${REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS:-240}"
+          if ! [[ "$publish_wrapper_timeout_seconds" =~ ^[0-9]+$ ]] || [ "$publish_wrapper_timeout_seconds" -le 0 ]; then
+            publish_wrapper_timeout_seconds=0
+          fi
+          if [ "${OPENCODE_PUBLISH_TIMEOUT_WRAPPED:-}" != "1" ] &&
+            [ "$publish_wrapper_timeout_seconds" -gt 0 ] &&
+            command -v timeout >/dev/null 2>&1 &&
+            [ -n "${BASH:-}" ] &&
+            [ -r "$0" ]; then
+            export OPENCODE_PUBLISH_TIMEOUT_WRAPPED=1
+            set +e
+            timeout --kill-after=15s "${publish_wrapper_timeout_seconds}s" "$BASH" "$0"
+            publish_wrapper_status=$?
+            set -e
+            case "$publish_wrapper_status" in
+              0) exit 0 ;;
+              124 | 137 | 143)
+                printf '::error::PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss while changing or holding review state for current head %s; timeout wrapper terminated the step so the scheduler can retry with a visible reason.\n' "$publish_wrapper_timeout_seconds" "${HEAD_SHA:-unknown}" >&2
+                exit 124
+                ;;
+              *)
+                exit "$publish_wrapper_status"
+                ;;
+            esac
+          fi
           echo "::group::OpenCode Review Approval Gate"
           echo "PR=#${PR_NUMBER} head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT}"
           publish_main_pid="${BASHPID:-$$}"
