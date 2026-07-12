@@ -490,6 +490,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_central_review_process_after_model_unavailable" in workflow
     assert "opencode.jsonc | \\" in workflow
+    assert "ContextualWisdomLab/.github:.jules/bolt.md | \\" in workflow
+    assert "ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \\" in workflow
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
     assert "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py" in workflow
@@ -499,6 +501,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'max_changed_count=24' in workflow
     assert 'max_changed_count=3' in workflow
     assert "changed_count\" -gt \"$max_changed_count\"" in workflow
+    assert "central_review_process_core_changed=false" in workflow
+    assert "central_review_process_core_changed=true" in workflow
+    assert 'central_review_process_core_changed" != "true"' in workflow
     assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
     assert workflow.index("Detect central review-process scope") < workflow.index(
         "Initialize CodeGraph index for OpenCode"

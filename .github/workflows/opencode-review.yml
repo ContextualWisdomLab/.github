@@ -1673,6 +1673,7 @@ jobs:
           changed_count=0
           max_changed_count=0
           scope_label="unsupported"
+          central_review_process_core_changed=false
 
           case "$GH_REPOSITORY" in
             ContextualWisdomLab/.github)
@@ -1691,9 +1692,11 @@ jobs:
               ContextualWisdomLab/.github:.github/workflows/opencode-review.yml | \
               ContextualWisdomLab/.github:.github/workflows/pr-review-merge-scheduler.yml | \
               ContextualWisdomLab/.github:.github/workflows/strix.yml | \
+              ContextualWisdomLab/.github:.jules/bolt.md | \
               ContextualWisdomLab/.github:.gitleaksignore | \
               ContextualWisdomLab/.github:opencode.jsonc | \
               ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
+              ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \
               ContextualWisdomLab/.github:scripts/ci/pr_head_replay_guard.py | \
               ContextualWisdomLab/.github:scripts/ci/pr_review_merge_scheduler.py | \
               ContextualWisdomLab/.github:scripts/ci/run_opencode_review_model_pool.sh | \
@@ -1717,6 +1720,20 @@ jobs:
             return 1
           }
 
+          fallback_changed_file_counts_as_core() {
+            local changed_file="$1"
+            case "${GH_REPOSITORY}:${changed_file}" in
+              ContextualWisdomLab/.github:.jules/bolt.md)
+                return 1
+                ;;
+              ContextualWisdomLab/.github:*)
+                fallback_changed_file_allowed "$changed_file"
+                return $?
+                ;;
+            esac
+            return 1
+          }
+
           if gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" &&
             [ -s "$changed_files_file" ] &&
             [ "$max_changed_count" -gt 0 ]; then
@@ -1727,10 +1744,17 @@ jobs:
               if ! fallback_changed_file_allowed "$changed_file"; then
                 eligible=false
               fi
+              if fallback_changed_file_counts_as_core "$changed_file"; then
+                central_review_process_core_changed=true
+              fi
             done <"$changed_files_file"
           fi
 
           if [ "$changed_count" -eq 0 ] || [ "$changed_count" -gt "$max_changed_count" ]; then
+            eligible=false
+          fi
+          if [ "$GH_REPOSITORY" = "ContextualWisdomLab/.github" ] &&
+            [ "$central_review_process_core_changed" != "true" ]; then
             eligible=false
           fi
 
