@@ -5,8 +5,6 @@ from __future__ import annotations
 import runpy
 import subprocess
 import sys
-import types
-
 import pytest
 
 from scripts.ci import changed_file_syntax_gate as gate
