@@ -3449,9 +3449,9 @@ jobs:
       - name: Publish OpenCode review outcome
         if: always()
         # Model execution belongs to the preceding bounded model-pool step.
-        # Keep this step short so an exhausted provider cannot occupy the PR
-        # review queue for hours after the model pool has already terminated.
-        timeout-minutes: 35
+        # This step may run one focused failed-check diagnosis, so keep it
+        # bounded but long enough for the same deep-review model budget.
+        timeout-minutes: 120
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3494,9 +3494,9 @@ jobs:
           REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "60"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"
           # A second model catalog pass is deliberately forbidden here. Give a
-          # focused failed-check diagnosis the same 15-minute per-model budget
-          # as the main pool so it finishes inside this step's 35-minute cap.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
+          # focused failed-check diagnosis the same 90-minute deep-review room
+          # as the main pool while still ending inside this step's cap.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
         run: |
           set -euo pipefail
