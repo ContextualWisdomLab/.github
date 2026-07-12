@@ -804,6 +804,10 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
         "OpenCode approve review publication skipped after successful gate" in workflow
     )
     assert (
+        "skipping non-authoritative overview comment mutation so the required approval check can finish promptly"
+        in workflow
+    )
+    assert (
         "Branch protection and rulesets remain authoritative if a matching GitHub pull review is required"
         in workflow
     )

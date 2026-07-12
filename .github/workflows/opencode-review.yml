@@ -4010,6 +4010,10 @@ jobs:
               if [ -n "${review_write_fallback_token:-}" ]; then
                 if post_pull_review_with_retry "fallback review" "$review_write_fallback_token" "$review_payload_file" "$gh_error_file"; then
                   rm -f "$gh_error_file" "$review_payload_file"
+                  if [ "$event" = "APPROVE" ]; then
+                    printf '::notice::OpenCode approve review was published for head %s with fallback token; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
+                    return 0
+                  fi
                   update_review_overview "$event" "$body"
                   return 0
                 fi
@@ -4040,6 +4044,10 @@ jobs:
               exit 1
             fi
             rm -f "$gh_error_file" "$review_payload_file"
+            if [ "$event" = "APPROVE" ]; then
+              printf '::notice::OpenCode approve review was published for head %s; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
+              return 0
+            fi
             update_review_overview "$event" "$body"
           }
 
