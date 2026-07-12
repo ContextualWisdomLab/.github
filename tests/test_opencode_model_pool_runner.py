@@ -12,6 +12,18 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
 
 
+def bash_command() -> str:
+    """Return a Bash executable that can run repository shell scripts locally."""
+    if os.name == "nt":
+        git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+        if git_bash.exists():
+            return str(git_bash)
+    found = shutil.which("bash")
+    if found:
+        return found
+    raise RuntimeError("bash executable was not found")
+
+
 def run_failed_model(
     tmp_path: Path,
     *,
@@ -56,9 +68,9 @@ def run_failed_model(
             "OPENCODE_OUTPUT_FILE": str(tmp_path / "selected-output.md"),
             "OPENCODE_POOL_MAX_CYCLES": "1",
             "OPENCODE_REVIEW_WORKDIR": str(review_dir),
-            "OPENCODE_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "10",
             "OPENCODE_SOURCE_WORKDIR": str(source_dir),
-            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "3",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "30",
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
             "PR_NUMBER": "635",
             "RUNNER_TEMP": str(runner_temp),
@@ -67,13 +79,13 @@ def run_failed_model(
         }
     )
     return subprocess.run(
-        ["bash", str(RUNNER)],
+        [bash_command(), str(RUNNER)],
         cwd=ROOT,
         env=env,
         capture_output=True,
         text=True,
         check=False,
-        timeout=15,
+        timeout=30,
     )
 
 

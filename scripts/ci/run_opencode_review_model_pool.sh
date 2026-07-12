@@ -126,22 +126,51 @@ emit_sanitized_opencode_failure_detail() {
 		json_bytes="$(wc -c <"$opencode_json_file" | tr -d ' ')"
 		{
 			tail -n 200 "$opencode_json_file" |
-				jq -Rr '
-					fromjson?
-					| [
-						(.error? |
-							if type == "string" then .
-							elif type == "object" then
-								[(.name? // empty), (.message? // .data?.message? // .data?.responseBody? // empty)]
-								| map(select(type == "string" and length > 0))
-								| join(": ")
-							else empty end),
-						(.message? // empty),
-						(.data?.message? // empty)
-					]
-					| .[]
-					| select(type == "string" and length > 0)
-				' 2>/dev/null |
+				python3 -c '
+import json
+import sys
+
+
+def strings_from_payload(payload):
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, str) and error:
+        yield error
+    elif isinstance(error, dict):
+        parts = []
+        for key in ("name", "message"):
+            value = error.get(key)
+            if isinstance(value, str) and value:
+                parts.append(value)
+        data = error.get("data")
+        if isinstance(data, dict):
+            for key in ("message", "responseBody"):
+                value = data.get(key)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+        elif isinstance(data, str) and data:
+            parts.append(data)
+        if parts:
+            yield ": ".join(parts)
+    if isinstance(payload, dict):
+        for key in ("message",):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                yield value
+        data = payload.get("data")
+        if isinstance(data, dict):
+            value = data.get("message")
+            if isinstance(value, str) and value:
+                yield value
+
+
+for line in sys.stdin:
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    for text in strings_from_payload(parsed):
+        print(text)
+' 2>/dev/null |
 				head -n 16 |
 				sed 's/^/json: /' >>"$detail_file"
 		} || true
