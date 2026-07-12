@@ -509,9 +509,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12", workflow)
     assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 420", workflow)
     assert 'timeout-minutes: 12' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 75", workflow)
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 210", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,420}timeout-minutes: 30", workflow)
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,420}timeout-minutes: 120", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
@@ -525,9 +525,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/deepseek/deepseek-r1"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "900"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
@@ -546,7 +546,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         not in publish_step
     )
     assert "MODEL: github-models/deepseek/deepseek-v3-0324" in publish_step
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "1200"' in publish_step
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in publish_step
     assert (
         'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"'
         in publish_step
@@ -569,7 +569,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-3600' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-11400' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
     assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert "OpenCode model pool exhausted before producing a valid control conclusion." in model_pool_runner

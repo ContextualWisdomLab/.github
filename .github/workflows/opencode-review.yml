@@ -3094,7 +3094,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 75
+        timeout-minutes: 210
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3118,13 +3118,15 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Fifteen minutes per model keeps high-sensitivity review enabled
-          # while forcing stalled providers to yield the org review queue.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
+          # 90 minutes gives DeepSeek V3 enough room for deep tool-using review.
+          # The retry budget still bounds queue impact: DeepSeek gets a full
+          # window, then one strong fallback can run before publish fails closed
+          # with visible provider/check evidence.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"
           # Stop after one catalog pass; the retry budget fails closed with
-          # visible diagnostics before the 75-minute step timeout.
+          # visible diagnostics before the 210-minute step timeout.
           OPENCODE_POOL_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
@@ -3492,12 +3494,11 @@ jobs:
 
       - name: Publish OpenCode review outcome
         if: always()
-        # Model execution belongs to the preceding bounded model-pool step.
-        # This step only publishes or, on failed peer checks, runs one focused
-        # diagnosis. Keep publication bounded so a stalled GitHub review side
-        # effect returns the runner with an explicit hold reason instead of
-        # occupying the organization queue for hours.
-        timeout-minutes: 30
+        # Catalog model execution belongs to the preceding bounded model-pool
+        # step. This step keeps GitHub review publication retries short, but
+        # still gives one focused failed-check diagnosis a deep DeepSeek V3
+        # window before it publishes an explicit hold reason.
+        timeout-minutes: 120
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3541,9 +3542,10 @@ jobs:
           REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "20"
           # A second model catalog pass is deliberately forbidden here. Give a
-          # focused failed-check diagnosis one bounded single-model window; the
-          # full fallback catalog still belongs to the model-pool step.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "1200"
+          # focused failed-check diagnosis one bounded 90-minute single-model
+          # window; the full fallback catalog still belongs to the model-pool
+          # step.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
