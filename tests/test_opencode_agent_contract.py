@@ -537,6 +537,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OpenCode publishing pull review with %s token" in publish_step
     assert "failed on attempt %s/%s" in publish_step
     assert "exhausted %s configured attempt(s)" in publish_step
+    assert (
+        'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100'
+        in publish_step
+    )
+    assert (
+        'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate'
+        not in publish_step
+    )
     assert "MODEL: github-models/deepseek/deepseek-v3-0324" in publish_step
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in publish_step
     assert (

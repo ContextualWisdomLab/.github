@@ -3844,7 +3844,7 @@ jobs:
 
             if ! overview_comment_id="$(
               timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
-                gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+                gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
                 --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
                 2>"$gh_error_file"
             )"; then
@@ -5722,7 +5722,7 @@ jobs:
           sentinel_comment_error_file="$(mktemp)"
           if ! comment_json="$(
             timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+              gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
               --jq "[.[] | select((.user.login == \"github-actions[bot]\" or .user.login == \"opencode-agent[bot]\") and (.body | contains(\"${sentinel}\")))] | sort_by(.created_at) | last // {}" 2>"$sentinel_comment_error_file"
           )"; then
             if gh_error_is_retryable_publication_failure "$sentinel_comment_error_file"; then
