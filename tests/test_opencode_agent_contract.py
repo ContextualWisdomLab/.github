@@ -503,6 +503,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert "model pool was intentionally skipped" not in workflow
     assert "central review-process evidence fallback" in workflow
+    assert 'collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"' in workflow
+    central_fallback = workflow.split("approve_central_review_process_after_model_unavailable()", 1)[1].split(
+        "request_changes_for_merge_conflict_if_present()", 1
+    )[0]
+    assert "wait_for_peer_github_checks" not in central_fallback
     assert "collect_open_code_scanning_alerts" in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow

@@ -5804,15 +5804,11 @@ jobs:
             fi
 
             pending_checks_file="$(mktemp)"
-            set +e
-            wait_for_peer_github_checks "$pending_checks_file"
-            pending_wait_status=$?
-            set -e
-            if [ "$pending_wait_status" -eq 1 ]; then
+            if ! collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"; then
               printf '::notice::Central review-process evidence fallback skipped because peer GitHub Checks could not be read.\n'
               return 1
             fi
-            if [ "$pending_wait_status" -ne 0 ]; then
+            if [ -s "$pending_checks_file" ]; then
               failed_check_review_body_file="$(mktemp)"
               build_pending_check_body "$pending_checks_file" "$failed_check_review_body_file"
               hold_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"
