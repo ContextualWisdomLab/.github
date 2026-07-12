@@ -3327,7 +3327,7 @@ jobs:
 
       - name: Publish OpenCode review outcome
         if: always()
-        timeout-minutes: 45
+        timeout-minutes: 220
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3371,6 +3371,8 @@ jobs:
           OPENCODE_MODEL_ATTEMPTS: "1"
           OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          # The publish gate may re-kick the review catalog after an exhausted
+          # model-pool output so the PR still gets a concrete pass/fail reason.
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
