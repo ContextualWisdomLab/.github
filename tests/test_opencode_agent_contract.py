@@ -435,6 +435,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "hit a retryable GitHub API throttle; retrying attempt" in workflow
     assert "GitHub returned HTTP 422 for this review write; likely causes are token/event policy" in workflow
     assert "GitHub rate-limited the review write token; retry after the reported reset window" in workflow
+    assert "post_pull_review_request()" in workflow
+    assert "curl --silent --show-error --fail-with-body" in workflow
+    assert '--max-time "$api_timeout"' in workflow
+    assert '--data-binary "@${review_payload_file}"' in workflow
     assert "Review execution contracts" in workflow
     assert "Accessibility/i18n:" in workflow
     assert "Supply-chain/license:" in workflow
@@ -565,6 +569,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "20"' in publish_step
     assert "OpenCode publishing pull review with %s token" in publish_step
     assert "failed on attempt %s/%s" in publish_step
+    assert 'post_pull_review_request "$token_value" "$review_payload_file" "$error_file" "$api_timeout"' in publish_step
     assert "exhausted %s configured attempt(s)" in publish_step
     assert (
         'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100'

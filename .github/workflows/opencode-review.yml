@@ -3745,6 +3745,28 @@ jobs:
             grep -Eiq 'API rate limit exceeded|secondary rate limit|You have exceeded a secondary rate limit|abuse detection|Try again later|retry later|timed out after [0-9]+ seconds' "$error_file"
           }
 
+          post_pull_review_request() {
+            local token_value="$1" review_payload_file="$2" error_file="$3" api_timeout="$4"
+
+            if command -v curl >/dev/null 2>&1; then
+              curl --silent --show-error --fail-with-body \
+                --connect-timeout 5 \
+                --max-time "$api_timeout" \
+                -X POST \
+                -H "Authorization: Bearer ${token_value}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                --data-binary "@${review_payload_file}" \
+                "https://api.github.com/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+                >/dev/null 2>"$error_file"
+              return $?
+            fi
+
+            timeout "${api_timeout}s" env GH_TOKEN="$token_value" \
+              gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+              --input "$review_payload_file" >/dev/null 2>"$error_file"
+          }
+
           review_publish_retry_sleep_seconds() {
             local token_value="$1" default_sleep="$2"
             local rate_json remaining reset_epoch now delay max_sleep
@@ -3785,13 +3807,13 @@ jobs:
             while :; do
               : >"$error_file"
               printf 'OpenCode publishing pull review with %s token (attempt %s/%s, timeout %ss).\n' "$token_label" "$attempt" "$attempts" "$api_timeout" >&2
-              timeout "${api_timeout}s" env GH_TOKEN="$token_value" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$error_file"
+              post_pull_review_request "$token_value" "$review_payload_file" "$error_file" "$api_timeout"
               publish_status=$?
               if [ "$publish_status" -eq 0 ]; then
                 return 0
               fi
               printf 'GitHub pull review publication with %s token failed on attempt %s/%s (exit %s).\n' "$token_label" "$attempt" "$attempts" "$publish_status" >>"$error_file"
-              if [ "$publish_status" -eq 124 ]; then
+              if [ "$publish_status" -eq 124 ] || [ "$publish_status" -eq 28 ]; then
                 printf 'GitHub pull review publication with %s token timed out after %s seconds.\n' "$token_label" "$api_timeout" >>"$error_file"
               fi
               if ! gh_error_is_retryable_publication_failure "$error_file" || [ "$attempt" -ge "$attempts" ]; then
