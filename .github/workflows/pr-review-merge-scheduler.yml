@@ -425,7 +425,7 @@ jobs:
       # this contract). The scheduler paginates, so 1000 keeps the practical
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
       ORG_SWEEP_MAX_PRS: ${{ vars.ORG_SWEEP_MAX_PRS || '1000' }}
-      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
+      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
@@ -436,7 +436,7 @@ jobs:
       # if MORE than this many repositories become unreachable at once, the whole
       # credential likely broke and the job fails loudly.
       ORG_SWEEP_MAX_UNAVAILABLE: ${{ vars.ORG_SWEEP_MAX_UNAVAILABLE || '5' }}
-      STALE_OPENCODE_MINUTES: ${{ vars.STALE_OPENCODE_MINUTES || '420' }}
+      STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '420' }}
     steps:
       - name: Exchange OpenCode app token for sweep mutations
         id: sweep_app_token
@@ -735,7 +735,7 @@ jobs:
                   -H "Accept: application/vnd.github+json" \
                   "/repos/${repo_full_name}/actions/runs?status=${active_status}&per_page=100" \
                   --paginate
-              done | jq -sc '[.[] | .workflow_runs[]]'
+              done | jq -sc '[.[] | (.workflow_runs // [])[]]'
             )"; then
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: queued/in-progress Actions runs could not be read. Grant the sweep credential Actions read access; no run will be cancelled from incomplete evidence."
               active_runs_json="[]"
