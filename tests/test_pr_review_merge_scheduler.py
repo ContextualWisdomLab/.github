@@ -1571,7 +1571,7 @@ def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
     ) == []
 
 
-def test_cancel_stale_pr_queued_runs_force_cancels_same_pr_old_head_runs(monkeypatch):
+def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(monkeypatch):
     calls = []
     head_sha = "a" * 40
     stale_same_pr = {
@@ -1598,30 +1598,42 @@ def test_cancel_stale_pr_queued_runs_force_cancels_same_pr_old_head_runs(monkeyp
         "head_sha": "old",
         "pull_requests": [{"number": 1}],
     }
+    stale_in_progress = {
+        "id": 9005,
+        "name": "Required OpenCode Review",
+        "head_sha": "older-running-head",
+        "pull_requests": [{"number": 1}],
+    }
 
     def fake_run(args, stdin=None):
         calls.append(args)
         if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
-            assert "status=queued" in args
-            return json.dumps({"workflow_runs": [stale_same_pr, current_same_pr, stale_other_pr, stale_strix]})
+            if "status=queued" in args:
+                runs = [stale_same_pr, current_same_pr, stale_other_pr, stale_strix]
+            elif "status=in_progress" in args:
+                runs = [stale_in_progress]
+            else:  # pragma: no cover - the assertion below exposes new states
+                raise AssertionError(args)
+            return json.dumps({"workflow_runs": runs})
         return ""
 
     monkeypatch.setattr(sched, "run", fake_run)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
 
-    run_ids = sched.cancel_stale_pr_queued_runs(
+    run_ids = sched.cancel_stale_pr_runs(
         "owner/repo",
         make_pr(headRefOid=head_sha),
         dry_run=False,
     )
 
-    assert run_ids == ["9001", "9004"]
+    assert run_ids == ["9001", "9004", "9005"]
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9004/force-cancel"] in calls
+    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9005/force-cancel"] in calls
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
-    assert not any("status=in_progress" in " ".join(call) for call in calls)
+    assert any("status=in_progress" in " ".join(call) for call in calls)
 
 
 def test_mutations_refuse_local_credentials(monkeypatch):
@@ -2311,7 +2323,7 @@ def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
     cancelled = []
     monkeypatch.setattr(
         sched,
-        "cancel_stale_pr_queued_runs",
+        "cancel_stale_pr_runs",
         lambda repo, pr, dry_run: cancelled.append((repo, pr["number"], dry_run)) or [],
     )
 
@@ -2462,7 +2474,7 @@ def test_inspect_pr_dispatches_strix_after_update_branch_observes_new_head(monke
     new_head_pr = make_pr(headRefOid="new-head", reviews={"nodes": []})
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
-    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -2488,7 +2500,7 @@ def test_inspect_pr_notes_when_update_branch_head_is_not_observed(monkeypatch):
     )
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append(pr["number"]))
-    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     decision = inspect(pr, dry_run=False)
@@ -2514,7 +2526,7 @@ def test_inspect_pr_updates_outdated_branch_before_review_dispatch(monkeypatch):
     )
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
-    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -3125,7 +3137,7 @@ def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypat
         "update_branch",
         lambda repo, pr, dry_run: updated.append(pr["number"]),
     )
-    monkeypatch.setattr(sched, "cancel_stale_pr_queued_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     assert (

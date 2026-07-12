@@ -1540,12 +1540,12 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
             ))
 
 
-def cancel_stale_pr_queued_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel queued runs for older heads of the same PR."""
+def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel queued or running workflows for older heads of the same PR."""
     if dry_run:
         return []
-    require_github_actions_control_actor("force-cancel-stale-pr-queued-runs")
-    run_ids = stale_pr_run_ids(repo, pr, statuses=("queued",))
+    require_github_actions_control_actor("force-cancel-stale-pr-runs")
+    run_ids = stale_pr_run_ids(repo, pr)
     force_cancel_workflow_runs(repo, run_ids)
     return run_ids
 
@@ -1726,7 +1726,7 @@ def inspect_pr(
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
-    cancel_stale_pr_queued_runs(repo, pr, dry_run=dry_run)
+    cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these
