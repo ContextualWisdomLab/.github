@@ -114,6 +114,60 @@ is_context_overflow_failure() {
 	grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file"
 }
 
+emit_sanitized_opencode_failure_detail() {
+	local opencode_json_file="$1"
+	local opencode_stderr_file="$2"
+	local detail_file json_bytes stderr_bytes
+
+	detail_file="$(mktemp)"
+	json_bytes=0
+	stderr_bytes=0
+	if [ -s "$opencode_json_file" ]; then
+		json_bytes="$(wc -c <"$opencode_json_file" | tr -d ' ')"
+		{
+			tail -n 200 "$opencode_json_file" |
+				jq -Rr '
+					fromjson?
+					| [
+						(.error? |
+							if type == "string" then .
+							elif type == "object" then
+								[(.name? // empty), (.message? // .data?.message? // .data?.responseBody? // empty)]
+								| map(select(type == "string" and length > 0))
+								| join(": ")
+							else empty end),
+						(.message? // empty),
+						(.data?.message? // empty)
+					]
+					| .[]
+					| select(type == "string" and length > 0)
+				' 2>/dev/null |
+				head -n 16 |
+				sed 's/^/json: /' >>"$detail_file"
+		} || true
+	fi
+	if [ -s "$opencode_stderr_file" ]; then
+		stderr_bytes="$(wc -c <"$opencode_stderr_file" | tr -d ' ')"
+		tail -n 40 "$opencode_stderr_file" | sed 's/^/stderr: /' >>"$detail_file"
+	fi
+
+	if [ -s "$detail_file" ]; then
+		perl -pe '
+			s/\bBearer\s+[A-Za-z0-9._~+\/=:-]+/Bearer [REDACTED]/ig;
+			s/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/[REDACTED]/g;
+			s/\bsk-[A-Za-z0-9_-]{6,}/[REDACTED]/g;
+			s/((?:api[_-]?key|authorization|token|secret|password)\s*[":=]\s*)[^,\s;]+/${1}[REDACTED]/ig;
+			s/\b[A-Za-z0-9_+\/=.-]{32,}\b/[REDACTED]/g;
+			s/[\x00-\x08\x0B-\x1F\x7F]/?/g;
+		' "$detail_file" |
+			awk 'NF && !seen[$0]++ { if (length($0) > 500) $0 = substr($0, 1, 500) "..."; print "OpenCode provider failure detail: " $0; if (++count >= 8) exit }'
+	else
+		printf 'OpenCode provider failure supplied no structured JSON or stderr reason (json-bytes=%s, stderr-bytes=%s).\n' \
+			"$json_bytes" "$stderr_bytes"
+	fi
+	rm -f "$detail_file"
+}
+
 is_direct_openai_candidate() {
 	case "$1" in
 	openai/*) return 0 ;;
@@ -156,23 +210,26 @@ run_one_model_attempt() {
 	local candidate_output_file="$6"
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
-	local run_timeout_seconds export_timeout_seconds opencode_status session_id
+	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
 
-	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
+	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-900}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
+	opencode_stderr_file="${opencode_json_file}.stderr"
 
-	rm -f "$opencode_json_file" "$opencode_export_file" "$candidate_output_file"
+	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
 	timeout --kill-after=30s "${run_timeout_seconds}s" opencode run "$(cat "$prompt_file")" \
 		--pure \
 		--agent "$agent" \
 		--model "$model_candidate" \
 		--format json \
-		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" >"$opencode_json_file"
+		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+		>"$opencode_json_file" 2>"$opencode_stderr_file"
 	opencode_status=$?
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
+		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
 		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
 			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
 		fi
@@ -217,8 +274,8 @@ main() {
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
-	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000}"
+	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-900}"
+	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-3600}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	deadline=0
 	if [ "$budget_seconds" -gt 0 ]; then
