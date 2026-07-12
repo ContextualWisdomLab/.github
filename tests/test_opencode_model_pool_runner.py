@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
@@ -24,6 +26,36 @@ def bash_command() -> str:
     raise RuntimeError("bash executable was not found")
 
 
+def bash_path(path: Path) -> str:
+    """Return a path string usable by the bash process under test."""
+    if os.name != "nt":
+        return str(path)
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    posix_path = resolved.as_posix()
+    if drive:
+        return f"/{drive}{posix_path[2:]}"
+    return posix_path
+
+
+def skip_if_windows_bash_is_unresponsive(command: str) -> None:
+    """Skip with a visible reason when local Git Bash cannot start on Windows."""
+    if os.name != "nt":
+        return
+    try:
+        result = subprocess.run(
+            [command, "-lc", "printf bash-ok"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.skip("Git Bash did not respond to a smoke command within 5 seconds on Windows")
+    if result.returncode != 0:
+        pytest.skip(f"Git Bash smoke command failed on Windows: {result.stderr.strip()}")
+
+
 def run_failed_model(
     tmp_path: Path,
     *,
@@ -31,6 +63,8 @@ def run_failed_model(
     stderr_line: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """Run one fake provider failure through the real model-pool launcher."""
+    command = bash_command()
+    skip_if_windows_bash_is_unresponsive(command)
     review_dir = tmp_path / "review"
     source_dir = tmp_path / "source"
     runner_temp = tmp_path / "runner-temp"
@@ -59,27 +93,27 @@ def run_failed_model(
         {
             "FAKE_OPENCODE_JSON": json_line,
             "FAKE_OPENCODE_STDERR": stderr_line,
-            "GITHUB_OUTPUT": str(github_output),
-            "GITHUB_WORKSPACE": str(ROOT),
+            "GITHUB_OUTPUT": bash_path(github_output),
+            "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "1" * 40,
-            "OPENCODE_EVIDENCE_FILE": str(evidence_file),
+            "OPENCODE_EVIDENCE_FILE": bash_path(evidence_file),
             "OPENCODE_MODEL_ATTEMPTS": "1",
             "OPENCODE_MODEL_CANDIDATES": "github-models/openai/gpt-5",
-            "OPENCODE_OUTPUT_FILE": str(tmp_path / "selected-output.md"),
+            "OPENCODE_OUTPUT_FILE": bash_path(tmp_path / "selected-output.md"),
             "OPENCODE_POOL_MAX_CYCLES": "1",
-            "OPENCODE_REVIEW_WORKDIR": str(review_dir),
+            "OPENCODE_REVIEW_WORKDIR": bash_path(review_dir),
             "OPENCODE_RUN_TIMEOUT_SECONDS": "10",
-            "OPENCODE_SOURCE_WORKDIR": str(source_dir),
+            "OPENCODE_SOURCE_WORKDIR": bash_path(source_dir),
             "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "30",
-            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "PATH": f"{bash_path(fake_bin)}:{env['PATH']}",
             "PR_NUMBER": "635",
-            "RUNNER_TEMP": str(runner_temp),
+            "RUNNER_TEMP": bash_path(runner_temp),
             "RUN_ATTEMPT": "1",
             "RUN_ID": "29189945378",
         }
     )
     return subprocess.run(
-        [bash_command(), str(RUNNER)],
+        [command, bash_path(RUNNER)],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -91,13 +125,14 @@ def run_failed_model(
 
 def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: Path) -> None:
     """Provider JSON/stderr reasons remain useful without leaking credentials."""
+    fake_bearer_token = "secret" + "-value"
     fake_openai_token = "sk" + "-dangerous123456"
     fake_github_token = "github" + "_pat_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
     result = run_failed_model(
         tmp_path,
         json_line=(
             '{"type":"error","error":{"name":"ProviderAuthError","data":'
-            '{"message":"HTTP 401 authorization Bearer secret-value; '
+            f'{{"message":"HTTP 401 authorization Bearer {fake_bearer_token}; '
             f'api_key={fake_openai_token}"' + "}}}"
         ),
         stderr_line=(
@@ -110,10 +145,10 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: P
     assert "OpenCode provider failure detail: json: ProviderAuthError: HTTP 401" in result.stdout
     assert "OpenCode provider failure detail: stderr: request failed" in result.stdout
     assert result.stdout.count("[REDACTED]") >= 3
-    assert "secret-value" not in result.stdout
+    assert fake_bearer_token not in result.stdout
     assert fake_openai_token not in result.stdout
     assert fake_github_token not in result.stdout
-    assert "secret-value" not in result.stderr
+    assert fake_bearer_token not in result.stderr
 
 
 def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) -> None:
