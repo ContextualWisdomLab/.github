@@ -785,6 +785,15 @@ def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monk
     assert len(cancelled) == len(run_ids)
 
 
+def test_cancel_stale_opencode_runs_dry_run_skips_lookup_and_mutation(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sched, "stale_opencode_run_ids", lambda *args: calls.append(args) or ["1"])
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", lambda *args: calls.append(args))
+
+    assert sched.cancel_stale_opencode_runs("owner/repo", "workflow", make_pr(), dry_run=True) == []
+    assert calls == []
+
+
 def test_context_review_and_check_helpers():
     assert sched.context_nodes({}) == []
     assert sched.context_nodes(make_pr()) == []
@@ -1418,6 +1427,19 @@ def test_stacked_pr_waits_for_central_required_workflow_without_dispatch_credent
     assert "OpenCode Review dispatch waits" in stacked.reason
     assert "no cross-repository workflow-dispatch credential" in stacked.reason
     assert dispatched == []
+
+
+def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+
+    assert stacked.action == "wait"
+    assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
 
 
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
@@ -2272,6 +2294,19 @@ def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch
     assert sched.stale_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == ["13"]
 
 
+def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr(monkeypatch):
+    runs = [
+        {"name": "Other", "id": 20, "head_sha": "old", "pull_requests": [{"number": 1}]},
+        {"name": "OpenCode Review", "id": 21, "head_sha": "head", "pull_requests": [{"number": 2}]},
+        {"name": "OpenCode Review", "id": 22, "head_sha": "head", "pull_requests": []},
+        {"name": "OpenCode Review", "id": 23, "head_sha": "old", "pull_requests": [{"number": 1}]},
+    ]
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): runs)
+
+    assert sched.stale_pr_run_ids("owner/repo", make_pr(), workflow="OpenCode Review") == ["23"]
+    assert sched.active_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == (["22"], ["23"])
+
+
 def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
     cancelled = []
     monkeypatch.setattr(
@@ -2590,7 +2625,7 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
     )
     assert "same-head OpenCode workflow run is already active" in followup(
         make_pr(
-            headRefOid="new-head",
+            headRefOid="newer-head",
             statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
         )
     )
@@ -2934,6 +2969,17 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert stale_decision.action == "review_dispatch"
     assert "retry threshold" in stale_decision.reason
     assert dispatched == ["Strix Security Scan", "OpenCode Review", "OpenCode Review"]
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    stale_already_active = inspect(stale_opencode, stale_opencode_minutes=0)
+    assert stale_already_active.action == "wait"
+    assert (
+        stale_already_active.reason
+        == "OpenCode review exceeded the status-check retry threshold, but a same-head workflow run is already active"
+    )
     stale_limited = inspect(stale_opencode, stale_opencode_minutes=0, review_dispatch_allowed=False)
     assert stale_limited.action == "wait"
     assert "review dispatch limit reached" in stale_limited.reason
@@ -2952,6 +2998,14 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     )
     assert completed_strix_limited.action == "wait"
     assert completed_strix_limited.reason == "current head has completed Strix evidence; review dispatch limit reached"
+    completed_strix_already_active = inspect(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}),
+    )
+    assert completed_strix_already_active.action == "wait"
+    assert (
+        completed_strix_already_active.reason
+        == "current head has completed Strix evidence; same-head OpenCode workflow run is already active"
+    )
     assert inspect(make_pr(), trigger_reviews=False).reason == "current head has no OpenCode approval"
     missing_approval_auto = inspect(make_pr(autoMergeRequest={"enabledAt": "now"}), trigger_reviews=False)
     assert missing_approval_auto.action == "disable_auto_merge"
