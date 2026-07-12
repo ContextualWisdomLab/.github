@@ -740,6 +740,11 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     )
 
     assert "Run merge scheduler after approval" in workflow
+    assert "Publish workflow_dispatch OpenCode status" in workflow
+    assert "statuses: write" in workflow
+    assert 'context="opencode-review"' in workflow
+    assert 'repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}' in workflow
+    assert "OpenCode workflow_dispatch evidence passed for current head." in workflow
     assert "python3 scripts/ci/pr_review_merge_scheduler.py" in workflow
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
     assert "github.event_name == 'pull_request_target'" in workflow
