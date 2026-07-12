@@ -1696,7 +1696,7 @@ jobs:
           npx -y "$CODEGRAPH_PACKAGE" status
 
       - name: Prepare bounded OpenCode review evidence
-        timeout-minutes: 40
+        timeout-minutes: 12
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -1704,8 +1704,9 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
-          FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"
-          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
+          FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"
+          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "5"
+          OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS: "30"
         run: |
           set -euo pipefail
           context_env_file="${RUNNER_TEMP:-.}/opencode-review-context.env"
@@ -1726,7 +1727,7 @@ jobs:
             # Exclude this OpenCode check run; otherwise the evidence step would
             # wait on itself until the bounded retry budget is exhausted.
             # shellcheck disable=SC2016
-            if ! rollup_running="$(gh api graphql \
+            if ! rollup_running="$(timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -1818,6 +1819,7 @@ jobs:
             local attempts="${FAILED_CHECK_EVIDENCE_ATTEMPTS:-19}"
             local sleep_seconds="${FAILED_CHECK_EVIDENCE_SLEEP_SECONDS:-10}"
             local attempt=1
+            local collect_status
 
             if [ ! -x scripts/ci/collect_failed_check_evidence.sh ]; then
               {
@@ -1829,7 +1831,11 @@ jobs:
             fi
 
             while [ "$attempt" -le "$attempts" ]; do
-              if scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
+              set +e
+              timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
+              collect_status=$?
+              set -e
+              if [ "$collect_status" -eq 0 ]; then
                 if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
                   return 0
                 fi
@@ -1850,26 +1856,32 @@ jobs:
                 if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
                   break
                 fi
-                printf 'Failed-check evidence attempt %s/%s could not collect evidence while peer checks are still running; retrying in %ss before model review.\n' "$attempt" "$attempts" "$sleep_seconds" >&2
+                printf 'Failed-check evidence attempt %s/%s could not collect evidence within %ss while peer checks are still running; retrying in %ss before model review.\n' "$attempt" "$attempts" "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}" "$sleep_seconds" >&2
                 sleep "$sleep_seconds"
               fi
               attempt=$((attempt + 1))
             done
 
-            scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
+            if ! timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
+              {
+                printf 'Failed-check evidence collector did not complete within %s seconds.\n' "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}"
+                printf 'The approval gate will re-query current-head GitHub Checks before approving.\n'
+              } >"$evidence_file"
+              return 0
+            fi
           }
 
           emit_pr_mergeability_evidence() {
             local pr_json
-            if ! pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus,mergeable 2>/dev/null)"; then
+            if ! pr_json="$(timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
               printf 'PR mergeability evidence could not be collected.\n'
               return 0
             fi
 
             printf '%s\n' "$pr_json" | jq -r '
-              (.mergeStateStatus // "unknown") as $state |
-              "- Base branch: `" + (.baseRefName // "unknown") + "`",
-              "- Head branch: `" + (.headRefName // "unknown") + "`",
+              (.mergeStateStatus // .mergeable_state // "unknown") as $state |
+              "- Base branch: `" + (.base.ref // "unknown") + "`",
+              "- Head branch: `" + (.head.ref // "unknown") + "`",
               "- mergeStateStatus: `" + $state + "`",
               "- mergeable: `" + ((.mergeable // "unknown") | tostring) + "`",
               if ($state == "DIRTY" or $state == "CONFLICTING") then
@@ -1965,7 +1977,7 @@ jobs:
             }
           }
           GRAPHQL
-            if ! gh api graphql \
+            if ! timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -2025,7 +2037,7 @@ jobs:
             reviews_json_file="$(mktemp)"
             comments_json_file="$(mktemp)"
 
-            if gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" -f per_page=100 >"$reviews_json_file" 2>/dev/null; then
+            if timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" -f per_page=100 >"$reviews_json_file" 2>/dev/null; then
               jq -r '
                 [ .[] | {
                     author: ((.user.login // "unknown")),
@@ -2046,7 +2058,7 @@ jobs:
             fi
             printf '\n'
 
-            if gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 >"$comments_json_file" 2>/dev/null; then
+            if timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 >"$comments_json_file" 2>/dev/null; then
               jq -r '
                 [ .[] | {
                     author: ((.user.login // "unknown")),
