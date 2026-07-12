@@ -3109,9 +3109,11 @@ jobs:
       - name: Exchange OpenCode app token for review writes
         id: opencode_app_token
         if: always()
+        timeout-minutes: 2
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
+          OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS: "20"
         run: |
           set -euo pipefail
 
@@ -3134,10 +3136,12 @@ jobs:
 
           if ! oidc_response="$(
             curl -fsS \
+              --connect-timeout 5 \
+              --max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}" \
               -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               "${request_url}${separator}audience=${OIDC_AUDIENCE}"
           )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s."
             mark_unavailable
             exit 0
           fi
@@ -3151,11 +3155,13 @@ jobs:
 
           if ! token_response="$(
             curl -fsS \
+              --connect-timeout 5 \
+              --max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}" \
               -X POST \
               -H "Authorization: Bearer ${oidc_token}" \
               "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
           )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            echo "OpenCode app token exchange unavailable: app token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s."
             mark_unavailable
             exit 0
           fi

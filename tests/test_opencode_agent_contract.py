@@ -749,6 +749,9 @@ def test_opencode_review_publication_prefers_merge_token_before_app_token():
         "secrets.OPENCODE_APPROVE_TOKEN || "
         "steps.opencode_app_token.outputs.token || github.token }}"
     ) in workflow
+    assert 'OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS: "20"' in workflow
+    assert '--max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}"' in workflow
+    assert "app token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s" in workflow
 
 
 def test_opencode_approve_review_publication_failure_keeps_gate_result():
