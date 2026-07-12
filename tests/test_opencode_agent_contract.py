@@ -423,10 +423,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "using github-token primary and opencode-app fallback" in workflow
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-$GH_TOKEN}"' not in workflow
     assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"' in workflow
+    assert 'REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "60"' in workflow
     assert "gh_error_is_retryable_publication_failure()" in workflow
     assert "review_publish_retry_sleep_seconds()" in workflow
     assert 'post_pull_review_with_retry "primary review"' in workflow
     assert 'post_pull_review_with_retry "fallback review"' in workflow
+    assert "GitHub review publication retry sleep capped from %s to %s seconds." in workflow
     assert "hit a retryable GitHub API throttle; retrying attempt" in workflow
     assert "GitHub returned HTTP 422 for this review write; likely causes are token/event policy" in workflow
     assert "GitHub rate-limited the review write token; retry after the reported reset window" in workflow

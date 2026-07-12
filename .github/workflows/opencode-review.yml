@@ -3488,6 +3488,7 @@ jobs:
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
+          REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "60"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"
           # A second model catalog pass is deliberately forbidden here. This
           # timeout is only for a focused failed-check diagnosis after the
@@ -3583,7 +3584,9 @@ jobs:
 
           review_publish_retry_sleep_seconds() {
             local token_value="$1" default_sleep="$2"
-            local rate_json remaining reset_epoch now delay
+            local rate_json remaining reset_epoch now delay max_sleep
+
+            max_sleep="${REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS:-60}"
 
             rate_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$token_value" gh api rate_limit 2>/dev/null || true)"
             remaining="$(printf '%s' "$rate_json" | jq -r '.resources.core.remaining // empty' 2>/dev/null || true)"
@@ -3592,9 +3595,18 @@ jobs:
               now="$(date +%s)"
               delay=$((reset_epoch - now + 5))
               if [ "$delay" -gt 0 ] && [ "$delay" -le 900 ]; then
+                if [[ "$max_sleep" =~ ^[0-9]+$ ]] && [ "$max_sleep" -gt 0 ] && [ "$delay" -gt "$max_sleep" ]; then
+                  printf 'GitHub review publication retry sleep capped from %s to %s seconds.\n' "$delay" "$max_sleep" >&2
+                  delay="$max_sleep"
+                fi
                 printf '%s\n' "$delay"
                 return 0
               fi
+            fi
+            if [[ "$default_sleep" =~ ^[0-9]+$ ]] && [[ "$max_sleep" =~ ^[0-9]+$ ]] &&
+              [ "$max_sleep" -gt 0 ] && [ "$default_sleep" -gt "$max_sleep" ]; then
+              printf '%s\n' "$max_sleep"
+              return 0
             fi
             printf '%s\n' "$default_sleep"
           }
