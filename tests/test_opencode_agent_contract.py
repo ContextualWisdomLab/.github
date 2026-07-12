@@ -501,6 +501,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
+    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "300"' in workflow
+    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "420"' in workflow
+    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
+    assert "Central review-process evidence fallback eligible" in model_pool_runner
+    assert "provider delay is logged before the publish fallback evaluates current-head peer evidence" in model_pool_runner
     assert "model pool was intentionally skipped" not in workflow
     assert "central review-process evidence fallback" in workflow
     assert 'collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"' in workflow
