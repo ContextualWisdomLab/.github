@@ -318,7 +318,7 @@ run_one_model_attempt() {
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
 
-	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
+	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
@@ -381,8 +381,8 @@ main() {
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-5400}"
-	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-11400}"
+	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
+	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ]; then
 		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-300}"
