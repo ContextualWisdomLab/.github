@@ -512,8 +512,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 75", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
     assert re.search(r"Publish OpenCode review outcome[\s\S]{0,420}timeout-minutes: 120", workflow)
-    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "120"' in workflow
-    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"' in workflow
+    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
+    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
