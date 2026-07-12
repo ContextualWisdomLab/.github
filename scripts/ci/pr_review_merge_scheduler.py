@@ -1350,7 +1350,9 @@ def post_update_branch_followup(
     wait_reason = workflow_dispatch_wait_reason(repo, workflow)
     if wait_reason:
         return f"{head_note}; {wait_reason}"
-    dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
+    dispatch_result = dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
+    if dispatch_result == "already_running":
+        return f"{head_note}; same-head OpenCode workflow run is already active"
     return f"{head_note}; same-head Strix evidence is complete, so OpenCode review was dispatched"
 
 
@@ -1480,7 +1482,46 @@ def stale_pr_run_ids(
 
 def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list[str]:
     """Return active OpenCode run ids for older heads of the same pull request."""
-    return stale_pr_run_ids(repo, pr, workflow=workflow)
+    _, stale = active_opencode_run_ids(repo, workflow, pr)
+    return stale
+
+
+def active_opencode_run_ids(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> tuple[list[str], list[str]]:
+    """Return current-head and stale OpenCode run ids for one pull request.
+
+    A workflow-dispatch run can have an empty ``pull_requests`` array even
+    though its validated inputs target a PR. Treat a matching OpenCode workflow
+    name plus the exact current head SHA as sufficient current-head ownership;
+    otherwise require an explicit PR association before classifying a run as
+    stale. This prevents repeated scheduler passes from dispatching a new run
+    that cancels the already queued or running same-head review.
+    """
+    head = str(pr.get("headRefOid") or "").lower()
+    number = int(pr["number"])
+    current: list[str] = []
+    stale: list[str] = []
+    for run_data in active_workflow_runs(repo, statuses):
+        run_name = str(run_data.get("name") or "")
+        if run_name != workflow and run_name not in OPENCODE_WORKFLOW_NAMES:
+            continue
+        run_id = run_data.get("id")
+        if not run_id:
+            continue
+        run_head = str(run_data.get("head_sha") or "").lower()
+        pull_requests = run_data.get("pull_requests") or []
+        if run_head == head:
+            if pull_requests and not workflow_run_mentions_pr(run_data, number):
+                continue
+            current.append(str(run_id))
+            continue
+        if workflow_run_mentions_pr(run_data, number):
+            stale.append(str(run_id))
+    return current, stale
 
 
 def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
@@ -1499,12 +1540,12 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
             ))
 
 
-def cancel_stale_pr_queued_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel queued runs for older heads of the same PR."""
+def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
+    """Force-cancel queued or running workflows for older heads of the same PR."""
     if dry_run:
         return []
-    require_github_actions_control_actor("force-cancel-stale-pr-queued-runs")
-    run_ids = stale_pr_run_ids(repo, pr, statuses=("queued",))
+    require_github_actions_control_actor("force-cancel-stale-pr-runs")
+    run_ids = stale_pr_run_ids(repo, pr)
     force_cancel_workflow_runs(repo, run_ids)
     return run_ids
 
@@ -1519,16 +1560,26 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
     return run_ids
 
 
-def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
-    """Dispatch the OpenCode Review workflow for the PR head."""
-    cancel_stale_opencode_runs(repo, workflow, pr, dry_run=dry_run)
+def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
+    """Dispatch OpenCode for the PR head, or report an active same-head run."""
+    if not dry_run:
+        require_github_actions_control_actor("inspect-active-opencode-review")
+        current_run_ids, stale_run_ids = active_opencode_run_ids(repo, workflow, pr)
+        force_cancel_workflow_runs(repo, stale_run_ids)
+        if current_run_ids:
+            print(
+                "OpenCode review dispatch skipped: active same-head workflow run(s) "
+                + ", ".join(current_run_ids)
+            )
+            return "already_running"
     job_id = matching_actions_job_id(pr, is_opencode_context)
     if job_id:
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-opencode-review")
-        return
+        return "rerun"
     if dry_run:
-        return
+        return "dry_run"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
+    head_ref = validate_git_ref(pr["headRefName"])
     dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
     run_github_actions(
         [
@@ -1548,9 +1599,12 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             "-f",
             f"pr_base_sha={base_sha}",
             "-f",
+            f"pr_head_ref={head_ref}",
+            "-f",
             f"pr_head_sha={head_sha}",
         ]
     )
+    return "dispatched"
 
 
 def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -1675,7 +1729,7 @@ def inspect_pr(
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
-    cancel_stale_pr_queued_runs(repo, pr, dry_run=dry_run)
+    cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these
@@ -1687,7 +1741,13 @@ def inspect_pr(
             wait_reason = workflow_dispatch_wait_reason(repo, workflow)
             if wait_reason:
                 return Decision(number, "wait", f"stacked PR onto {base_ref}; {wait_reason}")
-            dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "already_running":
+                return Decision(
+                    number,
+                    "wait",
+                    f"stacked PR onto {base_ref}; same-head OpenCode workflow run is already active",
+                )
             return Decision(
                 number,
                 "review_dispatch",
@@ -1972,7 +2032,12 @@ def inspect_pr(
                 "wait",
                 f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; review dispatch limit reached",
             )
-        dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        if dispatch_result == "already_running":
+            return decide(
+                "wait",
+                "OpenCode review exceeded the status-check retry threshold, but a same-head workflow run is already active",
+            )
         return decide(
             "review_dispatch",
             f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; same-head OpenCode re-dispatched",
@@ -2006,7 +2071,12 @@ def inspect_pr(
         wait_reason = workflow_dispatch_wait_reason(repo, workflow)
         if wait_reason:
             return decide("wait", f"current head has completed Strix evidence; {wait_reason}")
-        dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        if dispatch_result == "already_running":
+            return decide(
+                "wait",
+                "current head has completed Strix evidence; same-head OpenCode workflow run is already active",
+            )
         return decide(
             "review_dispatch",
             "current head has completed Strix evidence; same-head OpenCode dispatched",
