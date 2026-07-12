@@ -3449,9 +3449,10 @@ jobs:
       - name: Publish OpenCode review outcome
         if: always()
         # Model execution belongs to the preceding bounded model-pool step.
-        # This step may run one focused failed-check diagnosis, so keep it
-        # bounded but long enough for the same deep-review model budget.
-        timeout-minutes: 120
+        # This step only publishes or, on failed peer checks, runs one focused
+        # diagnosis. Keep it short so approval publication cannot hold the org
+        # queue after the model pool has already finished.
+        timeout-minutes: 30
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3485,19 +3486,19 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "49"
-          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"
-          CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "18"
+          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
+          CHECK_LOOKUP_RETRY_ATTEMPTS: "3"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
-          REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
-          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
-          REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "60"
-          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"
+          REVIEW_PUBLISH_RETRY_ATTEMPTS: "2"
+          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "10"
+          REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"
+          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "45"
           # A second model catalog pass is deliberately forbidden here. Give a
-          # focused failed-check diagnosis the same 90-minute deep-review room
-          # as the main pool while still ending inside this step's cap.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          # focused failed-check diagnosis a bounded single-model window; deep
+          # review belongs to the model-pool step, not publication.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "900"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
