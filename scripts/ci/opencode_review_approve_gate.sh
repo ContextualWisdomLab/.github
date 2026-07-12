@@ -210,6 +210,7 @@ PR_HEAD_SHA_VAR="${PR_HEAD_SHA:-${HEAD_SHA:-}}"
 if ! python3 - "$SOURCE_ROOT" "$TMP_JSON" "$PR_BASE_SHA_VAR" "$PR_HEAD_SHA_VAR" <<'PY'
 from __future__ import annotations
 
+import functools
 import json
 import re
 import subprocess
@@ -231,9 +232,12 @@ def normalized_line(value: str) -> str:
     return " ".join(value.strip().split())
 
 
-def changed_new_lines(path_value: str) -> set[int]:
+# ⚡ Bolt: Memoize changed_new_lines to prevent N+1 git diff subprocess calls
+# Impact: Substantially reduces I/O wait overhead when multiple findings are on the same file path
+@functools.cache
+def changed_new_lines(path_value: str) -> frozenset[int]:
     if not pr_base_sha or not pr_head_sha:
-        return set()
+        return frozenset()
     try:
         completed = subprocess.run(
             [
@@ -255,9 +259,9 @@ def changed_new_lines(path_value: str) -> set[int]:
             shell=False,
         )
     except OSError:
-        return set()
+        return frozenset()
     if completed.returncode not in {0, 1}:
-        return set()
+        return frozenset()
 
     line_numbers: set[int] = set()
     hunk_header = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -270,7 +274,7 @@ def changed_new_lines(path_value: str) -> set[int]:
         if count <= 0:
             continue
         line_numbers.update(range(start, start + count))
-    return line_numbers
+    return frozenset(line_numbers)
 
 
 _file_cache: dict[Path, list[str]] = {}

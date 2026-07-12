@@ -37,3 +37,6 @@
 ## 2024-07-25 - Pre-calculate and cache environmental file reads
 **Learning:** The `current_changed_files` function in `scripts/ci/opencode_review_normalize_output.py` was being called multiple times per item during JSON structure normalization, leading to redundant I/O reads of `OPENCODE_CHANGED_FILES_FILE`.
 **Action:** Use `@functools.lru_cache(maxsize=1)` and return an immutable `frozenset` when repeatedly reading static contextual files within a script's execution lifecycle.
+## 2024-11-23 - Memoize File-Based Subprocess Queries in Embedded Python Scripts
+**Learning:** Found an N+1 subprocess bottleneck in `scripts/ci/opencode_review_approve_gate.sh` where `changed_new_lines` invoked `git diff` for every finding, even when multiple findings pointed to the same file. Repeatedly shelling out inside loops is a severe performance anti-pattern.
+**Action:** When validating multiple findings against the same file, decorate the inspection function with `@functools.cache` and ensure the return value is immutable (e.g., `frozenset` instead of `set`) to avoid redundant subprocess calls.
