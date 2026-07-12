@@ -275,6 +275,8 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
     assert ".head_sha != $current_default_sha" in workflow
     assert "do not match an open PR or default-branch Current HEAD" in workflow
+    assert '.current_head // "closed-or-no-open-pr"' in workflow
+    assert '.current_head // \\"closed-or-no-open-pr\\"' not in workflow
     assert "select($current_pr_heads[$head_key] == null)" in workflow
     assert "Could not cancel superseded run" in workflow
     assert "No run will be cancelled from incomplete evidence" in workflow
