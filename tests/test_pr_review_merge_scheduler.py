@@ -1041,6 +1041,38 @@ def test_review_state_and_failed_checks():
     assert sched.has_current_head_approval(superseded)
     assert not sched.has_current_head_changes_requested(superseded)
 
+    stale_gate_reviews = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "old", login="github-actions[bot]"),
+                    "databaseId": 101,
+                    "body": "OpenCode cannot approve this previous head.",
+                },
+                {
+                    **opencode_review("CHANGES_REQUESTED", "older"),
+                    "databaseId": 102,
+                },
+                {
+                    **opencode_review("CHANGES_REQUESTED", "old", login="github-actions[bot]"),
+                    "databaseId": 103,
+                    "body": "An unrelated automation requested changes.",
+                },
+                {
+                    **opencode_review("CHANGES_REQUESTED", "old", login="human"),
+                    "databaseId": 104,
+                    "body": "OpenCode was mentioned by a human reviewer.",
+                },
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "databaseId": 105,
+                },
+                opencode_review("CHANGES_REQUESTED", "old"),
+            ]
+        }
+    )
+    assert sched.stale_opencode_change_request_ids(stale_gate_reviews) == [101, 102]
+
     failed = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1080,6 +1112,28 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
+
+
+def test_current_head_approval_cleans_previous_head_change_gate_before_merge():
+    pr = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "old"),
+                    "databaseId": 301,
+                },
+                opencode_review("APPROVED", "head"),
+            ]
+        }
+    )
+
+    decision = inspect(pr)
+
+    assert decision.action == "auto_merge"
+    assert decision.notes == (
+        "Would dismiss 1 previous-head automated OpenCode change-request review(s); "
+        "exact-current-head approval supersedes those stale gates.",
+    )
 
 
 def test_failed_status_checks_uses_latest_check_run_for_same_workflow_name():
@@ -1716,6 +1770,66 @@ def test_resolve_outdated_review_threads_uses_github_actions_actor(monkeypatch):
     assert sched.resolve_outdated_review_threads(pr, dry_run=False) == 2
     assert [fields["threadId"] for _, fields in calls] == ["thread-1", "thread-4"]
     assert all(query == sched.RESOLVE_REVIEW_THREAD_MUTATION for query, _ in calls)
+
+
+def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypatch):
+    exact_head = "a" * 40
+    unapproved = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "b" * 40),
+                    "databaseId": 200,
+                }
+            ]
+        },
+    )
+    assert sched.dismiss_stale_opencode_change_requests("owner/repo", unapproved, dry_run=False) == 0
+
+    pr = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "b" * 40),
+                    "databaseId": 201,
+                },
+                {
+                    **opencode_review("CHANGES_REQUESTED", "c" * 40, login="github-actions[bot]"),
+                    "databaseId": 202,
+                    "body": "OpenCode coverage evidence failed on an old head.",
+                },
+                opencode_review("APPROVED", exact_head),
+            ]
+        },
+    )
+    calls = []
+    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or exact_head)
+    monkeypatch.setattr(sched, "run", lambda args, stdin=None: calls.append(args) or "")
+
+    assert sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=True) == 2
+    assert calls == []
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "local-token")
+    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
+        sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False)
+    assert calls == []
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    assert sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False) == 2
+    assert calls[0] == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]
+    assert calls[1][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/201/dismissals"]
+    assert calls[2][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/202/dismissals"]
+    assert all(call[-2] == "-f" and call[-1].startswith("message=") for call in calls[1:])
+
+    calls.clear()
+    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or ("d" * 40))
+    with pytest.raises(RuntimeError, match="head changed before stale review dismissal"):
+        sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False)
+    assert len(calls) == 1
 
 
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
