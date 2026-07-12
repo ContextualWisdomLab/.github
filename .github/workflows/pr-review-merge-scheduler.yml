@@ -422,6 +422,15 @@ jobs:
       ORG_SWEEP_MAX_PRS: ${{ vars.ORG_SWEEP_MAX_PRS || '30' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
+      # A repository the sweep credential structurally cannot read (the OpenCode
+      # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
+      # HTTP 403 "Resource not accessible by integration". That is an access-grant
+      # fact the automation can never resolve, so it is reported as a skipped,
+      # non-fatal "unavailable" repository rather than a hard sweep failure. This
+      # ceiling keeps the sweep fail-closed against a credential-scope regression:
+      # if MORE than this many repositories become unreachable at once, the whole
+      # credential likely broke and the job fails loudly.
+      ORG_SWEEP_MAX_UNAVAILABLE: ${{ vars.ORG_SWEEP_MAX_UNAVAILABLE || '5' }}
       STALE_OPENCODE_MINUTES: ${{ vars.STALE_OPENCODE_MINUTES || '420' }}
     steps:
       - name: Exchange OpenCode app token for sweep mutations
@@ -578,6 +587,16 @@ jobs:
           fi
           echo "Sweep mutation token source: $SCHEDULER_MUTATION_TOKEN_SOURCE"
 
+          # Validate the fail-closed ceiling before it is used in a numeric test.
+          # A non-integer would make "[ ... -gt ... ]" error out inside an if
+          # condition, which set -e does not trap, silently skipping the
+          # regression guard. Fail loudly instead so a misconfigured
+          # ORG_SWEEP_MAX_UNAVAILABLE can never quietly disable fail-closed.
+          if ! [[ "$ORG_SWEEP_MAX_UNAVAILABLE" =~ ^[0-9]+$ ]]; then
+            echo "::error::ORG_SWEEP_MAX_UNAVAILABLE must be a non-negative integer; got '${ORG_SWEEP_MAX_UNAVAILABLE}'. Fix the ORG_SWEEP_MAX_UNAVAILABLE repository variable."
+            exit 1
+          fi
+
           repositories_json="$(
             gh api \
               -H "Accept: application/vnd.github+json" \
@@ -594,6 +613,8 @@ jobs:
           echo "Sweeping ${#sweep_targets[@]} repositories."
 
           failures=0
+          unavailable=0
+          unavailable_repos=()
           for target in "${sweep_targets[@]}"; do
             repo_full_name="${target%%$'\t'*}"
             default_branch="${target##*$'\t'}"
@@ -637,9 +658,27 @@ jobs:
             if [ "$DRY_RUN" = "true" ]; then
               args+=(--dry-run)
             fi
-            if ! python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"; then
-              echo "::error::Queue sweep failed for ${repo_full_name}; see the decision log above for the concrete per-PR reason."
-              failures=$((failures + 1))
+            set +e
+            sweep_output="$(python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}" 2>&1)"
+            sweep_rc=$?
+            set -e
+            printf '%s\n' "$sweep_output"
+            if [ "$sweep_rc" -ne 0 ]; then
+              # A structural access denial ("Resource not accessible by
+              # integration") means the sweep credential cannot read this
+              # repository at all — the OpenCode app is not installed there or
+              # PR_REVIEW_MERGE_TOKEN does not cover it. The automation can never
+              # merge those PRs regardless, so this is a skipped, non-fatal
+              # "unavailable" repository, not a failure the sweep can act on. Any
+              # other non-zero exit is a genuine per-repository failure.
+              if printf '%s' "$sweep_output" | grep -qF "Resource not accessible by integration"; then
+                echo "::warning::Skipping ${repo_full_name}: the sweep credential lacks access (HTTP 403 Resource not accessible by integration). Install the OpenCode app on this repository or grant PR_REVIEW_MERGE_TOKEN access to include it in the sweep."
+                unavailable=$((unavailable + 1))
+                unavailable_repos+=("$repo_full_name")
+              else
+                echo "::error::Queue sweep failed for ${repo_full_name}; see the decision log above for the concrete per-PR reason."
+                failures=$((failures + 1))
+              fi
             fi
 
             # Queue hygiene: a run still queued after ORG_SWEEP_STALE_QUEUE_HOURS
@@ -668,6 +707,17 @@ jobs:
             echo "::endgroup::"
           done
 
+          if [ "$unavailable" -gt 0 ]; then
+            echo "::warning::${unavailable} repository(ies) were skipped as unreachable by the sweep credential (HTTP 403): ${unavailable_repos[*]}. These do not fail the sweep; install the OpenCode app or grant PR_REVIEW_MERGE_TOKEN access to include them."
+          fi
+          # Fail-closed guard: a handful of un-enrolled repositories is expected,
+          # but if MORE than ORG_SWEEP_MAX_UNAVAILABLE repositories become
+          # unreachable at once the sweep credential itself has regressed and the
+          # job must fail loudly rather than silently sweeping nothing.
+          if [ "$unavailable" -gt "$ORG_SWEEP_MAX_UNAVAILABLE" ]; then
+            echo "::error::Sweep credential could not access ${unavailable} repositories (limit ${ORG_SWEEP_MAX_UNAVAILABLE}); this indicates a credential-scope regression, not a few un-enrolled repositories. Verify PR_REVIEW_MERGE_TOKEN / the OpenCode app installation."
+            exit 1
+          fi
           if [ "$failures" -gt 0 ]; then
             echo "::error::Organization queue sweep completed with ${failures} repository failure(s); each failure's reason is printed in its repository group above."
             exit 1
