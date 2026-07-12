@@ -93,7 +93,26 @@ write_prompt() {
 		printf '```\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'
-			cat "$evidence_excerpt_file"
+			python3 - "$evidence_excerpt_file" "${OPENCODE_PROMPT_EVIDENCE_MAX_BYTES:-120000}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+max_bytes = int(sys.argv[2])
+data = path.read_bytes()
+if len(data) <= max_bytes:
+    sys.stdout.buffer.write(data)
+else:
+    head = data[: max_bytes // 2]
+    tail = data[-(max_bytes // 2) :]
+    sys.stdout.buffer.write(head)
+    sys.stdout.write(
+        "\n\n[OpenCode evidence excerpt truncated for provider context window; "
+        f"showing {len(head)} head bytes and {len(tail)} tail bytes from {len(data)} total bytes. "
+        "Read the full bounded-review-evidence.md file before making any source-backed conclusion.]\n\n"
+    )
+    sys.stdout.buffer.write(tail)
+PY
 			printf '\n'
 		fi
 	} >"$prompt_file"
