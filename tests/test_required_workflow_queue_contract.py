@@ -341,6 +341,19 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
         "STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || "
         "vars.STALE_OPENCODE_MINUTES || '420' }}"
     ) in workflow
+    assert (
+        "ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
+    ) in workflow
+    assert "ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}" in workflow
+    assert (
+        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ inputs.enable_auto_merge == true }}"
+    ) in workflow
+    assert "ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}" in workflow
+    assert "ORG_SWEEP_UPDATE_BRANCHES: ${{ inputs.update_branches == true }}" in workflow
+    assert 'if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then' in workflow
+    assert 'if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then' in workflow
+    assert '--merge-mode "$ORG_SWEEP_MERGE_MODE"' in workflow
+    assert 'if [ "$ORG_SWEEP_UPDATE_BRANCHES" = "true" ]; then' in workflow
 
 
 def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
