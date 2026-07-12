@@ -3494,10 +3494,10 @@ jobs:
         if: always()
         # Model execution belongs to the preceding bounded model-pool step.
         # This step only publishes or, on failed peer checks, runs one focused
-        # diagnosis. Failed-check diagnosis still needs deep-review scale time:
-        # DeepSeek V3 has been the most reliable reviewer in this queue, and
-        # short 10-30 minute model windows under-report actionable blockers.
-        timeout-minutes: 120
+        # diagnosis. Keep publication bounded so a stalled GitHub review side
+        # effect returns the runner with an explicit hold reason instead of
+        # occupying the organization queue for hours.
+        timeout-minutes: 30
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3536,14 +3536,14 @@ jobs:
           CHECK_LOOKUP_RETRY_ATTEMPTS: "1"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "2"
           CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"
-          REVIEW_PUBLISH_RETRY_ATTEMPTS: "2"
+          REVIEW_PUBLISH_RETRY_ATTEMPTS: "1"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "10"
           REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"
-          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "45"
+          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "20"
           # A second model catalog pass is deliberately forbidden here. Give a
-          # focused failed-check diagnosis a deep single-model window; the full
-          # fallback catalog still belongs to the model-pool step.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # focused failed-check diagnosis one bounded single-model window; the
+          # full fallback catalog still belongs to the model-pool step.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "1200"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
