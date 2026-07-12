@@ -818,6 +818,10 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
         in workflow
     )
     assert (
+        "OpenCode APPROVE review skips the non-authoritative changed-file graph before publication"
+        in workflow
+    )
+    assert (
         "Branch protection and rulesets remain authoritative if a matching GitHub pull review is required"
         in workflow
     )

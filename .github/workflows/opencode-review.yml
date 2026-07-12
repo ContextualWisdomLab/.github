@@ -4003,7 +4003,11 @@ jobs:
             local review_payload_file
             gh_error_file="$(mktemp)"
             review_payload_file="$(mktemp)"
-            body="$(ensure_review_body_has_change_graph "$body")"
+            if [ "$event" = "APPROVE" ]; then
+              printf '::notice::OpenCode APPROVE review skips the non-authoritative changed-file graph before publication so the required approval check can finish promptly.\n'
+            else
+              body="$(ensure_review_body_has_change_graph "$body")"
+            fi
             emit_review_body_to_action_log "$event" "$body"
             jq -n \
               --arg event "$event" \
