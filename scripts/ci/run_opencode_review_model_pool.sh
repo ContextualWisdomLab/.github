@@ -58,12 +58,29 @@ backoff_sleep() {
 	printf '%s\n' "$sleep_for"
 }
 
+should_inline_prompt_evidence_excerpt() {
+	local model_candidate="$1"
+
+	# GitHub Models OpenAI review endpoints currently reject request bodies
+	# above roughly 4000 tokens. Keep full evidence available as workspace
+	# files, but do not inline the excerpt for those candidates.
+	case "$model_candidate" in
+	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat | github-models/openai/o3)
+		return 1
+		;;
+	*)
+		return 0
+		;;
+	esac
+}
+
 write_prompt() {
 	local model_candidate="$1"
 	local prompt_file="$2"
 	local intro
 	local contract_file
 	local evidence_excerpt_file
+	local evidence_file_in_workdir
 
 	if [ -n "${OPENCODE_REVIEW_INTRO:-}" ]; then
 		intro="$OPENCODE_REVIEW_INTRO"
@@ -72,6 +89,7 @@ write_prompt() {
 	fi
 	contract_file="$OPENCODE_REVIEW_WORKDIR/opencode-review-contract-${model_candidate//\//-}.md"
 	evidence_excerpt_file="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
+	evidence_file_in_workdir="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
 	cp "$GITHUB_WORKSPACE/scripts/ci/opencode_review_prompt_template.md" "$contract_file"
 	OPENCODE_REVIEW_INTRO="$intro" \
 		PROMPT_MODEL_CANDIDATE="$model_candidate" \
@@ -82,9 +100,17 @@ write_prompt() {
 		printf 'Follow the complete review contract in `%s`; use this launcher as a packet-first entry point, not as a reduced policy.\n' "$contract_file"
 		printf 'Read bounded review evidence from `%s` and source files from `%s` when tool access works.\n' "$OPENCODE_EVIDENCE_FILE" "$OPENCODE_SOURCE_WORKDIR"
 		printf 'Use the trusted review workspace `%s` for scripts, prompts, policy files, CodeGraph config, and validation helpers.\n\n' "$OPENCODE_REVIEW_WORKDIR"
-		printf 'First review the current-head evidence excerpt in this prompt. Then inspect full evidence, changed files, focused related code, and configured structural/search tools when available.\n'
+		if should_inline_prompt_evidence_excerpt "$model_candidate"; then
+			printf 'First review the current-head evidence excerpt in this prompt. Then inspect full evidence, changed files, focused related code, and configured structural/search tools when available.\n'
+		else
+			printf 'The current-head evidence excerpt is not inlined for this GitHub Models OpenAI candidate because that provider rejects large request bodies. First read `%s`, `%s`, changed files, focused related code, and configured structural/search tools before any conclusion.\n' "$evidence_file_in_workdir" "$evidence_excerpt_file"
+		fi
 		printf 'Never emit raw tool-call markup, MCP call syntax, function-call JSON, tool_call text, or a JSON array of tool calls. If tool calls or file reads are unavailable, do not emit progress notes or raw tool-call text.\n'
-		printf 'If full-file reads do not execute, use the inlined evidence packet and its repeated current-head sections for Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and unresolved thread evidence.\n'
+		if should_inline_prompt_evidence_excerpt "$model_candidate"; then
+			printf 'If full-file reads do not execute, use the inlined evidence packet and its repeated current-head sections for Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and unresolved thread evidence.\n'
+		else
+			printf 'If file reads do not execute for this non-inlined prompt, do not approve from memory or generic confidence. REQUEST_CHANGES only when the visible launcher text or executed file reads provide current-head evidence tied to a positive source/evidence line.\n'
+		fi
 		printf 'Do not request changes solely because your tool call, MCP call, or full-file read was not executed. Treat that as a review source limitation unless current-head evidence explicitly reports a materialization failure; any such finding must be tied to that evidence, not a generic model-exhaustion message. REQUEST_CHANGES findings must cite a positive source/evidence line; never use line 0.\n'
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
 		printf 'Required control block shape:\n'
@@ -93,7 +119,30 @@ write_prompt() {
 		printf '```\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'
-			cat "$evidence_excerpt_file"
+			if should_inline_prompt_evidence_excerpt "$model_candidate"; then
+				python3 - "$evidence_excerpt_file" "${OPENCODE_PROMPT_EVIDENCE_MAX_BYTES:-120000}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+max_bytes = int(sys.argv[2])
+data = path.read_bytes()
+if len(data) <= max_bytes:
+    sys.stdout.buffer.write(data)
+else:
+    head = data[: max_bytes // 2]
+    tail = data[-(max_bytes // 2) :]
+    sys.stdout.buffer.write(head)
+    sys.stdout.write(
+        "\n\n[OpenCode evidence excerpt truncated for provider context window; "
+        f"showing {len(head)} head bytes and {len(tail)} tail bytes from {len(data)} total bytes. "
+        "Read the full bounded-review-evidence.md file before making any source-backed conclusion.]\n\n"
+    )
+    sys.stdout.buffer.write(tail)
+PY
+			else
+				printf '[Evidence excerpt omitted for `%s` to stay under the GitHub Models OpenAI request-body limit. Read `%s` and `%s` from the review workspace before returning a control block.]\n' "$model_candidate" "$evidence_file_in_workdir" "$evidence_excerpt_file"
+			fi
 			printf '\n'
 		fi
 	} >"$prompt_file"

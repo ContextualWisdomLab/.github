@@ -61,6 +61,9 @@ def run_failed_model(
     *,
     json_line: str = "",
     stderr_line: str = "",
+    evidence_excerpt: str = "",
+    model_candidates: str = "github-models/openai/gpt-5",
+    prompt_capture: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one fake provider failure through the real model-pool launcher."""
     command = bash_command()
@@ -74,10 +77,18 @@ def run_failed_model(
     shutil.copy2(ROOT / "opencode.jsonc", review_dir / "opencode.jsonc")
     evidence_file = tmp_path / "evidence.md"
     evidence_file.write_text("bounded current-head evidence\n", encoding="utf-8")
+    if evidence_excerpt:
+        (review_dir / "bounded-review-evidence-excerpt.md").write_text(
+            evidence_excerpt, encoding="utf-8"
+        )
+        (review_dir / "bounded-review-evidence.md").write_text(
+            f"full evidence\n{evidence_excerpt}", encoding="utf-8"
+        )
     fake_opencode = fake_bin / "opencode"
     fake_opencode.write_text(
         "#!/usr/bin/env bash\n"
         "if [ \"${1:-}\" = run ]; then\n"
+        "  [ -z \"${FAKE_OPENCODE_PROMPT_CAPTURE:-}\" ] || printf '%s\\n' \"$2\" > \"$FAKE_OPENCODE_PROMPT_CAPTURE\"\n"
         "  [ -z \"${FAKE_OPENCODE_JSON:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_JSON\"\n"
         "  [ -z \"${FAKE_OPENCODE_STDERR:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_STDERR\" >&2\n"
         "  exit 1\n"
@@ -92,13 +103,14 @@ def run_failed_model(
     env.update(
         {
             "FAKE_OPENCODE_JSON": json_line,
+            "FAKE_OPENCODE_PROMPT_CAPTURE": bash_path(prompt_capture) if prompt_capture else "",
             "FAKE_OPENCODE_STDERR": stderr_line,
             "GITHUB_OUTPUT": bash_path(github_output),
             "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "1" * 40,
             "OPENCODE_EVIDENCE_FILE": bash_path(evidence_file),
             "OPENCODE_MODEL_ATTEMPTS": "1",
-            "OPENCODE_MODEL_CANDIDATES": "github-models/openai/gpt-5",
+            "OPENCODE_MODEL_CANDIDATES": model_candidates,
             "OPENCODE_OUTPUT_FILE": bash_path(tmp_path / "selected-output.md"),
             "OPENCODE_POOL_MAX_CYCLES": "1",
             "OPENCODE_REVIEW_WORKDIR": bash_path(review_dir),
@@ -160,3 +172,40 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
         "OpenCode provider failure supplied no structured JSON or stderr reason "
         "(json-bytes=0, stderr-bytes=0)."
     ) in result.stdout
+
+
+def test_github_models_openai_prompt_references_evidence_without_inlining(tmp_path: Path) -> None:
+    """Small-request GitHub Models OpenAI candidates keep evidence as files."""
+    prompt_capture = tmp_path / "captured-prompt.md"
+    evidence_excerpt = "UNIQUE_CURRENT_HEAD_EVIDENCE_PACKET"
+
+    result = run_failed_model(
+        tmp_path,
+        evidence_excerpt=evidence_excerpt,
+        prompt_capture=prompt_capture,
+    )
+
+    assert result.returncode == 1
+    prompt = prompt_capture.read_text(encoding="utf-8")
+    assert evidence_excerpt not in prompt
+    assert "Evidence excerpt omitted for `github-models/openai/gpt-5`" in prompt
+    assert "bounded-review-evidence.md" in prompt
+    assert "bounded-review-evidence-excerpt.md" in prompt
+
+
+def test_deepseek_prompt_still_inlines_bounded_evidence_excerpt(tmp_path: Path) -> None:
+    """Large-context DeepSeek candidates retain the current-head prompt packet."""
+    prompt_capture = tmp_path / "captured-prompt.md"
+    evidence_excerpt = "UNIQUE_DEEPSEEK_INLINE_EVIDENCE_PACKET"
+
+    result = run_failed_model(
+        tmp_path,
+        evidence_excerpt=evidence_excerpt,
+        model_candidates="github-models/deepseek/deepseek-v3-0324",
+        prompt_capture=prompt_capture,
+    )
+
+    assert result.returncode == 1
+    prompt = prompt_capture.read_text(encoding="utf-8")
+    assert evidence_excerpt in prompt
+    assert "Evidence excerpt omitted" not in prompt
