@@ -141,13 +141,14 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
-        lambda repo, pr, workflow, workflow_repository, dry_run: calls.append((
+        lambda repo, pr, workflow, workflow_repository, dry_run, resolve_conflict=False: calls.append((
             "dispatch",
             repo,
             pr["number"],
             workflow,
             workflow_repository,
             dry_run,
+            resolve_conflict,
         )),
     )
     monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: calls.append(("marker", repo, pr["number"], dry_run)))
@@ -155,7 +156,7 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]) == 0
 
     assert calls == [
-        ("dispatch", "owner/repo", 7, "pr-review-autofix.yml", "ContextualWisdomLab/.github", True),
+        ("dispatch", "owner/repo", 7, "pr-review-autofix.yml", "ContextualWisdomLab/.github", True, False),
         ("marker", "owner/repo", 7, True),
     ]
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -380,6 +381,96 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     assert "target_repository=owner/repo" in calls[-1]
 
 
+def _approved_dirty_pr(**overrides):
+    """Return an approved PR that GitHub reports as conflicting."""
+    fields = {
+        "mergeStateStatus": "DIRTY",
+        "reviews": {
+            "nodes": [
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "opencode-agent"},
+                    "commit": {"oid": "a" * 40},
+                    "body": "Approved.",
+                }
+            ]
+        },
+    }
+    fields.update(overrides)
+    return make_pr(**fields)
+
+
+def test_needs_conflict_resolution_requires_approved_and_conflicting():
+    """Only an approved DIRTY/CONFLICTING PR qualifies for auto-resolution."""
+    needs, reasons = fix.needs_conflict_resolution(_approved_dirty_pr())
+    assert needs
+    assert "auto-resolving" in reasons[0]
+    assert fix.needs_conflict_resolution(_approved_dirty_pr(mergeStateStatus="CONFLICTING"))[0]
+    # Conflicting but not approved.
+    assert fix.needs_conflict_resolution(make_pr(mergeStateStatus="DIRTY")) == (False, ())
+    # Approved but clean.
+    assert fix.needs_conflict_resolution(
+        _approved_dirty_pr(mergeStateStatus="CLEAN")
+    ) == (False, ())
+
+
+def test_dispatch_autofix_passes_resolve_conflict_flag(capsys):
+    """The resolve_conflict flag reaches the dispatched workflow inputs."""
+    pr = make_pr()
+    fix.dispatch_autofix(
+        "owner/repo",
+        pr,
+        workflow="pr-review-autofix.yml",
+        workflow_repository="ContextualWisdomLab/.github",
+        dry_run=True,
+        resolve_conflict=True,
+    )
+    assert "resolve_conflict=true" in capsys.readouterr().out
+    fix.dispatch_autofix(
+        "owner/repo",
+        pr,
+        workflow="pr-review-autofix.yml",
+        workflow_repository="ContextualWisdomLab/.github",
+        dry_run=True,
+    )
+    assert "resolve_conflict=false" in capsys.readouterr().out
+
+
+def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
+    """An approved conflicting PR dispatches autofix in resolve_conflict mode."""
+    captured = {}
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, workflow, workflow_repository, dry_run, resolve_conflict=False: captured.update(
+            resolve_conflict=resolve_conflict
+        ),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"])
+    action, reasons = fix.inspect_pr("owner/repo", _approved_dirty_pr(), args)
+    assert action == "dispatch"
+    assert captured["resolve_conflict"] is True
+    assert "auto-resolving" in reasons[0]
+
+
+def test_process_queue_includes_conflict_resolution_candidates(monkeypatch, capsys):
+    """The queue pre-filter fetches comments for approved conflicting PRs too."""
+    pr = _approved_dirty_pr()
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, workflow, workflow_repository, dry_run, resolve_conflict=False: None,
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]) == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["autofix_dispatches"] == 1
+
+
 def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     """Inspect and queue logic report skip, wait, dispatch-limit, and errors."""
     args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
@@ -392,7 +483,7 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (False, ()))
     assert fix.inspect_pr("owner/repo", make_pr(), args) == (
         "skip",
-        ("no current-head autofixable OpenCode change request",),
+        ("no current-head autofixable OpenCode change request or approved merge conflict",),
     )
 
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))

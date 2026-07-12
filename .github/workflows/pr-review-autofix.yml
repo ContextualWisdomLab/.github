@@ -27,6 +27,11 @@ on:
         description: Pull request head SHA
         required: true
         type: string
+      resolve_conflict:
+        description: Merge the base branch into the head and resolve merge conflicts instead of applying review-feedback fixes
+        required: false
+        default: "false"
+        type: string
 
 concurrency:
   group: pr-review-autofix-${{ inputs.target_repository }}-${{ inputs.pr_number }}
@@ -47,6 +52,7 @@ jobs:
       PR_BASE_SHA: ${{ inputs.pr_base_sha }}
       PR_HEAD_REF: ${{ inputs.pr_head_ref }}
       PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
+      RESOLVE_CONFLICT: ${{ inputs.resolve_conflict }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -307,6 +313,7 @@ jobs:
           }' >"${OPENCODE_AUTOFIX_WORKDIR}/opencode.jsonc"
 
       - name: Run OpenCode review autofix
+        if: inputs.resolve_conflict != 'true'
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
@@ -381,6 +388,7 @@ jobs:
           trap - EXIT
 
       - name: Validate changed files
+        if: inputs.resolve_conflict != 'true'
         run: |
           set -euo pipefail
           cd "$TARGET_WORKSPACE"
@@ -421,6 +429,7 @@ jobs:
           fi
 
       - name: Commit and push autofix
+        if: inputs.resolve_conflict != 'true'
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
         run: |
@@ -438,3 +447,95 @@ jobs:
           git add -A
           git commit -m "fix(pr-${PR_NUMBER}): address review feedback"
           git push origin "HEAD:${PR_HEAD_REF}"
+
+      - name: Merge base branch and resolve conflicts with OpenCode
+        if: inputs.resolve_conflict == 'true'
+        env:
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
+          MODEL: github-models/openai/gpt-5
+          USE_GITHUB_TOKEN: "true"
+          SHARE: "false"
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+          NO_COLOR: "1"
+          OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
+        run: |
+          set -euo pipefail
+          cd "$TARGET_WORKSPACE"
+
+          # Merge the base branch into the detached head. A clean merge stays
+          # staged (--no-commit); a conflicting merge leaves git conflict
+          # markers for OpenCode to resolve.
+          echo "Merging base ${PR_BASE_REF} (${PR_BASE_SHA}) into head ${PR_HEAD_SHA} for conflict resolution."
+          git merge --no-commit --no-ff "$PR_BASE_SHA" || echo "Merge produced conflicts to resolve."
+          conflicted_files="$(git diff --name-only --diff-filter=U || true)"
+          printf 'Conflicted files:\n%s\n' "${conflicted_files:-<none>}"
+
+          if [ -n "$conflicted_files" ]; then
+            prompt_file="${RUNNER_TEMP}/opencode-conflict-prompt.md"
+            cat >"$prompt_file" <<EOF
+          Resolve the in-progress git merge conflict for PR #${PR_NUMBER} in ${TARGET_WORKSPACE}.
+          The base branch ${PR_BASE_REF} was merged into the PR head and left git conflict
+          markers (<<<<<<<, =======, >>>>>>>) in exactly these files:
+          <conflicted-files>
+          ${conflicted_files}
+          </conflicted-files>
+
+          Edit ONLY the files listed above. For each conflict region produce the correct
+          combined result that preserves the intent of BOTH sides; never drop either
+          side's changes, never change unrelated behavior, and remove every conflict
+          marker. Do not edit, delete, rename, or reformat any other file. If a conflict
+          cannot be resolved safely, leave its markers in place. Return a concise summary.
+          EOF
+            workspace_config_backup="${RUNNER_TEMP}/opencode-jsonc.conflict.backup"
+            had_workspace_config=0
+            if [ -f "$TARGET_WORKSPACE/opencode.jsonc" ]; then
+              cp "$TARGET_WORKSPACE/opencode.jsonc" "$workspace_config_backup"
+              had_workspace_config=1
+            fi
+            cp "$OPENCODE_AUTOFIX_WORKDIR/opencode.jsonc" "$TARGET_WORKSPACE/opencode.jsonc"
+            restore_workspace_config() {
+              if [ "$had_workspace_config" = "1" ]; then
+                cp "$workspace_config_backup" "$TARGET_WORKSPACE/opencode.jsonc"
+              else
+                rm -f "$TARGET_WORKSPACE/opencode.jsonc"
+              fi
+            }
+            trap restore_workspace_config EXIT
+            timeout 18000 opencode run "$(cat "$prompt_file")" \
+              --pure \
+              --agent ci-autofix \
+              --model "$MODEL" \
+              --title "PR #${PR_NUMBER} merge conflict resolution"
+            restore_workspace_config
+            trap - EXIT
+          fi
+
+          # Fail closed: never push unresolved conflict markers.
+          git add -A
+          marker_report="$(git diff --cached --check 2>&1 || true)"
+          if printf '%s' "$marker_report" | grep -qi "conflict marker"; then
+            echo "::error::Unresolved conflict markers remain after resolution; refusing to push."
+            printf '%s\n' "$marker_report"
+            exit 1
+          fi
+          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+            echo "::error::No merge is in progress after the base merge; refusing to push."
+            exit 1
+          fi
+
+          # Syntax-check any changed Python before pushing.
+          mapfile -t changed_python_files < <(git diff --name-only HEAD | grep -E '\.py$' || true)
+          if [ "${#changed_python_files[@]}" -gt 0 ]; then
+            python3 -m py_compile "${changed_python_files[@]}"
+          fi
+
+          live_head_sha="$(gh api -X GET "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "$live_head_sha" != "$PR_HEAD_SHA" ]; then
+            echo "::error::PR head moved during conflict resolution; refusing to push."
+            exit 1
+          fi
+          git commit --no-edit -m "merge(pr-${PR_NUMBER}): resolve conflicts with ${PR_BASE_REF}"
+          git push origin "HEAD:${PR_HEAD_REF}"
+          echo "Pushed conflict resolution; the new head will be re-reviewed and re-checked before merge."

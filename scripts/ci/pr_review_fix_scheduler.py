@@ -16,6 +16,7 @@ try:
     from pr_review_merge_scheduler import (
         fetch_open_prs,
         fetch_pr,
+        has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
         review_matches_current_head,
@@ -26,6 +27,7 @@ except ModuleNotFoundError:
     from scripts.ci.pr_review_merge_scheduler import (
         fetch_open_prs,
         fetch_pr,
+        has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
         review_matches_current_head,
@@ -124,6 +126,29 @@ def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     return bool(reasons), tuple(reasons)
 
 
+CONFLICT_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
+
+
+def needs_conflict_resolution(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
+    """Return whether an approved PR has a merge conflict safe to auto-resolve.
+
+    Only a current-head-approved PR that GitHub reports as ``DIRTY`` or
+    ``CONFLICTING`` qualifies: the head was otherwise ready to merge but for the
+    conflict. The bot merges the base into the head and pushes; the resulting
+    head is re-reviewed and re-checked before it can merge, so a wrong
+    resolution cannot merge unreviewed. Same-repository-head and dispatch
+    bounding are enforced by the caller.
+    """
+    merge_state = str(pr.get("mergeStateStatus") or "").upper()
+    if merge_state not in CONFLICT_MERGE_STATES:
+        return False, ()
+    if not has_current_head_approval(pr):
+        return False, ()
+    return True, (
+        f"current-head approved PR is {merge_state.lower()}; auto-resolving the merge conflict",
+    )
+
+
 def create_fix_marker(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Write a head-scoped dispatch marker comment."""
     number = int(pr["number"])
@@ -160,8 +185,13 @@ def dispatch_autofix(
     workflow: str,
     workflow_repository: str,
     dry_run: bool,
+    resolve_conflict: bool = False,
 ) -> None:
-    """Dispatch an autofix worker for the exact PR head."""
+    """Dispatch an autofix worker for the exact PR head.
+
+    When ``resolve_conflict`` is set the worker merges the base branch into the
+    head and resolves conflict markers instead of applying review-feedback fixes.
+    """
     dispatch_repo = workflow_repository or repo
     args = [
         "gh",
@@ -185,6 +215,8 @@ def dispatch_autofix(
             f"pr_head_ref={pr['headRefName']}",
             "-f",
             f"pr_head_sha={pr['headRefOid']}",
+            "-f",
+            f"resolve_conflict={'true' if resolve_conflict else 'false'}",
         ]
     )
     if dry_run:
@@ -210,8 +242,15 @@ def inspect_pr(
         return "skip", ("external PR head is not writable by repository workflow credentials",)
 
     needs_fix, reasons = needs_autofix(pr)
+    resolve_conflict = False
     if not needs_fix:
-        return "skip", ("no current-head autofixable OpenCode change request",)
+        needs_resolve, resolve_reasons = needs_conflict_resolution(pr)
+        if not needs_resolve:
+            return "skip", (
+                "no current-head autofixable OpenCode change request or approved merge conflict",
+            )
+        resolve_conflict = True
+        reasons = resolve_reasons
 
     if comments is None:
         comments = issue_comments(repo, number)
@@ -225,6 +264,7 @@ def inspect_pr(
         workflow=args.autofix_workflow,
         workflow_repository=args.autofix_repository,
         dry_run=args.dry_run,
+        resolve_conflict=resolve_conflict,
     )
     create_fix_marker(repo, pr, dry_run=args.dry_run)
     return "dispatch", reasons
@@ -246,7 +286,8 @@ def process_queue(args: argparse.Namespace) -> int:
         if not same_repository_head(args.repo, pr):
             continue
         needs_fix, _ = needs_autofix(pr)
-        if needs_fix:
+        needs_resolve, _ = needs_conflict_resolution(pr)
+        if needs_fix or needs_resolve:
             prs_needing_comments.append(pr)
 
     comments_by_pr: dict[int, list[dict[str, Any]]] = {}
@@ -320,6 +361,26 @@ def self_test() -> int:
     assert needs_autofix(pr) == (True, ("current-head OpenCode requested changes",))
     dirty_pr = {**pr, "mergeStateStatus": "DIRTY"}
     assert needs_autofix(dirty_pr) == (False, ())
+    approved_dirty_pr = {
+        "reviews": {
+            "nodes": [
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "opencode-agent"},
+                    "commit": {"oid": head},
+                    "body": "Approved.",
+                }
+            ]
+        },
+        "reviewThreads": {"nodes": []},
+        "headRefOid": head,
+        "mergeStateStatus": "DIRTY",
+    }
+    resolves, resolve_reasons = needs_conflict_resolution(approved_dirty_pr)
+    assert resolves
+    assert "auto-resolving" in resolve_reasons[0]
+    assert needs_conflict_resolution({**approved_dirty_pr, "mergeStateStatus": "CLEAN"}) == (False, ())
+    assert needs_conflict_resolution(dirty_pr) == (False, ())
     model_exhausted_pr = {
         **pr,
         "reviews": {
