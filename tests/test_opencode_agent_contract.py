@@ -690,6 +690,63 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
     )
 
 
+def test_opencode_gate_reads_tolerate_shared_token_throttle():
+    """A throttled gate READ is a GitHub side effect, not source evidence.
+
+    The APPROVE write path already keeps the required check green when GitHub
+    rejects the pull review as a pure side effect; the gate's own reads (live
+    head, sentinel comment, peer check lookups) that share the same contended
+    installation token must degrade the same way on a detected throttle instead
+    of hard-failing the required check under ``set -euo pipefail``.
+    """
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    # The unguarded top-level reads are now guarded and skip on throttle
+    # rather than tripping set -e.
+    assert 'if ! live_head_sha="$(gh api' in workflow
+    assert (
+        "skipping review side effects because the review write is a GitHub "
+        "side effect, not source evidence, while branch protection remains "
+        "authoritative" in workflow
+    )
+    assert 'if ! comment_json="$(' in workflow
+    assert (
+        "falling back to the selected OpenCode model output" in workflow
+    )
+
+    # The checks-lookup helper records a detected throttle and callers degrade
+    # on it, mirroring the existing app-token bypass.
+    assert "CHECK_LOOKUP_LAST_FAILURE_THROTTLED" in workflow
+    assert "check_lookup_failure_was_throttled()" in workflow
+    assert (
+        "gh_error_is_retryable_publication_failure \"$collector_error_file\""
+        in workflow
+    )
+    assert re.search(
+        r"elif check_lookup_failure_was_throttled; then[\s\S]{0,600}"
+        r': >"\$pending_checks_file"',
+        workflow,
+    )
+    assert re.search(
+        r"elif check_lookup_failure_was_throttled; then[\s\S]{0,600}"
+        r': >"\$failed_checks_file"',
+        workflow,
+    )
+
+    # A throttled REQUEST_CHANGES augmentation read still registers the
+    # source-backed REQUEST_CHANGES review instead of failing closed.
+    assert (
+        "still publishes the source-backed REQUEST_CHANGES from its control "
+        "block without failed-check augmentation" in workflow
+    )
+
+    # The fail-closed default for genuine, non-throttle read failures is
+    # preserved.
+    assert 'stop_approval_without_review "CHECKS_LOOKUP_FAILED"' in workflow
+
+
 def test_opencode_jq_filters_do_not_embed_literal_expression_openers():
     """Literal '${{' inside run scripts is parsed as a GitHub expression opener."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(

@@ -5307,6 +5307,17 @@ jobs:
 
           }
 
+          # Records whether the most recent collect_github_checks_with_retry failure
+          # carried a GitHub throttle signature (installation/secondary rate limit,
+          # abuse detection, retry-later). A throttled checks read is a GitHub side
+          # effect on the shared installation token, not source evidence, so callers
+          # may degrade like the existing app-token bypass instead of failing closed.
+          CHECK_LOOKUP_LAST_FAILURE_THROTTLED=""
+
+          check_lookup_failure_was_throttled() {
+            [ -n "${CHECK_LOOKUP_LAST_FAILURE_THROTTLED:-}" ]
+          }
+
           collect_github_checks_with_retry() {
             local collector="$1"
             local output_file="$2"
@@ -5315,10 +5326,19 @@ jobs:
             local primary_check_lookup_token="${GH_TOKEN:-}"
             local fallback_check_lookup_token="${CHECK_LOOKUP_GH_TOKEN:-}"
             local attempt=1
+            local collector_error_file
+            collector_error_file="$(mktemp)"
+            CHECK_LOOKUP_LAST_FAILURE_THROTTLED=""
 
             while [ "$attempt" -le "$attempts" ]; do
-              if GH_TOKEN="$primary_check_lookup_token" "$collector" "$output_file"; then
+              if GH_TOKEN="$primary_check_lookup_token" "$collector" "$output_file" 2>"$collector_error_file"; then
+                cat "$collector_error_file" >&2 || true
+                rm -f "$collector_error_file"
                 return 0
+              fi
+              cat "$collector_error_file" >&2 || true
+              if gh_error_is_retryable_publication_failure "$collector_error_file"; then
+                CHECK_LOOKUP_LAST_FAILURE_THROTTLED=1
               fi
               : >"$output_file"
               if [ "$attempt" -lt "$attempts" ]; then
@@ -5334,8 +5354,15 @@ jobs:
               printf 'GitHub Checks lookup failed with OpenCode app token; retrying with workflow github token before changing review state.\n' >&2
               attempt=1
               while [ "$attempt" -le "$attempts" ]; do
-                if GH_TOKEN="$fallback_check_lookup_token" "$collector" "$output_file"; then
+                if GH_TOKEN="$fallback_check_lookup_token" "$collector" "$output_file" 2>"$collector_error_file"; then
+                  cat "$collector_error_file" >&2 || true
+                  rm -f "$collector_error_file"
+                  CHECK_LOOKUP_LAST_FAILURE_THROTTLED=""
                   return 0
+                fi
+                cat "$collector_error_file" >&2 || true
+                if gh_error_is_retryable_publication_failure "$collector_error_file"; then
+                  CHECK_LOOKUP_LAST_FAILURE_THROTTLED=1
                 fi
                 : >"$output_file"
                 if [ "$attempt" -lt "$attempts" ]; then
@@ -5346,6 +5373,7 @@ jobs:
               done
             fi
 
+            rm -f "$collector_error_file"
             return 1
           }
 
@@ -5514,7 +5542,19 @@ jobs:
             done
           }
 
-          live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          live_head_lookup_error_file="$(mktemp)"
+          if ! live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>"$live_head_lookup_error_file")"; then
+            if gh_error_is_retryable_publication_failure "$live_head_lookup_error_file"; then
+              printf '::warning::OpenCode could not read the live pull request head for %s because GitHub throttled the shared installation token; skipping review side effects because the review write is a GitHub side effect, not source evidence, while branch protection remains authoritative.\n' "$HEAD_SHA"
+            else
+              printf '::warning::OpenCode could not read the live pull request head for %s; skipping review side effects because the review write is a GitHub side effect, not source evidence, while branch protection remains authoritative.\n' "$HEAD_SHA"
+            fi
+            sed 's/^/gh: /' "$live_head_lookup_error_file" >&2 || true
+            rm -f "$live_head_lookup_error_file"
+            echo "::endgroup::"
+            exit 0
+          fi
+          rm -f "$live_head_lookup_error_file"
           if [ "$live_head_sha" != "$HEAD_SHA" ]; then
             echo "stale OpenCode run: event head=${HEAD_SHA}, live head=${live_head_sha}; skipping review side effects."
             echo "::endgroup::"
@@ -5564,11 +5604,21 @@ jobs:
           }
 
           sentinel="<!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->"
-          comment_json="$(
+          sentinel_comment_error_file="$(mktemp)"
+          if ! comment_json="$(
             gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-              --jq "[.[] | select((.user.login == \"github-actions[bot]\" or .user.login == \"opencode-agent[bot]\") and (.body | contains(\"${sentinel}\")))] | sort_by(.created_at) | last // {}"
-          )"
-          comment_body="$(jq -r '.body // ""' <<<"$comment_json")"
+              --jq "[.[] | select((.user.login == \"github-actions[bot]\" or .user.login == \"opencode-agent[bot]\") and (.body | contains(\"${sentinel}\")))] | sort_by(.created_at) | last // {}" 2>"$sentinel_comment_error_file"
+          )"; then
+            if gh_error_is_retryable_publication_failure "$sentinel_comment_error_file"; then
+              printf '::warning::OpenCode could not read the Review Overview sentinel comment for %s because GitHub throttled the shared installation token; falling back to the selected OpenCode model output.\n' "$HEAD_SHA"
+            else
+              printf '::warning::OpenCode could not read the Review Overview sentinel comment for %s; falling back to the selected OpenCode model output.\n' "$HEAD_SHA"
+            fi
+            sed 's/^/gh: /' "$sentinel_comment_error_file" >&2 || true
+            comment_json=""
+          fi
+          rm -f "$sentinel_comment_error_file"
+          comment_body="$(jq -r '.body // ""' <<<"${comment_json:-}")"
 
           tmp_body="$(mktemp)"
           control_json="$(mktemp)"
@@ -5624,6 +5674,10 @@ jobs:
                   echo "GitHub Checks statusCheckRollup lookup is unavailable to the OpenCode app token; branch protection remains authoritative for target-repository checks."
                   : >"$pending_checks_file"
                   pending_wait_status=0
+                elif check_lookup_failure_was_throttled; then
+                  printf '::warning::GitHub throttled the shared installation token while reading peer GitHub Checks for %s; the checks read is a GitHub side effect, not source evidence, so OpenCode proceeds on the source-backed result while branch protection remains authoritative for target-repository checks.\n' "$HEAD_SHA"
+                  : >"$pending_checks_file"
+                  pending_wait_status=0
                 else
                 body="$(printf '%s\n' \
                   "## Pull request overview" \
@@ -5656,6 +5710,9 @@ jobs:
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
                 if app_token_limited_check_lookup; then
                   echo "GitHub failed-check lookup is unavailable to the OpenCode app token; approving based on source-backed OpenCode result and successful coverage evidence while branch protection remains authoritative."
+                  : >"$failed_checks_file"
+                elif check_lookup_failure_was_throttled; then
+                  printf '::warning::GitHub throttled the shared installation token while reading failed GitHub Checks for %s; the checks read is a GitHub side effect, not source evidence, so OpenCode approves on the source-backed result and successful coverage evidence while branch protection remains authoritative.\n' "$HEAD_SHA"
                   : >"$failed_checks_file"
                 else
                 body="$(printf '%s\n' \
@@ -5757,6 +5814,10 @@ jobs:
               failed_check_inline_failure_body_file="$(mktemp)"
               failed_checks_file="$(mktemp)"
               if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
+                if check_lookup_failure_was_throttled; then
+                  printf '::warning::GitHub throttled the shared installation token while reading failed GitHub Checks to augment OpenCode REQUEST_CHANGES for %s; the checks read is a GitHub side effect, not source evidence, so OpenCode still publishes the source-backed REQUEST_CHANGES from its control block without failed-check augmentation while branch protection remains authoritative.\n' "$HEAD_SHA"
+                  : >"$failed_checks_file"
+                else
                 body="$(printf '%s\n' \
                   "OpenCode could not validate REQUEST_CHANGES against current-head failed checks." \
                   "" \
@@ -5770,6 +5831,7 @@ jobs:
                   "No PR review was posted because check lookup failure is a review-tool state, not a source finding."
                 )"
                 stop_approval_without_review "CHECKS_LOOKUP_FAILED" "$body"
+                fi
               fi
 
               if [ -s "$failed_checks_file" ]; then
