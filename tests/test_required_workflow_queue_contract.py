@@ -329,6 +329,59 @@ def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
     assert "current_head=closed-or-no-open-pr" in result.stdout
 
 
+def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
+    """Manual full-sweep cadence must override repository variables and defaults."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert (
+        "ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ inputs.review_dispatch_limit || "
+        "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}"
+    ) in workflow
+    assert (
+        "STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || "
+        "vars.STALE_OPENCODE_MINUTES || '420' }}"
+    ) in workflow
+    assert (
+        "ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
+    ) in workflow
+    assert "ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}" in workflow
+    assert (
+        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ inputs.enable_auto_merge == true }}"
+    ) in workflow
+    assert "ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}" in workflow
+    assert "ORG_SWEEP_UPDATE_BRANCHES: ${{ inputs.update_branches == true }}" in workflow
+    assert 'if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then' in workflow
+    assert 'if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then' in workflow
+    assert '--merge-mode "$ORG_SWEEP_MERGE_MODE"' in workflow
+    assert 'if [ "$ORG_SWEEP_UPDATE_BRANCHES" = "true" ]; then' in workflow
+
+
+def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
+    """An inaccessible Actions page must not add a secondary jq null error."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required for the executable workflow filter regression test")
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    aggregation_line = next(
+        line.strip()
+        for line in workflow.splitlines()
+        if "done | jq -sc" in line and "workflow_runs" in line
+    )
+    jq_filter = shlex.split(aggregation_line)[4]
+    payload = '{"workflow_runs":[]}\n{"message":"Resource not accessible by integration"}\n'
+
+    result = subprocess.run(
+        [jq, "-sc", jq_filter],
+        input=payload,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == []
+
+
 def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None:
     """A repository the sweep credential cannot read must not fail the sweep.
 

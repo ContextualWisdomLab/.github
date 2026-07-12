@@ -424,8 +424,12 @@ jobs:
       # larger queue (BandScope had 34 during the incident that established
       # this contract). The scheduler paginates, so 1000 keeps the practical
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
-      ORG_SWEEP_MAX_PRS: ${{ vars.ORG_SWEEP_MAX_PRS || '1000' }}
-      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
+      ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
+      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
+      ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}
+      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ inputs.enable_auto_merge == true }}
+      ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}
+      ORG_SWEEP_UPDATE_BRANCHES: ${{ inputs.update_branches == true }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
@@ -436,7 +440,7 @@ jobs:
       # if MORE than this many repositories become unreachable at once, the whole
       # credential likely broke and the job fails loudly.
       ORG_SWEEP_MAX_UNAVAILABLE: ${{ vars.ORG_SWEEP_MAX_UNAVAILABLE || '5' }}
-      STALE_OPENCODE_MINUTES: ${{ vars.STALE_OPENCODE_MINUTES || '420' }}
+      STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '420' }}
     steps:
       - name: Exchange OpenCode app token for sweep mutations
         id: sweep_app_token
@@ -655,11 +659,17 @@ jobs:
               --review-workflow "Required OpenCode Review"
               --review-dispatch-limit "$ORG_SWEEP_REVIEW_DISPATCH_LIMIT"
               --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
-              --trigger-reviews
-              --enable-auto-merge
-              --merge-mode direct_or_auto
-              --update-branches
+              --merge-mode "$ORG_SWEEP_MERGE_MODE"
             )
+            if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then
+              args+=(--trigger-reviews)
+            fi
+            if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then
+              args+=(--enable-auto-merge)
+            fi
+            if [ "$ORG_SWEEP_UPDATE_BRANCHES" = "true" ]; then
+              args+=(--update-branches)
+            fi
             if [ "$DRY_RUN" = "true" ]; then
               args+=(--dry-run)
             fi
@@ -735,7 +745,7 @@ jobs:
                   -H "Accept: application/vnd.github+json" \
                   "/repos/${repo_full_name}/actions/runs?status=${active_status}&per_page=100" \
                   --paginate
-              done | jq -sc '[.[] | .workflow_runs[]]'
+              done | jq -sc '[.[] | (.workflow_runs // [])[]]'
             )"; then
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: queued/in-progress Actions runs could not be read. Grant the sweep credential Actions read access; no run will be cancelled from incomplete evidence."
               active_runs_json="[]"

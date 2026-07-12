@@ -305,7 +305,7 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
     )
 
     repo = tmp_path / "repo"
-    package = repo / "ADFS samples" / "Node App"
+    package = repo / "ADFS 연동 라이브러리" / "Node.JS" / "Node App"
     package.mkdir(parents=True)
     (package / "package.json").write_text('{"scripts":{"test":"node --test"}}\n')
     source = package / "index.js"
@@ -334,7 +334,7 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == ["ADFS samples/Node App"]
+    assert result.stdout.splitlines() == ["ADFS 연동 라이브러리/Node.JS/Node App"]
 
 
 def test_opencode_runtime_pin_supports_reasoning_options():
