@@ -605,6 +605,39 @@ jobs:
             fi
           }
 
+          javascript_coverage_package_dirs() {
+            changed_files_for_coverage \
+              | while IFS= read -r changed_path; do
+                  case "$changed_path" in
+                    package.json|package-lock.json|npm-shrinkwrap.json|pnpm-lock.yaml|yarn.lock|*.js|*.jsx|*.ts|*.tsx) ;;
+                    *) continue ;;
+                  esac
+
+                  candidate_dir="$(dirname "$changed_path")"
+                  while true; do
+                    if [ "$candidate_dir" = "." ]; then
+                      manifest="package.json"
+                    else
+                      manifest="${candidate_dir}/package.json"
+                    fi
+                    if [ -f "$manifest" ] \
+                      && git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
+                      printf '%s\n' "$candidate_dir"
+                      break
+                    fi
+                    if [ "$candidate_dir" = "." ]; then
+                      break
+                    fi
+                    next_dir="$(dirname "$candidate_dir")"
+                    if [ "$next_dir" = "$candidate_dir" ]; then
+                      break
+                    fi
+                    candidate_dir="$next_dir"
+                  done
+                done \
+              | sort -u
+          }
+
           declared_package_manager() {
             if [ -f package.json ]; then
               jq -r '.packageManager // "" | split("@")[0]' package.json 2>/dev/null || true
@@ -1313,60 +1346,68 @@ jobs:
             fi
           fi
 
-          if [ -f package.json ] && has_changed_tracked_files 'package.json' '*.js' '*.jsx' '*.ts' '*.tsx'; then
+          javascript_package_dirs="$(javascript_coverage_package_dirs)"
+          if [ -n "$javascript_package_dirs" ]; then
             measured_any=1
-            package_runner="$(select_package_runner)"
-            javascript_coverage_ran=0
+            while IFS= read -r package_dir; do
+              [ -n "$package_dir" ] || continue
+              pushd "$package_dir" >/dev/null
+              append "### JavaScript/TypeScript package (${package_dir})"
+              append ""
+              package_runner="$(select_package_runner)"
+              javascript_coverage_ran=0
 
-            if [ -z "$package_runner" ]; then
-              append "### JavaScript/TypeScript test coverage"
-              append ""
-              append "- Result: FAIL"
-              append "- Reason: package.json exists, but no supported package runner is available."
-              append ""
-              failures=$((failures + 1))
-            else
-              install_package_dependencies "$package_runner"
-            fi
+              if [ -z "$package_runner" ]; then
+                append "### JavaScript/TypeScript test coverage"
+                append ""
+                append "- Result: FAIL"
+                append "- Reason: package.json exists, but no supported package runner is available."
+                append ""
+                failures=$((failures + 1))
+              else
+                install_package_dependencies "$package_runner"
+              fi
 
-            if [ -n "$package_runner" ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null; then
-              run_and_capture "Repository docstring coverage" "$package_runner" run check:python-docstrings
-            elif [ -n "$package_runner" ] && jq -e '.scripts["docstring:coverage"] // empty' package.json >/dev/null; then
-              run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docstring:coverage
-            elif [ -n "$package_runner" ] && jq -e '.scripts["docs:coverage"] // empty' package.json >/dev/null; then
-              run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docs:coverage
-            else
-              append "### JavaScript/TypeScript docstring coverage"
-              append ""
-              append "- Result: PASS"
-              append "- Reason: package.json exists, but no check:python-docstrings, docstring:coverage, or docs:coverage script is defined; docstring coverage is advisory."
-              append ""
-            fi
+              if [ -n "$package_runner" ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null; then
+                run_and_capture "Repository docstring coverage" "$package_runner" run check:python-docstrings
+              elif [ -n "$package_runner" ] && jq -e '.scripts["docstring:coverage"] // empty' package.json >/dev/null; then
+                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docstring:coverage
+              elif [ -n "$package_runner" ] && jq -e '.scripts["docs:coverage"] // empty' package.json >/dev/null; then
+                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docs:coverage
+              else
+                append "### JavaScript/TypeScript docstring coverage"
+                append ""
+                append "- Result: PASS"
+                append "- Reason: package.json exists, but no check:python-docstrings, docstring:coverage, or docs:coverage script is defined; docstring coverage is advisory."
+                append ""
+              fi
 
-            if [ -z "$package_runner" ]; then
-              :
-            elif jq -e '.scripts.coverage // empty' package.json >/dev/null; then
-              run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
-              javascript_coverage_ran=1
-            elif jq -e '.scripts.test // empty' package.json >/dev/null; then
-              case "$package_runner" in
-                npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test -- --coverage ;;
-                yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
-              esac
-              javascript_coverage_ran=1
-            else
-              append "### JavaScript/TypeScript test coverage"
-              append ""
-              append "- Result: FAIL"
-              append "- Reason: package.json exists, but no coverage or test script is defined."
-              append ""
-              failures=$((failures + 1))
-            fi
+              if [ -z "$package_runner" ]; then
+                :
+              elif jq -e '.scripts.coverage // empty' package.json >/dev/null; then
+                run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
+                javascript_coverage_ran=1
+              elif jq -e '.scripts.test // empty' package.json >/dev/null; then
+                case "$package_runner" in
+                  npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                  pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test -- --coverage ;;
+                  yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
+                esac
+                javascript_coverage_ran=1
+              else
+                append "### JavaScript/TypeScript test coverage"
+                append ""
+                append "- Result: FAIL"
+                append "- Reason: package.json exists, but no coverage or test script is defined."
+                append ""
+                failures=$((failures + 1))
+              fi
 
-            if [ "$javascript_coverage_ran" -eq 1 ]; then
-              check_javascript_coverage_thresholds
-            fi
+              if [ "$javascript_coverage_ran" -eq 1 ]; then
+                check_javascript_coverage_thresholds
+              fi
+              popd >/dev/null
+            done <<<"$javascript_package_dirs"
           fi
 
           if has_changed_tracked_files '*.R' '*.r' 'DESCRIPTION' 'renv.lock'; then
