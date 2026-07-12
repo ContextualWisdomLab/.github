@@ -515,6 +515,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
+    assert 'REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS: "240"' in workflow
+    assert "PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss" in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5 "
@@ -752,6 +754,12 @@ def test_opencode_pending_peer_checks_hold_approval_without_failing_required_wor
         'hold_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"'
         in workflow
     )
+    assert (
+        'checkedAt: (if ((.startedAt // "") != "") then (.startedAt // "") else (.completedAt // "") end)'
+        in workflow
+    )
+    assert 'map(sort_by(.checkedAt // "") | last)' in workflow
+    assert "group_by(.label)" in workflow
     assert "build_waiting_for_checks_body" not in workflow
 
 
