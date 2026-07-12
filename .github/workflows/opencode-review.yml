@@ -3230,7 +3230,8 @@ jobs:
 
                       changed_files_file="$(mktemp)"
                       surfaces_file="$(mktemp)"
-                      if ! gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
+                      if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+                        gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
                         [ ! -s "$changed_files_file" ]; then
                         printf '```mermaid\n'
                         printf 'flowchart LR\n'
@@ -3322,7 +3323,8 @@ jobs:
 
                     append_mermaid_review_graph() {
                       local pr_json merge_state
-                      pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
+                      pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+                        gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
                       merge_state="$(printf '%s' "$pr_json" | jq -r '.mergeStateStatus // "UNKNOWN"' 2>/dev/null || printf 'UNKNOWN')"
                       printf '\n## Changed-File Evidence Map\n\n'
                       emit_change_flow_mermaid_graph "$merge_state"
@@ -3339,7 +3341,8 @@ jobs:
 
           append_merge_conflict_guidance() {
             local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
-            pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
+            pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
             fi
@@ -3442,7 +3445,10 @@ jobs:
 
       - name: Publish OpenCode review outcome
         if: always()
-        timeout-minutes: 220
+        # Model execution belongs to the preceding bounded model-pool step.
+        # Keep this step short so an exhausted provider cannot occupy the PR
+        # review queue for hours after the model pool has already terminated.
+        timeout-minutes: 35
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3482,20 +3488,12 @@ jobs:
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
           REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
-          OPENCODE_MODEL_ATTEMPTS: "1"
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"
+          # A second model catalog pass is deliberately forbidden here. This
+          # timeout is only for a focused failed-check diagnosis after the
+          # primary model result and peer-check evidence disagree.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          # The publish gate may re-kick the review catalog after an exhausted
-          # model-pool output so the PR still gets a concrete pass/fail reason.
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"
-          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
-          OPENCODE_BACKOFF_MAX_SECONDS: "30"
-          OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
-          OPENCODE_AGENT: ci-review-fallback
-          OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"
-          OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"
-          OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"
         run: |
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
@@ -3510,7 +3508,7 @@ jobs:
             GH_TOKEN="$OPENCODE_APP_TOKEN"
             export GH_TOKEN
             check_lookup_token_source="opencode-app"
-          elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
+          elif [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ] && [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
             GH_TOKEN="$CHECK_LOOKUP_GH_TOKEN"
             export GH_TOKEN
             check_lookup_token_source="github-token"
@@ -3635,7 +3633,8 @@ jobs:
 
                       changed_files_file="$(mktemp)"
                       surfaces_file="$(mktemp)"
-                      if ! gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
+                      if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+                        gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
                         [ ! -s "$changed_files_file" ]; then
                         printf '```mermaid\n'
                         printf 'flowchart LR\n'
@@ -3727,7 +3726,8 @@ jobs:
 
                     append_mermaid_review_graph() {
                       local pr_json merge_state
-                      pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
+                      pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+                        gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
                       merge_state="$(printf '%s' "$pr_json" | jq -r '.mergeStateStatus // "UNKNOWN"' 2>/dev/null || printf 'UNKNOWN')"
                       printf '\n## Changed-File Evidence Map\n\n'
                       emit_change_flow_mermaid_graph "$merge_state"
@@ -3744,7 +3744,8 @@ jobs:
 
           append_merge_conflict_guidance() {
             local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
-            pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
+            pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
             fi
@@ -4005,7 +4006,7 @@ jobs:
             }
           }
           GRAPHQL
-            if ! gh api graphql \
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -4165,7 +4166,7 @@ jobs:
               rm -f "$rewritten_payload_file"
             fi
             emit_review_body_to_action_log "$event" "$body" "$review_payload_file"
-            if ! env GH_TOKEN="$review_write_token" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$gh_error_file"; then
+            if ! post_pull_review_with_retry "inline review" "$review_write_token" "$review_payload_file" "$gh_error_file"; then
               warn_gh_publication_failure "pull review inline comments" "$gh_error_file"
               rm -f "$gh_error_file"
               if [ -s "$fallback_body_file" ]; then
@@ -4853,7 +4854,10 @@ jobs:
             if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
               return 1
             fi
-            if ! opencode export "$session_id" --pure >"$opencode_export_file"; then
+            if ! timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s" \
+              opencode export "$session_id" --pure >"$opencode_export_file"; then
+              printf 'OpenCode failed-check diagnosis export timed out or failed after at most %s seconds for session %s.\n' \
+                "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}" "$session_id" >&2
               return 1
             fi
             jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$opencode_output_file"
@@ -4884,7 +4888,8 @@ jobs:
 
             runs_json="$(mktemp)"
             workflow_lookup_err="$(mktemp)"
-            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
                 printf 'Strix workflow is not installed on %s; skipping optional current-head Strix workflow-run lookup.\n' "$GH_REPOSITORY" >&2
@@ -4898,7 +4903,8 @@ jobs:
             fi
             rm -f "$workflow_lookup_err"
 
-            if ! env HEAD_SHA="$HEAD_SHA" gh run list \
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              env HEAD_SHA="$HEAD_SHA" gh run list \
               --repo "$GH_REPOSITORY" \
               --workflow strix.yml \
               --commit "$HEAD_SHA" \
@@ -5003,7 +5009,8 @@ jobs:
                 ;;
             esac
 
-            gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
               -f per_page=100 \
               --paginate \
               --slurp |
@@ -5018,7 +5025,8 @@ jobs:
             local manual_run_url
 
             status_target="$(
-            gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
+            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
               --jq '
                 (.statuses // [])
                 | map(select((.context // "") == "strix"))
@@ -5048,7 +5056,7 @@ jobs:
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
 
-            gh api graphql \
+            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5101,7 +5109,8 @@ jobs:
             runs_json="$(mktemp)"
             workflow_lookup_err="$(mktemp)"
 
-            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
                 printf 'Strix workflow is not installed on %s; skipping optional manual Strix run lookup.\n' "$GH_REPOSITORY" >&2
@@ -5114,7 +5123,7 @@ jobs:
             fi
             rm -f "$workflow_lookup_err"
 
-            if ! gh run list \
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh run list \
               --repo "$GH_REPOSITORY" \
               --workflow strix.yml \
               --commit "$HEAD_SHA" \
@@ -5198,7 +5207,7 @@ jobs:
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             filtered_rollup_file="$(mktemp)"
-            if ! pr_node_id="$(gh api graphql \
+            if ! pr_node_id="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5211,7 +5220,7 @@ jobs:
               : >"$rollup_file"
             else
             # shellcheck disable=SC2016
-            if ! gh api graphql \
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5341,7 +5350,7 @@ jobs:
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             # shellcheck disable=SC2016
-            if ! gh api graphql \
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5519,10 +5528,13 @@ jobs:
           stop_without_review_after_model_unavailable() {
             local body
             body="$(printf '%s\n' \
-              "OpenCode model pool did not produce a successful current-head control block before the model-pool step ended." \
+              "OpenCode model pool did not produce a successful current-head control block before the model-pool step ended; the publish step will not rerun the model catalog." \
               "" \
               "- Result: MODEL_OUTPUT_UNAVAILABLE" \
-              "- Required next evidence: the model pool must keep retrying until it emits APPROVE or source-backed REQUEST_CHANGES." \
+              "- Model-pool outcome: \`${OPENCODE_MODEL_POOL_OUTCOME:-unknown}\`" \
+              "- Last model: \`${OPENCODE_MODEL_POOL_MODEL:-none}\`" \
+              "- Required next evidence: a later scheduler dispatch must rerun the model pool on this same current head until it emits APPROVE or source-backed REQUEST_CHANGES." \
+              "- Queue action: this publication gate exits immediately so the scheduler can retry the same current head without holding a runner for a duplicate catalog pass." \
               "- Head SHA: \`${HEAD_SHA}\`" \
               "- Workflow run: ${RUN_ID}" \
               "- Workflow attempt: ${RUN_ATTEMPT}" \
@@ -5535,7 +5547,8 @@ jobs:
                     request_changes_for_merge_conflict_if_present() {
                       local pr_json merge_state mergeable base_ref head_ref body change_graph
 
-            if ! pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus,mergeable 2>/dev/null)"; then
+            if ! pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus,mergeable 2>/dev/null)"; then
               return 1
             fi
 
@@ -5599,66 +5612,9 @@ jobs:
             scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
-          rekick_model_pool_on_exhaustion() {
-            local rekick_attempt=1
-            local rekick_output outcome model rekick_status
-            local sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS:-15}"
-            local max_sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS:-300}"
-            local max_total_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS:-4200}"
-            local started_at now elapsed
-
-            started_at="$(date +%s)"
-
-            while [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" = "exhausted" ]; do
-              if [ "$max_total_seconds" -gt 0 ]; then
-                now="$(date +%s)"
-                elapsed="$((now - started_at))"
-                if [ "$elapsed" -ge "$max_total_seconds" ]; then
-                  printf 'OpenCode model pool remained exhausted for %s seconds; stopping re-kicks and continuing with fail-closed handling.\n' "$elapsed" >&2
-                  break
-                fi
-              fi
-              printf 'OpenCode model pool exhausted; re-kicking model pool (attempt %s).\n' "$rekick_attempt"
-              rekick_output="$(mktemp)"
-              rekick_status=0
-              GITHUB_OUTPUT="$rekick_output" OPENCODE_OUTPUT_FILE="$OPENCODE_MODEL_POOL_OUTPUT_FILE" \
-                bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh" || rekick_status=$?
-              if [ "$rekick_status" -ne 0 ]; then
-                printf 'OpenCode model pool re-kick command exited with status %s; continuing with fail-closed handling.\n' "$rekick_status" >&2
-              fi
-              outcome="$(awk -F= '/^review_status=/{v=$2} END{print v}' "$rekick_output")"
-              model="$(awk -F= '/^review_model=/{v=$2} END{print v}' "$rekick_output")"
-              rm -f "$rekick_output"
-
-              if [ -z "$outcome" ]; then
-                printf 'OpenCode model pool re-kick produced no review_status output; treating outcome as exhausted.\n' >&2
-                outcome="exhausted"
-              fi
-              OPENCODE_MODEL_POOL_OUTCOME="$outcome"
-              OPENCODE_MODEL_POOL_MODEL="$model"
-              if [ "$outcome" = "success" ]; then
-                if [ -z "$model" ]; then
-                  printf 'OpenCode model pool re-kick succeeded but published an empty review_model.\n' >&2
-                fi
-                printf 'OpenCode model pool re-kick recovered with model: %s\n' "${model:-unknown}"
-                break
-              fi
-              if [ "$sleep_seconds" -gt 0 ]; then
-                printf 'OpenCode model pool still exhausted after re-kick attempt %s; retrying in %s seconds.\n' "$rekick_attempt" "$sleep_seconds"
-                sleep "$sleep_seconds"
-              fi
-              if [ "$sleep_seconds" -lt "$max_sleep_seconds" ]; then
-                sleep_seconds=$((sleep_seconds * 2))
-                if [ "$sleep_seconds" -gt "$max_sleep_seconds" ]; then
-                  sleep_seconds="$max_sleep_seconds"
-                fi
-              fi
-              rekick_attempt=$((rekick_attempt + 1))
-            done
-          }
-
           live_head_lookup_error_file="$(mktemp)"
-          if ! live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>"$live_head_lookup_error_file")"; then
+          if ! live_head_sha="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+            gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>"$live_head_lookup_error_file")"; then
             if gh_error_is_retryable_publication_failure "$live_head_lookup_error_file"; then
               printf '::warning::OpenCode could not read the live pull request head for %s because GitHub throttled the shared installation token; skipping review side effects because the review write is a GitHub side effect, not source evidence, while branch protection remains authoritative.\n' "$HEAD_SHA"
             else
@@ -5680,8 +5636,9 @@ jobs:
             request_changes_for_coverage_evidence_failure
           fi
 
-          rekick_model_pool_on_exhaustion
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
+          printf 'OpenCode model-pool outcome=%s model=%s; publish stage performs no duplicate model-catalog pass.\n' \
+            "$opencode_review_outcome" "${OPENCODE_MODEL_POOL_MODEL:-none}"
 
           # The model pool uses continue-on-error so this final step can publish
           # diagnostics. Do not read model output or change PR review state unless
@@ -5721,7 +5678,8 @@ jobs:
           sentinel="<!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->"
           sentinel_comment_error_file="$(mktemp)"
           if ! comment_json="$(
-            gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
               --jq "[.[] | select((.user.login == \"github-actions[bot]\" or .user.login == \"opencode-agent[bot]\") and (.body | contains(\"${sentinel}\")))] | sort_by(.created_at) | last // {}" 2>"$sentinel_comment_error_file"
           )"; then
             if gh_error_is_retryable_publication_failure "$sentinel_comment_error_file"; then

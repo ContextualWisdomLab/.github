@@ -444,7 +444,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Run OpenCode PR Review model pool" in workflow
     assert "opencode_review_model_pool" in workflow
     assert "run_opencode_review_model_pool.sh" in workflow
-    assert "rekick_model_pool_on_exhaustion" in workflow
+    assert "rekick_model_pool_on_exhaustion" not in workflow
+    assert "publish stage performs no duplicate model-catalog pass" in workflow
     concurrency_contract = workflow.split("permissions:", 1)[0]
     assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
@@ -503,7 +504,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'timeout-minutes: 40' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,120}timeout-minutes: 220", workflow)
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,360}timeout-minutes: 35", workflow)
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "49"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"' in workflow
     assert (
@@ -521,9 +522,18 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
-    assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
-    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"' in workflow
-    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"' in workflow
+    publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
+        "      - name: Run merge scheduler after approval", 1
+    )[0]
+    assert 'REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "120"' in publish_step
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in publish_step
+    assert (
+        'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"'
+        in publish_step
+    )
+    assert 'post_pull_review_with_retry "inline review" "$review_write_token"' in publish_step
+    assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
     assert "OpenCode model pool did not produce a successful current-head control block" in workflow
     assert "Repeated current-head sections for models without file reads" in workflow
@@ -772,7 +782,7 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
 
     # The unguarded top-level reads are now guarded and skip on throttle
     # rather than tripping set -e.
-    assert 'if ! live_head_sha="$(gh api' in workflow
+    assert 'if ! live_head_sha="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s"' in workflow
     assert (
         "skipping review side effects because the review write is a GitHub "
         "side effect, not source evidence, while branch protection remains "
@@ -900,7 +910,7 @@ def test_opencode_model_pool_failure_stops_without_review_state_change():
     )
     assert 'opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"' in workflow
     assert re.search(
-        r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,420}'
+        r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,760}'
         r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
         r"stop_without_review_after_model_unavailable\s+fi",
         workflow,
