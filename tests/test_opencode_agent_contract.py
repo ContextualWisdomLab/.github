@@ -295,6 +295,12 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
         'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;'
         in measure_step
     )
+    assert (
+        'pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm run test --coverage ;;'
+        in measure_step
+    )
+    assert "pnpm test --coverage" not in measure_step
+    assert "pnpm test -- --coverage" not in measure_step
     assert 'test("(^|[[:space:]])--coverage([.=[:space:]]|$)' in measure_step
     assert '|c8([[:space:]]|$)|nyc([[:space:]]|$)")' in measure_step
 
