@@ -520,9 +520,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
     assert 'REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS: "240"' in workflow
     assert "PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss" in workflow
-    assert 'publish_main_pid="$$"' in workflow
+    assert 'publish_main_pid="${BASHPID:-$$}"' in workflow
     assert "publish_step_outer_watchdog &" in workflow
+    assert 'pkill -TERM -P "$publish_main_pid"' in workflow
     assert 'kill -TERM "$publish_main_pid"' in workflow
+    assert "PUBLISH_STEP_TIMEOUT_EXIT" in workflow
     assert 'kill "$publish_outer_watchdog_pid"' in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
