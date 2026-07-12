@@ -1003,5 +1003,16 @@ jobs:
           if existing_current_run_success_status; then
             exit 0
           fi
-          echo "::error::Could not publish manual Strix status from follow-up job after all configured credentials failed; the target PR head is missing required Strix status evidence. See the preceding notices for token-specific reasons."
+
+          # A successful scan remains authoritative evidence even when an
+          # external target repository does not grant any configured token
+          # permission to create commit statuses. Keep every credential-
+          # specific failure visible above, but do not turn a clean security
+          # scan into a failed workflow solely because of target settings.
+          if [ "$STRIX_RESULT" = "success" ]; then
+            echo "::warning title=Manual Strix status unavailable::Strix scan succeeded, but no configured credential could publish or read the target commit status. Preserving the successful scan result; the target repository's branch protection remains authoritative. See the preceding token-specific notices."
+            exit 0
+          fi
+
+          echo "::error::Could not publish manual Strix status from follow-up job after all configured credentials failed after a non-successful scan; the target PR head is missing required Strix status evidence. See the preceding notices for token-specific reasons."
           exit 1

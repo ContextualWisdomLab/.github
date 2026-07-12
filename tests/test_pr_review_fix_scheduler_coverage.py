@@ -1,4 +1,3 @@
-import pytest
 import scripts.ci.pr_review_fix_scheduler as fix
 
 def test_coverage_process_queue_skips_draft_and_wrong_base_and_external_repo(monkeypatch):

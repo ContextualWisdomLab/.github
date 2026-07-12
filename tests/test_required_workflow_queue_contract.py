@@ -259,11 +259,26 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     )
     assert 'select(.full_name != "ContextualWisdomLab/.github")' in workflow
     assert "select(.archived == false and .disabled == false)" in workflow
+    # The sweep must not silently truncate large/old queues or skip a repository
+    # whose only open work is a stacked/non-default-base PR.
+    assert "vars.ORG_SWEEP_MAX_PRS || '1000'" in workflow
+    assert "/pulls?state=open&per_page=1&base=" not in workflow
+    assert "No open PRs (including stacked or non-default-base PRs)" in workflow
     # Every repository failure must leave a concrete logged reason.
     assert "see the decision log above for the concrete per-PR reason" in workflow
-    # Queue hygiene: stale queued runs are cancelled with a logged identity.
+    # Queue hygiene: previous-head runs are cancelled immediately, while the
+    # legacy age guard cannot cancel a valid current-head PR run.
     assert "ORG_SWEEP_STALE_QUEUE_HOURS" in workflow
-    assert "/actions/runs?status=queued&per_page=100" in workflow
+    assert "/actions/runs?status=${active_status}&per_page=100" in workflow
+    assert "for active_status in queued in_progress" in workflow
+    assert '"pull_request" or .event == "pull_request_target"' in workflow
+    assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
+    assert ".head_sha != $current_default_sha" in workflow
+    assert "do not match an open PR or default-branch Current HEAD" in workflow
+    assert "select($current_pr_heads[$head_key] == null)" in workflow
+    assert "Could not cancel superseded run" in workflow
+    assert "No run will be cancelled from incomplete evidence" in workflow
+    assert "queue_hygiene_ready=false" in workflow
     # The scheduler requires --project-flow; the sweep must derive and pass it
     # per target repository (regression: the first sweep failed every repo with
     # "--project-flow is required").

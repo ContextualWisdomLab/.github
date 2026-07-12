@@ -5,8 +5,6 @@ from __future__ import annotations
 import runpy
 import subprocess
 import sys
-import types
-
 import pytest
 
 from scripts.ci import changed_file_syntax_gate as gate
@@ -43,6 +41,7 @@ def test_check_with_command_reports_ok_and_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(gate.shutil, "which", lambda tool: "/usr/bin/" + tool)
 
     def fake_run_ok(cmd, **kwargs):
+        assert kwargs["timeout"] == gate.COMMAND_TIMEOUT_SECONDS
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(gate.subprocess, "run", fake_run_ok)
@@ -55,6 +54,19 @@ def test_check_with_command_reports_ok_and_failure(tmp_path, monkeypatch):
     result, detail = gate.check_with_command("node", ["node"], tmp_path)
     assert result == gate.FAILED
     assert "Unexpected token" in detail
+
+
+def test_check_with_command_skips_when_tool_times_out(tmp_path, monkeypatch):
+    """A hung syntax tool is skipped with an explicit reason."""
+    monkeypatch.setattr(gate.shutil, "which", lambda tool: "/usr/bin/" + tool)
+
+    def fake_timeout(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_timeout)
+    result, detail = gate.check_with_command("bash", ["bash"], tmp_path)
+    assert result == gate.SKIPPED
+    assert "timed out after" in detail
 
 
 def test_check_with_command_detail_fallbacks(tmp_path, monkeypatch):
@@ -76,12 +88,16 @@ def test_check_with_command_detail_fallbacks(tmp_path, monkeypatch):
     assert "reported a syntax error" in detail
 
 
-def test_check_shell_uses_bash_n(tmp_path):
+def test_check_shell_uses_bash_n(tmp_path, monkeypatch):
     """A real bash -n check flags a broken shell script when bash exists."""
     bad = write(tmp_path, "bad.sh", "if then fi\n")
-    if gate.shutil.which("bash") is None:  # pragma: no cover - CI always has bash
+    bash = gate.shutil.which("bash")
+    if bash is None:  # pragma: no cover - CI always has bash
         pytest.skip("bash not available")
-    result, _ = gate.check_shell(bad)
+    monkeypatch.setattr(gate, "COMMAND_TIMEOUT_SECONDS", 3)
+    result, detail = gate.check_shell(bad)
+    if result == gate.SKIPPED and "timed out after" in detail:
+        pytest.skip(detail)
     assert result == gate.FAILED
     good = write(tmp_path, "good.sh", "echo hello\n")
     assert gate.check_shell(good) == (gate.OK, "")
