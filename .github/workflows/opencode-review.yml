@@ -3757,7 +3757,6 @@ jobs:
           REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "10"
           REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "20"
-          REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS: "240"
           # A second model catalog pass is deliberately forbidden here. Any
           # failed-check diagnosis in this publish step is a short best-effort
           # augmentation; current-head logs/SARIF remain the authoritative
@@ -3766,78 +3765,8 @@ jobs:
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
-          publish_wrapper_timeout_seconds="${REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS:-240}"
-          if ! [[ "$publish_wrapper_timeout_seconds" =~ ^[0-9]+$ ]] || [ "$publish_wrapper_timeout_seconds" -le 0 ]; then
-            publish_wrapper_timeout_seconds=0
-          fi
-          if [ "${OPENCODE_PUBLISH_TIMEOUT_WRAPPED:-}" != "1" ] &&
-            [ "$publish_wrapper_timeout_seconds" -gt 0 ] &&
-            command -v timeout >/dev/null 2>&1 &&
-            [ -n "${BASH:-}" ] &&
-            [ -r "$0" ]; then
-            export OPENCODE_PUBLISH_TIMEOUT_WRAPPED=1
-            set +e
-            timeout --kill-after=15s "${publish_wrapper_timeout_seconds}s" "$BASH" "$0"
-            publish_wrapper_status=$?
-            set -e
-            case "$publish_wrapper_status" in
-              0) exit 0 ;;
-              124 | 137 | 143)
-                printf '::error::PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss while changing or holding review state for current head %s; timeout wrapper terminated the step so the scheduler can retry with a visible reason.\n' "$publish_wrapper_timeout_seconds" "${HEAD_SHA:-unknown}" >&2
-                exit 124
-                ;;
-              *)
-                exit "$publish_wrapper_status"
-                ;;
-            esac
-          fi
           echo "::group::OpenCode Review Approval Gate"
           echo "PR=#${PR_NUMBER} head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT}"
-          publish_main_pid="${BASHPID:-$$}"
-          publish_process_group="$(ps -o pgid= -p "$publish_main_pid" 2>/dev/null | tr -d '[:space:]' || true)"
-          publish_outer_watchdog_pid=""
-          publish_step_timeout_seconds() {
-            local timeout_seconds="${REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS:-240}"
-            if ! [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || [ "$timeout_seconds" -le 0 ]; then
-              printf '0\n'
-              return 0
-            fi
-            printf '%s\n' "$timeout_seconds"
-          }
-          terminate_publish_step_for_timeout() {
-            local timeout_seconds="$1"
-            printf '::error::PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss while changing or holding review state for current head %s; exiting so the scheduler can retry with a visible reason.\n' "$timeout_seconds" "$HEAD_SHA" >&2
-            pkill -TERM -P "$publish_main_pid" 2>/dev/null || true
-            if [ -n "${publish_process_group:-}" ]; then
-              kill -TERM -- "-${publish_process_group}" 2>/dev/null || true
-            fi
-            kill -TERM "$publish_main_pid" 2>/dev/null || true
-            sleep 5 || true
-            pkill -KILL -P "$publish_main_pid" 2>/dev/null || true
-            if [ -n "${publish_process_group:-}" ]; then
-              kill -KILL -- "-${publish_process_group}" 2>/dev/null || true
-            fi
-            kill -KILL "$publish_main_pid" 2>/dev/null || true
-            printf '::error::PUBLISH_STEP_TIMEOUT_EXIT: watchdog could not terminate publish step cleanly for head %s; exiting watchdog process after kill escalation.\n' "$HEAD_SHA" >&2
-            exit 124
-          }
-          publish_step_outer_watchdog() {
-            local timeout_seconds
-            timeout_seconds="$(publish_step_timeout_seconds)"
-            if [ "$timeout_seconds" -le 0 ]; then
-              return 0
-            fi
-            sleep "$timeout_seconds" || exit 0
-            terminate_publish_step_for_timeout "$timeout_seconds"
-          }
-          cleanup_publish_outer_watchdog() {
-            if [ -n "${publish_outer_watchdog_pid:-}" ]; then
-              kill "$publish_outer_watchdog_pid" 2>/dev/null || true
-            fi
-          }
-          trap cleanup_publish_outer_watchdog EXIT
-          publish_step_outer_watchdog &
-          publish_outer_watchdog_pid="$!"
           configured_review_write_token="${GH_TOKEN:-}"
           configured_review_write_token_source="${CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE:-configured}"
           if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
@@ -6285,28 +6214,11 @@ jobs:
           pending_checks_file=""
           unresolved_reviewer_threads_file=""
           reviewer_thread_review_body_file=""
-          publish_watchdog_pid=""
-          publish_step_watchdog() {
-            local timeout_seconds="${REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS:-240}"
-            if ! [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || [ "$timeout_seconds" -le 0 ]; then
-              return 0
-            fi
-            sleep "$timeout_seconds" || exit 0
-            terminate_publish_step_for_timeout "$timeout_seconds"
-          }
           # shellcheck disable=SC2329
           cleanup_approval_files() {
-            if [ -n "${publish_outer_watchdog_pid:-}" ]; then
-              kill "$publish_outer_watchdog_pid" 2>/dev/null || true
-            fi
-            if [ -n "${publish_watchdog_pid:-}" ]; then
-              kill "$publish_watchdog_pid" 2>/dev/null || true
-            fi
             rm -f "$tmp_body" "$control_json" "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file" "$failed_check_review_payload_file" "$failed_check_inline_failure_body_file" "$pending_checks_file" "$unresolved_reviewer_threads_file" "$reviewer_thread_review_body_file"
           }
           trap cleanup_approval_files EXIT
-          publish_step_watchdog &
-          publish_watchdog_pid="$!"
 
           if [ -n "$comment_body" ]; then
             printf '%s\n' "$comment_body" >"$tmp_body"

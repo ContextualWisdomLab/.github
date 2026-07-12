@@ -534,19 +534,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
-    assert 'REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS: "240"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in workflow
-    assert "PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss" in workflow
-    assert 'OPENCODE_PUBLISH_TIMEOUT_WRAPPED=1' in workflow
-    assert 'timeout --kill-after=15s "${publish_wrapper_timeout_seconds}s" "$BASH" "$0"' in workflow
-    assert 'publish_main_pid="${BASHPID:-$$}"' in workflow
-    assert "publish_step_outer_watchdog &" in workflow
-    assert 'pkill -TERM -P "$publish_main_pid"' in workflow
-    assert 'kill -TERM -- "-${publish_process_group}"' in workflow
-    assert 'kill -TERM "$publish_main_pid"' in workflow
-    assert 'kill -KILL -- "-${publish_process_group}"' in workflow
-    assert "PUBLISH_STEP_TIMEOUT_EXIT" in workflow
-    assert 'kill "$publish_outer_watchdog_pid"' in workflow
     assert "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair" in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
@@ -566,6 +554,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
         "      - name: Run merge scheduler after approval", 1
     )[0]
+    assert "REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS" not in publish_step
+    assert "OPENCODE_PUBLISH_TIMEOUT_WRAPPED" not in publish_step
+    assert "publish_step_outer_watchdog" not in publish_step
+    assert "publish_step_watchdog" not in publish_step
+    assert "publish_process_group" not in publish_step
+    assert "PUBLISH_STEP_TIMEOUT" not in publish_step
     assert 'REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "20"' in publish_step
     assert "OpenCode publishing pull review with %s token" in publish_step
     assert "failed on attempt %s/%s" in publish_step
