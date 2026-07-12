@@ -28,8 +28,11 @@ on:
         type: string
 
 concurrency:
+  # Include the event name so same-head workflow_dispatch evidence can run
+  # without cancelling the required pull_request_target review context.
+  # PR-number scope still keeps stale runs replaced within each event class.
   group: >-
-    opencode-review-${{
+    opencode-review-${{ github.event_name }}-${{
     github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
     github.repository }}-${{

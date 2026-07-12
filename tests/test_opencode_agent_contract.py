@@ -452,6 +452,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
     assert "github.event.inputs.pr_head_sha" not in concurrency_contract
+    assert "opencode-review-${{ github.event_name }}-" in concurrency_contract
+    assert "without cancelling the required pull_request_target review context" in concurrency_contract
     assert "github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number)" in workflow
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(encoding="utf-8")
