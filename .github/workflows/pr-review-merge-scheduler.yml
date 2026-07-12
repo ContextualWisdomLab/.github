@@ -419,12 +419,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       DRY_RUN: ${{ inputs.dry_run == true }}
       ORG_SWEEP_OWNER: ContextualWisdomLab
-      # Inspect the complete practical queue for every repository. The previous
-      # default of 30 silently omitted older PRs whenever a repository had a
-      # larger queue (BandScope had 34 during the incident that established
-      # this contract). The scheduler paginates, so 1000 keeps the practical
-      # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
-      ORG_SWEEP_MAX_PRS: ${{ vars.ORG_SWEEP_MAX_PRS || '1000' }}
+      ORG_SWEEP_MAX_PRS: ${{ vars.ORG_SWEEP_MAX_PRS || '30' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # A repository the sweep credential structurally cannot read (the OpenCode
@@ -628,11 +623,11 @@ jobs:
             open_pr_count="$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
-                "/repos/${repo_full_name}/pulls?state=open&per_page=1" \
+                "/repos/${repo_full_name}/pulls?state=open&per_page=1&base=${default_branch}" \
                 --jq 'length' || echo "unknown"
             )"
             if [ "$open_pr_count" = "0" ]; then
-              echo "No open PRs (including stacked or non-default-base PRs); skipping."
+              echo "No open PRs targeting ${default_branch}; skipping."
               echo "::endgroup::"
               continue
             fi
@@ -686,141 +681,17 @@ jobs:
               fi
             fi
 
-            # Queue hygiene, part 1: cancel every queued/in-progress PR run whose
-            # head SHA no longer matches its open PR's Current HEAD, plus default-
-            # branch push/schedule runs superseded by a newer default HEAD. PR
-            # concurrency normally does this on synchronize/close events, but it
-            # cannot repair runs left behind by an outage or a manual dispatch.
-            # Compare live refs on every sweep instead of waiting for an age
-            # threshold: previous-head checks are never useful merge evidence.
-            queue_hygiene_ready=true
-            if ! open_pr_heads_json="$(
+            # Queue hygiene: a run still queued after ORG_SWEEP_STALE_QUEUE_HOURS
+            # belongs to a head that events will never revisit (closed PR, force-
+            # pushed branch, or runner starvation from a previous outage). Cancel
+            # it so the Actions queue only holds current-head work.
+            stale_cutoff="$(date -u -d "${ORG_SWEEP_STALE_QUEUE_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)"
+            stale_runs_json="$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
-                "/repos/${repo_full_name}/pulls?state=open&per_page=100" \
-                --paginate \
-                | jq -sc '
-                    add
-                    | map(
-                        select(
-                          .head.repo.full_name != null and
-                          .head.ref != null and
-                          .head.sha != null
-                        )
-                        | {
-                            key: "\(.head.repo.full_name):\(.head.ref)",
-                            value: .head.sha
-                          }
-                      )
-                    | from_entries
-                  '
-            )"; then
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
-              open_pr_heads_json="{}"
-              queue_hygiene_ready=false
-            fi
-            if ! current_default_sha="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/${repo_full_name}/commits/${default_branch}" \
-                --jq '.sha // empty'
-            )"; then
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: default-branch HEAD could not be read safely. No run will be cancelled from incomplete evidence."
-              current_default_sha=""
-              queue_hygiene_ready=false
-            fi
-            if ! active_runs_json="$(
-              for active_status in queued in_progress; do
-                gh api \
-                  -H "Accept: application/vnd.github+json" \
-                  "/repos/${repo_full_name}/actions/runs?status=${active_status}&per_page=100" \
-                  --paginate
-              done | jq -sc '[.[] | .workflow_runs[]]'
-            )"; then
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: queued/in-progress Actions runs could not be read. Grant the sweep credential Actions read access; no run will be cancelled from incomplete evidence."
-              active_runs_json="[]"
-              queue_hygiene_ready=false
-            fi
-            superseded_runs_json="[]"
-            if [ "$queue_hygiene_ready" = "true" ]; then
-              superseded_runs_json="$(
-                jq \
-                  --argjson current_pr_heads "$open_pr_heads_json" \
-                  --arg default_branch "$default_branch" \
-                  --arg current_default_sha "$current_default_sha" \
-                  '[
-                    .[]
-                    | ((.head_repository.full_name // "") + ":" + (.head_branch // "")) as $head_key
-                    | ($current_pr_heads[$head_key] // null) as $current_pr_head
-                    | select(
-                        if (.event == "pull_request" or .event == "pull_request_target") then
-                          ($current_pr_head == null or .head_sha != $current_pr_head)
-                        elif (
-                          (.event == "push" or .event == "schedule") and
-                          .head_branch == $default_branch and
-                          $current_default_sha != ""
-                        ) then
-                          .head_sha != $current_default_sha
-                        else
-                          false
-                        end
-                      )
-                    | {
-                        id,
-                        name,
-                        status,
-                        event,
-                        head_branch,
-                        run_head: .head_sha,
-                        current_head: (
-                          if (.event == "pull_request" or .event == "pull_request_target") then
-                            $current_pr_head
-                          else
-                            $current_default_sha
-                          end
-                        ),
-                        created_at
-                      }
-                  ]' <<<"$active_runs_json"
-              )"
-            fi
-            superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
-            if [ "$superseded_count" -gt 0 ]; then
-              echo "Cancelling ${superseded_count} queued/in-progress run(s) that do not match an open PR or default-branch Current HEAD:"
-              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) current_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
-              if [ "$DRY_RUN" != "true" ]; then
-                while IFS= read -r run_id; do
-                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
-                    echo "Could not cancel superseded run ${run_id} in ${repo_full_name}; it may have finished already."
-                  fi
-                done < <(jq -r '.[].id' <<<"$superseded_runs_json")
-              fi
-            fi
-
-            # Queue hygiene, part 2: retain the legacy age guard only for queued
-            # runs that are not tied to a currently open PR head. This catches
-            # orphaned manual/workflow-chain runs without cancelling a valid
-            # current-head PR check merely because runner capacity was scarce.
-            stale_runs_json="[]"
-            if [ "$queue_hygiene_ready" = "true" ]; then
-              stale_cutoff="$(date -u -d "${ORG_SWEEP_STALE_QUEUE_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)"
-              stale_runs_json="$(
-                jq \
-                  --argjson current_pr_heads "$open_pr_heads_json" \
-                  --argjson superseded "$superseded_runs_json" \
-                  --arg stale_cutoff "$stale_cutoff" \
-                  '[
-                    .[]
-                    | .id as $run_id
-                    | ((.head_repository.full_name // "") + ":" + (.head_branch // "")) as $head_key
-                    | select(.status == "queued")
-                    | select(.created_at < $stale_cutoff)
-                    | select($current_pr_heads[$head_key] == null)
-                    | select(([ $superseded[].id ] | index($run_id)) == null)
-                    | {id, name, event, head_branch, head_sha, created_at}
-                  ]' <<<"$active_runs_json"
-              )"
-            fi
+                "/repos/${repo_full_name}/actions/runs?status=queued&per_page=100" \
+                --jq "[.workflow_runs[] | select(.created_at < \"${stale_cutoff}\") | {id, name, head_branch, created_at}]"
+            )" || stale_runs_json="[]"
             stale_count="$(jq 'length' <<<"$stale_runs_json")"
             if [ "$stale_count" -gt 0 ]; then
               echo "Cancelling ${stale_count} queued run(s) older than ${ORG_SWEEP_STALE_QUEUE_HOURS}h:"

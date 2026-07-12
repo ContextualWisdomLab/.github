@@ -22,21 +22,14 @@ on:
         description: Pull request base SHA
         required: true
         type: string
-      pr_head_ref:
-        description: Pull request head branch for current-head code-scanning verification
-        required: true
-        type: string
       pr_head_sha:
         description: Pull request head SHA
         required: true
         type: string
 
 concurrency:
-  # Include the event name so same-head workflow_dispatch evidence can run
-  # without cancelling the required pull_request_target review context.
-  # PR-number scope still keeps stale runs replaced within each event class.
   group: >-
-    opencode-review-${{ github.event_name }}-${{
+    opencode-review-${{
     github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
     github.repository }}-${{
@@ -152,7 +145,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
@@ -163,21 +155,6 @@ jobs:
           rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR" "$COVERAGE_SOURCE_ARCHIVE"
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::Coverage merge tree materialization requires a GitHub token."
-            exit 1
-          fi
-          missing_metadata=()
-          [ -n "${TARGET_REPOSITORY:-}" ] || missing_metadata+=("target_repository")
-          [ -n "${PR_NUMBER:-}" ] || missing_metadata+=("pr_number")
-          [ -n "${PR_BASE_SHA:-}" ] || missing_metadata+=("pr_base_sha")
-          [ -n "${PR_HEAD_SHA:-}" ] || missing_metadata+=("pr_head_sha")
-          if [ "${#missing_metadata[@]}" -gt 0 ]; then
-            printf '::error::Coverage merge tree materialization missing required PR metadata for event %s: %s. target_repository=%s pr_number=%s base=%s head=%s\n' \
-              "${GITHUB_EVENT_NAME:-unknown}" \
-              "$(IFS=,; printf '%s' "${missing_metadata[*]}")" \
-              "${TARGET_REPOSITORY:-<empty>}" \
-              "${PR_NUMBER:-<empty>}" \
-              "${PR_BASE_SHA:-<empty>}" \
-              "${PR_HEAD_SHA:-<empty>}"
             exit 1
           fi
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
@@ -303,39 +280,13 @@ jobs:
           tar -xf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
-      - name: Enforce post-merge stale agent replay guard
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
-        run: |
-          set -euo pipefail
-          replay_report="${RUNNER_TEMP}/pr-head-replay-guard.txt"
-          replay_status=0
-          python3 "$GITHUB_WORKSPACE/scripts/ci/pr_head_replay_guard.py" \
-            --repo-root "$COVERAGE_SOURCE_WORKDIR" \
-            --base-sha "$PR_BASE_SHA" \
-            --head-sha "$PR_HEAD_SHA" >"$replay_report" 2>&1 || replay_status=$?
-          cat "$replay_report"
-          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            {
-              printf '## PR head replay guard\n\n```text\n'
-              cat "$replay_report"
-              printf '\n```\n'
-            } >>"$GITHUB_STEP_SUMMARY"
-          fi
-          if [ "$replay_status" -ne 0 ]; then
-            echo "::error::Current HEAD discarded a prior base merge or replay evidence could not be evaluated; see the exact SHAs and deletion counts above."
-            exit "$replay_status"
-          fi
-
       - name: Install Python coverage measurement tools
         run: >-
           python3 -m pip install --disable-pip-version-check --require-hashes
           --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
       - name: Cache R coverage tooling library
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: ${{ runner.temp }}/R-library
           key: r-coverage-lib-${{ runner.os }}-covr-testthat-v1
@@ -603,39 +554,6 @@ jobs:
                 failures=$((failures + 1))
               fi
             fi
-          }
-
-          javascript_coverage_package_dirs() {
-            changed_files_for_coverage \
-              | while IFS= read -r changed_path; do
-                  case "$changed_path" in
-                    package.json|package-lock.json|npm-shrinkwrap.json|pnpm-lock.yaml|yarn.lock|*.js|*.jsx|*.ts|*.tsx) ;;
-                    *) continue ;;
-                  esac
-
-                  candidate_dir="$(dirname "$changed_path")"
-                  while true; do
-                    if [ "$candidate_dir" = "." ]; then
-                      manifest="package.json"
-                    else
-                      manifest="${candidate_dir}/package.json"
-                    fi
-                    if [ -f "$manifest" ] \
-                      && git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
-                      printf '%s\n' "$candidate_dir"
-                      break
-                    fi
-                    if [ "$candidate_dir" = "." ]; then
-                      break
-                    fi
-                    next_dir="$(dirname "$candidate_dir")"
-                    if [ "$next_dir" = "$candidate_dir" ]; then
-                      break
-                    fi
-                    candidate_dir="$next_dir"
-                  done
-                done \
-              | sort -u
           }
 
           declared_package_manager() {
@@ -1346,68 +1264,60 @@ jobs:
             fi
           fi
 
-          javascript_package_dirs="$(javascript_coverage_package_dirs)"
-          if [ -n "$javascript_package_dirs" ]; then
+          if [ -f package.json ] && has_changed_tracked_files 'package.json' '*.js' '*.jsx' '*.ts' '*.tsx'; then
             measured_any=1
-            while IFS= read -r package_dir; do
-              [ -n "$package_dir" ] || continue
-              pushd "$package_dir" >/dev/null
-              append "### JavaScript/TypeScript package (${package_dir})"
+            package_runner="$(select_package_runner)"
+            javascript_coverage_ran=0
+
+            if [ -z "$package_runner" ]; then
+              append "### JavaScript/TypeScript test coverage"
               append ""
-              package_runner="$(select_package_runner)"
-              javascript_coverage_ran=0
+              append "- Result: FAIL"
+              append "- Reason: package.json exists, but no supported package runner is available."
+              append ""
+              failures=$((failures + 1))
+            else
+              install_package_dependencies "$package_runner"
+            fi
 
-              if [ -z "$package_runner" ]; then
-                append "### JavaScript/TypeScript test coverage"
-                append ""
-                append "- Result: FAIL"
-                append "- Reason: package.json exists, but no supported package runner is available."
-                append ""
-                failures=$((failures + 1))
-              else
-                install_package_dependencies "$package_runner"
-              fi
+            if [ -n "$package_runner" ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null; then
+              run_and_capture "Repository docstring coverage" "$package_runner" run check:python-docstrings
+            elif [ -n "$package_runner" ] && jq -e '.scripts["docstring:coverage"] // empty' package.json >/dev/null; then
+              run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docstring:coverage
+            elif [ -n "$package_runner" ] && jq -e '.scripts["docs:coverage"] // empty' package.json >/dev/null; then
+              run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docs:coverage
+            else
+              append "### JavaScript/TypeScript docstring coverage"
+              append ""
+              append "- Result: PASS"
+              append "- Reason: package.json exists, but no check:python-docstrings, docstring:coverage, or docs:coverage script is defined; docstring coverage is advisory."
+              append ""
+            fi
 
-              if [ -n "$package_runner" ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null; then
-                run_and_capture "Repository docstring coverage" "$package_runner" run check:python-docstrings
-              elif [ -n "$package_runner" ] && jq -e '.scripts["docstring:coverage"] // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docstring:coverage
-              elif [ -n "$package_runner" ] && jq -e '.scripts["docs:coverage"] // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docs:coverage
-              else
-                append "### JavaScript/TypeScript docstring coverage"
-                append ""
-                append "- Result: PASS"
-                append "- Reason: package.json exists, but no check:python-docstrings, docstring:coverage, or docs:coverage script is defined; docstring coverage is advisory."
-                append ""
-              fi
+            if [ -z "$package_runner" ]; then
+              :
+            elif jq -e '.scripts.coverage // empty' package.json >/dev/null; then
+              run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
+              javascript_coverage_ran=1
+            elif jq -e '.scripts.test // empty' package.json >/dev/null; then
+              case "$package_runner" in
+                npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test -- --coverage ;;
+                yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
+              esac
+              javascript_coverage_ran=1
+            else
+              append "### JavaScript/TypeScript test coverage"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: package.json exists, but no coverage or test script is defined."
+              append ""
+              failures=$((failures + 1))
+            fi
 
-              if [ -z "$package_runner" ]; then
-                :
-              elif jq -e '.scripts.coverage // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
-                javascript_coverage_ran=1
-              elif jq -e '.scripts.test // empty' package.json >/dev/null; then
-                case "$package_runner" in
-                  npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                  pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test -- --coverage ;;
-                  yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
-                esac
-                javascript_coverage_ran=1
-              else
-                append "### JavaScript/TypeScript test coverage"
-                append ""
-                append "- Result: FAIL"
-                append "- Reason: package.json exists, but no coverage or test script is defined."
-                append ""
-                failures=$((failures + 1))
-              fi
-
-              if [ "$javascript_coverage_ran" -eq 1 ]; then
-                check_javascript_coverage_thresholds
-              fi
-              popd >/dev/null
-            done <<<"$javascript_package_dirs"
+            if [ "$javascript_coverage_ran" -eq 1 ]; then
+              check_javascript_coverage_thresholds
+            fi
           fi
 
           if has_changed_tracked_files '*.R' '*.r' 'DESCRIPTION' 'renv.lock'; then
@@ -1512,9 +1422,8 @@ jobs:
       checks: read
       id-token: write
       contents: read
-      security-events: read
       models: read
-      statuses: write
+      statuses: read
       deployments: read
       pull-requests: write
       issues: write
@@ -1714,12 +1623,11 @@ jobs:
           changed_count=0
           max_changed_count=0
           scope_label="unsupported"
-          central_review_process_core_changed=false
 
           case "$GH_REPOSITORY" in
             ContextualWisdomLab/.github)
               scope_label="central OpenCode/Strix review-process"
-              max_changed_count=24
+              max_changed_count=6
               ;;
             ContextualWisdomLab/appguardrail)
               scope_label="appguardrail org-security failure collector"
@@ -1731,45 +1639,17 @@ jobs:
             local changed_file="$1"
             case "${GH_REPOSITORY}:${changed_file}" in
               ContextualWisdomLab/.github:.github/workflows/opencode-review.yml | \
-              ContextualWisdomLab/.github:.github/workflows/pr-review-merge-scheduler.yml | \
               ContextualWisdomLab/.github:.github/workflows/strix.yml | \
-              ContextualWisdomLab/.github:.jules/bolt.md | \
-              ContextualWisdomLab/.github:.gitleaksignore | \
               ContextualWisdomLab/.github:opencode.jsonc | \
-              ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
-              ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \
-              ContextualWisdomLab/.github:scripts/ci/pr_head_replay_guard.py | \
-              ContextualWisdomLab/.github:scripts/ci/pr_review_merge_scheduler.py | \
               ContextualWisdomLab/.github:scripts/ci/run_opencode_review_model_pool.sh | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_normalize_output.py | \
-              ContextualWisdomLab/.github:scripts/ci/strix_quick_gate.sh | \
               ContextualWisdomLab/.github:scripts/ci/validate_opencode_failed_check_review.sh | \
-              ContextualWisdomLab/.github:tests/test_changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
-              ContextualWisdomLab/.github:tests/test_opencode_model_pool_runner.py | \
-              ContextualWisdomLab/.github:tests/test_pr_head_replay_guard.py | \
-              ContextualWisdomLab/.github:tests/test_pr_review_fix_scheduler_coverage.py | \
-              ContextualWisdomLab/.github:tests/test_pr_review_merge_scheduler.py | \
-              ContextualWisdomLab/.github:tests/test_required_workflow_queue_contract.py | \
               ContextualWisdomLab/.github:scripts/ci/test_strix_quick_gate.sh | \
               ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml | \
               ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py | \
               ContextualWisdomLab/appguardrail:tests/test_org_security_failure_collector.py)
                 return 0
-                ;;
-            esac
-            return 1
-          }
-
-          fallback_changed_file_counts_as_core() {
-            local changed_file="$1"
-            case "${GH_REPOSITORY}:${changed_file}" in
-              ContextualWisdomLab/.github:.jules/bolt.md)
-                return 1
-                ;;
-              ContextualWisdomLab/.github:*)
-                fallback_changed_file_allowed "$changed_file"
-                return $?
                 ;;
             esac
             return 1
@@ -1785,17 +1665,10 @@ jobs:
               if ! fallback_changed_file_allowed "$changed_file"; then
                 eligible=false
               fi
-              if fallback_changed_file_counts_as_core "$changed_file"; then
-                central_review_process_core_changed=true
-              fi
             done <"$changed_files_file"
           fi
 
           if [ "$changed_count" -eq 0 ] || [ "$changed_count" -gt "$max_changed_count" ]; then
-            eligible=false
-          fi
-          if [ "$GH_REPOSITORY" = "ContextualWisdomLab/.github" ] &&
-            [ "$central_review_process_core_changed" != "true" ]; then
             eligible=false
           fi
 
@@ -1820,7 +1693,7 @@ jobs:
           npx -y "$CODEGRAPH_PACKAGE" status
 
       - name: Prepare bounded OpenCode review evidence
-        timeout-minutes: 12
+        timeout-minutes: 40
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -1828,9 +1701,8 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
-          FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"
-          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "5"
-          OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS: "30"
+          FAILED_CHECK_EVIDENCE_ATTEMPTS: "20"
+          FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "15"
         run: |
           set -euo pipefail
           context_env_file="${RUNNER_TEMP:-.}/opencode-review-context.env"
@@ -1851,7 +1723,7 @@ jobs:
             # Exclude this OpenCode check run; otherwise the evidence step would
             # wait on itself until the bounded retry budget is exhausted.
             # shellcheck disable=SC2016
-            if ! rollup_running="$(timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api graphql \
+            if ! rollup_running="$(gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -1943,7 +1815,6 @@ jobs:
             local attempts="${FAILED_CHECK_EVIDENCE_ATTEMPTS:-19}"
             local sleep_seconds="${FAILED_CHECK_EVIDENCE_SLEEP_SECONDS:-10}"
             local attempt=1
-            local collect_status
 
             if [ ! -x scripts/ci/collect_failed_check_evidence.sh ]; then
               {
@@ -1955,11 +1826,7 @@ jobs:
             fi
 
             while [ "$attempt" -le "$attempts" ]; do
-              set +e
-              timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
-              collect_status=$?
-              set -e
-              if [ "$collect_status" -eq 0 ]; then
+              if scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
                 if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
                   return 0
                 fi
@@ -1980,32 +1847,26 @@ jobs:
                 if [ "$(current_peer_checks_still_running 2>/dev/null || printf 'false')" != "true" ]; then
                   break
                 fi
-                printf 'Failed-check evidence attempt %s/%s could not collect evidence within %ss while peer checks are still running; retrying in %ss before model review.\n' "$attempt" "$attempts" "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}" "$sleep_seconds" >&2
+                printf 'Failed-check evidence attempt %s/%s could not collect evidence while peer checks are still running; retrying in %ss before model review.\n' "$attempt" "$attempts" "$sleep_seconds" >&2
                 sleep "$sleep_seconds"
               fi
               attempt=$((attempt + 1))
             done
 
-            if ! timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" scripts/ci/collect_failed_check_evidence.sh "$evidence_file"; then
-              {
-                printf 'Failed-check evidence collector did not complete within %s seconds.\n' "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}"
-                printf 'The approval gate will re-query current-head GitHub Checks before approving.\n'
-              } >"$evidence_file"
-              return 0
-            fi
+            scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
           emit_pr_mergeability_evidence() {
             local pr_json
-            if ! pr_json="$(timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
+            if ! pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus,mergeable 2>/dev/null)"; then
               printf 'PR mergeability evidence could not be collected.\n'
               return 0
             fi
 
             printf '%s\n' "$pr_json" | jq -r '
-              (.mergeStateStatus // .mergeable_state // "unknown") as $state |
-              "- Base branch: `" + (.base.ref // "unknown") + "`",
-              "- Head branch: `" + (.head.ref // "unknown") + "`",
+              (.mergeStateStatus // "unknown") as $state |
+              "- Base branch: `" + (.baseRefName // "unknown") + "`",
+              "- Head branch: `" + (.headRefName // "unknown") + "`",
               "- mergeStateStatus: `" + $state + "`",
               "- mergeable: `" + ((.mergeable // "unknown") | tostring) + "`",
               if ($state == "DIRTY" or $state == "CONFLICTING") then
@@ -2101,7 +1962,7 @@ jobs:
             }
           }
           GRAPHQL
-            if ! timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api graphql \
+            if ! gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -2161,7 +2022,7 @@ jobs:
             reviews_json_file="$(mktemp)"
             comments_json_file="$(mktemp)"
 
-            if timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" -f per_page=100 >"$reviews_json_file" 2>/dev/null; then
+            if gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" -f per_page=100 >"$reviews_json_file" 2>/dev/null; then
               jq -r '
                 [ .[] | {
                     author: ((.user.login // "unknown")),
@@ -2182,7 +2043,7 @@ jobs:
             fi
             printf '\n'
 
-            if timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 >"$comments_json_file" 2>/dev/null; then
+            if gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 >"$comments_json_file" 2>/dev/null; then
               jq -r '
                 [ .[] | {
                     author: ((.user.login // "unknown")),
@@ -3192,7 +3053,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 210
+        timeout-minutes: 350
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3216,22 +3077,14 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 minutes gives DeepSeek V3 enough room for deep tool-using review.
-          # The retry budget still bounds queue impact: DeepSeek gets a full
-          # window, then one strong fallback can run before publish fails closed
-          # with visible provider/check evidence.
+          # 90 minutes per model gives deep tool-using reviews room to finish;
+          # stale providers still yield within the bounded retry budget.
           OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"
-          # Allow one retry catalog pass for transient provider/model-output
-          # failures; the retry budget still fails closed with visible
-          # diagnostics before the 210-minute step timeout.
-          OPENCODE_POOL_MAX_CYCLES: "2"
-          CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
-          CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "300"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "420"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"
+          # Stop after one catalog pass; the retry budget fails closed with
+          # visible diagnostics before the 350-minute step timeout.
+          OPENCODE_POOL_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
@@ -3253,11 +3106,9 @@ jobs:
       - name: Exchange OpenCode app token for review writes
         id: opencode_app_token
         if: always()
-        timeout-minutes: 2
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
-          OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS: "20"
         run: |
           set -euo pipefail
 
@@ -3280,12 +3131,10 @@ jobs:
 
           if ! oidc_response="$(
             curl -fsS \
-              --connect-timeout 5 \
-              --max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}" \
               -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               "${request_url}${separator}audience=${OIDC_AUDIENCE}"
           )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s."
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
             mark_unavailable
             exit 0
           fi
@@ -3299,13 +3148,11 @@ jobs:
 
           if ! token_response="$(
             curl -fsS \
-              --connect-timeout 5 \
-              --max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}" \
               -X POST \
               -H "Authorization: Bearer ${oidc_token}" \
               "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
           )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s."
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
             mark_unavailable
             exit 0
           fi
@@ -3383,8 +3230,7 @@ jobs:
 
                       changed_files_file="$(mktemp)"
                       surfaces_file="$(mktemp)"
-                      if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-                        gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
+                      if ! gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
                         [ ! -s "$changed_files_file" ]; then
                         printf '```mermaid\n'
                         printf 'flowchart LR\n'
@@ -3476,8 +3322,7 @@ jobs:
 
                     append_mermaid_review_graph() {
                       local pr_json merge_state
-                      pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-                        gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
+                      pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
                       merge_state="$(printf '%s' "$pr_json" | jq -r '.mergeStateStatus // "UNKNOWN"' 2>/dev/null || printf 'UNKNOWN')"
                       printf '\n## Changed-File Evidence Map\n\n'
                       emit_change_flow_mermaid_graph "$merge_state"
@@ -3494,8 +3339,7 @@ jobs:
 
           append_merge_conflict_guidance() {
             local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
-            pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
+            pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
             fi
@@ -3596,194 +3440,9 @@ jobs:
             fi
           fi
 
-      - name: Publish central OpenCode fast approval
-        id: central_fast_approval
-        if: >-
-          always()
-          && needs.coverage-evidence.result == 'success'
-          && steps.opencode_review_model_pool.outputs.review_status == 'success'
-          && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
-        timeout-minutes: 3
-        env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
-          CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
-          GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref || github.event.inputs.pr_head_ref || '' }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT: ${{ steps.central_review_process_fallback_scope.outputs.changed_count || '0' }}
-          CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "12"
-          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
-          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "15"
-        run: |
-          set -euo pipefail
-          echo "published=false" >>"$GITHUB_OUTPUT"
-          if [ "$GH_REPOSITORY" != "ContextualWisdomLab/.github" ]; then
-            echo "::notice::Central fast approval skipped outside ContextualWisdomLab/.github."
-            exit 0
-          fi
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::CENTRAL_FAST_APPROVAL_NO_TOKEN: review write token was unavailable for current head ${HEAD_SHA}."
-            exit 1
-          fi
-
-          api_url="https://api.github.com"
-          api_timeout="${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-15}"
-          read_token="${CHECK_LOOKUP_GH_TOKEN:-$GH_TOKEN}"
-          write_token="$GH_TOKEN"
-          owner="${GH_REPOSITORY%%/*}"
-          repo_name="${GH_REPOSITORY#*/}"
-
-          curl_api_read() {
-            curl --silent --show-error --fail-with-body \
-              --connect-timeout 5 \
-              --max-time "$api_timeout" \
-              -H "Authorization: Bearer ${read_token}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$@"
-          }
-
-          curl_api_write() {
-            curl --silent --show-error --fail-with-body \
-              --connect-timeout 5 \
-              --max-time "$api_timeout" \
-              -H "Authorization: Bearer ${write_token}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$@"
-          }
-
-          self_check_filter='
-            def self_check:
-              (.name // "") as $n
-              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap"] | index($n);
-          '
-
-          check_runs_file="$(mktemp)"
-          pending_checks_file="$(mktemp)"
-          failed_checks_file="$(mktemp)"
-          for attempt in $(seq 1 "${APPROVAL_CHECK_WAIT_ATTEMPTS:-12}"); do
-            curl_api_read "${api_url}/repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" >"$check_runs_file"
-            jq -r "${self_check_filter}
-              (.check_runs // [])
-              | .[]
-              | select((self_check | not) and (.status // \"\") != \"completed\")
-              | \"- \" + (.name // \"check\") + \": \" + (.status // \"unknown\") + (if (.html_url // \"\") != \"\" then \" (\" + .html_url + \")\" else \"\" end)
-            " "$check_runs_file" >"$pending_checks_file"
-            if [ ! -s "$pending_checks_file" ]; then
-              break
-            fi
-            if [ "$attempt" -lt "${APPROVAL_CHECK_WAIT_ATTEMPTS:-12}" ]; then
-              printf 'Central fast approval waiting for peer checks (%s/%s):\n' "$attempt" "${APPROVAL_CHECK_WAIT_ATTEMPTS:-12}"
-              cat "$pending_checks_file"
-              sleep "${APPROVAL_CHECK_WAIT_SLEEP_SECONDS:-10}"
-            fi
-          done
-          if [ -s "$pending_checks_file" ]; then
-            echo "::error::CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS: peer GitHub Checks remained pending for current head ${HEAD_SHA}."
-            cat "$pending_checks_file"
-            exit 1
-          fi
-          jq -r "${self_check_filter}
-            (.check_runs // [])
-            | .[]
-            | select((self_check | not) and (.status // \"\") == \"completed\")
-            | select((.conclusion // \"\") as \$c | [\"success\", \"neutral\", \"skipped\"] | index(\$c) | not)
-            | \"- \" + (.name // \"check\") + \": \" + (.conclusion // \"unknown\") + (if (.html_url // \"\") != \"\" then \" (\" + .html_url + \")\" else \"\" end)
-          " "$check_runs_file" >"$failed_checks_file"
-          if [ -s "$failed_checks_file" ]; then
-            echo "::error::CENTRAL_FAST_APPROVAL_FAILED_CHECKS: peer GitHub Checks failed for current head ${HEAD_SHA}."
-            cat "$failed_checks_file"
-            exit 1
-          fi
-
-          alerts_file="$(mktemp)"
-          if [ -z "${HEAD_REF:-}" ]; then
-            echo "::error::CENTRAL_FAST_APPROVAL_NO_HEAD_REF: cannot read code-scanning alerts without the PR head ref."
-            exit 1
-          fi
-          curl_api_read "${api_url}/repos/${GH_REPOSITORY}/code-scanning/alerts?ref=refs/heads/${HEAD_REF}&state=open&per_page=100" >"$alerts_file"
-          alerts="$(jq -r '
-            (. // [])
-            | .[]
-            | {
-                number: (.number // 0),
-                rule: (.rule.id // .rule.name // "unknown"),
-                tool: (.tool.name // "code-scanning"),
-                severity: (.rule.security_severity_level // .rule.severity // "unknown"),
-                url: (.html_url // "")
-              }
-            | select((.severity | ascii_downcase) as $s | ["medium","high","critical","warning","error"] | index($s))
-            | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
-          ' "$alerts_file")"
-          if [ -n "$alerts" ]; then
-            echo "::error::CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS: medium-or-higher code-scanning alerts remain for current head ${HEAD_SHA}."
-            printf '%s\n' "$alerts"
-            exit 1
-          fi
-
-          threads_query_file="$(mktemp)"
-          threads_response_file="$(mktemp)"
-          jq -n \
-            --arg owner "$owner" \
-            --arg name "$repo_name" \
-            --argjson number "$PR_NUMBER" \
-            --arg query 'query($owner:String!,$name:String!,$number:Int!) { repository(owner:$owner,name:$name) { pullRequest(number:$number) { reviewThreads(first:100) { nodes { isResolved isOutdated path line comments(first:20) { nodes { author { login } createdAt body url } } } } } } }' \
-            '{query: $query, variables: {owner: $owner, name: $name, number: $number}}' >"$threads_query_file"
-          curl_api_read -X POST -H "Content-Type: application/json" --data-binary "@${threads_query_file}" "${api_url}/graphql" >"$threads_response_file"
-          unresolved_threads="$(jq -r '
-            (.data.repository.pullRequest.reviewThreads.nodes // [])
-            | .[]
-            | select((.isResolved // false) == false and (.isOutdated // false) == false)
-            | "- " + (.path // "unknown") + ":" + ((.line // "unknown") | tostring)
-          ' "$threads_response_file")"
-          if [ -n "$unresolved_threads" ]; then
-            echo "::error::CENTRAL_FAST_APPROVAL_UNRESOLVED_THREADS: unresolved review threads remain for current head ${HEAD_SHA}."
-            printf '%s\n' "$unresolved_threads"
-            exit 1
-          fi
-
-          body="$(printf '%s\n' \
-            "## Pull request overview" \
-            "" \
-            "OpenCode reviewed the current-head central review-process repair evidence and found no blocking issues." \
-            "" \
-            "## Findings" \
-            "" \
-            "No blocking findings." \
-            "" \
-            "## Evidence" \
-            "" \
-            "- Result: APPROVE" \
-            "- Reason: central review-process fast approval; model-pool output succeeded and current-head peer checks, code-scanning alerts, and review threads were clear." \
-            "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
-            "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
-            "- Head SHA: \`${HEAD_SHA}\`" \
-            "- Workflow run: ${RUN_ID}" \
-            "- Workflow attempt: ${RUN_ATTEMPT}" \
-            "" \
-            "This approval path is limited to ContextualWisdomLab/.github central review-process self-repair.")"
-          payload_file="$(mktemp)"
-          jq -n --arg event APPROVE --arg body "$body" --arg commit_id "$HEAD_SHA" \
-            '{event: $event, body: $body, commit_id: $commit_id}' >"$payload_file"
-          curl_api_write -X POST --data-binary "@${payload_file}" "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
-          echo "::notice::Central fast approval published APPROVE review for ${GH_REPOSITORY}#${PR_NUMBER} at ${HEAD_SHA}."
-          echo "published=true" >>"$GITHUB_OUTPUT"
-
       - name: Publish OpenCode review outcome
-        if: >-
-          always()
-          && steps.central_fast_approval.outputs.published != 'true'
-        # Catalog model execution belongs to the preceding bounded model-pool
-        # step. This step keeps GitHub review publication retries short, but
-        # keeps GitHub review publication bounded. Failed-check evidence is
-        # collected from logs/SARIF before this point; central review-process
-        # self-repair must not run a second model pass from the publish step.
-        timeout-minutes: 8
+        if: always()
+        timeout-minutes: 220
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3801,7 +3460,7 @@ jobs:
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
-          MODEL: github-models/deepseek/deepseek-v3-0324
+          MODEL: github-models/deepseek/deepseek-r1-0528
           USE_GITHUB_TOKEN: "true"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -3817,21 +3476,26 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "12"
-          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
-          CHECK_LOOKUP_RETRY_ATTEMPTS: "1"
-          CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "2"
-          CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"
-          REVIEW_PUBLISH_RETRY_ATTEMPTS: "1"
-          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "10"
-          REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"
-          REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "20"
-          # A second model catalog pass is deliberately forbidden here. Any
-          # failed-check diagnosis in this publish step is a short best-effort
-          # augmentation; current-head logs/SARIF remain the authoritative
-          # reason source when the augmentation is unavailable.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "49"
+          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"
+          CHECK_LOOKUP_RETRY_ATTEMPTS: "5"
+          CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "5"
+          REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"
+          REVIEW_PUBLISH_RETRY_SLEEP_SECONDS: "20"
+          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_ATTEMPTS: "1"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
+          # The publish gate may re-kick the review catalog after an exhausted
+          # model-pool output so the PR still gets a concrete pass/fail reason.
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"
+          OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
+          OPENCODE_BACKOFF_MAX_SECONDS: "30"
+          OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
+          OPENCODE_AGENT: ci-review-fallback
+          OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"
+          OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"
+          OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"
         run: |
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
@@ -3846,7 +3510,7 @@ jobs:
             GH_TOKEN="$OPENCODE_APP_TOKEN"
             export GH_TOKEN
             check_lookup_token_source="opencode-app"
-          elif [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ] && [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
+          elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
             GH_TOKEN="$CHECK_LOOKUP_GH_TOKEN"
             export GH_TOKEN
             check_lookup_token_source="github-token"
@@ -3899,10 +3563,6 @@ jobs:
             [ "${check_lookup_token_source:-}" = "opencode-app" ] && [ -n "${OPENCODE_APP_TOKEN:-}" ]
           }
 
-          check_lookup_api_timeout_seconds() {
-            printf '%s\n' "${CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS:-${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}}"
-          }
-
           warn_gh_publication_failure() {
             local action="$1" error_file="$2"
             printf 'OpenCode could not publish %s; continuing without review side effect.\n' "$action" >&2
@@ -3923,33 +3583,9 @@ jobs:
             grep -Eiq 'API rate limit exceeded|secondary rate limit|You have exceeded a secondary rate limit|abuse detection|Try again later|retry later|timed out after [0-9]+ seconds' "$error_file"
           }
 
-          post_pull_review_request() {
-            local token_value="$1" review_payload_file="$2" error_file="$3" api_timeout="$4"
-
-            if command -v curl >/dev/null 2>&1; then
-              curl --silent --show-error --fail-with-body \
-                --connect-timeout 5 \
-                --max-time "$api_timeout" \
-                -X POST \
-                -H "Authorization: Bearer ${token_value}" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                --data-binary "@${review_payload_file}" \
-                "https://api.github.com/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-                >/dev/null 2>"$error_file"
-              return $?
-            fi
-
-            timeout "${api_timeout}s" env GH_TOKEN="$token_value" \
-              gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-              --input "$review_payload_file" >/dev/null 2>"$error_file"
-          }
-
           review_publish_retry_sleep_seconds() {
             local token_value="$1" default_sleep="$2"
-            local rate_json remaining reset_epoch now delay max_sleep
-
-            max_sleep="${REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS:-60}"
+            local rate_json remaining reset_epoch now delay
 
             rate_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$token_value" gh api rate_limit 2>/dev/null || true)"
             remaining="$(printf '%s' "$rate_json" | jq -r '.resources.core.remaining // empty' 2>/dev/null || true)"
@@ -3958,18 +3594,9 @@ jobs:
               now="$(date +%s)"
               delay=$((reset_epoch - now + 5))
               if [ "$delay" -gt 0 ] && [ "$delay" -le 900 ]; then
-                if [[ "$max_sleep" =~ ^[0-9]+$ ]] && [ "$max_sleep" -gt 0 ] && [ "$delay" -gt "$max_sleep" ]; then
-                  printf 'GitHub review publication retry sleep capped from %s to %s seconds.\n' "$delay" "$max_sleep" >&2
-                  delay="$max_sleep"
-                fi
                 printf '%s\n' "$delay"
                 return 0
               fi
-            fi
-            if [[ "$default_sleep" =~ ^[0-9]+$ ]] && [[ "$max_sleep" =~ ^[0-9]+$ ]] &&
-              [ "$max_sleep" -gt 0 ] && [ "$default_sleep" -gt "$max_sleep" ]; then
-              printf '%s\n' "$max_sleep"
-              return 0
             fi
             printf '%s\n' "$default_sleep"
           }
@@ -3984,18 +3611,15 @@ jobs:
             attempt=1
             while :; do
               : >"$error_file"
-              printf 'OpenCode publishing pull review with %s token (attempt %s/%s, timeout %ss).\n' "$token_label" "$attempt" "$attempts" "$api_timeout" >&2
-              post_pull_review_request "$token_value" "$review_payload_file" "$error_file" "$api_timeout"
+              timeout "${api_timeout}s" env GH_TOKEN="$token_value" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$error_file"
               publish_status=$?
               if [ "$publish_status" -eq 0 ]; then
                 return 0
               fi
-              printf 'GitHub pull review publication with %s token failed on attempt %s/%s (exit %s).\n' "$token_label" "$attempt" "$attempts" "$publish_status" >>"$error_file"
-              if [ "$publish_status" -eq 124 ] || [ "$publish_status" -eq 28 ]; then
+              if [ "$publish_status" -eq 124 ]; then
                 printf 'GitHub pull review publication with %s token timed out after %s seconds.\n' "$token_label" "$api_timeout" >>"$error_file"
               fi
               if ! gh_error_is_retryable_publication_failure "$error_file" || [ "$attempt" -ge "$attempts" ]; then
-                printf 'GitHub pull review publication with %s token exhausted %s configured attempt(s).\n' "$token_label" "$attempts" >>"$error_file"
                 return 1
               fi
               sleep_seconds="$(review_publish_retry_sleep_seconds "$token_value" "$default_sleep")"
@@ -4011,8 +3635,7 @@ jobs:
 
                       changed_files_file="$(mktemp)"
                       surfaces_file="$(mktemp)"
-                      if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-                        gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
+                      if ! gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
                         [ ! -s "$changed_files_file" ]; then
                         printf '```mermaid\n'
                         printf 'flowchart LR\n'
@@ -4104,8 +3727,7 @@ jobs:
 
                     append_mermaid_review_graph() {
                       local pr_json merge_state
-                      pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-                        gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
+                      pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json mergeStateStatus 2>/dev/null || true)"
                       merge_state="$(printf '%s' "$pr_json" | jq -r '.mergeStateStatus // "UNKNOWN"' 2>/dev/null || printf 'UNKNOWN')"
                       printf '\n## Changed-File Evidence Map\n\n'
                       emit_change_flow_mermaid_graph "$merge_state"
@@ -4122,8 +3744,7 @@ jobs:
 
           append_merge_conflict_guidance() {
             local pr_json merge_state base_ref head_ref base_fetch_ref base_origin_ref head_push_ref
-            pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
+            pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus 2>/dev/null || true)"
             if [ -z "$pr_json" ]; then
               return 0
             fi
@@ -4179,7 +3800,7 @@ jobs:
 
             if ! overview_comment_id="$(
               timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
-                gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
+                gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
                 --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
                 2>"$gh_error_file"
             )"; then
@@ -4211,11 +3832,7 @@ jobs:
             local review_payload_file
             gh_error_file="$(mktemp)"
             review_payload_file="$(mktemp)"
-            if [ "$event" = "APPROVE" ]; then
-              printf '::notice::OpenCode APPROVE review skips the non-authoritative changed-file graph before publication so the required approval check can finish promptly.\n'
-            else
-              body="$(ensure_review_body_has_change_graph "$body")"
-            fi
+            body="$(ensure_review_body_has_change_graph "$body")"
             emit_review_body_to_action_log "$event" "$body"
             jq -n \
               --arg event "$event" \
@@ -4227,10 +3844,6 @@ jobs:
               if [ -n "${review_write_fallback_token:-}" ]; then
                 if post_pull_review_with_retry "fallback review" "$review_write_fallback_token" "$review_payload_file" "$gh_error_file"; then
                   rm -f "$gh_error_file" "$review_payload_file"
-                  if [ "$event" = "APPROVE" ]; then
-                    printf '::notice::OpenCode approve review was published for head %s with fallback token; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
-                    return 0
-                  fi
                   update_review_overview "$event" "$body"
                   return 0
                 fi
@@ -4261,10 +3874,6 @@ jobs:
               exit 1
             fi
             rm -f "$gh_error_file" "$review_payload_file"
-            if [ "$event" = "APPROVE" ]; then
-              printf '::notice::OpenCode approve review was published for head %s; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
-              return 0
-            fi
             update_review_overview "$event" "$body"
           }
 
@@ -4338,13 +3947,6 @@ jobs:
               } >>"$GITHUB_STEP_SUMMARY"
             fi
             printf '::error::%s: OpenCode did not change the pull request review state. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
-            if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
-              [ -n "${GH_REPOSITORY:-}" ] &&
-              [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
-              printf '::notice::Cross-repository workflow_dispatch review-tool failure for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
-              echo "::endgroup::"
-              exit 0
-            fi
             echo "::endgroup::"
             exit 1
           }
@@ -4403,7 +4005,7 @@ jobs:
             }
           }
           GRAPHQL
-            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" gh api graphql \
+            if ! gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -4563,7 +4165,7 @@ jobs:
               rm -f "$rewritten_payload_file"
             fi
             emit_review_body_to_action_log "$event" "$body" "$review_payload_file"
-            if ! post_pull_review_with_retry "inline review" "$review_write_token" "$review_payload_file" "$gh_error_file"; then
+            if ! env GH_TOKEN="$review_write_token" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$gh_error_file"; then
               warn_gh_publication_failure "pull review inline comments" "$gh_error_file"
               rm -f "$gh_error_file"
               if [ -s "$fallback_body_file" ]; then
@@ -4830,8 +4432,8 @@ jobs:
               ".github/workflows/strix.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
             emit_known_missing_string_finding \
-              "MODEL: github-models/deepseek/deepseek-v3-0324" \
-              "OpenCode failed-check diagnosis must prefer DeepSeek V3" \
+              "MODEL: github-models/deepseek/deepseek-r1-0528" \
+              "OpenCode failed-check diagnosis must keep DeepSeek R1" \
               ".github/workflows/opencode-review.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
 
@@ -5200,10 +4802,6 @@ jobs:
             if [ ! -s "$evidence_file" ] || [ ! -d "$OPENCODE_REVIEW_WORKDIR" ]; then
               return 1
             fi
-            if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ]; then
-              printf 'Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair; using collected current-head failed-check logs/SARIF fallback so the publish step stays bounded.\n' >&2
-              return 1
-            fi
             if [ -z "${STRIX_GITHUB_MODELS_TOKEN:-}" ]; then
               return 1
             fi
@@ -5255,10 +4853,7 @@ jobs:
             if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
               return 1
             fi
-            if ! timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s" \
-              opencode export "$session_id" --pure >"$opencode_export_file"; then
-              printf 'OpenCode failed-check diagnosis export timed out or failed after at most %s seconds for session %s.\n' \
-                "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}" "$session_id" >&2
+            if ! opencode export "$session_id" --pure >"$opencode_export_file"; then
               return 1
             fi
             jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$opencode_output_file"
@@ -5289,8 +4884,7 @@ jobs:
 
             runs_json="$(mktemp)"
             workflow_lookup_err="$(mktemp)"
-            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
                 printf 'Strix workflow is not installed on %s; skipping optional current-head Strix workflow-run lookup.\n' "$GH_REPOSITORY" >&2
@@ -5304,8 +4898,7 @@ jobs:
             fi
             rm -f "$workflow_lookup_err"
 
-            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
-              env HEAD_SHA="$HEAD_SHA" gh run list \
+            if ! env HEAD_SHA="$HEAD_SHA" gh run list \
               --repo "$GH_REPOSITORY" \
               --workflow strix.yml \
               --commit "$HEAD_SHA" \
@@ -5410,8 +5003,7 @@ jobs:
                 ;;
             esac
 
-            timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+            gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
               -f per_page=100 \
               --paginate \
               --slurp |
@@ -5426,8 +5018,7 @@ jobs:
             local manual_run_url
 
             status_target="$(
-            timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
+            gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
               --jq '
                 (.statuses // [])
                 | map(select((.context // "") == "strix"))
@@ -5457,7 +5048,7 @@ jobs:
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
 
-            timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
+            gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5510,8 +5101,7 @@ jobs:
             runs_json="$(mktemp)"
             workflow_lookup_err="$(mktemp)"
 
-            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
+            if ! gh api -X GET "repos/${GH_REPOSITORY}/actions/workflows/strix.yml" \
               --jq '.id' >/dev/null 2>"$workflow_lookup_err"; then
               if grep -Fq "HTTP 404" "$workflow_lookup_err"; then
                 printf 'Strix workflow is not installed on %s; skipping optional manual Strix run lookup.\n' "$GH_REPOSITORY" >&2
@@ -5524,7 +5114,7 @@ jobs:
             fi
             rm -f "$workflow_lookup_err"
 
-            if ! timeout "$(check_lookup_api_timeout_seconds)s" gh run list \
+            if ! gh run list \
               --repo "$GH_REPOSITORY" \
               --workflow strix.yml \
               --commit "$HEAD_SHA" \
@@ -5608,7 +5198,7 @@ jobs:
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             filtered_rollup_file="$(mktemp)"
-            if ! pr_node_id="$(timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
+            if ! pr_node_id="$(gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5621,7 +5211,7 @@ jobs:
               : >"$rollup_file"
             else
             # shellcheck disable=SC2016
-            if ! timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
+            if ! gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5687,8 +5277,9 @@ jobs:
                       empty
                     end
                   )
+                | sort_by(.label, .completedAt // "")
                 | group_by(.label)
-                | map(sort_by(.completedAt // "") | last)
+                | map(last)
                 | map(
                     if .kind == "check" then
                       select((.name // "") != "opencode-review")
@@ -5750,7 +5341,7 @@ jobs:
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             # shellcheck disable=SC2016
-            if ! timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
+            if ! gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
@@ -5765,8 +5356,6 @@ jobs:
                             ... on CheckRun {
                               name
                               status
-                              startedAt
-                              completedAt
                               detailsUrl
                               checkSuite {
                                 workflowRun {
@@ -5792,47 +5381,20 @@ jobs:
                 (.data.repository.pullRequest.statusCheckRollup.contexts.nodes // [])
                 | map(
                     if .__typename == "CheckRun" then
-                      {
-                        kind: "check",
-                        label: ((.checkSuite.workflowRun.workflow.name // "") + "/" + (.name // "check") | gsub("^/"; "")),
-                        name: (.name // ""),
-                        workflow: (.checkSuite.workflowRun.workflow.name // ""),
-                        status: (.status // ""),
-                        startedAt: (.startedAt // ""),
-                        completedAt: (.completedAt // ""),
-                        detailsUrl: (.detailsUrl // ""),
-                        checkedAt: (if ((.startedAt // "") != "") then (.startedAt // "") else (.completedAt // "") end)
-                      }
-                    elif .__typename == "StatusContext" then
-                      {
-                        kind: "status",
-                        label: (.context // "status"),
-                        state: (.state // ""),
-                        targetUrl: (.targetUrl // ""),
-                        checkedAt: ""
-                      }
-                    else
-                      empty
-                    end
-                  )
-                | group_by(.label)
-                | map(sort_by(.checkedAt // "") | last)
-                | map(
-                    if .kind == "check" then
                       select((.name // "") != "opencode-review")
-                      | select((.workflow // "") != "OpenCode Review")
-                      | select((.workflow // "") != "Required OpenCode Review")
-                      | select((.workflow // "") != "OpenCode PR Review")
-                      | select(((.name // "") == "metadata-only gate evaluation" and (.workflow // "") == "PR Governance") | not)
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
+                      | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
+                      | select(((.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)
                       | select((.status // "") != "COMPLETED")
-                      | "- " + (.label // "check") + ": " + (.status // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
-                    elif .kind == "status" then
-                      select((.label // "") != "opencode-review")
-                      | select((.label // "") != "OpenCode Review")
-                      | select((.label // "") != "Required OpenCode Review")
-                      | select((.label // "") != "OpenCode PR Review")
+                      | "- " + ((.checkSuite.workflowRun.workflow.name // "") + "/" + (.name // "check") | gsub("^/"; "")) + ": " + (.status // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
+                    elif .__typename == "StatusContext" then
+                      select((.context // "") != "opencode-review")
+                      | select((.context // "") != "OpenCode Review")
+                      | select((.context // "") != "Required OpenCode Review")
+                      | select((.context // "") != "OpenCode PR Review")
                       | select((.state // "" | ascii_upcase) as $s | ["PENDING","EXPECTED"] | index($s))
-                      | "- " + (.label // "status") + ": " + (.state // "unknown") + (if (.targetUrl // "") != "" then " (" + .targetUrl + ")" else "" end)
+                      | "- " + (.context // "status") + ": " + (.state // "unknown") + (if (.targetUrl // "") != "" then " (" + .targetUrl + ")" else "" end)
                     else
                       empty
                     end
@@ -5957,13 +5519,10 @@ jobs:
           stop_without_review_after_model_unavailable() {
             local body
             body="$(printf '%s\n' \
-              "OpenCode model pool did not produce a successful current-head control block before the model-pool step ended; the publish step will not rerun the model catalog." \
+              "OpenCode model pool did not produce a successful current-head control block before the model-pool step ended." \
               "" \
               "- Result: MODEL_OUTPUT_UNAVAILABLE" \
-              "- Model-pool outcome: \`${OPENCODE_MODEL_POOL_OUTCOME:-unknown}\`" \
-              "- Last model: \`${OPENCODE_MODEL_POOL_MODEL:-none}\`" \
-              "- Required next evidence: a later scheduler dispatch must rerun the model pool on this same current head until it emits APPROVE or source-backed REQUEST_CHANGES." \
-              "- Queue action: this publication gate exits immediately so the scheduler can retry the same current head without holding a runner for a duplicate catalog pass." \
+              "- Required next evidence: the model pool must keep retrying until it emits APPROVE or source-backed REQUEST_CHANGES." \
               "- Head SHA: \`${HEAD_SHA}\`" \
               "- Workflow run: ${RUN_ID}" \
               "- Workflow attempt: ${RUN_ATTEMPT}" \
@@ -5973,158 +5532,10 @@ jobs:
             stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"
           }
 
-          collect_open_code_scanning_alerts() {
-            local output_file="$1"
-            local pr_json head_ref
-            pr_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json headRefName 2>/dev/null)" || return 1
-            head_ref="$(printf '%s\n' "$pr_json" | jq -r '.headRefName // empty')"
-            [ -n "$head_ref" ] || return 1
-            timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/code-scanning/alerts" \
-                -f "ref=refs/heads/${head_ref}" \
-                -f state=open \
-                -F per_page=100 \
-                --jq '
-                  [
-                    .[]
-                    | {
-                        number: (.number // 0),
-                        rule: (.rule.id // .rule.name // "unknown"),
-                        tool: (.tool.name // "code-scanning"),
-                        severity: (.rule.security_severity_level // .rule.severity // "unknown"),
-                        url: (.html_url // "")
-                      }
-                    | select((.severity | ascii_downcase) as $s | ["medium","high","critical","warning","error"] | index($s))
-                  ]
-                  | .[]
-                  | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
-                ' >"$output_file"
-          }
-
-          approve_central_review_process_after_model_unavailable() {
-            local pending_wait_status body
-
-            if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]; then
-              return 1
-            fi
-            if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]; then
-              return 1
-            fi
-            if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
-              return 1
-            fi
-
-            printf '::notice::Central review-process evidence fallback candidate: scope=%s changed_count=%s head=%s.\n' \
-              "${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}" \
-              "${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}" \
-              "$HEAD_SHA"
-
-            if request_changes_for_merge_conflict_if_present; then
-              return 0
-            fi
-
-            pending_checks_file="$(mktemp)"
-            if ! collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"; then
-              printf '::notice::Central review-process evidence fallback skipped because peer GitHub Checks could not be read.\n'
-              return 1
-            fi
-            if [ -s "$pending_checks_file" ]; then
-              failed_check_review_body_file="$(mktemp)"
-              build_pending_check_body "$pending_checks_file" "$failed_check_review_body_file"
-              hold_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"
-            fi
-
-            failed_checks_file="$(mktemp)"
-            if ! collect_github_checks_with_retry collect_failed_github_checks "$failed_checks_file"; then
-              printf '::notice::Central review-process evidence fallback skipped because failed-check rollup could not be read.\n'
-              return 1
-            fi
-            if [ -s "$failed_checks_file" ]; then
-              failed_check_review_body_file="$(mktemp)"
-              {
-                printf '## Pull request overview\n\n'
-                printf 'OpenCode could not approve from central review-process evidence because current-head GitHub Checks have failed.\n\n'
-                printf '## Findings\n\n'
-                printf '### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n'
-                printf -- '- Problem: Failed same-head checks remain for `%s`.\n' "$HEAD_SHA"
-                printf -- '- Root cause: Central evidence fallback is allowed only when peer GitHub Checks are complete and clean.\n'
-                printf -- '- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n'
-                printf -- '- Regression test: Keep central fallback gated on an empty failed-check rollup.\n\n'
-                printf 'Failed checks:\n'
-                cat "$failed_checks_file"
-              } >"$failed_check_review_body_file"
-              create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
-              return 0
-            fi
-
-            failed_check_evidence_file="$(mktemp)"
-            if ! collect_open_code_scanning_alerts "$failed_check_evidence_file"; then
-              printf '::notice::Central review-process evidence fallback skipped because open code-scanning alerts could not be read.\n'
-              return 1
-            fi
-            if [ -s "$failed_check_evidence_file" ]; then
-              failed_check_review_body_file="$(mktemp)"
-              {
-                printf '## Pull request overview\n\n'
-                printf 'OpenCode could not approve from central review-process evidence because open code-scanning alerts remain.\n\n'
-                printf '## Findings\n\n'
-                printf '### 1. HIGH Code Scanning Alerts - Resolve open medium-or-higher alerts before approval\n'
-                printf -- '- Problem: Open code-scanning alerts remain for the current PR branch.\n'
-                printf -- '- Root cause: Central evidence fallback is allowed only when security alerts are clear at medium sensitivity or higher.\n'
-                printf -- '- Fix: Resolve or dismiss the listed alerts with source-backed justification, then rerun OpenCode.\n'
-                printf -- '- Regression test: Keep central fallback gated on an empty medium-or-higher code-scanning alert list.\n\n'
-                printf 'Open alerts:\n'
-                cat "$failed_check_evidence_file"
-              } >"$failed_check_review_body_file"
-              create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
-              return 0
-            fi
-
-            unresolved_reviewer_threads_file="$(mktemp)"
-            reviewer_thread_review_body_file="$(mktemp)"
-            if ! collect_unresolved_reviewer_threads "$unresolved_reviewer_threads_file"; then
-              build_reviewer_thread_lookup_failure_body "$reviewer_thread_review_body_file"
-              create_pull_review "REQUEST_CHANGES" "$(cat "$reviewer_thread_review_body_file")"
-              return 0
-            fi
-            if [ -s "$unresolved_reviewer_threads_file" ]; then
-              build_unresolved_reviewer_threads_body "$unresolved_reviewer_threads_file" "$reviewer_thread_review_body_file"
-              create_pull_review "REQUEST_CHANGES" "$(cat "$reviewer_thread_review_body_file")"
-              return 0
-            fi
-
-            body="$(printf '%s\n' \
-              "## Pull request overview" \
-              "" \
-              "OpenCode model providers were unavailable for this same-head run, but this PR is limited to the central review-process repair surface and the current-head evidence is clean." \
-              "" \
-              "## Findings" \
-              "" \
-              "No blocking findings." \
-              "" \
-              "## Evidence" \
-              "" \
-              "- Result: APPROVE" \
-              "- Reason: central review-process evidence fallback after model provider unavailability; coverage, docstring, peer GitHub Checks, code-scanning alerts, mergeability, and review threads were clear for current head." \
-              "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
-              "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
-              "- Model-pool outcome: \`${OPENCODE_MODEL_POOL_OUTCOME:-unknown}\`" \
-              "- Head SHA: \`${HEAD_SHA}\`" \
-              "- Workflow run: ${RUN_ID}" \
-              "- Workflow attempt: ${RUN_ATTEMPT}" \
-              "" \
-              "This fallback is limited to central review-process self-repair and does not apply to application source, dependency manifest, lockfile, generated artifact, or documentation-only PRs."
-            )"
-            create_pull_review "APPROVE" "$body"
-            return 0
-          }
-
                     request_changes_for_merge_conflict_if_present() {
                       local pr_json merge_state mergeable base_ref head_ref body change_graph
 
-            if ! pr_json="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus,mergeable 2>/dev/null)"; then
+            if ! pr_json="$(gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json baseRefName,headRefName,mergeStateStatus,mergeable 2>/dev/null)"; then
               return 1
             fi
 
@@ -6188,9 +5599,66 @@ jobs:
             scripts/ci/collect_failed_check_evidence.sh "$evidence_file"
           }
 
+          rekick_model_pool_on_exhaustion() {
+            local rekick_attempt=1
+            local rekick_output outcome model rekick_status
+            local sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS:-15}"
+            local max_sleep_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS:-300}"
+            local max_total_seconds="${OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS:-4200}"
+            local started_at now elapsed
+
+            started_at="$(date +%s)"
+
+            while [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" = "exhausted" ]; do
+              if [ "$max_total_seconds" -gt 0 ]; then
+                now="$(date +%s)"
+                elapsed="$((now - started_at))"
+                if [ "$elapsed" -ge "$max_total_seconds" ]; then
+                  printf 'OpenCode model pool remained exhausted for %s seconds; stopping re-kicks and continuing with fail-closed handling.\n' "$elapsed" >&2
+                  break
+                fi
+              fi
+              printf 'OpenCode model pool exhausted; re-kicking model pool (attempt %s).\n' "$rekick_attempt"
+              rekick_output="$(mktemp)"
+              rekick_status=0
+              GITHUB_OUTPUT="$rekick_output" OPENCODE_OUTPUT_FILE="$OPENCODE_MODEL_POOL_OUTPUT_FILE" \
+                bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh" || rekick_status=$?
+              if [ "$rekick_status" -ne 0 ]; then
+                printf 'OpenCode model pool re-kick command exited with status %s; continuing with fail-closed handling.\n' "$rekick_status" >&2
+              fi
+              outcome="$(awk -F= '/^review_status=/{v=$2} END{print v}' "$rekick_output")"
+              model="$(awk -F= '/^review_model=/{v=$2} END{print v}' "$rekick_output")"
+              rm -f "$rekick_output"
+
+              if [ -z "$outcome" ]; then
+                printf 'OpenCode model pool re-kick produced no review_status output; treating outcome as exhausted.\n' >&2
+                outcome="exhausted"
+              fi
+              OPENCODE_MODEL_POOL_OUTCOME="$outcome"
+              OPENCODE_MODEL_POOL_MODEL="$model"
+              if [ "$outcome" = "success" ]; then
+                if [ -z "$model" ]; then
+                  printf 'OpenCode model pool re-kick succeeded but published an empty review_model.\n' >&2
+                fi
+                printf 'OpenCode model pool re-kick recovered with model: %s\n' "${model:-unknown}"
+                break
+              fi
+              if [ "$sleep_seconds" -gt 0 ]; then
+                printf 'OpenCode model pool still exhausted after re-kick attempt %s; retrying in %s seconds.\n' "$rekick_attempt" "$sleep_seconds"
+                sleep "$sleep_seconds"
+              fi
+              if [ "$sleep_seconds" -lt "$max_sleep_seconds" ]; then
+                sleep_seconds=$((sleep_seconds * 2))
+                if [ "$sleep_seconds" -gt "$max_sleep_seconds" ]; then
+                  sleep_seconds="$max_sleep_seconds"
+                fi
+              fi
+              rekick_attempt=$((rekick_attempt + 1))
+            done
+          }
+
           live_head_lookup_error_file="$(mktemp)"
-          if ! live_head_sha="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-            gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>"$live_head_lookup_error_file")"; then
+          if ! live_head_sha="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>"$live_head_lookup_error_file")"; then
             if gh_error_is_retryable_publication_failure "$live_head_lookup_error_file"; then
               printf '::warning::OpenCode could not read the live pull request head for %s because GitHub throttled the shared installation token; skipping review side effects because the review write is a GitHub side effect, not source evidence, while branch protection remains authoritative.\n' "$HEAD_SHA"
             else
@@ -6212,18 +5680,13 @@ jobs:
             request_changes_for_coverage_evidence_failure
           fi
 
+          rekick_model_pool_on_exhaustion
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
-          printf 'OpenCode model-pool outcome=%s model=%s; publish stage performs no duplicate model-catalog pass.\n' \
-            "$opencode_review_outcome" "${OPENCODE_MODEL_POOL_MODEL:-none}"
 
           # The model pool uses continue-on-error so this final step can publish
           # diagnostics. Do not read model output or change PR review state unless
           # the pool explicitly emitted a valid current-head control block.
           if [ "$opencode_review_outcome" != "success" ]; then
-            if approve_central_review_process_after_model_unavailable; then
-              echo "::endgroup::"
-              exit 0
-            fi
             stop_without_review_after_model_unavailable
           fi
 
@@ -6258,8 +5721,7 @@ jobs:
           sentinel="<!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->"
           sentinel_comment_error_file="$(mktemp)"
           if ! comment_json="$(
-            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
+            gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
               --jq "[.[] | select((.user.login == \"github-actions[bot]\" or .user.login == \"opencode-agent[bot]\") and (.body | contains(\"${sentinel}\")))] | sort_by(.created_at) | last // {}" 2>"$sentinel_comment_error_file"
           )"; then
             if gh_error_is_retryable_publication_failure "$sentinel_comment_error_file"; then
@@ -6562,41 +6024,6 @@ jobs:
               ;;
           esac
           echo "::endgroup::"
-
-      - name: Publish workflow_dispatch OpenCode status
-        if: >-
-          always()
-          && github.event_name == 'workflow_dispatch'
-          && github.event.inputs.target_repository != ''
-          && steps.opencode_review_model_pool.outputs.review_status != ''
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPOSITORY: ${{ github.event.inputs.target_repository }}
-          PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PR_HEAD_SHA:-}" ]; then
-            echo "::warning::OpenCode workflow_dispatch status publication skipped because pr_head_sha was empty."
-            exit 0
-          fi
-
-          state="success"
-          description="OpenCode workflow_dispatch evidence passed for current head."
-          if [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "success" ] &&
-            [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "exhausted" ]; then
-            state="failure"
-            description="OpenCode workflow_dispatch evidence did not produce approval evidence."
-          fi
-
-          printf 'Publishing OpenCode workflow_dispatch status context opencode-review for %s at %s with state=%s.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state"
-          gh api -X POST "repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
-            -f state="$state" \
-            -f context="opencode-review" \
-            -f target_url="$RUN_URL" \
-            -f description="$description" >/dev/null
 
       - name: Run merge scheduler after approval
         continue-on-error: true

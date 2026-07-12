@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import os
 import shutil
 import subprocess
 from collections.abc import Sequence
@@ -29,7 +28,6 @@ FAILED = "failed"
 SKIPPED = "skipped"
 
 DETAIL_LIMIT = 400
-COMMAND_TIMEOUT_SECONDS = float(os.environ.get("CHANGED_FILE_SYNTAX_TIMEOUT_SECONDS", "15"))
 
 
 def check_python(path: Path) -> tuple[str, str]:
@@ -50,17 +48,13 @@ def check_with_command(tool: str, command: Sequence[str], path: Path) -> tuple[s
     """
     if shutil.which(tool) is None:
         return (SKIPPED, f"{tool} is not available on this runner")
-    try:
-        completed = subprocess.run(
-            list(command),
-            capture_output=True,
-            text=True,
-            shell=False,
-            check=False,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return (SKIPPED, f"{tool} syntax check timed out after {COMMAND_TIMEOUT_SECONDS:g}s")
+    completed = subprocess.run(
+        list(command),
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
     if completed.returncode != 0:
         detail = (completed.stderr.strip() or completed.stdout.strip() or "")[:DETAIL_LIMIT]
         return (FAILED, detail or f"{tool} reported a syntax error")

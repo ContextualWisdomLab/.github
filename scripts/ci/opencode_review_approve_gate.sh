@@ -232,9 +232,9 @@ def normalized_line(value: str) -> str:
     return " ".join(value.strip().split())
 
 
-# ⚡ Bolt: Memoize changed_new_lines to prevent N+1 git diff subprocess calls
-# Impact: Substantially reduces I/O wait overhead when multiple findings are on the same file path
-@functools.cache
+# ⚡ Bolt: N+1 git diff 서브프로세스 호출 방지를 위한 changed_new_lines 메모이제이션
+# Impact: 여러 finding이 동일한 파일 경로를 가리킬 때 발생하는 I/O 대기 오버헤드를 대폭 줄입니다.
+@functools.lru_cache(maxsize=1024)
 def changed_new_lines(path_value: str) -> frozenset[int]:
     if not pr_base_sha or not pr_head_sha:
         return frozenset()

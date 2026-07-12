@@ -3,7 +3,6 @@ import os
 import re
 import shutil
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -217,9 +216,6 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "uses: actions/checkout" not in step
     assert "refs/pull/${{ github.event.pull_request.number }}/merge" not in step
     assert "TARGET_REPOSITORY:" in step
-    assert "PR_NUMBER:" in step
-    assert "missing_metadata=()" in step
-    assert "Coverage merge tree materialization missing required PR metadata" in step
     assert 'printf \'x-access-token:%s\' "$GH_TOKEN" | base64 | tr -d \'\\n\'' in step
     assert "echo \"::add-mask::$auth_header\"" in step
     assert '-c http.extraheader="AUTHORIZATION: basic ${auth_header}"' in step
@@ -276,65 +272,6 @@ def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
     declared_pnpm_block = select_function[declared_pnpm_start:declared_pnpm_end]
     assert 'printf \'%s\\n\' "pnpm"' in declared_pnpm_block
     assert "return" in declared_pnpm_block
-
-
-def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
-    """A changed JS file must select its nearest nested package.json for coverage."""
-    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
-    measure_end = workflow.index("\n      - name:", measure_start + 1)
-    measure_step = workflow[measure_start:measure_end]
-
-    changed_start = measure_step.index("          changed_files_for_coverage() {\n")
-    changed_end = measure_step.index(
-        "\n\n          has_changed_tracked_files()", changed_start
-    )
-    discovery_start = measure_step.index(
-        "          javascript_coverage_package_dirs() {\n"
-    )
-    discovery_end = measure_step.index(
-        "\n\n          declared_package_manager()", discovery_start
-    )
-    shell = "\n".join(
-        (
-            "set -euo pipefail",
-            textwrap.dedent(measure_step[changed_start:changed_end]),
-            textwrap.dedent(measure_step[discovery_start:discovery_end]),
-            "javascript_coverage_package_dirs",
-        )
-    )
-
-    repo = tmp_path / "repo"
-    package = repo / "ADFS samples" / "Node App"
-    package.mkdir(parents=True)
-    (package / "package.json").write_text('{"scripts":{"test":"node --test"}}\n')
-    source = package / "index.js"
-    source.write_text("module.exports = 1;\n")
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Coverage Test"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "coverage@example.invalid"], cwd=repo, check=True
-    )
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
-    base_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    source.write_text("module.exports = 2;\n")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "head"], cwd=repo, check=True)
-    head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    env = os.environ.copy()
-    env.update({"PR_BASE_SHA": base_sha, "PR_HEAD_SHA": head_sha})
-
-    result = subprocess.run(
-        ["bash", "-c", shell],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == ["ADFS samples/Node App"]
 
 
 def test_opencode_runtime_pin_supports_reasoning_options():
@@ -485,20 +422,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "review write fallback token source=" in workflow
     assert "using github-token primary and opencode-app fallback" in workflow
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-$GH_TOKEN}"' not in workflow
-    assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "1"' in workflow
-    assert 'REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"' in workflow
+    assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "3"' in workflow
     assert "gh_error_is_retryable_publication_failure()" in workflow
     assert "review_publish_retry_sleep_seconds()" in workflow
     assert 'post_pull_review_with_retry "primary review"' in workflow
     assert 'post_pull_review_with_retry "fallback review"' in workflow
-    assert "GitHub review publication retry sleep capped from %s to %s seconds." in workflow
     assert "hit a retryable GitHub API throttle; retrying attempt" in workflow
     assert "GitHub returned HTTP 422 for this review write; likely causes are token/event policy" in workflow
     assert "GitHub rate-limited the review write token; retry after the reported reset window" in workflow
-    assert "post_pull_review_request()" in workflow
-    assert "curl --silent --show-error --fail-with-body" in workflow
-    assert '--max-time "$api_timeout"' in workflow
-    assert '--data-binary "@${review_payload_file}"' in workflow
     assert "Review execution contracts" in workflow
     assert "Accessibility/i18n:" in workflow
     assert "Supply-chain/license:" in workflow
@@ -513,14 +444,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Run OpenCode PR Review model pool" in workflow
     assert "opencode_review_model_pool" in workflow
     assert "run_opencode_review_model_pool.sh" in workflow
-    assert "rekick_model_pool_on_exhaustion" not in workflow
-    assert "publish stage performs no duplicate model-catalog pass" in workflow
+    assert "rekick_model_pool_on_exhaustion" in workflow
     concurrency_contract = workflow.split("permissions:", 1)[0]
     assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
     assert "github.event.inputs.pr_head_sha" not in concurrency_contract
-    assert "opencode-review-${{ github.event_name }}-" in concurrency_contract
-    assert "without cancelling the required pull_request_target review context" in concurrency_contract
     assert "github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number)" in workflow
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(encoding="utf-8")
@@ -543,46 +471,26 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "skipping remaining attempts for this model" in model_pool_runner
     assert "using %ss run timeout with %ss retry budget remaining" in model_pool_runner
     assert "timed out after %ss; falling through within the remaining retry budget" in model_pool_runner
-    assert "emit_sanitized_opencode_failure_detail" in model_pool_runner
-    assert "OpenCode provider failure detail" in model_pool_runner
-    assert "[REDACTED]" in model_pool_runner
     assert "approve_low_risk_review_fallback_after_model_exhaustion" not in workflow
     assert "changed_file_is_low_risk_review_fallback" not in workflow
-    assert "approve_central_review_process_after_model_unavailable" in workflow
+    assert "approve_central_review_process_fallback" not in workflow
     assert "opencode.jsonc | \\" in workflow
-    assert "ContextualWisdomLab/.github:.jules/bolt.md | \\" in workflow
-    assert "ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \\" in workflow
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
     assert "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py" in workflow
     assert "ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml" in workflow
     assert "ContextualWisdomLab/appguardrail:tests/test_org_security_failure_collector.py" in workflow
     assert "appguardrail org-security failure collector" in workflow
-    assert 'max_changed_count=24' in workflow
     assert 'max_changed_count=3' in workflow
     assert "changed_count\" -gt \"$max_changed_count\"" in workflow
-    assert "central_review_process_core_changed=false" in workflow
-    assert "central_review_process_core_changed=true" in workflow
-    assert 'central_review_process_core_changed" != "true"' in workflow
     assert "steps.central_review_process_fallback_scope.outputs.eligible != 'true'" not in workflow
     assert workflow.index("Detect central review-process scope") < workflow.index(
         "Initialize CodeGraph index for OpenCode"
     )
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
-    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "300"' in workflow
-    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "420"' in workflow
-    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
-    assert "Central review-process evidence fallback eligible" in model_pool_runner
-    assert "provider delay is logged before the publish fallback evaluates current-head peer evidence" in model_pool_runner
     assert "model pool was intentionally skipped" not in workflow
-    assert "central review-process evidence fallback" in workflow
-    assert 'collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"' in workflow
-    central_fallback = workflow.split("approve_central_review_process_after_model_unavailable()", 1)[1].split(
-        "request_changes_for_merge_conflict_if_present()", 1
-    )[0]
-    assert "wait_for_peer_github_checks" not in central_fallback
-    assert "collect_open_code_scanning_alerts" in workflow
+    assert "deterministic fallback" not in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
@@ -590,17 +498,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
-    assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12", workflow)
+    assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 40", workflow)
     assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 420", workflow)
-    assert 'timeout-minutes: 12' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 210", workflow)
+    assert 'timeout-minutes: 40' in workflow
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 350", workflow)
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 8", workflow)
-    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
-    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
-    assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in workflow
-    assert "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair" in workflow
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,120}timeout-minutes: 220", workflow)
+    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "49"' in workflow
+    assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "15"' in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5 "
@@ -613,44 +518,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"' in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "2"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "18000"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
-    publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
-        "      - name: Run merge scheduler after approval", 1
-    )[0]
-    assert "REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS" not in publish_step
-    assert "OPENCODE_PUBLISH_TIMEOUT_WRAPPED" not in publish_step
-    assert "publish_step_outer_watchdog" not in publish_step
-    assert "publish_step_watchdog" not in publish_step
-    assert "publish_process_group" not in publish_step
-    assert "PUBLISH_STEP_TIMEOUT" not in publish_step
-    assert 'REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "20"' in publish_step
-    assert "OpenCode publishing pull review with %s token" in publish_step
-    assert "failed on attempt %s/%s" in publish_step
-    assert 'post_pull_review_request "$token_value" "$review_payload_file" "$error_file" "$api_timeout"' in publish_step
-    assert "exhausted %s configured attempt(s)" in publish_step
-    assert (
-        'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100'
-        in publish_step
-    )
-    assert (
-        'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate'
-        not in publish_step
-    )
-    assert "MODEL: github-models/deepseek/deepseek-v3-0324" in publish_step
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in publish_step
-    assert (
-        'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"'
-        in publish_step
-    )
-    assert 'post_pull_review_with_retry "inline review" "$review_write_token"' in publish_step
-    assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
+    assert 'OPENCODE_EXHAUSTED_REKICK_INITIAL_SLEEP_SECONDS: "15"' in workflow
+    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_SLEEP_SECONDS: "30"' in workflow
+    assert 'OPENCODE_EXHAUSTED_REKICK_MAX_TOTAL_SECONDS: "180"' in workflow
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
     assert "OpenCode model pool did not produce a successful current-head control block" in workflow
-    assert "Cross-repository workflow_dispatch review-tool failure" in workflow
-    assert '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' in workflow
     assert "Repeated current-head sections for models without file reads" in workflow
     assert "append_evidence_section" in workflow
     assert "Focused changed hunks\" 14000" in workflow
@@ -662,7 +537,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-11400' in model_pool_runner
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-18000' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
     assert "retry budget/GitHub Actions job timeout" in model_pool_runner
     assert "OpenCode model pool exhausted before producing a valid control conclusion." in model_pool_runner
@@ -805,11 +680,6 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     )
 
     assert "Run merge scheduler after approval" in workflow
-    assert "Publish workflow_dispatch OpenCode status" in workflow
-    assert "statuses: write" in workflow
-    assert 'context="opencode-review"' in workflow
-    assert 'repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}' in workflow
-    assert "OpenCode workflow_dispatch evidence passed for current head." in workflow
     assert "python3 scripts/ci/pr_review_merge_scheduler.py" in workflow
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
     assert "github.event_name == 'pull_request_target'" in workflow
@@ -850,12 +720,6 @@ def test_opencode_pending_peer_checks_hold_approval_without_failing_required_wor
         'hold_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"'
         in workflow
     )
-    assert (
-        'checkedAt: (if ((.startedAt // "") != "") then (.startedAt // "") else (.completedAt // "") end)'
-        in workflow
-    )
-    assert 'map(sort_by(.checkedAt // "") | last)' in workflow
-    assert "group_by(.label)" in workflow
     assert "build_waiting_for_checks_body" not in workflow
 
 
@@ -870,9 +734,6 @@ def test_opencode_review_publication_prefers_merge_token_before_app_token():
         "secrets.OPENCODE_APPROVE_TOKEN || "
         "steps.opencode_app_token.outputs.token || github.token }}"
     ) in workflow
-    assert 'OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS: "20"' in workflow
-    assert '--max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}"' in workflow
-    assert "app token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s" in workflow
 
 
 def test_opencode_approve_review_publication_failure_keeps_gate_result():
@@ -886,19 +747,6 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
     assert (
         "OpenCode approve review publication skipped after successful gate" in workflow
     )
-    assert (
-        "skipping non-authoritative overview comment mutation so the required approval check can finish promptly"
-        in workflow
-    )
-    assert (
-        "OpenCode APPROVE review skips the non-authoritative changed-file graph before publication"
-        in workflow
-    )
-    assert "Publish central OpenCode fast approval" in workflow
-    assert "steps.central_fast_approval.outputs.published != 'true'" in workflow
-    assert "CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS" in workflow
-    assert "CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS" in workflow
-    assert "Central fast approval published APPROVE review" in workflow
     assert (
         "Branch protection and rulesets remain authoritative if a matching GitHub pull review is required"
         in workflow
@@ -924,7 +772,7 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
 
     # The unguarded top-level reads are now guarded and skip on throttle
     # rather than tripping set -e.
-    assert 'if ! live_head_sha="$(timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s"' in workflow
+    assert 'if ! live_head_sha="$(gh api' in workflow
     assert (
         "skipping review side effects because the review write is a GitHub "
         "side effect, not source evidence, while branch protection remains "
@@ -1052,10 +900,9 @@ def test_opencode_model_pool_failure_stops_without_review_state_change():
     )
     assert 'opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"' in workflow
     assert re.search(
-        r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,900}'
+        r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,420}'
         r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
-        r"if approve_central_review_process_after_model_unavailable; then[\s\S]{0,180}"
-        r"exit 0\s+fi\s+stop_without_review_after_model_unavailable\s+fi",
+        r"stop_without_review_after_model_unavailable\s+fi",
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow

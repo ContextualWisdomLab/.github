@@ -1,12 +1,8 @@
 import json
-import shlex
-import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
-
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -263,70 +259,17 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     )
     assert 'select(.full_name != "ContextualWisdomLab/.github")' in workflow
     assert "select(.archived == false and .disabled == false)" in workflow
-    # The sweep must not silently truncate large/old queues or skip a repository
-    # whose only open work is a stacked/non-default-base PR.
-    assert "vars.ORG_SWEEP_MAX_PRS || '1000'" in workflow
-    assert "/pulls?state=open&per_page=1&base=" not in workflow
-    assert "No open PRs (including stacked or non-default-base PRs)" in workflow
     # Every repository failure must leave a concrete logged reason.
     assert "see the decision log above for the concrete per-PR reason" in workflow
-    # Queue hygiene: previous-head runs are cancelled immediately, while the
-    # legacy age guard cannot cancel a valid current-head PR run.
+    # Queue hygiene: stale queued runs are cancelled with a logged identity.
     assert "ORG_SWEEP_STALE_QUEUE_HOURS" in workflow
-    assert "/actions/runs?status=${active_status}&per_page=100" in workflow
-    assert "for active_status in queued in_progress" in workflow
-    assert '"pull_request" or .event == "pull_request_target"' in workflow
-    assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
-    assert ".head_sha != $current_default_sha" in workflow
-    assert "do not match an open PR or default-branch Current HEAD" in workflow
-    assert '.current_head // "closed-or-no-open-pr"' in workflow
-    assert '.current_head // \\"closed-or-no-open-pr\\"' not in workflow
-    assert "select($current_pr_heads[$head_key] == null)" in workflow
-    assert "Could not cancel superseded run" in workflow
-    assert "No run will be cancelled from incomplete evidence" in workflow
-    assert "queue_hygiene_ready=false" in workflow
+    assert "/actions/runs?status=queued&per_page=100" in workflow
     # The scheduler requires --project-flow; the sweep must derive and pass it
     # per target repository (regression: the first sweep failed every repo with
     # "--project-flow is required").
     assert "--project-flow" in workflow
     assert 'main|master) project_flow="github-flow"' in workflow
     assert 'develop) project_flow="git-flow"' in workflow
-
-
-def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
-    """The Current-HEAD cancellation evidence must be valid jq, not just valid Bash."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required for the executable workflow filter regression test")
-
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    jq_line = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "closed-or-no-open-pr" in line and "jq -r" in line
-    )
-    jq_filter = shlex.split(jq_line)[2]
-    payload = [
-        {
-            "id": 42,
-            "name": "Required OpenCode Review",
-            "status": "in_progress",
-            "event": "pull_request_target",
-            "head_branch": "old-head",
-            "run_head": "deadbeef",
-            "current_head": None,
-        }
-    ]
-
-    result = subprocess.run(
-        [jq, "-r", jq_filter],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "current_head=closed-or-no-open-pr" in result.stdout
 
 
 def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None:

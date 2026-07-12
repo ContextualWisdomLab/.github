@@ -325,8 +325,8 @@ normalize_changed_file_path() {
 	python3 - "$REPO_ROOT" "$changed_file" <<'PY'
 from pathlib import Path
 import posixpath
+import re
 import sys
-import unicodedata
 
 repo_root = Path(sys.argv[1]).resolve(strict=True)
 relative_path_str = sys.argv[2]
@@ -344,20 +344,9 @@ normalized = posixpath.normpath(relative_path_str)
 if normalized in (".", "") or normalized.startswith("../") or normalized == "..":
     raise SystemExit(1)
 # '@' is required for Apple/Tauri retina asset names (128x128@2x.png) and '+'
-# for SvelteKit's mandatory route files (+page.svelte, +layout.ts). Preserve
-# the existing ASCII allowlist and additionally accept only Unicode letters,
-# combining marks, and numbers. This supports internationalized repository
-# paths without admitting controls, separators, bidi formatting, shell
-# metacharacters, or Unicode punctuation that could resemble a path boundary.
-allowed_ascii = frozenset("_.@+/ []-")
-if not all(
-    (character.isascii() and (character.isalnum() or character in allowed_ascii))
-    or (
-        not character.isascii()
-        and unicodedata.category(character)[0] in {"L", "M", "N"}
-    )
-    for character in normalized
-):
+# for SvelteKit's mandatory route files (+page.svelte, +layout.ts). Both are
+# inert in POSIX paths and every downstream consumer quotes these values.
+if not re.fullmatch(r"[A-Za-z0-9_.@+/ \[\]-]+", normalized):
     raise SystemExit(1)
 relative_path = Path(normalized)
 if relative_path.is_absolute():
@@ -420,7 +409,7 @@ pr_head_regular_file_mode() {
 	if ! git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null; then
 		return 2
 	fi
-	if ! tree_output="$(git -c core.quotepath=false ls-tree "$head_sha" -- "$relative_path")"; then
+	if ! tree_output="$(git ls-tree "$head_sha" -- "$relative_path")"; then
 		return 2
 	fi
 	if [ -z "$tree_output" ]; then
@@ -965,20 +954,15 @@ PY
 	fi
 
 	local changed_files_output
-	# Git quotes non-ASCII paths by default (core.quotepath=true). Those quoted
-	# octal byte sequences are display text, not repository-relative paths, and
-	# the path-safety gate correctly rejects them. Request literal UTF-8 path
-	# output for this command only so legitimate internationalized paths still
-	# pass through the same fail-closed normalization below.
-	if ! changed_files_output="$(git -c core.quotepath=false diff --name-only "$base_sha...$head_sha" -- 2>/dev/null)"; then
+	if ! changed_files_output="$(git diff --name-only "$base_sha...$head_sha" -- 2>/dev/null)"; then
 		if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && pull_request_metadata_env_present; then
-			if changed_files_output="$(git -c core.quotepath=false diff --name-only "$base_sha" "$head_sha" -- 2>/dev/null)"; then
+			if changed_files_output="$(git diff --name-only "$base_sha" "$head_sha" -- 2>/dev/null)"; then
 				echo "Using explicit base/head diff for workflow_dispatch PR-scope Strix evidence." >&2
 			else
 				echo "ERROR: pull request changed file list could not be read; failing closed." >&2
 				return 2
 			fi
-		elif changed_files_output="$(git -c core.quotepath=false diff --name-only "$base_sha..$head_sha" -- 2>/dev/null)"; then
+		elif changed_files_output="$(git diff --name-only "$base_sha..$head_sha" -- 2>/dev/null)"; then
 			echo "INFO: Unable to compute PR merge base; falling back to direct base/head diff for changed file enumeration." >&2
 		else
 			if pull_request_head_blob_required; then
@@ -1555,7 +1539,7 @@ build_pull_request_head_tree_scope_dir() {
 	fi
 
 	local tree_output
-	if ! tree_output="$(git -c core.quotepath=false ls-tree -r --full-tree "$head_sha")"; then
+	if ! tree_output="$(git ls-tree -r --full-tree "$head_sha")"; then
 		echo "ERROR: pull request head tree could not be read; failing closed." >&2
 		return 2
 	fi
@@ -3768,9 +3752,6 @@ run_current_target_scan() {
 
 	case "$PR_FINDINGS_DECISION" in
 	block_changed | block_unmapped | block_manifest_unverified)
-		if [ "$strict_primary_provider_fallback" -eq 1 ]; then
-			fail_reported_vulnerabilities_before_fallback_success || true
-		fi
 		return 1
 		;;
 	esac
@@ -3841,9 +3822,6 @@ run_current_target_scan() {
 
 		case "$PR_FINDINGS_DECISION" in
 		block_changed | block_unmapped | block_manifest_unverified)
-			if [ "$strict_fallback_provider_signal" -eq 1 ]; then
-				fail_reported_vulnerabilities_before_fallback_success || true
-			fi
 			return 1
 			;;
 		esac

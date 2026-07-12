@@ -37,6 +37,6 @@
 ## 2024-07-25 - Pre-calculate and cache environmental file reads
 **Learning:** The `current_changed_files` function in `scripts/ci/opencode_review_normalize_output.py` was being called multiple times per item during JSON structure normalization, leading to redundant I/O reads of `OPENCODE_CHANGED_FILES_FILE`.
 **Action:** Use `@functools.lru_cache(maxsize=1)` and return an immutable `frozenset` when repeatedly reading static contextual files within a script's execution lifecycle.
-## 2024-11-23 - Memoize File-Based Subprocess Queries in Embedded Python Scripts
-**Learning:** Found an N+1 subprocess bottleneck in `scripts/ci/opencode_review_approve_gate.sh` where `changed_new_lines` invoked `git diff` for every finding, even when multiple findings pointed to the same file. Repeatedly shelling out inside loops is a severe performance anti-pattern.
-**Action:** When validating multiple findings against the same file, decorate the inspection function with `@functools.cache` and ensure the return value is immutable (e.g., `frozenset` instead of `set`) to avoid redundant subprocess calls.
+## 2024-11-23 - 파이썬 내장 스크립트에서의 서브프로세스 쿼리 메모이제이션 (Memoize File-Based Subprocess Queries in Embedded Python Scripts)
+**Learning:** `scripts/ci/opencode_review_approve_gate.sh` 내부의 `changed_new_lines` 함수에서 여러 finding이 동일한 파일을 가리킴에도 매번 `git diff` 서브프로세스를 호출하는 N+1 병목을 발견했습니다. 루프 내부에서 반복적으로 서브프로세스를 생성하는 것은 심각한 성능 안티패턴입니다.
+**Action:** 동일한 파일에 대해 여러 finding을 검사할 때, 검사 함수에 `@functools.lru_cache(maxsize=1024)`를 장식하고 반환값을 불변 객체(`set` 대신 `frozenset` 등)로 보장하여 중복 서브프로세스 호출을 방지합니다. 또한 하위 파이썬 버전과의 호환성을 위해 `@functools.cache` 대신 `@functools.lru_cache`를 사용합니다.
