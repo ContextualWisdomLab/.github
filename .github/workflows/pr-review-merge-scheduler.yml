@@ -67,13 +67,15 @@ on:
         type: string
   schedule:
     - cron: "*/30 * * * *"
-    # Hourly org-wide sweep cadence for the org-queue-sweep job below. Target
+    # Every-15-minutes org-wide sweep cadence for the org-queue-sweep job below. Target
     # repositories only receive scheduler runs on PR events, review/security
     # workflow completion, and protected-branch pushes; a PR whose approval or
     # required checks land AFTER its last event has no later trigger and sits
     # approved-but-unmerged until a human pushes something. The sweep closes
-    # that gap on a fixed heartbeat.
-    - cron: "17 * * * *"
+    # that gap on a fixed heartbeat. Runs every 15 minutes so an approval or
+    # required check that lands after a PR's last event is auto-updated/merged
+    # within ~15 minutes instead of sitting idle for up to an hour.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -167,7 +169,7 @@ jobs:
       ) &&
       (
         github.event_name != 'schedule' ||
-        github.event.schedule != '17 * * * *'
+        github.event.schedule != '*/15 * * * *'
       ) &&
       (
         github.event_name != 'workflow_dispatch' ||
@@ -401,7 +403,7 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       (
-        (github.event_name == 'schedule' && github.event.schedule == '17 * * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
         (github.event_name == 'workflow_dispatch' && inputs.org_sweep == true)
       )
     runs-on: ubuntu-latest
