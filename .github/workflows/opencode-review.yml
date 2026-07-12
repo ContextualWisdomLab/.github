@@ -3141,9 +3141,10 @@ jobs:
           OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"
-          # Stop after one catalog pass; the retry budget fails closed with
-          # visible diagnostics before the 210-minute step timeout.
-          OPENCODE_POOL_MAX_CYCLES: "1"
+          # Allow one retry catalog pass for transient provider/model-output
+          # failures; the retry budget still fails closed with visible
+          # diagnostics before the 210-minute step timeout.
+          OPENCODE_POOL_MAX_CYCLES: "2"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
