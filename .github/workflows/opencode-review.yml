@@ -1710,6 +1710,7 @@ jobs:
         run: |
           set -euo pipefail
           changed_files_file="$(mktemp)"
+          fallback_reasons_file="$(mktemp)"
           eligible=false
           changed_count=0
           max_changed_count=0
@@ -1735,6 +1736,8 @@ jobs:
               ContextualWisdomLab/.github:.github/workflows/strix.yml | \
               ContextualWisdomLab/.github:.jules/bolt.md | \
               ContextualWisdomLab/.github:.gitleaksignore | \
+              ContextualWisdomLab/.github:ci-review-prompt.md | \
+              ContextualWisdomLab/.github:code-reviewer-prompt.md | \
               ContextualWisdomLab/.github:opencode.jsonc | \
               ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \
@@ -1775,15 +1778,20 @@ jobs:
             return 1
           }
 
-          if gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" &&
-            [ -s "$changed_files_file" ] &&
-            [ "$max_changed_count" -gt 0 ]; then
+          if ! gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file"; then
+            printf 'gh pr diff failed for %s#%s\n' "$GH_REPOSITORY" "$PR_NUMBER" >>"$fallback_reasons_file"
+          elif [ ! -s "$changed_files_file" ]; then
+            printf 'no changed files were returned by gh pr diff\n' >>"$fallback_reasons_file"
+          elif [ "$max_changed_count" -le 0 ]; then
+            printf 'repository %s is not configured for central fallback scope\n' "$GH_REPOSITORY" >>"$fallback_reasons_file"
+          else
             eligible=true
             while IFS= read -r changed_file; do
               [ -n "$changed_file" ] || continue
               changed_count=$((changed_count + 1))
               if ! fallback_changed_file_allowed "$changed_file"; then
                 eligible=false
+                printf 'disallowed changed file: %s\n' "$changed_file" >>"$fallback_reasons_file"
               fi
               if fallback_changed_file_counts_as_core "$changed_file"; then
                 central_review_process_core_changed=true
@@ -1793,10 +1801,12 @@ jobs:
 
           if [ "$changed_count" -eq 0 ] || [ "$changed_count" -gt "$max_changed_count" ]; then
             eligible=false
+            printf 'changed_count=%s is outside allowed range 1..%s\n' "$changed_count" "$max_changed_count" >>"$fallback_reasons_file"
           fi
           if [ "$GH_REPOSITORY" = "ContextualWisdomLab/.github" ] &&
             [ "$central_review_process_core_changed" != "true" ]; then
             eligible=false
+            printf 'no central OpenCode/Strix core file changed\n' >>"$fallback_reasons_file"
           fi
 
           {
@@ -1807,6 +1817,12 @@ jobs:
           printf 'Trusted review-process scope=%s eligible=%s changed_count=%s max_changed_count=%s\n' \
             "$scope_label" "$eligible" "$changed_count" "$max_changed_count"
           sed 's/^/- /' "$changed_files_file"
+          if [ -s "$fallback_reasons_file" ]; then
+            printf 'Fallback ineligibility reasons:\n'
+            sed 's/^/- /' "$fallback_reasons_file"
+          else
+            printf 'Fallback ineligibility reasons: none\n'
+          fi
 
       - name: Initialize CodeGraph index for OpenCode
         env:
