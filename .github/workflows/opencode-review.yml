@@ -148,6 +148,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
@@ -158,6 +159,21 @@ jobs:
           rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR" "$COVERAGE_SOURCE_ARCHIVE"
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::Coverage merge tree materialization requires a GitHub token."
+            exit 1
+          fi
+          missing_metadata=()
+          [ -n "${TARGET_REPOSITORY:-}" ] || missing_metadata+=("target_repository")
+          [ -n "${PR_NUMBER:-}" ] || missing_metadata+=("pr_number")
+          [ -n "${PR_BASE_SHA:-}" ] || missing_metadata+=("pr_base_sha")
+          [ -n "${PR_HEAD_SHA:-}" ] || missing_metadata+=("pr_head_sha")
+          if [ "${#missing_metadata[@]}" -gt 0 ]; then
+            printf '::error::Coverage merge tree materialization missing required PR metadata for event %s: %s. target_repository=%s pr_number=%s base=%s head=%s\n' \
+              "${GITHUB_EVENT_NAME:-unknown}" \
+              "$(IFS=,; printf '%s' "${missing_metadata[*]}")" \
+              "${TARGET_REPOSITORY:-<empty>}" \
+              "${PR_NUMBER:-<empty>}" \
+              "${PR_BASE_SHA:-<empty>}" \
+              "${PR_HEAD_SHA:-<empty>}"
             exit 1
           fi
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
@@ -3552,6 +3568,40 @@ jobs:
           set -euo pipefail
           echo "::group::OpenCode Review Approval Gate"
           echo "PR=#${PR_NUMBER} head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT}"
+          publish_main_pid="$$"
+          publish_outer_watchdog_pid=""
+          publish_step_timeout_seconds() {
+            local timeout_seconds="${REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS:-240}"
+            if ! [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || [ "$timeout_seconds" -le 0 ]; then
+              printf '0\n'
+              return 0
+            fi
+            printf '%s\n' "$timeout_seconds"
+          }
+          terminate_publish_step_for_timeout() {
+            local timeout_seconds="$1"
+            printf '::error::PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss while changing or holding review state for current head %s; exiting so the scheduler can retry with a visible reason.\n' "$timeout_seconds" "$HEAD_SHA" >&2
+            kill -TERM "$publish_main_pid" 2>/dev/null || true
+            sleep 5 || true
+            kill -KILL "$publish_main_pid" 2>/dev/null || true
+          }
+          publish_step_outer_watchdog() {
+            local timeout_seconds
+            timeout_seconds="$(publish_step_timeout_seconds)"
+            if [ "$timeout_seconds" -le 0 ]; then
+              return 0
+            fi
+            sleep "$timeout_seconds" || exit 0
+            terminate_publish_step_for_timeout "$timeout_seconds"
+          }
+          cleanup_publish_outer_watchdog() {
+            if [ -n "${publish_outer_watchdog_pid:-}" ]; then
+              kill "$publish_outer_watchdog_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_publish_outer_watchdog EXIT
+          publish_step_outer_watchdog &
+          publish_outer_watchdog_pid="$!"
           configured_review_write_token="${GH_TOKEN:-}"
           configured_review_write_token_source="${CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE:-configured}"
           if [ -n "${OPENCODE_APP_TOKEN:-}" ] && [ "${configured_review_write_token:-}" = "${OPENCODE_APP_TOKEN:-}" ]; then
@@ -5817,13 +5867,13 @@ jobs:
               return 0
             fi
             sleep "$timeout_seconds" || exit 0
-            printf '::error::PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss while changing or holding review state for current head %s; exiting so the scheduler can retry with a visible reason.\n' "$timeout_seconds" "$HEAD_SHA" >&2
-            kill -TERM "$$" 2>/dev/null || true
-            sleep 5 || true
-            kill -KILL "$$" 2>/dev/null || true
+            terminate_publish_step_for_timeout "$timeout_seconds"
           }
           # shellcheck disable=SC2329
           cleanup_approval_files() {
+            if [ -n "${publish_outer_watchdog_pid:-}" ]; then
+              kill "$publish_outer_watchdog_pid" 2>/dev/null || true
+            fi
             if [ -n "${publish_watchdog_pid:-}" ]; then
               kill "$publish_watchdog_pid" 2>/dev/null || true
             fi

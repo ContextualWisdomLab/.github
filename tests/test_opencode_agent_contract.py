@@ -216,6 +216,9 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "uses: actions/checkout" not in step
     assert "refs/pull/${{ github.event.pull_request.number }}/merge" not in step
     assert "TARGET_REPOSITORY:" in step
+    assert "PR_NUMBER:" in step
+    assert "missing_metadata=()" in step
+    assert "Coverage merge tree materialization missing required PR metadata" in step
     assert 'printf \'x-access-token:%s\' "$GH_TOKEN" | base64 | tr -d \'\\n\'' in step
     assert "echo \"::add-mask::$auth_header\"" in step
     assert '-c http.extraheader="AUTHORIZATION: basic ${auth_header}"' in step
@@ -517,6 +520,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
     assert 'REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS: "240"' in workflow
     assert "PUBLISH_STEP_TIMEOUT: OpenCode publish step exceeded %ss" in workflow
+    assert 'publish_main_pid="$$"' in workflow
+    assert "publish_step_outer_watchdog &" in workflow
+    assert 'kill -TERM "$publish_main_pid"' in workflow
+    assert 'kill "$publish_outer_watchdog_pid"' in workflow
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5 "
