@@ -339,7 +339,7 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     ) in workflow
     assert (
         "STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || "
-        "vars.STALE_OPENCODE_MINUTES || '420' }}"
+        "vars.STALE_OPENCODE_MINUTES || '90' }}"
     ) in workflow
     assert (
         "ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
