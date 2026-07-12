@@ -3631,15 +3631,18 @@ jobs:
             attempt=1
             while :; do
               : >"$error_file"
+              printf 'OpenCode publishing pull review with %s token (attempt %s/%s, timeout %ss).\n' "$token_label" "$attempt" "$attempts" "$api_timeout" >&2
               timeout "${api_timeout}s" env GH_TOKEN="$token_value" gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --input "$review_payload_file" >/dev/null 2>"$error_file"
               publish_status=$?
               if [ "$publish_status" -eq 0 ]; then
                 return 0
               fi
+              printf 'GitHub pull review publication with %s token failed on attempt %s/%s (exit %s).\n' "$token_label" "$attempt" "$attempts" "$publish_status" >>"$error_file"
               if [ "$publish_status" -eq 124 ]; then
                 printf 'GitHub pull review publication with %s token timed out after %s seconds.\n' "$token_label" "$api_timeout" >>"$error_file"
               fi
               if ! gh_error_is_retryable_publication_failure "$error_file" || [ "$attempt" -ge "$attempts" ]; then
+                printf 'GitHub pull review publication with %s token exhausted %s configured attempt(s).\n' "$token_label" "$attempts" >>"$error_file"
                 return 1
               fi
               sleep_seconds="$(review_publish_retry_sleep_seconds "$token_value" "$default_sleep")"
