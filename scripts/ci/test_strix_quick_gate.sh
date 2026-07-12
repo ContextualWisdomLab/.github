@@ -664,6 +664,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "stop_without_review_after_model_unavailable" "model-unavailable path leaves PR review state unchanged"
 	assert_file_contains "$workflow_file" "MODEL_OUTPUT_UNAVAILABLE" "model-unavailable path fails the check without publishing review feedback"
 	assert_file_contains "$workflow_file" "No pull request review was posted because provider delay or model-output unavailability is not review feedback." "model-unavailable path explains delay without changing review state"
+	assert_file_contains "$workflow_file" "Cross-repository workflow_dispatch review-tool failure" "cross-repository dispatch tool failures log the reason without poisoning the central source-branch check"
+	assert_file_contains "$workflow_file" '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' "opencode approval distinguishes central cross-repository dispatch from same-repository required checks"
 	assert_file_contains "$workflow_file" "request_changes_for_merge_conflict_if_present" "source-backed approval still gates on mergeability"
 	assert_file_not_contains "$workflow_file" "No PR approval was posted because model-output failure is not evidence that the PR has no blockers." "model-failure path must not publish model-exhaustion review bodies"
 	assert_file_contains "$workflow_file" 'Detect central review-process scope' "opencode approval records central review-process scope before model attempts"

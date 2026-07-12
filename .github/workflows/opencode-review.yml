@@ -4017,6 +4017,13 @@ jobs:
               } >>"$GITHUB_STEP_SUMMARY"
             fi
             printf '::error::%s: OpenCode did not change the pull request review state. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
+            if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
+              [ -n "${GH_REPOSITORY:-}" ] &&
+              [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
+              printf '::notice::Cross-repository workflow_dispatch review-tool failure for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
+              echo "::endgroup::"
+              exit 0
+            fi
             echo "::endgroup::"
             exit 1
           }

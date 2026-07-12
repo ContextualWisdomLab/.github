@@ -556,6 +556,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
     assert "OpenCode model pool did not produce a successful current-head control block" in workflow
+    assert "Cross-repository workflow_dispatch review-tool failure" in workflow
+    assert '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' in workflow
     assert "Repeated current-head sections for models without file reads" in workflow
     assert "append_evidence_section" in workflow
     assert "Focused changed hunks\" 14000" in workflow
