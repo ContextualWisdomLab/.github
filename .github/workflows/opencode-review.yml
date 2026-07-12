@@ -3254,10 +3254,9 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # 90 minutes gives DeepSeek V3 enough room for deep tool-using review.
-          # The retry budget still bounds queue impact: DeepSeek gets a full
-          # window, then one strong fallback can run before publish fails closed
-          # with visible provider/check evidence.
+          # Base ceiling for large or explicitly configured reviews. Dynamic
+          # cadence below shortens small/medium PRs so a hung provider emits a
+          # timeout reason and falls through without holding the org queue.
           OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"
@@ -3265,6 +3264,18 @@ jobs:
           # failures; the retry budget still fails closed with visible
           # diagnostics before the 210-minute step timeout.
           OPENCODE_POOL_MAX_CYCLES: "2"
+          OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
+          OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
+          OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "900"
+          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "2100"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3900"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "3600"
+          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "7200"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3900"
+          OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "300"
@@ -3275,6 +3286,7 @@ jobs:
           OPENCODE_FIRST_ATTEMPT_AGENT: ci-review
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-model-pool.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head

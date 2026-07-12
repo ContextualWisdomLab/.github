@@ -58,6 +58,34 @@ backoff_sleep() {
 	printf '%s\n' "$sleep_for"
 }
 
+is_non_negative_integer() {
+	case "${1:-}" in
+	"" | *[!0-9]*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+env_integer_or_default() {
+	local name="$1"
+	local default_value="$2"
+	local value="${!name:-}"
+
+	if is_non_negative_integer "$value"; then
+		printf '%s\n' "$value"
+	else
+		printf '%s\n' "$default_value"
+	fi
+}
+
+count_changed_files_for_cadence() {
+	local changed_files_file="${OPENCODE_CHANGED_FILES_FILE:-}"
+
+	if [ -z "$changed_files_file" ] || [ ! -f "$changed_files_file" ]; then
+		return 1
+	fi
+	awk 'NF { count += 1 } END { printf "%d\n", count + 0 }' "$changed_files_file"
+}
+
 should_inline_prompt_evidence_excerpt() {
 	local model_candidate="$1"
 
@@ -349,6 +377,7 @@ run_one_model_attempt() {
 main() {
 	local attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
 	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
+	local changed_file_count small_file_threshold medium_file_threshold
 	local -a model_candidates
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
@@ -361,6 +390,30 @@ main() {
 		max_cycles="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES:-1}"
 		printf 'Central review-process evidence fallback eligible for scope "%s"; limiting OpenCode model pool to %ss per attempt, %ss total budget, and %s cycle(s) so provider delay is logged before the publish fallback evaluates current-head peer evidence.\n' \
 			"${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unsupported}" "$original_run_timeout" "$budget_seconds" "$max_cycles"
+	elif [ "${OPENCODE_DYNAMIC_REVIEW_CADENCE:-false}" = "true" ]; then
+		small_file_threshold="$(env_integer_or_default OPENCODE_SMALL_CHANGE_FILE_THRESHOLD 3)"
+		medium_file_threshold="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD 20)"
+		if changed_file_count="$(count_changed_files_for_cadence)"; then
+			if [ "$changed_file_count" -le "$small_file_threshold" ]; then
+				original_run_timeout="$(env_integer_or_default OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS 900)"
+				budget_seconds="$(env_integer_or_default OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS 2100)"
+			elif [ "$changed_file_count" -le "$medium_file_threshold" ]; then
+				original_run_timeout="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
+				budget_seconds="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
+			else
+				original_run_timeout="$(env_integer_or_default OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
+				budget_seconds="$(env_integer_or_default OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS 7200)"
+			fi
+			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 1)"
+			printf 'OpenCode dynamic review cadence selected %ss per attempt and %ss total budget for %s changed file(s); max-cycles=%s.\n' \
+				"$original_run_timeout" "$budget_seconds" "$changed_file_count" "$max_cycles"
+		else
+			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
+			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
+			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 1)"
+			printf 'OpenCode dynamic review cadence could not read OPENCODE_CHANGED_FILES_FILE; using %ss per attempt and %ss total budget; max-cycles=%s.\n' \
+				"$original_run_timeout" "$budget_seconds" "$max_cycles"
+		fi
 	fi
 	deadline=0
 	if [ "$budget_seconds" -gt 0 ]; then

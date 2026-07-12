@@ -668,6 +668,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11400"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "2"' in workflow
+    assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
+    assert 'OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "900"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "1800"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
         "      - name: Run merge scheduler after approval", 1
@@ -714,6 +720,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "mini/nano review models are disabled" in model_pool_runner
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
+    assert "OpenCode dynamic review cadence selected %ss per attempt" in model_pool_runner
+    assert "count_changed_files_for_cadence" in model_pool_runner
     assert "OpenCode model pool has no configured model candidates." in model_pool_runner
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-11400' in model_pool_runner
     assert "completed a full model-candidate cycle without a valid control conclusion" in model_pool_runner
