@@ -3505,8 +3505,8 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          APPROVAL_CHECK_WAIT_ATTEMPTS: "6"
-          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "5"
+          APPROVAL_CHECK_WAIT_ATTEMPTS: "120"
+          APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "30"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "1"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "2"
           CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"
