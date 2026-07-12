@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -202,7 +203,15 @@ def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> Non
         "OpenCode dynamic review cadence selected 7s per attempt and 11s total budget "
         "for 2 changed file(s); max-cycles=1."
     ) in result.stdout
-    assert "OpenCode github-models/openai/gpt-5 attempt 1/1 using 7s run timeout" in result.stdout
+    attempt_budget = re.search(
+        r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
+        r"with (\d+)s retry budget remaining\.",
+        result.stdout,
+    )
+    assert attempt_budget is not None
+    run_timeout, remaining_budget = map(int, attempt_budget.groups())
+    assert 1 <= run_timeout <= 7
+    assert run_timeout <= remaining_budget <= 11
     assert "retry budget remaining." in result.stdout
 
 

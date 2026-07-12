@@ -50,8 +50,9 @@ fragment SchedulerPullRequestFields on PullRequest {
   files(first: 20) {
     nodes { path }
   }
-  reviews(last: 50) {
+  reviews(last: 100) {
     nodes {
+      databaseId
       state
       body
       submittedAt
@@ -625,6 +626,7 @@ def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
 
     commit_id = review.get("commit_id")
     return {
+        "databaseId": review.get("id"),
         "state": review.get("state"),
         "body": review.get("body"),
         "submittedAt": review.get("submitted_at"),
@@ -1099,6 +1101,68 @@ def has_current_head_approval(pr: dict[str, Any]) -> bool:
 def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     """Return whether OpenCode requested changes on the exact current head."""
     return current_head_review_state(pr, "CHANGES_REQUESTED")
+
+
+def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
+    """Return dismissible automated change requests tied to previous heads."""
+    review_ids: list[int] = []
+    for review in (pr.get("reviews") or {}).get("nodes") or []:
+        if (review.get("state") or "").upper() != "CHANGES_REQUESTED":
+            continue
+        if review_matches_current_head(review, pr):
+            continue
+        login = review_author_login(review)
+        legacy_actions_review = login in {"github-actions", "github-actions[bot]"} and "opencode" in (
+            review.get("body") or ""
+        ).lower()
+        if not (is_opencode_review(review) or legacy_actions_review):
+            continue
+        review_id = review.get("databaseId")
+        if isinstance(review_id, int) and review_id > 0:
+            review_ids.append(review_id)
+    return review_ids
+
+
+def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry_run: bool) -> int:
+    """Dismiss previous-head automated gates only after exact-head approval."""
+    if not has_current_head_approval(pr):
+        return 0
+    review_ids = stale_opencode_change_request_ids(pr)
+    if not review_ids:
+        return 0
+    if dry_run:
+        return len(review_ids)
+
+    require_github_actions_mutation_actor("dismiss-stale-opencode-review")
+    repo = validate_github_repository(repo)
+    number = str(int(pr["number"]))
+    expected_head = validate_git_sha(pr["headRefOid"])
+    live_head = run_github_read(
+        ["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
+    ).strip()
+    if live_head != expected_head:
+        raise RuntimeError(
+            "PR head changed before stale review dismissal; "
+            f"expected {expected_head}, observed {live_head or '<missing>'}"
+        )
+
+    for review_id in review_ids:
+        message = (
+            "Superseded automated OpenCode change request from a previous head; "
+            f"exact current head {expected_head} has a later OpenCode approval."
+        )
+        run(
+            [
+                "gh",
+                "api",
+                "-X",
+                "PUT",
+                f"repos/{repo}/pulls/{number}/reviews/{review_id}/dismissals",
+                "-f",
+                f"message={message}",
+            ]
+        )
+    return len(review_ids)
 
 
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:
@@ -1758,14 +1822,28 @@ def inspect_pr(
         )
 
     outdated_cleanup_count = resolve_outdated_review_threads(pr, dry_run=dry_run)
+    stale_review_cleanup_count = 0
 
     def finish(decision: Decision) -> Decision:
-        """Attach outdated-thread cleanup evidence to the final decision."""
-        return with_outdated_thread_cleanup_note(
+        """Attach obsolete review cleanup evidence to the final decision."""
+        decision = with_outdated_thread_cleanup_note(
             decision,
             outdated_cleanup_count,
             dry_run=dry_run,
         )
+        if stale_review_cleanup_count:
+            verb = "Would dismiss" if dry_run else "Dismissed"
+            note = (
+                f"{verb} {stale_review_cleanup_count} previous-head automated OpenCode "
+                "change-request review(s); exact-current-head approval supersedes those stale gates."
+            )
+            decision = Decision(
+                decision.pr,
+                decision.action,
+                decision.reason,
+                (*decision.notes, note),
+            )
+        return decision
 
     def decide(action: str, reason: str) -> Decision:
         """Create a decision after applying shared cleanup notes."""
@@ -1820,6 +1898,12 @@ def inspect_pr(
         return decide("block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
+    if current_head_approved:
+        stale_review_cleanup_count = dismiss_stale_opencode_change_requests(
+            repo,
+            pr,
+            dry_run=dry_run,
+        )
     auto_merge_enabled = bool(pr.get("autoMergeRequest"))
     if merge_state in {"DIRTY", "CONFLICTING"}:
         conflict_reason = merge_conflict_guidance(pr, merge_state)
