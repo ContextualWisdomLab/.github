@@ -247,6 +247,33 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert '--fail-under-lines "$threshold"' in measure_step
 
 
+def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
+    """pnpm workspaces must not be measured through npm after corepack setup."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
+    select_start = measure_step.index("          select_package_runner() {\n")
+    select_end = measure_step.index("\n          run_python_docstring_coverage()", select_start)
+    select_function = measure_step[select_start:select_end]
+
+    assert 'jq -r \'.packageManager // "" | split("@")[0]\'' in measure_step
+    assert 'corepack prepare "$spec" --activate' in measure_step
+    assert "not falling back to npm" in measure_step
+    assert "ensure_corepack_runner pnpm" in select_function
+    assert "ensure_corepack_runner yarn" in select_function
+    assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
+        "elif command -v npm"
+    )
+
+    declared_pnpm_start = select_function.index("              pnpm)")
+    declared_pnpm_end = select_function.index("              yarn)", declared_pnpm_start)
+    declared_pnpm_block = select_function[declared_pnpm_start:declared_pnpm_end]
+    assert 'printf \'%s\\n\' "pnpm"' in declared_pnpm_block
+    assert "return" in declared_pnpm_block
+
+
 def test_opencode_runtime_pin_supports_reasoning_options():
     """Keep OpenCode runtime new enough to apply model-level reasoning settings."""
     review_workflow = Path(".github/workflows/opencode-review.yml").read_text(
