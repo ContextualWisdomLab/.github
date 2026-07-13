@@ -6,6 +6,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import javascript_coverage_gate as gate
 
 
@@ -124,7 +126,7 @@ def write_coverage(
     )
     summary_list = repo / "coverage-files.txt"
     summary_list.write_text(
-        "coverage/coverage-summary.json\ncoverage/coverage-final.json\n",
+        "\ncoverage/coverage-summary.json\ncoverage/coverage-final.json\n",
         encoding="utf-8",
     )
     return summary_list
@@ -218,4 +220,221 @@ def test_test_only_change_has_explicit_not_applicable_result(
     assert run_gate(repo, base_sha, head_sha, summary_list) == 0
     report = capsys.readouterr().out
     assert "No changed JavaScript/TypeScript runtime source files" in report
+    assert "Result: PASS" in report
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "README.md",
+        "tests/runtime.ts",
+        "src/runtime.d.ts",
+        "vite.config.ts",
+    ],
+)
+def test_non_runtime_javascript_paths_are_explicitly_excluded(path: str) -> None:
+    assert not gate.is_runtime_source(path)
+
+
+def test_git_command_error_is_scrubbed_into_runtime_error(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="fatal:"):
+        gate.git(tmp_path, "status")
+
+
+def test_changed_file_enumeration_error_is_visible(monkeypatch, tmp_path: Path) -> None:
+    completed = subprocess.CompletedProcess(
+        args=["git"],
+        returncode=1,
+        stdout=b"",
+        stderr=b"enumeration failed",
+    )
+    monkeypatch.setattr(gate.subprocess, "run", lambda *args, **kwargs: completed)
+
+    with pytest.raises(RuntimeError, match="enumeration failed"):
+        gate.changed_runtime_lines(tmp_path, "base", "head")
+
+
+def test_invalid_istanbul_locations_do_not_intersect() -> None:
+    assert gate.location_range(None) is None
+    assert gate.location_range({"start": {"line": "two"}}) is None
+    assert gate.location_range({"start": {"line": 2}, "end": {}}) == (2, 2)
+    assert not gate.intersects(None, {2})
+    assert gate.intersects(
+        {"start": {"line": 2}, "end": {"line": 4}},
+        {4},
+    )
+
+
+def test_unmapped_and_unchanged_istanbul_units_are_ignored() -> None:
+    invalid = {"start": {}, "end": {}}
+    unchanged = {"start": {"line": 10}, "end": {"line": 10}}
+    record = {
+        "statementMap": {"invalid": invalid, "unchanged": unchanged},
+        "s": {"invalid": 1, "unchanged": 1},
+        "fnMap": {
+            "invalid": {"loc": invalid},
+            "unchanged": {"name": "unchanged", "loc": unchanged},
+        },
+        "f": {"invalid": 1, "unchanged": 1},
+        "branchMap": {
+            "invalid": {"type": "if", "locations": [invalid]},
+            "unchanged": {"type": "if", "loc": unchanged},
+        },
+        "b": {"invalid": [1], "unchanged": [1]},
+    }
+
+    assert gate.changed_metric_counts([record], {2}) == {
+        metric: (0, 0) for metric in gate.METRICS
+    }
+
+
+def test_coverage_path_normalization_handles_relative_suffix_and_ambiguity(
+    tmp_path: Path,
+) -> None:
+    changed = {"frontend/src/runtime.ts"}
+    assert (
+        gate.normalize_coverage_path(
+            "./frontend/src/runtime.ts", tmp_path, changed
+        )
+        == "frontend/src/runtime.ts"
+    )
+    assert (
+        gate.normalize_coverage_path(
+            "/different/root/frontend/src/runtime.ts", tmp_path, changed
+        )
+        == "frontend/src/runtime.ts"
+    )
+    assert (
+        gate.normalize_coverage_path(
+            "/different/root/src/runtime.ts",
+            tmp_path,
+            {"frontend/src/runtime.ts", "backend/src/runtime.ts"},
+        )
+        is None
+    )
+
+
+def test_runtime_line_classifier_distinguishes_types_comments_and_code(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "src" / "runtime.ts"
+    source.parent.mkdir()
+    source.write_text(
+        "\n"
+        "/* block\n"
+        " * comment\n"
+        " */\n"
+        "// line comment\n"
+        "interface RuntimeShape {\n"
+        "}\n"
+        "export type RuntimeId = string;\n"
+        "import type { Runtime } from './types';\n"
+        "const runtimeValue = 1;\n",
+        encoding="utf-8",
+    )
+
+    assert gate.likely_runtime_lines(
+        tmp_path, "src/runtime.ts", set(range(1, 11))
+    ) == [10]
+
+
+def test_missing_or_invalid_coverage_evidence_fails_closed(
+    tmp_path: Path, capsys
+) -> None:
+    missing = tmp_path / "missing.txt"
+    assert gate.main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--base-sha",
+            "base",
+            "--head-sha",
+            "head",
+            "--summary-list",
+            str(missing),
+        ]
+    ) == 1
+    assert "coverage evidence could not be evaluated" in capsys.readouterr().out
+
+
+def test_changed_source_requires_coverage_final_json(
+    tmp_path: Path, capsys
+) -> None:
+    repo, base_sha, head_sha = fixture_repo(tmp_path)
+    coverage_dir = repo / "coverage"
+    coverage_dir.mkdir()
+    summary = coverage_dir / "coverage-summary.json"
+    summary.write_text(
+        json.dumps({"total": {metric: {"pct": 100} for metric in gate.METRICS}}),
+        encoding="utf-8",
+    )
+    summary_list = repo / "coverage-files.txt"
+    summary_list.write_text("coverage/coverage-summary.json\n", encoding="utf-8")
+
+    assert run_gate(repo, base_sha, head_sha, summary_list) == 1
+    assert "coverage-final.json is required" in capsys.readouterr().out
+
+
+def test_runtime_looking_change_without_mapped_units_fails(
+    tmp_path: Path, capsys
+) -> None:
+    repo, base_sha, head_sha = fixture_repo(tmp_path)
+    summary_list = write_coverage(repo, statement_count=1)
+    final_path = repo / "coverage" / "coverage-final.json"
+    final_path.write_text(
+        json.dumps(
+            {
+                str(repo / "src" / "calculate_total.ts"): {
+                    "statementMap": {},
+                    "s": {},
+                    "fnMap": {},
+                    "f": {},
+                    "branchMap": {},
+                    "b": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert run_gate(repo, base_sha, head_sha, summary_list) == 1
+    assert "Istanbul mapped no execution units" in capsys.readouterr().out
+
+
+def test_comment_only_change_without_mapped_units_passes(
+    tmp_path: Path, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    source = repo / "src" / "runtime.ts"
+    source.parent.mkdir(parents=True)
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.name", "Coverage Test")
+    git(repo, "config", "user.email", "coverage@example.invalid")
+    source.write_text("// base comment\n", encoding="utf-8")
+    base_sha = commit(repo, "base")
+    source.write_text("// changed comment\n", encoding="utf-8")
+    head_sha = commit(repo, "comment only")
+    coverage_dir = repo / "coverage"
+    coverage_dir.mkdir()
+    (coverage_dir / "coverage-final.json").write_text(
+        json.dumps(
+            {
+                str(source): {
+                    "statementMap": {},
+                    "s": {},
+                    "fnMap": {},
+                    "f": {},
+                    "branchMap": {},
+                    "b": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_list = repo / "coverage-files.txt"
+    summary_list.write_text("coverage/coverage-final.json\n", encoding="utf-8")
+
+    assert run_gate(repo, base_sha, head_sha, summary_list) == 0
+    report = capsys.readouterr().out
+    assert "comments, delimiters, or type-only declarations" in report
     assert "Result: PASS" in report

@@ -191,10 +191,12 @@ def changed_metric_counts(
         statements = file_data.get("s") or {}
         statement_map = file_data.get("statementMap") or {}
         for statement_id, location in statement_map.items():
-            if not intersects(location, changed_lines):
-                continue
             line_range = location_range(location)
             if line_range is None:
+                continue
+            if not any(
+                line_range[0] <= line <= line_range[1] for line in changed_lines
+            ):
                 continue
             count = int(statements.get(statement_id, 0))
             units["statements"][line_range] = max(
@@ -208,10 +210,12 @@ def changed_metric_counts(
         functions = file_data.get("f") or {}
         for function_id, function_data in (file_data.get("fnMap") or {}).items():
             location = function_data.get("loc") or function_data.get("decl")
-            if not intersects(location, changed_lines):
-                continue
             line_range = location_range(location)
             if line_range is None:
+                continue
+            if not any(
+                line_range[0] <= line <= line_range[1] for line in changed_lines
+            ):
                 continue
             key = (*line_range, str(function_data.get("name") or ""))
             units["functions"][key] = max(
@@ -224,10 +228,13 @@ def changed_metric_counts(
             locations = branch_data.get("locations") or []
             for index, count in enumerate(counts):
                 location = locations[index] if index < len(locations) else branch_data.get("loc")
-                if not intersects(location, changed_lines):
-                    continue
                 line_range = location_range(location)
                 if line_range is None:
+                    continue
+                if not any(
+                    line_range[0] <= line <= line_range[1]
+                    for line in changed_lines
+                ):
                     continue
                 key = (*line_range, str(branch_data.get("type") or ""), index)
                 units["branches"][key] = max(
