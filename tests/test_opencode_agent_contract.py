@@ -926,9 +926,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "600"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "1800"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[
         1
@@ -1278,8 +1278,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "COVERAGE_EOF" not in coverage_job
     assert "os.urandom(24).hex()" in coverage_job
     assert '/^## Coverage Decision$/ { emit = 1 }' in coverage_job
-    assert 'grep -Fqx "$coverage_output_delimiter" "$coverage_output_file"' in coverage_job
-    assert 'cat "$coverage_output_file"' in coverage_job
+    assert 'scripts/ci/sanitize_github_output_summary.py" \\' in coverage_job
+    assert '"$coverage_output_file" "$summary_output_file"' in coverage_job
+    assert 'grep -Fqx "$coverage_output_delimiter" "$summary_output_file"' in coverage_job
+    assert 'cat "$summary_output_file"' in coverage_job
     assert "Published compact coverage decision output" in coverage_job
 
     assert (
