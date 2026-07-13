@@ -3920,6 +3920,8 @@ jobs:
           body="$(printf '%s\n' \
             "## Pull request overview" \
             "" \
+            "OpenCode reviewed the current-head bounded evidence and found no blocking issues." \
+            "" \
             "$model_summary" \
             "" \
             "## Findings" \

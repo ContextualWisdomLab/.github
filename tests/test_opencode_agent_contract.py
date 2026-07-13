@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.opencode_existing_approval_gate import PRIMARY_APPROVAL_MARKER
+
 
 def test_code_reviewer_subagent_contract_is_configured():
     """Guard the read-only code-reviewer subagent contract."""
@@ -1500,6 +1502,7 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
         "      - name: Publish central OpenCode fast approval", 1
     )[1].split("      - name: Publish OpenCode review outcome", 1)[0]
     assert "continue-on-error: true" in fast_approval
+    assert PRIMARY_APPROVAL_MARKER in fast_approval
     assert "def latest_peer_checks:" in fast_approval
     assert 'group_by([.app.slug // "", .name // ""])' in fast_approval
     assert fast_approval.count("latest_peer_checks") == 3
