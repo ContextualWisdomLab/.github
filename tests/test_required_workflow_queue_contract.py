@@ -686,6 +686,34 @@ def test_standalone_scorecard_delegates_code_scanning_upload_to_central_gate() -
     assert "category: scorecard" in central
 
 
+@pytest.mark.parametrize(
+    ("workflow_name", "step_name"),
+    (
+        ("security-scan.yml", "Upload OSV SARIF to code scanning"),
+        ("security-scan.yml", "Upload Trivy SARIF to code scanning"),
+        ("security-scan.yml", "Upload Scorecard SARIF to code scanning"),
+        ("python-security.yml", "Upload Bandit SARIF to code scanning"),
+    ),
+)
+def test_sarif_upload_quota_is_separate_from_local_security_gates(
+    workflow_name: str, step_name: str
+) -> None:
+    """Installation API exhaustion must not impersonate a scanner finding."""
+    workflow = workflow_text(workflow_name)
+    marker = f"      - name: {step_name}\n"
+    start = workflow.index(marker)
+    end = workflow.find("\n      - name:", start + len(marker))
+    upload_step = workflow[start : end if end >= 0 else len(workflow)]
+
+    assert "continue-on-error: true" in upload_step
+    if workflow_name == "security-scan.yml":
+        assert "--fail-on-vuln=true" in workflow
+        assert "raise SystemExit(1)" in workflow
+    else:
+        assert "Enforce bandit gate (fail on MEDIUM+ findings)" in workflow
+        assert "steps.bandit.outputs.rc != '0'" in workflow
+
+
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     assert "fail-on-severity: moderate" in workflow

@@ -221,6 +221,9 @@ jobs:
           )
       - name: Upload OSV SARIF to code scanning
         if: always() && hashFiles('results.sarif') != ''
+        # The reporter above is the vulnerability gate. Preserve an upload
+        # quota failure in this step's log without reclassifying it as a CVE.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: results.sarif
@@ -371,6 +374,8 @@ jobs:
               raise SystemExit(1)
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
+        # The parser above fails on every fixable Medium+ finding independently.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: trivy-results.sarif
@@ -437,6 +442,8 @@ jobs:
           )
           PY
       - name: Upload Scorecard SARIF to code scanning
+        # Scorecard is soft repository-posture evidence; upload quota is external.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: results.sarif
