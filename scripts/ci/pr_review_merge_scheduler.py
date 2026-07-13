@@ -1924,20 +1924,42 @@ def active_opencode_run_ids(
     return current, stale
 
 
-def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
-    """Force-cancel workflow runs by id."""
+def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, str]:
+    """Force-cancel workflow runs without blocking current-head decisions."""
     if not run_ids:
-        return
-    if len(run_ids) <= 1:  # pragma: no cover
-        for run_id in run_ids:  # pragma: no cover
-            run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"])  # pragma: no cover
+        return {}
+
+    def cancel_one(run_id: str) -> tuple[str, str | None]:
+        """Return one run id and its bounded GitHub cancellation error, if any."""
+        try:
+            run_github_actions(
+                [
+                    "gh",
+                    "api",
+                    "-X",
+                    "POST",
+                    f"repos/{repo}/actions/runs/{run_id}/force-cancel",
+                ]
+            )
+        except RuntimeError as exc:
+            return run_id, str(exc).replace("\n", "; ")[:600]
+        return run_id, None
+
+    if len(run_ids) == 1:
+        results = [cancel_one(str(run_ids[0]))]
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(run_ids))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            list(executor.map(
-                lambda run_id: run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"]),
-                run_ids
-            ))
+            results = list(executor.map(cancel_one, (str(run_id) for run_id in run_ids)))
+
+    failures = {run_id: reason for run_id, reason in results if reason is not None}
+    for run_id, reason in failures.items():
+        print(
+            "::warning::Could not force-cancel superseded workflow run "
+            f"{run_id}: {reason}. Continuing current-head processing; "
+            "the old-head run remains non-authoritative."
+        )
+    return failures
 
 
 def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:

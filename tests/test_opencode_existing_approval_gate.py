@@ -259,6 +259,28 @@ def test_adversarial_validation_rejects_circular_or_unanchored_evidence():
     assert "must cite" in gate.adversarial_rejection_reason(body)
 
 
+def test_adversarial_validation_rejects_unobserved_source_and_test_claims():
+    weak = {
+        "status": "passed",
+        "probes": [
+            {
+                "path": ".github/workflows/opencode-review.yml",
+                "line": 6646,
+                "hypothesis": "Approval lookup misses a delayed review.",
+                "attack_or_counterexample": "Simulate delayed review propagation.",
+                "evidence": (
+                    "Source inspection and test coverage verify error branches are handled; "
+                    "full error debug output is preserved."
+                ),
+                "outcome": "falsified",
+            }
+        ],
+        "residual_risk": "GitHub API consistency remains external.",
+    }
+    body = f"## Adversarial validation\n```json\n{json.dumps(weak)}\n```"
+    assert "observed proof result" in gate.adversarial_rejection_reason(body)
+
+
 def test_parse_args_and_main(monkeypatch, capsys):
     args = gate.parse_args(["--head", HEAD])
     assert args.head == HEAD

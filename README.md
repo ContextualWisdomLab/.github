@@ -34,6 +34,11 @@ waits for the publishing OpenCode check to finish, and then retries direct merge
 outside the review job when repository auto-merge is unavailable. Every merge
 keeps `--match-head-commit`; it prefers squash and retries with a merge commit
 only when the target repository explicitly reports that squash is disabled.
+Superseded queued or running workflow cleanup remains mandatory, but a GitHub
+cancel or force-cancel API failure cannot make an old head authoritative or
+block a policy-clean current head. The scheduler logs the exact run id and
+bounded API error as an Actions warning, then continues the current-head
+decision.
 That `update_branch` path is deliberately not used for `DIRTY` or
 `CONFLICTING` PRs: GitHub cannot synthesize a safe conflict resolution for the
 author, so the merge scheduler must give the author a repair path instead of pretending
@@ -85,7 +90,11 @@ PoC/execution result. It must also split `Developer experience:` from
 product, documentation, review-comment, or status-check reader outcomes. The PoC
 can be a temporary scratch repro, focused test, lint, security check,
 performance probe, or UI verification command, but it must be actually run and
-cited. Execution evidence must be sandboxed in the CI workspace or an isolated
+cited. Every adversarial probe must also state an observed result such as an
+exit code, passed or failed test/assertion, rejected input, log value, or source
+trace outcome. Generic `source inspection` or `test coverage verifies` prose
+without that observation is not reusable approval evidence. Execution evidence
+must be sandboxed in the CI workspace or an isolated
 temporary directory, with a credential-scrubbed environment by default and no
 persistent mutation outside test caches or scratch files. When repo-native
 verification legitimately needs network access or GitHub Secrets, pass only the
