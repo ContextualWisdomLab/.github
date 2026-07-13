@@ -186,6 +186,7 @@ jobs:
           Path("bandit-results.sarif").write_text(json.dumps(sarif, indent=2), encoding="utf-8")
           PY
       - name: Upload Bandit SARIF to code scanning
+        id: upload_bandit_sarif
         if: always() && hashFiles('bandit-results.sarif') != ''
         # The explicit gate below still fails on every Medium+ Bandit result.
         continue-on-error: true
@@ -193,6 +194,11 @@ jobs:
         with:
           sarif_file: bandit-results.sarif
           category: bandit
+          wait-for-processing: false
+      - name: Report Bandit SARIF upload failure
+        if: steps.upload_bandit_sarif.outcome == 'failure'
+        run: |
+          echo "::warning::Bandit SARIF upload to code scanning failed after the local Bandit scan. The Bandit hard gate still follows the scan rc, so upload rate limits cannot hide MEDIUM+ findings."
       - name: Enforce bandit gate (fail on MEDIUM+ findings)
         if: steps.bandit.outputs.rc != '0'
         run: |

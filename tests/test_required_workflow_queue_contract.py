@@ -16,6 +16,16 @@ def workflow_text(name: str) -> str:
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
+def workflow_step(workflow: str, name: str) -> str:
+    step = f"      - name: {name}\n"
+    start = workflow.index(step)
+    try:
+        end = workflow.index("\n      - name:", start + len(step))
+    except ValueError:
+        end = len(workflow)
+    return workflow[start:end]
+
+
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -575,9 +585,7 @@ def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(tmp_pat
 
 def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
     workflow = workflow_text("security-scan.yml")
-    step = "      - name: Upload OSV SARIF to code scanning\n"
-    start = workflow.index(step)
-    upload_step = workflow[start : workflow.index("\n      - name:", start + len(step))]
+    upload_step = workflow_step(workflow, "Upload OSV SARIF to code scanning")
 
     assert "Checkout PR merge ref for OSV SARIF upload" not in workflow
     assert 'merge_ref="refs/pull/${PR_NUMBER}/merge"' not in workflow
@@ -587,6 +595,54 @@ def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
     assert "ref: refs/pull/${{ github.event.pull_request.number }}/head" in upload_step
     assert "sha: ${{ github.event.pull_request.head.sha }}" in upload_step
     assert "category:" not in upload_step
+    assert "continue-on-error: true" in upload_step
+    assert "wait-for-processing: false" in upload_step
+
+
+def test_pr_sarif_upload_rate_limits_do_not_mask_scanner_gates() -> None:
+    """Scanner hard gates must run even when GitHub code-scanning upload is busy."""
+    cases = (
+        (
+            "python-security.yml",
+            "Upload Bandit SARIF to code scanning",
+            "upload_bandit_sarif",
+            "Report Bandit SARIF upload failure",
+            "upload rate limits cannot hide MEDIUM+ findings",
+        ),
+        (
+            "security-scan.yml",
+            "Upload OSV SARIF to code scanning",
+            "upload_osv_sarif",
+            "Report OSV SARIF upload failure",
+            "upload rate limits cannot hide OSV findings",
+        ),
+        (
+            "security-scan.yml",
+            "Upload Trivy SARIF to code scanning",
+            "upload_trivy_sarif",
+            "Report Trivy SARIF upload failure",
+            "upload rate limits cannot hide CRITICAL/HIGH/MEDIUM findings",
+        ),
+        (
+            "security-scan.yml",
+            "Upload Scorecard SARIF to code scanning",
+            "upload_scorecard_sarif",
+            "Report Scorecard SARIF upload failure",
+            "CodeQL, OSV, Trivy, and dependency-review remain the hard gates",
+        ),
+    )
+
+    for filename, upload_name, step_id, warning_name, warning_text in cases:
+        workflow = workflow_text(filename)
+        upload_step = workflow_step(workflow, upload_name)
+        warning_step = workflow_step(workflow, warning_name)
+
+        assert f"id: {step_id}" in upload_step
+        assert "continue-on-error: true" in upload_step
+        assert "github/codeql-action/upload-sarif" in upload_step
+        assert "wait-for-processing: false" in upload_step
+        assert f"steps.{step_id}.outcome == 'failure'" in warning_step
+        assert warning_text in warning_step
 
 
 def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
