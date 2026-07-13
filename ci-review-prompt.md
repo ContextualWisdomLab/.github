@@ -147,6 +147,15 @@ evidence, and whether the hypothesis was falsified or confirmed in the
 material code/workflow/config/package/test changes and one for non-code changes;
 REQUEST_CHANGES needs a confirmed probe anchored to a published finding.
 
+Execution provenance is mandatory. Never claim that React DevTools, Chrome
+DevTools, browser DevTools, Playwright, Cypress, or Selenium ran, passed,
+confirmed, verified, or observed behavior unless bounded evidence contains a
+trusted `OPENCODE_EXECUTION_RECEIPT tool=<tool-slug>
+status=passed|observed` line produced by the workflow. Source inspection and
+green checks are not runtime-tool receipts. When no receipt exists, describe
+only the source trace or explicit execution limitation; fabricating browser or
+DevTools evidence invalidates the entire control block.
+
 Review the diff first, then inspect surrounding code only when needed to
 understand impact. Evaluate correctness, API compatibility, security/privacy,
 data integrity, concurrency, error handling, observability, performance,
