@@ -71,6 +71,9 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
         "token visible": "token visible",
         "token=": "token=",
         "token=,": "token=,",
+        "9safe=value": "9safe=value",
+        '"token: value': f'"token: {redactor.REDACTED}',
+        "token:   ": "token:   ",
     }
 
     for source, expected in cases.items():
@@ -79,6 +82,27 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
     assert redactor.redact_text('token="safe\\"inside" trailing') == (
         f"token={redactor.REDACTED} trailing"
     )
+
+
+def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
+    """Provider-shaped tokens are removed even when they are not key/value assignments."""
+    source = "\n".join(
+        [
+            "classic ghp_" + ("A" * 24),
+            "fine github_pat_" + ("B" * 24),
+            "openai sk-" + ("C" * 24),
+            "slack xoxb-" + ("D" * 24),
+            "aws AKIA" + ("E" * 16),
+        ]
+    )
+    cleaned = redactor.redact_text(source)
+
+    assert "ghp_" not in cleaned
+    assert "github_pat_" not in cleaned
+    assert "sk-" not in cleaned
+    assert "xoxb-" not in cleaned
+    assert "AKIA" not in cleaned
+    assert cleaned.count(redactor.REDACTED) == 5
 
 
 def test_sensitive_log_redaction_handles_lists_empty_input_and_cli(monkeypatch: pytest.MonkeyPatch) -> None:
