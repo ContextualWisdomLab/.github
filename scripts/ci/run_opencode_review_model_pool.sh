@@ -41,6 +41,10 @@ run_central_adversarial_harness() {
 			return 1
 		fi
 	done
+	if ! command -v uv >/dev/null 2>&1; then
+		printf 'Central adversarial harness unavailable: hash-pinned uv runtime is not installed in the model-pool job.\n'
+		return 1
+	fi
 
 	printf 'OpenCode provider catalog unavailable; running the bounded central current-head adversarial harness.\n'
 	test_log="$(mktemp)"

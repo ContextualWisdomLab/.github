@@ -630,12 +630,23 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert workflow.index("Detect central review-process scope") < workflow.index(
         "Initialize CodeGraph index for OpenCode"
     )
+    assert "Install central adversarial harness runtime" in workflow
+    assert (
+        workflow.index("Install central adversarial harness runtime")
+        < workflow.index("Run OpenCode PR Review model pool")
+    )
+    assert (
+        "steps.central_review_process_fallback_scope.outputs.eligible == 'true'"
+        in workflow
+    )
+    assert "--only-binary=:all: -r requirements-opencode-review-ci-hashes.txt" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "120"' in workflow
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "180"' in workflow
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
     assert "Central review-process evidence fallback eligible" in model_pool_runner
+    assert "hash-pinned uv runtime is not installed in the model-pool job" in model_pool_runner
     assert "provider delay is logged before the publish fallback evaluates current-head peer evidence" in model_pool_runner
     assert "model pool was intentionally skipped" not in workflow
     assert "current-head model-unavailable evidence fallback" not in workflow

@@ -1756,6 +1756,14 @@ jobs:
             printf 'Fallback ineligibility reasons: none\n'
           fi
 
+      - name: Install central adversarial harness runtime
+        if: >-
+          needs.coverage-evidence.result == 'success'
+          && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
       - name: Initialize CodeGraph index for OpenCode
         env:
           CODEGRAPH_PACKAGE: "@colbymchenry/codegraph@0.9.9"
