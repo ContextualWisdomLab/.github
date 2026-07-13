@@ -1,7 +1,7 @@
 import json
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 import subprocess
 import sys
 import textwrap
@@ -24,7 +24,7 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert workflow.count("Preserve CodeQL SARIF evidence") == 2
     assert "security-severity" in workflow
     assert "score >= 4.0" in workflow
-    assert 'result.get("suppressions")' in workflow
+    assert "result.get(\"suppressions\")" in workflow
     assert "detect-languages:" in workflow
     assert "java-kotlin" in workflow
     assert "-name '*.java'" in workflow
