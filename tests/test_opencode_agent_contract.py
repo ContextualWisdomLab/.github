@@ -1449,17 +1449,7 @@ def test_slow_peer_wait_matches_only_image_validation_checks():
         ("- docs image validation: in_progress\n", False, False),
     )
     for candidate, fast_expected, general_expected in probes:
-        fast_match = subprocess.run(
-            ["grep", "-Eiq", "--", fast_pattern],
-            input=candidate,
-            text=True,
-            check=False,
-        ).returncode == 0
-        general_match = subprocess.run(
-            ["grep", "-Eiq", "--", general_pattern],
-            input=candidate,
-            text=True,
-            check=False,
-        ).returncode == 0
+        fast_match = re.search(fast_pattern, candidate, re.IGNORECASE | re.MULTILINE) is not None
+        general_match = re.search(general_pattern, candidate, re.IGNORECASE | re.MULTILINE) is not None
         assert fast_match is fast_expected, candidate
         assert general_match is general_expected, candidate
