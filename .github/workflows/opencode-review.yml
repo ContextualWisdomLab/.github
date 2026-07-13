@@ -353,6 +353,7 @@ jobs:
           cd "$COVERAGE_SOURCE_WORKDIR"
 
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
+          summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
           failures=0
 
           append() {
@@ -1349,13 +1350,16 @@ jobs:
             append "- Failure count: ${failures}"
           fi
 
+          python3 "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py" \
+            "$summary_file" "$summary_output_file"
+
           coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
-          while grep -Fqx "$coverage_output_delimiter" "$summary_file"; do
+          while grep -Fqx "$coverage_output_delimiter" "$summary_output_file"; do
             coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
           done
           {
             printf 'coverage_summary<<%s\n' "$coverage_output_delimiter"
-            cat "$summary_file"
+            cat "$summary_output_file"
             printf '%s\n' "$coverage_output_delimiter"
           } >>"$GITHUB_OUTPUT"
 
@@ -3249,13 +3253,13 @@ jobs:
           OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
           OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "600"
           OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "1800"
-          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
+          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a
           # full medium/large cadence slot after the long-context candidate.
           OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"
-          OPENCODE_DYNAMIC_MAX_CYCLES: "1"
+          OPENCODE_DYNAMIC_MAX_CYCLES: "0"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "600"
