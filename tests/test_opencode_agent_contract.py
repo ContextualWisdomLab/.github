@@ -875,6 +875,11 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
     assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
+    assert "branch_update_limit:" in workflow
+    assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
+    assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
+    assert '--branch-update-limit "$branch_update_limit"' in workflow
+    assert '--branch-update-limit "$ORG_SWEEP_BRANCH_UPDATE_LIMIT"' in workflow
 
 
 def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch():

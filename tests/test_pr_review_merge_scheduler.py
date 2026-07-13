@@ -3342,7 +3342,7 @@ def test_direct_merge_block_detail_keeps_generic_refusal_tail():
     assert sched.direct_merge_block_detail(error) == "first diagnostic line last diagnostic line"
 
 
-def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypatch, capsys):
+def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
     prs = [
         make_pr(
             number=1,
@@ -3357,6 +3357,13 @@ def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypat
             mergeStateStatus="BLOCKED",
             restMergeableState="BLOCKED",
             compareBehindBy=2,
+            autoMergeRequest={"enabledAt": "now"},
+        ),
+        make_pr(
+            number=4,
+            mergeStateStatus="BLOCKED",
+            restMergeableState="BLOCKED",
+            compareBehindBy=3,
             autoMergeRequest={"enabledAt": "now"},
         ),
     ]
@@ -3388,6 +3395,8 @@ def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypat
                 "github-flow",
                 "--review-dispatch-limit",
                 "1",
+                "--branch-update-limit",
+                "1",
             ]
         )
         == 0
@@ -3397,12 +3406,16 @@ def test_main_limits_review_dispatches_without_blocking_branch_updates(monkeypat
     payload = json.loads(output.strip().splitlines()[-1])
     assert dispatched == [1]
     assert updated == [3]
-    assert payload["counts"] == {"review_dispatch": 1, "update_branch": 1, "wait": 1}
+    assert payload["counts"] == {"review_dispatch": 1, "update_branch": 1, "wait": 2}
     assert (
         payload["decisions"][1]["reason"]
         == "current head has completed Strix evidence; review dispatch limit reached"
     )
     assert payload["decisions"][2]["contract_decision"] == "UPDATE_BRANCH"
+    assert payload["decisions"][3]["contract_decision"] == "WAIT"
+    assert payload["decisions"][3]["reason"] == (
+        "branch update limit reached (1 update/run); defer outdated branch to the next scheduler run"
+    )
 
 
 def test_main_rejects_invalid_review_dispatch_limit():
@@ -3416,6 +3429,22 @@ def test_main_rejects_invalid_review_dispatch_limit():
                 "--project-flow",
                 "github-flow",
                 "--review-dispatch-limit",
+                "-2",
+            ]
+        )
+
+
+def test_main_rejects_invalid_branch_update_limit():
+    with pytest.raises(SystemExit, match="--branch-update-limit must be -1 or greater"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--branch-update-limit",
                 "-2",
             ]
         )
