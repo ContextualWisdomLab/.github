@@ -35,6 +35,11 @@ on:
         required: false
         default: "1"
         type: string
+      branch_update_limit:
+        description: Branch update budget per scheduler run (-1 updates every eligible outdated branch)
+        required: false
+        default: "1"
+        type: string
       enable_auto_merge:
         description: Enable auto-merge for current-head approved PRs
         required: false
@@ -103,6 +108,10 @@ on:
         type: boolean
       review_dispatch_limit:
         description: OpenCode/Strix review dispatch budget per scheduler run (-1 dispatches every eligible current-head review)
+        required: false
+        default: "1"
+      branch_update_limit:
+        description: Branch update budget per scheduler run (-1 updates every eligible outdated branch)
         required: false
         default: "1"
       enable_auto_merge:
@@ -192,6 +201,7 @@ jobs:
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
+      BRANCH_UPDATE_LIMIT_INPUT: ${{ inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
       UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.update_branches == true }}
@@ -356,6 +366,10 @@ jobs:
           if [ -z "$review_dispatch_limit" ]; then
             review_dispatch_limit="-1"
           fi
+          branch_update_limit="$BRANCH_UPDATE_LIMIT_INPUT"
+          if [ -z "$branch_update_limit" ]; then
+            branch_update_limit="1"
+          fi
           args=(
             --repo "$GITHUB_REPOSITORY"
             --base-branch "$DEFAULT_BRANCH"
@@ -363,6 +377,7 @@ jobs:
             --project-flow "$project_flow"
             --review-workflow "Required OpenCode Review"
             --review-dispatch-limit "$review_dispatch_limit"
+            --branch-update-limit "$branch_update_limit"
             --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
           )
           if [ -n "$PULL_REQUEST_NUMBER" ]; then
@@ -426,6 +441,7 @@ jobs:
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
       ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
+      ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
       ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}
       ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ inputs.enable_auto_merge == true }}
       ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}
@@ -658,6 +674,7 @@ jobs:
               --max-prs "$ORG_SWEEP_MAX_PRS"
               --review-workflow "Required OpenCode Review"
               --review-dispatch-limit "$ORG_SWEEP_REVIEW_DISPATCH_LIMIT"
+              --branch-update-limit "$ORG_SWEEP_BRANCH_UPDATE_LIMIT"
               --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
               --merge-mode "$ORG_SWEEP_MERGE_MODE"
             )
