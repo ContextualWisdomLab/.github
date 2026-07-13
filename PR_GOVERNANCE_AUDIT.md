@@ -324,6 +324,17 @@ PR #381: wait: OpenCode review is already in progress
 
 ## Remaining Proof Gaps
 
+- 2026-07-13 KST `.github` workflow-dispatch run `29227653777` produced a
+  current-head real-model approval for PR #506 after 409 tests, 100% executable
+  coverage, 100% docstring coverage, and three falsified adversarial probes, but
+  job `86745134533` then selected the OpenCode app token for the
+  `opencode-review` commit status and failed with `Resource not accessible by
+  integration (HTTP 403)`. The app has pull-request review permission but not
+  commit-status permission. Same-repository dispatch status publication must use
+  the workflow token; cross-repository dispatch must emit a precise warning and
+  skip the write unless `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN` is
+  configured, rather than turning valid review evidence into an opaque job
+  failure.
 - 2026-06-29 KST `html4tree` onboarding gap: PR #3 is the lowest open PR and is
   cleanly mergeable by GitHub, but current head
   `d0c4cbc2bb267aed407e4bf6308f4f3cfd3b504c` has no check runs and no reviews.
