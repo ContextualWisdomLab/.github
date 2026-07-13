@@ -337,6 +337,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
+          # Same-repository dispatch credential: when this scheduler runs inside
+          # ContextualWisdomLab/.github (the repository the required workflows are
+          # dispatched on), the runner token can dispatch them without any
+          # cross-repository PAT. The scheduler only uses it when
+          # GITHUB_REPOSITORY equals the dispatch repository.
+          SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
           SCHEDULER_READ_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
@@ -582,6 +588,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.sweep_app_token.outputs.token || github.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.sweep_app_token.outputs.token || github.token }}
+          # The sweep executes inside ContextualWisdomLab/.github, which is exactly
+          # where the central required workflows are dispatched, so the runner's own
+          # github.token (actions: write) is a sufficient dispatch credential even
+          # though the OpenCode app token has no Actions permission. Without this the
+          # sweep deadlocks every PR that needs current-head review evidence with
+          # "no cross-repository workflow-dispatch credential".
+          SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.sweep_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
           SCHEDULER_REQUIRED_WORKFLOW_REF: main

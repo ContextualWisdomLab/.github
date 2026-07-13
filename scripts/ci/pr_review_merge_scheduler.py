@@ -465,6 +465,31 @@ def run_github_actions(args: Sequence[str], *, stdin: str | None = None) -> str:
     return run_with_env(args, stdin=stdin, env=env)
 
 
+def scheduler_dispatch_env() -> dict[str, str] | None:
+    """Return an env override for central-repository workflow dispatch when configured.
+
+    The OpenCode app installation has no Actions permission, so the mutation token
+    cannot dispatch `gh workflow run`. When the scheduler executes inside the
+    central repository the required workflows are dispatched on, the runner's own
+    github.token (actions: write) is a sufficient dispatch credential; the workflow
+    passes it through SCHEDULER_DISPATCH_TOKEN.
+    """
+    dispatch_token = os.environ.get("SCHEDULER_DISPATCH_TOKEN")
+    if not dispatch_token or dispatch_token == os.environ.get("GH_TOKEN"):
+        return None
+    env = os.environ.copy()
+    env["GH_TOKEN"] = dispatch_token
+    return env
+
+
+def run_github_dispatch(args: Sequence[str], *, stdin: str | None = None) -> str:
+    """Run a workflow dispatch command with the dispatch token when configured."""
+    env = scheduler_dispatch_env()
+    if env is None:
+        return run_github_actions(args, stdin=stdin)
+    return run_with_env(args, stdin=stdin, env=env)
+
+
 def split_repo(repo: str) -> tuple[str, str]:
     """Split an owner/name repository string into owner and repository name."""
     try:
@@ -551,6 +576,12 @@ def workflow_dispatch_wait_reason(repo: str, workflow: str) -> str | None:
         return None
     dispatch_repo = validate_github_repository(dispatch_repo)
     if dispatch_repo == target_repo or env_flag_enabled("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH"):
+        return None
+    execution_repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if os.environ.get("SCHEDULER_DISPATCH_TOKEN") and execution_repo == dispatch_repo:
+        # The dispatch targets the repository this scheduler run executes in and the
+        # workflow provided a dispatch-capable runner token for it, so no
+        # cross-repository credential is needed.
         return None
     return (
         f"{workflow} dispatch waits for central required workflow materialization; "
@@ -1643,7 +1674,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     head_ref = validate_git_ref(pr["headRefName"])
     dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
-    run_github_actions(
+    run_github_dispatch(
         [
             "gh",
             "workflow",
@@ -1679,7 +1710,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         return
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
-    run_github_actions(
+    run_github_dispatch(
         [
             "gh",
             "workflow",

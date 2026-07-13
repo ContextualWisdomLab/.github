@@ -1500,10 +1500,75 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
     assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
 
     monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", "true")
     assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
+
+
+def test_same_repository_dispatch_token_unblocks_central_workflow_dispatch(monkeypatch):
+    """A runner token for the dispatch repository is a sufficient dispatch credential.
+
+    The OpenCode app token has no Actions permission and no cross-repository PAT is
+    configured, so without this allowance the org sweep deadlocks every PR that
+    needs current-head review evidence.
+    """
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
+
+    # A dispatch token for a DIFFERENT execution repository is not dispatch evidence.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/naruon")
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+
+    # Same execution repository without a dispatch token still waits.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
+    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+
+
+def test_scheduler_dispatch_env_prefers_distinct_dispatch_token(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "mutation-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+
+    env = sched.scheduler_dispatch_env()
+
+    assert env is not None
+    assert env["GH_TOKEN"] == "runner-token"
+
+
+def test_scheduler_dispatch_env_is_noop_without_distinct_token(monkeypatch):
+    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
+    assert sched.scheduler_dispatch_env() is None
+
+    monkeypatch.setenv("GH_TOKEN", "same-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "same-token")
+    assert sched.scheduler_dispatch_env() is None
+
+
+def test_run_github_dispatch_uses_dispatch_token_env(monkeypatch):
+    calls = []
+    monkeypatch.setenv("GH_TOKEN", "mutation-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+    monkeypatch.setattr(
+        sched,
+        "run_with_env",
+        lambda args, stdin=None, env=None: calls.append((tuple(args), env["GH_TOKEN"])) or "dispatched",
+    )
+
+    assert sched.run_github_dispatch(["gh", "workflow", "run"]) == "dispatched"
+    assert calls == [(("gh", "workflow", "run"), "runner-token")]
+
+
+def test_run_github_dispatch_falls_back_to_actions_token(monkeypatch):
+    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
+    monkeypatch.setattr(sched, "run_github_actions", lambda args, stdin=None: "fallback")
+
+    assert sched.run_github_dispatch(["gh", "workflow", "run"]) == "fallback"
 
 
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
