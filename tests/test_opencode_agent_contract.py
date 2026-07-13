@@ -764,9 +764,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "600"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "1800"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
         "      - name: Run merge scheduler after approval", 1
