@@ -29,6 +29,7 @@ PRIMARY_REVIEW_MARKERS = (
     "Result: APPROVE",
     "opencode-review-control-v1",
 )
+REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 IGNORED_RUNNING_CHECKS = {
     "approve-after-primary-review",
     "noema-review",
@@ -180,12 +181,26 @@ def review_commit(review: dict[str, Any]) -> str:
     return ((review.get("commit") or {}).get("oid") or "").strip()
 
 
+def review_body_head_sha(review: dict[str, Any]) -> str | None:
+    """Return the last explicit current-head SHA recorded in a review body."""
+    matches = REVIEW_BODY_HEAD_SHA_RE.findall(str(review.get("body") or ""))
+    return matches[-1] if matches else None
+
+
+def review_matches_current_head(review: dict[str, Any], head_sha: str) -> bool:
+    """Return whether commit and explicit review-body evidence match the live head."""
+    if not head_sha or review_commit(review) != head_sha:
+        return False
+    body_head = review_body_head_sha(review)
+    return body_head is None or body_head.lower() == head_sha.lower()
+
+
 def current_primary_approval(pr: dict[str, Any]) -> dict[str, Any] | None:
     """Return the current-head OpenCode approval when it matches the contract."""
     head_sha = str(pr.get("headRefOid") or "")
     reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
     for review in reversed(reviews):
-        if review_commit(review) != head_sha:
+        if not review_matches_current_head(review, head_sha):
             continue
         if str(review.get("state") or "").upper() != "APPROVED":
             continue
@@ -201,7 +216,7 @@ def has_current_changes_requested(pr: dict[str, Any]) -> bool:
     head_sha = str(pr.get("headRefOid") or "")
     reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
     for review in reversed(reviews):
-        if review_commit(review) == head_sha and str(review.get("state") or "").upper() == "CHANGES_REQUESTED":
+        if review_matches_current_head(review, head_sha) and str(review.get("state") or "").upper() == "CHANGES_REQUESTED":
             return True
     return False
 
