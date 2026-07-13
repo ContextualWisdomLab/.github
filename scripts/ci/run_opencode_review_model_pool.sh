@@ -626,8 +626,8 @@ main() {
 	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ]; then
-		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-300}"
-		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-420}"
+		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-600}"
+		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-3600}"
 		max_cycles="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES:-1}"
 		printf 'Central review-process evidence fallback eligible for scope "%s"; limiting OpenCode model pool to %ss per attempt, %ss total budget, and %s cycle(s) so provider delay is logged before the publish fallback evaluates current-head peer evidence.\n' \
 			"${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unsupported}" "$original_run_timeout" "$budget_seconds" "$max_cycles"
