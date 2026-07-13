@@ -243,6 +243,11 @@ def admits_missing_structural_review(reason: str, summary: str) -> bool:
 def control_review_text(value: dict[str, Any]) -> str:
     """Return human review text from a control block for policy validation."""
     chunks = [str(value.get("reason", "")), str(value.get("summary", ""))]
+    adversarial_validation = value.get("adversarial_validation")
+    if isinstance(adversarial_validation, dict):
+        chunks.append(
+            json.dumps(adversarial_validation, ensure_ascii=False, sort_keys=True)
+        )
     for finding in value.get("findings", []) or []:
         if not isinstance(finding, dict):
             continue
@@ -324,6 +329,102 @@ def current_changed_files() -> frozenset[str]:
         )
     except OSError:
         return frozenset()
+
+
+def adversarial_validation_required() -> bool:
+    """Return whether the central workflow requires structured attack probes."""
+    return (
+        os.environ.get("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "").casefold()
+        in {"1", "true", "yes"}
+    )
+
+
+def required_adversarial_probe_count() -> int:
+    """Require two probes for material changes and one for non-code changes."""
+    changed_files = current_changed_files()
+    if any(changed_file_is_material(path) for path in changed_files):
+        return 2
+    return 1
+
+
+def adversarial_validation_error(
+    value: Any,
+    *,
+    result: str,
+    findings: list[Any],
+) -> str:
+    """Return why structured adversarial evidence is not publishable."""
+    if value is None and not adversarial_validation_required():
+        return ""
+    if not isinstance(value, dict):
+        return "adversarial_validation must be an object"
+
+    status = value.get("status")
+    if status not in {"passed", "failed"}:
+        return "adversarial_validation.status must be passed or failed"
+    residual_risk = value.get("residual_risk")
+    if not isinstance(residual_risk, str) or not residual_risk.strip():
+        return "adversarial_validation.residual_risk must be a non-empty string"
+
+    probes = value.get("probes")
+    if not isinstance(probes, list):
+        return "adversarial_validation.probes must be a list"
+    minimum_probes = required_adversarial_probe_count()
+    if len(probes) < minimum_probes:
+        return (
+            "adversarial_validation requires at least "
+            f"{minimum_probes} concrete probe(s) for this changed-file scope"
+        )
+
+    changed_files = current_changed_files()
+    confirmed_locations: set[tuple[str, int]] = set()
+    for index, probe in enumerate(probes, start=1):
+        if not isinstance(probe, dict):
+            return f"adversarial probe {index} must be an object"
+        path = probe.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return f"adversarial probe {index} path must be a non-empty string"
+        path = path.strip()
+        if path.startswith("/") or ".." in Path(path).parts:
+            return f"adversarial probe {index} path is unsafe"
+        if changed_files and path not in changed_files:
+            return f"adversarial probe {index} path is not a current-head changed file"
+        line = probe.get("line")
+        if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
+            return f"adversarial probe {index} line must be a positive integer"
+        for field in ("hypothesis", "attack_or_counterexample", "evidence"):
+            field_value = probe.get(field)
+            if not isinstance(field_value, str) or not field_value.strip():
+                return f"adversarial probe {index} field {field} must be non-empty"
+        outcome = probe.get("outcome")
+        if outcome not in {"falsified", "confirmed"}:
+            return (
+                f"adversarial probe {index} outcome must be falsified or confirmed"
+            )
+        if outcome == "confirmed":
+            confirmed_locations.add((path, line))
+
+    if result == "APPROVE":
+        if status != "passed":
+            return "APPROVE requires adversarial_validation.status=passed"
+        if confirmed_locations:
+            return "APPROVE cannot contain a confirmed adversarial probe"
+    else:
+        if status != "failed":
+            return "REQUEST_CHANGES requires adversarial_validation.status=failed"
+        if not confirmed_locations:
+            return "REQUEST_CHANGES requires at least one confirmed adversarial probe"
+        finding_locations = {
+            (str(finding.get("path") or "").strip(), finding.get("line"))
+            for finding in findings
+            if isinstance(finding, dict)
+        }
+        if not confirmed_locations.intersection(finding_locations):
+            return (
+                "REQUEST_CHANGES requires a confirmed adversarial probe anchored "
+                "to a published finding"
+            )
+    return ""
 
 
 def changed_file_is_source_like(path: str) -> bool:
@@ -705,6 +806,17 @@ def check_structural_approval(control_file: Path) -> int:
     if not isinstance(value, dict):
         return reject("control JSON is not an object")
 
+    findings = value.get("findings")
+    if not isinstance(findings, list):
+        findings = []
+    adversarial_error = adversarial_validation_error(
+        value.get("adversarial_validation"),
+        result=str(value.get("result") or ""),
+        findings=findings,
+    )
+    if adversarial_error:
+        return reject(adversarial_error)
+
     if value.get("result") == "APPROVE" and admits_missing_structural_review(
         str(value.get("reason", "")),
         str(value.get("summary", "")),
@@ -790,6 +902,13 @@ def valid_control(
         return None
     if result == "REQUEST_CHANGES" and not findings:
         return None
+    adversarial_error = adversarial_validation_error(
+        value.get("adversarial_validation"),
+        result=result,
+        findings=findings,
+    )
+    if adversarial_error:
+        return None
     if contains_non_actionable_failed_check_review(value):
         return None
     if result != "APPROVE" and violates_review_language_contract(value):
@@ -835,7 +954,7 @@ def valid_control(
             if not isinstance(finding.get(field), str) or not finding[field].strip():
                 return None
 
-    return {
+    normalized = {
         "head_sha": value["head_sha"],
         "run_id": value["run_id"],
         "run_attempt": value["run_attempt"],
@@ -844,6 +963,9 @@ def valid_control(
         "summary": summary,
         "findings": findings,
     }
+    if isinstance(value.get("adversarial_validation"), dict):
+        normalized["adversarial_validation"] = value["adversarial_validation"]
+    return normalized
 
 
 def extract_dicts(obj: Any) -> list[Any]:

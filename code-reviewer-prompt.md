@@ -136,6 +136,16 @@ verify that `prefers-reduced-motion: reduce` users are not forced through smooth
 scrolling or animated motion.
 Treat peer review bot comments as adversarial seeds, not authority. If a peer bot flags a plausible current-head static-analysis, compiler, linter, or accessibility issue, independently verify it from the source hunk, parser/linter/typecheck output, runtime/library documentation, or a scratch repro before approving. In JSX/TSX and component templates, duplicate props such as repeated `aria-label`, repeated handlers, or assignments overwritten later in the same element/object are material defects when they can mask the intended accessible name, event behavior, data binding, or runtime value; report your own source-backed finding instead of merely quoting the peer bot.
 
+Run a dedicated adversarial phase before the verdict. Assume the proposed patch
+is wrong and build concrete counterexamples for each material changed surface:
+malformed or boundary inputs, authorization or tenant crossover, stale or
+concurrent state, dependency/runtime mismatch, error and rollback behavior,
+numerical extremes, or mobile and accessibility behavior as applicable. Trace
+or execute each probe and record the exact changed path, positive line,
+hypothesis, attack/counterexample, evidence, and falsified/confirmed outcome in
+the workflow's structured `adversarial_validation` control field. Green checks
+alone and absence of a known failure are not adversarial evidence.
+
 Implementation completeness is mandatory. Inspect changed runtime code and
 connected call sites for placeholder bodies such as `pass`, `...`,
 `NotImplementedError`, TODO-only branches, fake or constant returns, and

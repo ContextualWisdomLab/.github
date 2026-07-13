@@ -3295,6 +3295,7 @@ jobs:
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-model-pool.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -3415,6 +3416,8 @@ jobs:
           # re-rejects it (NO_CONCLUSION / exit 4), failing an otherwise valid
           # review instead of publishing it.
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
           # The publish gate re-runs source-backed validation against PR-head data.
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
@@ -3684,6 +3687,13 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref || github.event.inputs.pr_head_ref || '' }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          OPENCODE_MODEL_POOL_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-model-pool.md
+          OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT: ${{ steps.central_review_process_fallback_scope.outputs.changed_count || '0' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "12"
@@ -3699,6 +3709,27 @@ jobs:
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::CENTRAL_FAST_APPROVAL_NO_TOKEN: review write token was unavailable for current head ${HEAD_SHA}."
             exit 1
+          fi
+
+          model_output_copy="$(mktemp)"
+          normalized_control_file="$(mktemp)"
+          if [ ! -s "${OPENCODE_MODEL_POOL_OUTPUT_FILE:-}" ]; then
+            echo "::error::CENTRAL_FAST_APPROVAL_NO_MODEL_OUTPUT: selected current-head model output is unavailable."
+            exit 1
+          fi
+          perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$OPENCODE_MODEL_POOL_OUTPUT_FILE" >"$model_output_copy"
+          if ! python3 scripts/ci/opencode_review_normalize_output.py \
+            "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$model_output_copy"; then
+            echo "::error::CENTRAL_FAST_APPROVAL_ADVERSARIAL_INVALID: selected model output did not satisfy the structured adversarial contract."
+            exit 1
+          fi
+          gate_result="$(
+            bash scripts/ci/opencode_review_approve_gate.sh \
+              "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$model_output_copy" "$normalized_control_file"
+          )"
+          if [ "$gate_result" != "APPROVE" ]; then
+            echo "::notice::Central fast approval skipped because the adversarially validated model verdict was ${gate_result:-unknown}, not APPROVE."
+            exit 0
           fi
 
           api_url="https://api.github.com"
@@ -3818,19 +3849,28 @@ jobs:
             exit 1
           fi
 
+          model_reason="$(jq -r '.reason' "$normalized_control_file")"
+          model_summary="$(jq -r '.summary' "$normalized_control_file")"
+          adversarial_evidence="$(jq -c '.adversarial_validation' "$normalized_control_file")"
           body="$(printf '%s\n' \
             "## Pull request overview" \
             "" \
-            "OpenCode reviewed the current-head central review-process repair evidence and found no blocking issues." \
+            "$model_summary" \
             "" \
             "## Findings" \
             "" \
             "No blocking findings." \
             "" \
+            "## Adversarial validation" \
+            "" \
+            '```json' \
+            "$adversarial_evidence" \
+            '```' \
+            "" \
             "## Evidence" \
             "" \
             "- Result: APPROVE" \
-            "- Reason: central review-process fast approval; model-pool output succeeded and current-head peer checks, code-scanning alerts, and review threads were clear." \
+            "- Reason: ${model_reason}" \
             "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
             "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
             "- Head SHA: \`${HEAD_SHA}\`" \
@@ -3870,6 +3910,8 @@ jobs:
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_FAILED_CHECK_DIAGNOSIS_FILE: ${{ runner.temp }}/opencode-failed-check-diagnosis.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || 'skipped' }}
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -4675,9 +4717,11 @@ jobs:
             local summary
             local reason
             local findings
+            local adversarial_evidence
 
             summary="$(jq -r '.summary // ""' "$control_json")"
             reason="$(jq -r '.reason // ""' "$control_json")"
+            adversarial_evidence="$(jq -c '.adversarial_validation' "$control_json")"
             findings="$(
               # shellcheck disable=SC2016
               jq -r '
@@ -4705,6 +4749,8 @@ jobs:
               printf '%s\n\n' "$findings"
               printf '## Summary\n\n'
               printf '%s\n\n' "$summary"
+              printf '## Adversarial validation\n\n'
+              printf '```json\n%s\n```\n\n' "$adversarial_evidence"
               printf -- '- Result: REQUEST_CHANGES\n'
               printf -- '- Reason: %s\n\n' "$reason"
               printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
@@ -6087,7 +6133,7 @@ jobs:
             rm -f "$lookup_error_file"
           }
 
-          approve_current_head_after_model_unavailable() {
+          publish_blockers_after_model_unavailable() {
             local pending_wait_status body
 
             if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
@@ -6174,30 +6220,8 @@ jobs:
               return 0
             fi
 
-            body="$(printf '%s\n' \
-              "## Pull request overview" \
-              "" \
-              "OpenCode model providers were unavailable for this same-head run, but deterministic current-head evidence is clean: coverage evidence passed, peer GitHub Checks are complete, medium-or-higher code-scanning alerts are clear, mergeability is clean, and reviewer threads are resolved or outdated." \
-              "" \
-              "## Findings" \
-              "" \
-              "No blocking findings." \
-              "" \
-              "## Evidence" \
-              "" \
-              "- Result: APPROVE" \
-              "- Reason: current-head model-unavailable evidence fallback; coverage, docstring, peer GitHub Checks, code-scanning alerts, mergeability, and review threads were clear for current head." \
-              "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
-              "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
-              "- Model-pool outcome: \`${OPENCODE_MODEL_POOL_OUTCOME:-unknown}\`" \
-              "- Head SHA: \`${HEAD_SHA}\`" \
-              "- Workflow run: ${RUN_ID}" \
-              "- Workflow attempt: ${RUN_ATTEMPT}" \
-              "" \
-              "This fallback does not suppress failed checks, medium-or-higher code-scanning alerts, merge conflicts, unresolved reviewer threads, or failed coverage evidence; any of those conditions still publish REQUEST_CHANGES or leave the approval state unchanged."
-            )"
-            create_pull_review "APPROVE" "$body"
-            return 0
+            printf '::notice::MODEL_OUTPUT_UNAVAILABLE: current-head checks and alerts are clean, but no APPROVE review will be published without mandatory structured adversarial probes for head %s.\n' "$HEAD_SHA"
+            return 1
           }
 
                     request_changes_for_merge_conflict_if_present() {
@@ -6300,7 +6324,7 @@ jobs:
           # diagnostics. Do not read model output or change PR review state unless
           # the pool explicitly emitted a valid current-head control block.
           if [ "$opencode_review_outcome" != "success" ]; then
-            if approve_current_head_after_model_unavailable; then
+            if publish_blockers_after_model_unavailable; then
               echo "::endgroup::"
               exit 0
             fi
@@ -6520,6 +6544,7 @@ jobs:
               fi
               summary="$(jq -r '.summary' "$control_json")"
               reason="$(jq -r '.reason' "$control_json")"
+              adversarial_evidence="$(jq -c '.adversarial_validation' "$control_json")"
               body="$(printf '%s\n' \
                 "## Pull request overview" \
                 "" \
@@ -6532,6 +6557,12 @@ jobs:
                 "## Summary" \
                 "" \
                 "$summary" \
+                "" \
+                "## Adversarial validation" \
+                "" \
+                '```json' \
+                "$adversarial_evidence" \
+                '```' \
                 "" \
                 "- Result: APPROVE" \
                 "- Reason: ${reason}" \
