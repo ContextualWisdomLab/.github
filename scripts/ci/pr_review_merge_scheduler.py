@@ -972,10 +972,14 @@ def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> b
     """Return whether a review is valid evidence for the current head commit."""
     head = pr.get("headRefOid")
     commit = (review.get("commit") or {}).get("oid")
-    if not head or commit != head:
+    if not head:
         return False
     body_head = review_body_head_sha(review)
-    return body_head is None or body_head.lower() == head.lower()
+    if commit == head:
+        return body_head is None or body_head.lower() == head.lower()
+    if not commit and body_head is not None:
+        return body_head.lower() == head.lower()
+    return False
 
 
 def review_body_head_sha(review: dict[str, Any]) -> str | None:
@@ -1108,6 +1112,17 @@ def is_deterministic_fallback_approval(review: dict[str, Any]) -> bool:
         return False
     body = (review.get("body") or "").lower()
     return any(marker in body for marker in DETERMINISTIC_APPROVAL_MARKERS)
+
+
+def has_current_head_deterministic_fallback_approval(pr: dict[str, Any]) -> bool:
+    """Return whether OpenCode's latest current-head review is fallback-only."""
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review):
+            continue
+        if not review_matches_current_head(review, pr):
+            continue
+        return is_deterministic_fallback_approval(review)
+    return False
 
 
 def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
@@ -2084,6 +2099,15 @@ def inspect_pr(
     opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
     if opencode_state == "running":
         return decide("wait", "OpenCode review is already in progress")
+
+    if (
+        os.environ.get("GITHUB_EVENT_NAME") == "workflow_run"
+        and has_current_head_deterministic_fallback_approval(pr)
+    ):
+        return decide(
+            "wait",
+            "current-head deterministic fallback is not merge evidence; defer real-model retry to the next scheduler heartbeat",
+        )
 
     if behind_by and trigger_reviews:
         if not update_branches:
