@@ -374,6 +374,7 @@ normalized = {
     "result": control["result"],
     "reason": control["reason"],
     "summary": control["summary"],
+    "adversarial_validation": control.get("adversarial_validation"),
     "findings": control.get("findings") or [],
 }
 Path(sys.argv[2]).write_text(
