@@ -644,11 +644,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]' not in current_head_fallback
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
-        "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
-        "github.token }}"
+        "CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}"
     ) in workflow
-    assert "CODE_SCANNING_TOKEN_SOURCE" in workflow
+    assert "CODE_SCANNING_TOKEN_SOURCE: github-token" in workflow
     assert 'GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s"' in workflow
     assert "Open code-scanning alert lookup skipped because no target-repository read token" in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
