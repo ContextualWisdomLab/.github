@@ -1692,8 +1692,9 @@ def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
         sched.restamp_pr_head_for_last_push_approval("owner/repo", stale, dry_run=False)
 
 
+@pytest.mark.parametrize("auto", [False, True])
 def test_head_guarded_merge_retries_merge_commit_when_squash_is_disabled(
-    monkeypatch, capsys
+    monkeypatch, capsys, auto
 ):
     calls = []
     head_sha = "a" * 40
@@ -1707,18 +1708,24 @@ def test_head_guarded_merge_retries_merge_commit_when_squash_is_disabled(
         return ""
 
     monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"allow_squash_merge": True}),
+    )
 
     sched.run_head_guarded_merge(
         "owner/repo",
         "7",
         head_sha,
-        auto=False,
+        auto=auto,
     )
 
     assert len(calls) == 2
     assert "--squash" in calls[0]
     assert "--merge" in calls[1]
-    assert "--auto" not in calls[1]
+    assert ("--auto" in calls[0]) is auto
+    assert ("--auto" in calls[1]) is auto
     assert calls[0][-2:] == ["--match-head-commit", head_sha]
     assert calls[1][-2:] == ["--match-head-commit", head_sha]
     assert "Squash merges are not allowed" in capsys.readouterr().out
