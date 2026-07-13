@@ -675,6 +675,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "stop_without_review_after_model_unavailable" "general model-unavailable path leaves PR review state unchanged"
 	assert_file_not_contains "$workflow_file" "approve_central_review_process_after_model_unavailable" "opencode fallback name reflects current-head deterministic evidence, not central-only scope"
 	assert_file_contains "$workflow_file" "collect_open_code_scanning_alerts" "model-unavailable fallback checks open code-scanning alerts before approval"
+	assert_file_contains "$workflow_file" "Retrying open code-scanning alert lookup with %s." "model-unavailable code-scanning lookup retries with the configured fallback token when the primary token cannot read alerts"
+	assert_file_contains "$workflow_file" 'GH_TOKEN="$fallback_token" timeout "$(check_lookup_api_timeout_seconds)s"' "model-unavailable code-scanning retry actually scopes the fallback token to the retry call"
 	assert_file_not_contains "$workflow_file" 'if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]' "model-unavailable fallback is not limited to central governance repository once current-head evidence is clean"
 	assert_file_contains "$workflow_file" 'create_pull_review "APPROVE" "$fallback_approval_body"' "model-unavailable path publishes approval only after blocker checks are clean"
 	assert_file_contains "$workflow_file" "No pull request review was posted because provider delay or model-output unavailability is not review feedback." "general model-unavailable path still explains delay without changing review state before clean fallback is evaluated"
