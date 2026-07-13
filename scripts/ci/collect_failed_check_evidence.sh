@@ -12,20 +12,14 @@ fi
 
 OUTPUT_FILE="$1"
 FAILED_CHECK_LOG_LINES="${FAILED_CHECK_LOG_LINES:-180}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 strip_ansi() {
 	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g'
 }
 
 redact_sensitive_log() {
-	perl -pe '
-		s/\b(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/[REDACTED_GITHUB_TOKEN]/g;
-		s/\b(sk-[A-Za-z0-9_-]{20,})/[REDACTED_API_KEY]/g;
-		s/\b(xox[baprs]-[A-Za-z0-9-]{20,})/[REDACTED_SLACK_TOKEN]/g;
-		s/\b(AKIA[0-9A-Z]{16})/[REDACTED_AWS_ACCESS_KEY]/g;
-		s/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["'\'']?[^"'\''\s]+["'\'']?/${1}[REDACTED]/ig;
-		s/((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+/${1}[REDACTED]/ig;
-	'
+	python3 "$SCRIPT_DIR/redact_sensitive_log.py"
 }
 
 emit_bounded_file() {
