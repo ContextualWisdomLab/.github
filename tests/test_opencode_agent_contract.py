@@ -717,8 +717,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OpenCode model pool exceeded the outer" in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 8", workflow)
-    assert 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' in workflow
+    assert re.search(r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: 8", workflow)
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 10", workflow)
+    assert workflow.count('APPROVAL_CHECK_WAIT_ATTEMPTS: "36"') == 2
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in workflow
@@ -1285,3 +1286,37 @@ def test_opencode_review_thread_jq_filters_preserve_bash_single_quotes():
 
     assert 'gsub("`"; "\'")' not in workflow
     assert workflow.count('gsub("`"; "&apos;")') == 4
+
+
+def test_peer_check_wait_budget_fits_publication_step_timeouts():
+    """Keep slow-check cadence bounded inside both publication step caps."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    attempts = [
+        int(value)
+        for value in re.findall(r'APPROVAL_CHECK_WAIT_ATTEMPTS: "(\d+)"', workflow)
+    ]
+    sleeps = [
+        int(value)
+        for value in re.findall(
+            r'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "(\d+)"', workflow
+        )
+    ]
+    fast_timeout = re.search(
+        r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: (\d+)",
+        workflow,
+    )
+    publish_timeout = re.search(
+        r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: (\d+)",
+        workflow,
+    )
+
+    assert attempts == [36, 36]
+    assert sleeps == [10, 10]
+    assert fast_timeout is not None
+    assert publish_timeout is not None
+    wait_seconds = (attempts[0] - 1) * sleeps[0]
+    assert int(fast_timeout.group(1)) * 60 - wait_seconds >= 120
+    assert int(publish_timeout.group(1)) * 60 - wait_seconds >= 240
