@@ -498,12 +498,20 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}' "opencode review gives the provider the same model token source"
 	assert_file_matches "$workflow_file" 'uses:[[:space:]]+actions/checkout@[0-9a-fA-F]{40}([[:space:]]|$)' "opencode review workflow pins checkout to a full commit SHA"
 	assert_workflow_uses_are_sha_pinned "$workflow_file" "opencode review workflow"
-	assert_file_contains "$workflow_file" "@colbymchenry/codegraph@0.9.9" "opencode review workflow pins the CodeGraph package"
+	assert_file_contains "$workflow_file" "scripts/ci/codegraph-package/package-lock.json" "opencode review workflow installs CodeGraph from the committed lockfile"
+	if ! jq -e '
+		.packages["node_modules/@colbymchenry/codegraph"]
+		| .version == "0.9.9" and (.integrity | startswith("sha512-"))
+	' "$REPO_ROOT/scripts/ci/codegraph-package/package-lock.json" >/dev/null; then
+		record_failure "opencode review CodeGraph lockfile pins version 0.9.9 with integrity"
+	fi
+	assert_file_contains "$workflow_file" "CODEGRAPH_NO_DOWNLOAD=1 exec" "opencode review reuses the integrity-pinned CodeGraph binary for MCP"
+	assert_file_not_contains "$workflow_file" "@colbymchenry/codegraph@0.9.9 serve --mcp" "opencode review must not fetch CodeGraph again for MCP"
 	assert_file_contains "$workflow_file" "https://mcp.deepwiki.com/mcp" "opencode review workflow configures the DeepWiki remote MCP server"
 	assert_file_contains "$workflow_file" "@upstash/context7-mcp@3.1.0" "opencode review workflow pins the Context7 MCP package"
 	assert_file_contains "$workflow_file" "@guhcostan/web-search-mcp@1.0.5" "opencode review workflow pins a web search MCP package"
 	assert_file_contains "$workflow_file" "NPM_CONFIG_LOGLEVEL" "opencode review workflow suppresses npm warning output for local MCP package fetches"
-	assert_file_contains "$workflow_file" 'NPM_CONFIG_IGNORE_SCRIPTS: "true"' "opencode review workflow disables npm lifecycle scripts for CodeGraph npx"
+	assert_file_contains "$workflow_file" 'NPM_CONFIG_IGNORE_SCRIPTS: "true"' "opencode review workflow disables npm lifecycle scripts for local MCP packages"
 	assert_file_contains "$workflow_file" "init -i" "opencode review workflow builds the CodeGraph index"
 	assert_file_contains "$workflow_file" "CodeGraph MCP tools" "opencode review prompt requires CodeGraph-backed review evidence"
 	assert_file_contains "$workflow_file" "general-purpose and meticulous" "opencode review prompt requires a general-purpose meticulous review"
@@ -2871,6 +2879,8 @@ run_gate_case() {
 	local raw_llm_api_base="https://example.invalid/generateContent"
 	if [ "$raw_llm_api_base_override" != "__DEFAULT__" ]; then
 		raw_llm_api_base="$raw_llm_api_base_override"
+	elif [ "$default_provider" = "openai" ]; then
+		raw_llm_api_base=""
 	fi
 	local transient_retry_per_model="${12-0}"
 	local min_fail_severity="${13-CRITICAL}"
@@ -2890,6 +2900,10 @@ run_gate_case() {
 	local gemini_fallback_models="${27-__SAME_AS_FALLBACK_MODELS__}"
 	local generic_fallback_models="${28-}"
 	local fail_on_provider_signal="${29-1}"
+	if [ "$default_provider" = "openai" ] && [ -z "$generic_fallback_models" ] && [ -n "$fallback_models" ]; then
+		generic_fallback_models="$fallback_models"
+		fallback_models=""
+	fi
 
 	if [ -n "${STRIX_TEST_CASE_FILTER:-}" ] && [ "$scenario" != "$STRIX_TEST_CASE_FILTER" ]; then
 		return
@@ -5405,6 +5419,17 @@ run_filtered_gate_case_if_requested() {
 			"2" \
 			"vertex_ai/missing-primary|vertex_ai/fallback-one" \
 			"<unset>|<unset>"
+		;;
+	openai-primary-quota-fallback-success)
+		run_gate_case_allow_provider_signal "openai-primary-quota-fallback-success" \
+			"openai/quota-primary" \
+			"openai/fallback-one openai/fallback-two" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'openai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"openai/quota-primary|openai/fallback-one" \
+			"<unset>|<unset>" \
+			"openai"
 		;;
 	pr-critical-changed-json-target)
 		run_gate_case "pr-critical-changed-json-target" \

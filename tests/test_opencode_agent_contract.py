@@ -1067,13 +1067,22 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         "\n      - name:", 1
     )[0]
     assert "CODEGRAPH_TRUSTED_ROOT" in codegraph_step
+    assert 'CODEGRAPH_NO_DOWNLOAD: "1"' in codegraph_step
     assert "cp scripts/ci/codegraph-package/package.json" in codegraph_step
     assert "scripts/ci/codegraph-package/package-lock.json" in codegraph_step
-    assert 'npm ci --ignore-scripts --omit=dev --prefix "$CODEGRAPH_TRUSTED_ROOT"' in codegraph_step
+    assert 'cd "$CODEGRAPH_TRUSTED_ROOT"' in codegraph_step
+    assert "npm ci --ignore-scripts --omit=dev --no-audit --no-fund" in codegraph_step
+    assert '--prefix "$CODEGRAPH_TRUSTED_ROOT"' not in codegraph_step
     assert '"$CODEGRAPH_BIN" init -i' in codegraph_step
     assert '"$CODEGRAPH_BIN" status' in codegraph_step
     assert "npm install --ignore-scripts --no-save" not in codegraph_step
     assert 'npx -y "$CODEGRAPH_PACKAGE" init -i' not in codegraph_step
+    isolated_step = target_job.split(
+        "      - name: Prepare isolated OpenCode review workspace", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert "CODEGRAPH_BIN: ${{ runner.temp }}/trusted-codegraph/node_modules/.bin/codegraph" in isolated_step
+    assert "CODEGRAPH_NO_DOWNLOAD=1 exec " in isolated_step
+    assert "@colbymchenry/codegraph@0.9.9 serve --mcp" not in isolated_step
     package_lock = json.loads(
         Path("scripts/ci/codegraph-package/package-lock.json").read_text(encoding="utf-8")
     )
