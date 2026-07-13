@@ -1,8 +1,7 @@
-# Uploads CodeQL code scanning analyses on every PR so the org ruleset
-# "CWL Central required workflows" -> code_scanning(CodeQL) can evaluate
-# mergeability. Without PR-head and merge-preview SARIF on merge_commit_sha,
-# approved PRs stay mergeStateStatus=BLOCKED with
-# "Code scanning is waiting for results from CodeQL".
+# Runs CodeQL on both the PR head and merge preview. Medium+ security results
+# fail locally with rule/path/line/message evidence, while SARIF is preserved
+# as an artifact. This keeps real findings blocking even when GitHub's
+# installation API quota prevents code-scanning uploads.
 name: CodeQL PR
 
 on:
@@ -74,7 +73,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
+      security-events: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
@@ -100,9 +99,78 @@ jobs:
         uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           category: "/language:${{ matrix.language }}"
-          upload: always
+          upload: false
+          output: codeql-results-head
           ref: ${{ format('refs/pull/{0}/head', github.event.pull_request.number) }}
           sha: ${{ github.event.pull_request.head.sha }}
+
+      - name: Enforce CodeQL Medium+ SARIF gate
+        shell: python3 {0}
+        env:
+          CODEQL_SARIF_DIR: codeql-results-head
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CODEQL_SARIF_DIR"])
+          paths = sorted(root.rglob("*.sarif"))
+          if not paths:
+              raise SystemExit(f"CodeQL produced no SARIF under {root}; inspect the analysis log above.")
+
+          findings = []
+          total_results = 0
+          for path in paths:
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              for run in payload.get("runs") or []:
+                  rules = ((run.get("tool") or {}).get("driver") or {}).get("rules") or []
+                  rules_by_id = {
+                      str(rule.get("id") or ""): rule
+                      for rule in rules
+                      if isinstance(rule, dict)
+                  }
+                  for result in run.get("results") or []:
+                      if not isinstance(result, dict):
+                          continue
+                      total_results += 1
+                      if result.get("suppressions"):
+                          continue
+                      rule = rules_by_id.get(str(result.get("ruleId") or ""), {})
+                      rule_index = result.get("ruleIndex")
+                      if not rule and isinstance(rule_index, int) and 0 <= rule_index < len(rules):
+                          rule = rules[rule_index] if isinstance(rules[rule_index], dict) else {}
+                      result_properties = result.get("properties") or {}
+                      rule_properties = rule.get("properties") or {}
+                      raw_score = result_properties.get("security-severity", rule_properties.get("security-severity"))
+                      try:
+                          score = float(raw_score)
+                      except (TypeError, ValueError):
+                          score = None
+                      level = str(result.get("level") or (rule.get("defaultConfiguration") or {}).get("level") or "none").lower()
+                      tags = {str(tag).lower() for tag in rule_properties.get("tags") or []}
+                      security_rule = "security" in tags or any(tag.startswith("external/cwe/") for tag in tags)
+                      if not ((score is not None and score >= 4.0) or (score is None and security_rule and level in {"error", "warning"})):
+                          continue
+                      physical = (((result.get("locations") or [{}])[0].get("physicalLocation") or {}))
+                      artifact = (physical.get("artifactLocation") or {}).get("uri") or "unknown"
+                      line = (physical.get("region") or {}).get("startLine") or 0
+                      message = str((result.get("message") or {}).get("text") or "no message").replace("\n", " ")
+                      findings.append((str(result.get("ruleId") or rule.get("id") or "unknown"), score, level, artifact, line, message))
+
+          print(f"CODEQL_SARIF files={len(paths)} results={total_results} medium_plus={len(findings)}")
+          for rule_id, score, level, artifact, line, message in findings:
+              severity = f"security-severity={score:g}" if score is not None else f"level={level}"
+              print(f"CODEQL_FINDING rule={rule_id} {severity} path={artifact} line={line} message={message}")
+          if findings:
+              raise SystemExit(f"CodeQL found {len(findings)} unsuppressed Medium+ security result(s).")
+
+      - name: Preserve CodeQL SARIF evidence
+        if: always() && hashFiles('codeql-results-head/**/*.sarif') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-head-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: codeql-results-head
+          retention-days: 7
 
   analyze-merge:
     name: CodeQL merge preview (${{ matrix.language }})
@@ -112,7 +180,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
+      security-events: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
@@ -138,6 +206,75 @@ jobs:
         uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           category: "/language:${{ matrix.language }}-merge"
-          upload: always
+          upload: false
+          output: codeql-results-merge
           ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
           sha: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Enforce CodeQL Medium+ SARIF gate
+        shell: python3 {0}
+        env:
+          CODEQL_SARIF_DIR: codeql-results-merge
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CODEQL_SARIF_DIR"])
+          paths = sorted(root.rglob("*.sarif"))
+          if not paths:
+              raise SystemExit(f"CodeQL produced no SARIF under {root}; inspect the analysis log above.")
+
+          findings = []
+          total_results = 0
+          for path in paths:
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              for run in payload.get("runs") or []:
+                  rules = ((run.get("tool") or {}).get("driver") or {}).get("rules") or []
+                  rules_by_id = {
+                      str(rule.get("id") or ""): rule
+                      for rule in rules
+                      if isinstance(rule, dict)
+                  }
+                  for result in run.get("results") or []:
+                      if not isinstance(result, dict):
+                          continue
+                      total_results += 1
+                      if result.get("suppressions"):
+                          continue
+                      rule = rules_by_id.get(str(result.get("ruleId") or ""), {})
+                      rule_index = result.get("ruleIndex")
+                      if not rule and isinstance(rule_index, int) and 0 <= rule_index < len(rules):
+                          rule = rules[rule_index] if isinstance(rules[rule_index], dict) else {}
+                      result_properties = result.get("properties") or {}
+                      rule_properties = rule.get("properties") or {}
+                      raw_score = result_properties.get("security-severity", rule_properties.get("security-severity"))
+                      try:
+                          score = float(raw_score)
+                      except (TypeError, ValueError):
+                          score = None
+                      level = str(result.get("level") or (rule.get("defaultConfiguration") or {}).get("level") or "none").lower()
+                      tags = {str(tag).lower() for tag in rule_properties.get("tags") or []}
+                      security_rule = "security" in tags or any(tag.startswith("external/cwe/") for tag in tags)
+                      if not ((score is not None and score >= 4.0) or (score is None and security_rule and level in {"error", "warning"})):
+                          continue
+                      physical = (((result.get("locations") or [{}])[0].get("physicalLocation") or {}))
+                      artifact = (physical.get("artifactLocation") or {}).get("uri") or "unknown"
+                      line = (physical.get("region") or {}).get("startLine") or 0
+                      message = str((result.get("message") or {}).get("text") or "no message").replace("\n", " ")
+                      findings.append((str(result.get("ruleId") or rule.get("id") or "unknown"), score, level, artifact, line, message))
+
+          print(f"CODEQL_SARIF files={len(paths)} results={total_results} medium_plus={len(findings)}")
+          for rule_id, score, level, artifact, line, message in findings:
+              severity = f"security-severity={score:g}" if score is not None else f"level={level}"
+              print(f"CODEQL_FINDING rule={rule_id} {severity} path={artifact} line={line} message={message}")
+          if findings:
+              raise SystemExit(f"CodeQL found {len(findings)} unsuppressed Medium+ security result(s).")
+
+      - name: Preserve CodeQL SARIF evidence
+        if: always() && hashFiles('codeql-results-merge/**/*.sarif') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-merge-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: codeql-results-merge
+          retention-days: 7
