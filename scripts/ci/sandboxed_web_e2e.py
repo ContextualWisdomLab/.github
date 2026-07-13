@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -102,7 +103,7 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
     log_path = logs_dir / f"{label}.log"
     log_file = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
-        ["/bin/bash", "-lc", command],
+        shlex.split(command),
         cwd=cwd,
         env=env,
         text=True,
@@ -137,7 +138,7 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
 def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
     """Run a shell command and capture its output."""
     return subprocess.run(
-        ["/bin/bash", "-lc", command],
+        shlex.split(command),
         cwd=cwd,
         env=env,
         text=True,
