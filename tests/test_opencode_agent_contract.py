@@ -607,8 +607,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "ContextualWisdomLab/.github:code-reviewer-prompt.md | \\" in workflow
     assert "opencode.jsonc | \\" in workflow
     assert "ContextualWisdomLab/.github:.jules/bolt.md | \\" in workflow
+    assert "ContextualWisdomLab/.github:scripts/ci/javascript_coverage_gate.py | \\" in workflow
     assert "ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \\" in workflow
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
+    assert "ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \\" in workflow
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
     assert "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py" in workflow
     assert "ContextualWisdomLab/appguardrail:.github/workflows/org-security-failure-collector.yml" in workflow
@@ -647,9 +649,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
         "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
-        "github.token }}"
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in workflow
+    code_scanning_token_line = next(
+        line for line in workflow.splitlines() if "CODE_SCANNING_GH_TOKEN:" in line
+    )
+    assert "opencode_app_token" not in code_scanning_token_line
     assert "CODE_SCANNING_TOKEN_SOURCE" in workflow
     assert 'GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s"' in workflow
     assert "Open code-scanning alert lookup skipped because no target-repository read token" in workflow

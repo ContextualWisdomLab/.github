@@ -1670,6 +1670,7 @@ jobs:
               ContextualWisdomLab/.github:code-reviewer-prompt.md | \
               ContextualWisdomLab/.github:opencode.jsonc | \
               ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
+              ContextualWisdomLab/.github:scripts/ci/javascript_coverage_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \
               ContextualWisdomLab/.github:scripts/ci/pr_head_replay_guard.py | \
               ContextualWisdomLab/.github:scripts/ci/pr_review_merge_scheduler.py | \
@@ -1678,6 +1679,7 @@ jobs:
               ContextualWisdomLab/.github:scripts/ci/strix_quick_gate.sh | \
               ContextualWisdomLab/.github:scripts/ci/validate_opencode_failed_check_review.sh | \
               ContextualWisdomLab/.github:tests/test_changed_file_syntax_gate.py | \
+              ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
               ContextualWisdomLab/.github:tests/test_opencode_model_pool_runner.py | \
               ContextualWisdomLab/.github:tests/test_pr_head_replay_guard.py | \
@@ -3834,9 +3836,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
-          CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
-          CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
