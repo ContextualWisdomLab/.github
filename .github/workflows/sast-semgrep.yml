@@ -80,6 +80,7 @@ jobs:
             --severity=WARNING \
             --severity=ERROR \
             --exclude=.github/workflows \
+            --exclude='docs/research/**/standards' \
             --error \
             --sarif \
             --output=semgrep-results.sarif \

@@ -78,6 +78,7 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     workflow = workflow_text("sast-semgrep.yml")
 
     assert "Report every Semgrep finding in the job log" in workflow
+    assert "--exclude='docs/research/**/standards'" in workflow
     assert "SEMGREP_FINDING_COUNT=" in workflow
     assert "SEMGREP_FINDING rule=" in workflow
     assert 'level=\\(.level // $levels[.ruleId] // "unknown")' in workflow
