@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,7 @@ def run_failed_model(
         "  [ -z \"${FAKE_OPENCODE_PROMPT_CAPTURE:-}\" ] || printf '%s\\n' \"$2\" > \"$FAKE_OPENCODE_PROMPT_CAPTURE\"\n"
         "  [ -z \"${FAKE_OPENCODE_JSON:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_JSON\"\n"
         "  [ -z \"${FAKE_OPENCODE_STDERR:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_STDERR\" >&2\n"
+        "  sleep \"${FAKE_OPENCODE_HANG_SECONDS:-0}\"\n"
         "  exit 1\n"
         "fi\n"
         "printf 'unexpected fake opencode command: %s\\n' \"$*\" >&2\n"
@@ -116,6 +118,7 @@ def run_failed_model(
             "HEAD_SHA": "1" * 40,
             "OPENCODE_CHANGED_FILES_FILE": bash_path(changed_files_file),
             "OPENCODE_EVIDENCE_FILE": bash_path(evidence_file),
+            "OPENCODE_FATAL_ERROR_POLL_SECONDS": "1",
             "OPENCODE_MODEL_ATTEMPTS": "1",
             "OPENCODE_MODEL_CANDIDATES": model_candidates,
             "OPENCODE_OUTPUT_FILE": bash_path(tmp_path / "selected-output.md"),
@@ -181,6 +184,57 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
         "OpenCode provider failure supplied no structured JSON or stderr reason "
         "(json-bytes=0, stderr-bytes=0)."
     ) in result.stdout
+
+
+@pytest.mark.parametrize(
+    "json_line",
+    [
+        (
+            '{"type":"error","error":{"name":"ContextOverflowError","data":'
+            '{"message":"Request body too large for gpt-5 model. Max size: 4000 tokens."}}}'
+        ),
+        (
+            '{"type":"error","error":{"name":"ProviderQuotaError","data":'
+            '{"message":"insufficient_quota: request rejected"}}}'
+        ),
+    ],
+    ids=["context-overflow", "insufficient-quota"],
+)
+def test_fatal_provider_error_kills_hung_opencode_run_early(
+    tmp_path: Path, json_line: str
+) -> None:
+    """A hung opencode process dies seconds after logging a fatal provider error."""
+    start = time.monotonic()
+    result = run_failed_model(
+        tmp_path,
+        json_line=json_line,
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "120",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "120",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "240",
+        },
+    )
+    elapsed = time.monotonic() - start
+
+    assert result.returncode == 1
+    assert "logged a fatal provider error while still running" in result.stdout
+    assert "skipping remaining attempts for this model" in result.stdout
+    assert elapsed < 25
+
+
+def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:
+    """Model prose mentioning fatal signatures never kills a healthy streaming run."""
+    result = run_failed_model(
+        tmp_path,
+        json_line=(
+            '{"type":"text","text":"This PR hardens ContextOverflowError and '
+            'context window handling in the model pool."}'
+        ),
+        extra_env={"FAKE_OPENCODE_HANG_SECONDS": "4"},
+    )
+
+    assert result.returncode == 1
+    assert "logged a fatal provider error while still running" not in result.stdout
 
 
 def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> None:
