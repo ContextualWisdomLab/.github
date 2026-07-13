@@ -2899,8 +2899,9 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         "current head is approved; merge mode disabled by scheduler inputs"
     )
     blocked_unmergeable_direct_or_auto = inspect(blocked_unmergeable, merge_mode="direct_or_auto")
-    assert blocked_unmergeable_direct_or_auto.action == "auto_merge"
+    assert blocked_unmergeable_direct_or_auto.action == "merge"
     assert "GitHub mergeability is BLOCKED" in blocked_unmergeable_direct_or_auto.reason
+    assert "direct merge requested" in blocked_unmergeable_direct_or_auto.reason
     blocked_unmergeable_direct = inspect(blocked_unmergeable, merge_mode="direct")
     assert blocked_unmergeable_direct.action == "wait"
     assert blocked_unmergeable_direct.reason == (
@@ -3007,16 +3008,17 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ),
         merge_mode="direct_or_auto",
     )
-    assert blocked_direct_or_auto.action == "auto_merge"
+    assert blocked_direct_or_auto.action == "merge"
     assert "GitHub mergeability is BLOCKED" in blocked_direct_or_auto.reason
-    assert "auto-merge enabled" in blocked_direct_or_auto.reason
+    assert "direct merge requested" in blocked_direct_or_auto.reason
     assert direct_merges == [
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
+        ("owner/repo", 1, True),
     ]
-    assert auto_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
+    assert auto_merges == [("owner/repo", 1, True)]
     blocked_already_auto = inspect(
         make_pr(
             mergeStateStatus="BLOCKED",
@@ -3035,12 +3037,12 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
+        ("owner/repo", 1, True),
     ]
-    assert auto_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
+    assert auto_merges == [("owner/repo", 1, True)]
     blocked_auto = inspect(blocked_approved, merge_mode="auto")
     assert blocked_auto.action == "auto_merge"
     assert auto_merges == [
-        ("owner/repo", 1, True),
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
     ]
@@ -3210,8 +3212,49 @@ def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direc
     assert "existing auto-merge request remains queued" in already_queued.reason
     assert auto_merges == [("owner/repo", 1, True)]
 
+    blocked = make_pr(
+        mergeStateStatus="BLOCKED",
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    blocked_decision = inspect(blocked, merge_mode="direct_or_auto")
+
+    assert blocked_decision.action == "auto_merge"
+    assert "GitHub mergeability is BLOCKED" in blocked_decision.reason
+    assert "direct merge was blocked by branch policy" in blocked_decision.reason
+    assert "At least 2 approving reviews are required" in blocked_decision.reason
+    assert auto_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
+
+    def non_policy_merge_failure(repo, pr, dry_run):
+        raise RuntimeError("Command failed (1): gh pr merge\ntransport closed before merge")
+
+    monkeypatch.setattr(sched, "merge_pr", non_policy_merge_failure)
+    with pytest.raises(RuntimeError, match="transport closed"):
+        inspect(blocked, merge_mode="direct_or_auto")
+
+    monkeypatch.setattr(sched, "merge_pr", policy_blocked_merge)
     with pytest.raises(RuntimeError, match="base branch policy prohibits"):
         inspect(approved, merge_mode="direct")
+
+
+def test_direct_or_auto_attempts_direct_merge_when_mergeability_is_blocked(monkeypatch):
+    approved = make_pr(
+        mergeStateStatus="BLOCKED",
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    direct_merges = []
+
+    monkeypatch.setattr(
+        sched,
+        "merge_pr",
+        lambda repo, pr, dry_run: direct_merges.append((repo, pr["number"], dry_run)),
+    )
+
+    decision = inspect(approved, merge_mode="direct_or_auto")
+
+    assert decision.action == "merge"
+    assert "direct merge requested" in decision.reason
+    assert "GitHub mergeability is BLOCKED" in decision.reason
+    assert direct_merges == [("owner/repo", 1, True)]
 
 
 def test_direct_merge_block_detail_keeps_generic_refusal_tail():
@@ -3537,6 +3580,15 @@ def test_action_error_guidance_distinguishes_update_branch_from_merge():
     assert "workflow-file PRs need a scheduler mutation credential" in workflow_permission_error
     assert "PR_REVIEW_MERGE_TOKEN" in workflow_permission_error
     assert "do not leave this as a review comment" in workflow_permission_error
+
+    auto_merge_disabled_error = sched.summarize_action_error(
+        RuntimeError(
+            "Command failed (1): gh pr merge 7 --auto --squash\n"
+            "GraphQL: Pull request auto-merge is disabled for this repository (enablePullRequestAutoMerge)"
+        )
+    )
+    assert "native auto-merge is disabled" in auto_merge_disabled_error
+    assert "--merge-mode direct_or_auto" in auto_merge_disabled_error
 
     unknown_mutation_error = sched.summarize_action_error(
         RuntimeError(

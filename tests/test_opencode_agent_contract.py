@@ -521,14 +521,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CHECK_LOOKUP_GH_TOKEN" in workflow
     assert "CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE" in workflow
     assert "retrying with workflow github token" in workflow
-    assert 'review_write_token="$GH_TOKEN"' in workflow
     assert 'review_write_token="$OPENCODE_APP_TOKEN"' in workflow
     assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
     assert 'review_write_token="$configured_review_write_token"' in workflow
     assert 'review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
-    assert 'review_write_fallback_token="$OPENCODE_APP_TOKEN"' in workflow
     assert "review write fallback token source=" in workflow
-    assert "using github-token primary and opencode-app fallback" in workflow
+    assert "using github-token primary and opencode-app fallback" not in workflow
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-$GH_TOKEN}"' not in workflow
     assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "1"' in workflow
     assert 'REVIEW_PUBLISH_RETRY_MAX_SLEEP_SECONDS: "20"' in workflow
@@ -924,17 +922,23 @@ def test_opencode_pending_peer_checks_hold_approval_without_failing_required_wor
     assert "build_waiting_for_checks_body" not in workflow
 
 
-def test_opencode_review_publication_prefers_merge_token_before_app_token():
-    """Use the less-contended merge token before the OpenCode app token."""
+def test_opencode_review_publication_prefers_app_token_for_review_writes():
+    """OpenCode review writes must use the OIDC-backed app token before workflow tokens."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
         encoding="utf-8"
     )
 
     assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || "
-        "steps.opencode_app_token.outputs.token || github.token }}"
+        "GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in workflow
+    assert (
+        "CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && "
+        "'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN"
+    ) in workflow
+    assert 'review_write_token="$OPENCODE_APP_TOKEN"' in workflow
+    assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
     assert 'OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS: "20"' in workflow
     assert '--max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}"' in workflow
     assert "app token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s" in workflow

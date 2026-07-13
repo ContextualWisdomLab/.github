@@ -2089,10 +2089,23 @@ def inspect_pr(
             return decide("wait", "current head is approved; merge mode disabled by scheduler inputs")
         if merge_mode in {"direct", "direct_or_auto"}:
             if merge_mode == "direct_or_auto":
-                enable_auto_merge(repo, pr, dry_run=dry_run)
+                try:
+                    merge_pr(repo, pr, dry_run=dry_run)
+                except RuntimeError as exc:
+                    if not direct_merge_can_fallback_to_auto_merge(exc):
+                        raise
+                    block_detail = direct_merge_block_detail(exc)
+                    enable_auto_merge(repo, pr, dry_run=dry_run)
+                    return decide(
+                        "auto_merge",
+                        "current head is approved; direct merge was blocked by branch policy, "
+                        "so auto-merge was enabled with the same head guard evidence; "
+                        f"GitHub mergeability is {merge_state}; GitHub reported: {block_detail}",
+                    )
                 return decide(
-                    "auto_merge",
-                    f"current head is approved; auto-merge enabled while GitHub mergeability is {merge_state}",
+                    "merge",
+                    f"current head is approved; direct merge requested with {mutation_token_label()} "
+                    f"and --match-head-commit while GitHub mergeability is {merge_state}",
                 )
             return decide(
                 "wait",
@@ -2534,6 +2547,12 @@ def summarize_action_error(exc: RuntimeError) -> str:
             f"{summary}; workflow-file PRs need a scheduler mutation credential with GitHub `workflows` permission. "
             "Configure `PR_REVIEW_MERGE_TOKEN` or expand the selected GitHub App permission, then rerun the scheduler; "
             "do not leave this as a review comment for the PR author."
+        )
+    if "auto-merge is disabled" in lower_summary or "auto merge is disabled" in lower_summary:
+        summary = (
+            f"{summary}; native auto-merge is disabled for this repository. "
+            "Use `--merge-mode direct_or_auto` so the scheduler attempts a guarded direct merge before queueing native auto-merge, "
+            "or enable repository auto-merge when branch policy requires GitHub's queued merge path."
         )
     if "resource not accessible by integration" in lower_summary:
         if "mergepullrequest" in lower_summary or "enablepullrequestautomerge" in lower_summary or "gh pr merge" in lower_summary:
