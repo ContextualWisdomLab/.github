@@ -714,6 +714,17 @@ def test_sarif_upload_quota_is_separate_from_local_security_gates(
         assert "steps.bandit.outputs.rc != '0'" in workflow
 
 
+def test_default_branch_scorecard_upload_quota_is_non_blocking() -> None:
+    """A soft Scorecard upload outage must not fail the default branch."""
+    workflow = workflow_text("scorecard-analysis.yml")
+    marker = "      - name: Upload to code scanning\n"
+    start = workflow.index(marker)
+    upload_step = workflow[start:]
+
+    assert "continue-on-error: true" in upload_step
+    assert "github/codeql-action/upload-sarif" in upload_step
+
+
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     assert "fail-on-severity: moderate" in workflow
