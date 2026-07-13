@@ -3230,7 +3230,7 @@ jobs:
           OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "3600"
+          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "2100"
           # Keep cycling through the high-sensitivity candidate catalog until
           # the retry budget or step timeout is exhausted; a single invalid
           # cycle can be all provider formatting noise rather than review
@@ -3247,12 +3247,15 @@ jobs:
           OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
           OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "600"
+          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "1800"
+          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a
           # full medium/large cadence slot after the long-context candidate.
           OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"
-          OPENCODE_DYNAMIC_MAX_CYCLES: "0"
+          OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "600"
