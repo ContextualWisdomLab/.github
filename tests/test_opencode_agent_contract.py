@@ -1437,6 +1437,11 @@ def test_slow_peer_wait_matches_only_image_validation_checks():
     assert workflow.count(f"grep -Eiq -- '{fast_pattern}'") == 1
     assert workflow.count(f"grep -Eiq -- '{general_pattern}'") == 1
 
+    def matches_workflow_grep(pattern: str, candidate: str) -> bool:
+        """Mirror the workflow's grep -Eiq check without requiring grep locally."""
+        flags = re.IGNORECASE | re.MULTILINE
+        return re.search(pattern, candidate, flags) is not None
+
     probes = (
         ("- validate naruon image: in_progress\n", True, True),
         (
@@ -1444,12 +1449,17 @@ def test_slow_peer_wait_matches_only_image_validation_checks():
             False,
             True,
         ),
+        ("noise\n- validate naruon image: queued\n", True, True),
+        ("- VALIDATE naruon IMAGE: queued\n", True, True),
+        ("- validate backend image: success\ntrailing noise\n", True, True),
         ("- invalidate naruon image: in_progress\n", False, False),
         ("- validate security/image: in_progress\n", False, False),
         ("- docs image validation: in_progress\n", False, False),
+        ("- Build and Publish Docker Images/VALIDATE frontend IMAGE: queued\n", False, True),
+        ("- Build and Publish Docker Images/validate security/image: queued\n", False, False),
     )
     for candidate, fast_expected, general_expected in probes:
-        fast_match = re.search(fast_pattern, candidate, re.IGNORECASE | re.MULTILINE) is not None
-        general_match = re.search(general_pattern, candidate, re.IGNORECASE | re.MULTILINE) is not None
+        fast_match = matches_workflow_grep(fast_pattern, candidate)
+        general_match = matches_workflow_grep(general_pattern, candidate)
         assert fast_match is fast_expected, candidate
         assert general_match is general_expected, candidate
