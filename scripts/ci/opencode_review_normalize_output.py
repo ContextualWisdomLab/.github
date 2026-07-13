@@ -230,6 +230,43 @@ HANGUL_RE = re.compile(r"[가-힣]")
 PREFERRED_REVIEW_LANGUAGE_RE = re.compile(
     r"Preferred review language:\s*`?([A-Za-z]+)`?", re.IGNORECASE
 )
+RUNTIME_TOOL_PATTERN = re.compile(
+    r"\b(?:react\s+devtools|chrome\s+devtools|browser\s+devtools|"
+    r"headless\s+chromium|playwright|cypress|selenium|puppeteer|webdriver|"
+    r"chromium|chrome|firefox|safari|browser)\b",
+    re.IGNORECASE,
+)
+RUNTIME_ASSERTION_PATTERN = re.compile(
+    r"\b(?:ran|executed|used|observed|verified|confirmed|validated|passed|"
+    r"proved|demonstrated|showed|launched|opened|inspected|rendered|exercised|"
+    r"tested|checked|navigated|visited|browsed|loaded|displayed|captured|recorded|"
+    r"profiled|traced|clicked|typed|submitted|interacted|completed|succeeded|"
+    r"worked|generated|produced|took|reproduced|replayed|debugged|runs|executes|"
+    r"uses|observes|verifies|confirms|validates|passes|proves|demonstrates|shows|"
+    r"launches|opens|inspects|renders|exercises|checks|navigates|visits|browses|"
+    r"loads|displays|captures|records|profiles|traces|clicks|types|submits|"
+    r"interacts|completes|succeeds|works|generates|produces|takes|reproduces|"
+    r"replays|debugs|reports|indicates|(?:did|does|do)\s+(?:run|execute|use|"
+    r"observe|verify|confirm|validate|pass|prove|demonstrate|show|launch|open|"
+    r"inspect|render|exercise|check|navigate|visit|browse|load|display|capture|"
+    r"record|profile|trace|click|type|submit|interact|complete|succeed|work|"
+    r"generate|produce|take|reproduce|replay|debug|report|indicate))\b",
+    re.IGNORECASE,
+)
+NEGATED_RUNTIME_ASSERTION_PATTERN = re.compile(
+    r"(?:\b(?:did|could|was|were|is|are|has|have)\s+not\b|\bnot\b|\bnever\b|"
+    r"\bwithout\b|\b(?:didn't|couldn't|wasn't|weren't|isn't|aren't|"
+    r"hasn't|haven't)\b)",
+    re.IGNORECASE,
+)
+EXECUTION_RECEIPT_PATTERN = re.compile(
+    r"^OPENCODE_EXECUTION_RECEIPT\s+"
+    r"tool=(react-devtools|chrome-devtools|browser-devtools|headless-chromium|"
+    r"playwright|cypress|selenium|puppeteer|webdriver|chromium|chrome|firefox|"
+    r"safari|browser)\s+"
+    r"status=(?:passed|observed)$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def admits_missing_structural_review(reason: str, summary: str) -> bool:
@@ -251,17 +288,20 @@ def control_review_text(value: dict[str, Any]) -> str:
     for finding in value.get("findings", []) or []:
         if not isinstance(finding, dict):
             continue
-        chunks.extend(str(finding.get(field, "")) for field in (
-            "path",
-            "line",
-            "severity",
-            "title",
-            "problem",
-            "root_cause",
-            "fix_direction",
-            "regression_test_direction",
-            "suggested_diff",
-        ))
+        chunks.extend(
+            str(finding.get(field, ""))
+            for field in (
+                "path",
+                "line",
+                "severity",
+                "title",
+                "problem",
+                "root_cause",
+                "fix_direction",
+                "regression_test_direction",
+                "suggested_diff",
+            )
+        )
     return "\n".join(chunks)
 
 
@@ -299,13 +339,22 @@ def contains_non_actionable_failed_check_review(value: dict[str, Any]) -> bool:
 def non_actionable_failed_check_review_phrase(value: dict[str, Any]) -> str:
     """Return the failed-check deflection phrase found in the review, if any."""
     combined = control_review_text(value).casefold()
-    return next((phrase for phrase in NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES if phrase in combined), "")
+    return next(
+        (
+            phrase
+            for phrase in NON_ACTIONABLE_FAILED_CHECK_REVIEW_PHRASES
+            if phrase in combined
+        ),
+        "",
+    )
 
 
 def model_failure_approval_phrase(reason: str, summary: str) -> str:
     """Return the model-failure approval phrase found in approval prose, if any."""
     combined = f"{reason}\n{summary}".casefold()
-    return next((phrase for phrase in MODEL_FAILURE_APPROVAL_PHRASES if phrase in combined), "")
+    return next(
+        (phrase for phrase in MODEL_FAILURE_APPROVAL_PHRASES if phrase in combined), ""
+    )
 
 
 def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
@@ -331,12 +380,86 @@ def current_changed_files() -> frozenset[str]:
         return frozenset()
 
 
+def runtime_tool_slug(tool_name: str) -> str:
+    """Return the canonical receipt slug for a browser execution tool."""
+    return re.sub(r"\s+", "-", tool_name.strip().casefold())
+
+
+@lru_cache(maxsize=1)
+def trusted_execution_receipts() -> frozenset[str]:
+    """Return browser tools backed by trusted workflow execution receipts."""
+    receipt_path = os.environ.get("OPENCODE_EXECUTION_RECEIPTS_FILE")
+    if not receipt_path:
+        return frozenset()
+    try:
+        receipt_text = Path(receipt_path).read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    return frozenset(
+        runtime_tool_slug(match.group(1))
+        for match in EXECUTION_RECEIPT_PATTERN.finditer(receipt_text)
+    )
+
+
+def runtime_assertion_is_negated(
+    text: str,
+    assertion: re.Match[str],
+    *,
+    suffix: str = "",
+) -> bool:
+    """Return whether a nearby negation applies to this execution assertion."""
+    prefix = text[max(0, assertion.start() - 40) : assertion.start()]
+    prefix = re.split(r"[,;]|\bbut\b|\bhowever\b", prefix, flags=re.IGNORECASE)[-1]
+    return NEGATED_RUNTIME_ASSERTION_PATTERN.search(f"{prefix}{suffix}") is not None
+
+
+def claimed_runtime_tools(text: str) -> tuple[str, ...]:
+    """Return every browser tool asserted as executed, excluding explicit limits."""
+    claimed_tools: list[str] = []
+    for tool_match in RUNTIME_TOOL_PATTERN.finditer(text):
+        before = text[max(0, tool_match.start() - 96) : tool_match.start()]
+        after = text[tool_match.end() : tool_match.end() + 96]
+        before = re.split(r"[.;\n]", before)[-1]
+        after = re.split(r"[.;\n]", after)[0]
+        before_matches = list(RUNTIME_ASSERTION_PATTERN.finditer(before))
+        if before_matches:
+            before_match = before_matches[-1]
+            if not runtime_assertion_is_negated(
+                before,
+                before_match,
+                suffix=before[before_match.end() :],
+            ):
+                claimed_tools.append(runtime_tool_slug(tool_match.group(0)))
+                continue
+        if any(
+            not runtime_assertion_is_negated(after, after_match)
+            for after_match in RUNTIME_ASSERTION_PATTERN.finditer(after)
+        ):
+            claimed_tools.append(runtime_tool_slug(tool_match.group(0)))
+    return tuple(dict.fromkeys(claimed_tools))
+
+
+def claimed_runtime_tool(text: str) -> str:
+    """Return the first browser tool asserted as executed, if one exists."""
+    return next(iter(claimed_runtime_tools(text)), "")
+
+
+def unreceipted_runtime_tool_claim(text: str) -> str:
+    """Return an asserted browser tool missing a trusted execution receipt."""
+    receipts = trusted_execution_receipts()
+    for tool_slug in claimed_runtime_tools(text):
+        if tool_slug not in receipts:
+            return tool_slug
+    return ""
+
+
 def adversarial_validation_required() -> bool:
     """Return whether the central workflow requires structured attack probes."""
-    return (
-        os.environ.get("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "").casefold()
-        in {"1", "true", "yes"}
-    )
+    return os.environ.get("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "").casefold() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def required_adversarial_probe_count() -> int:
@@ -396,11 +519,15 @@ def adversarial_validation_error(
             field_value = probe.get(field)
             if not isinstance(field_value, str) or not field_value.strip():
                 return f"adversarial probe {index} field {field} must be non-empty"
+        runtime_tool = unreceipted_runtime_tool_claim(str(probe.get("evidence") or ""))
+        if runtime_tool:
+            return (
+                f"adversarial probe {index} claims {runtime_tool} execution "
+                "without a trusted workflow receipt"
+            )
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
-            return (
-                f"adversarial probe {index} outcome must be falsified or confirmed"
-            )
+            return f"adversarial probe {index} outcome must be falsified or confirmed"
         if outcome == "confirmed":
             confirmed_locations.add((path, line))
 
@@ -473,13 +600,23 @@ def contradicts_changed_file_kinds(reason: str, summary: str) -> bool:
         "no supported source files or package manifests",
         "",
     )
-    has_source_like_change = any(changed_file_is_source_like(path) for path in changed_files)
-    has_test_like_change = any(changed_file_is_test_like(path) for path in changed_files)
-    if has_source_like_change and any(phrase in combined_for_kind_claims for phrase in SOURCE_KIND_FALSE_PHRASES):
+    has_source_like_change = any(
+        changed_file_is_source_like(path) for path in changed_files
+    )
+    has_test_like_change = any(
+        changed_file_is_test_like(path) for path in changed_files
+    )
+    if has_source_like_change and any(
+        phrase in combined_for_kind_claims for phrase in SOURCE_KIND_FALSE_PHRASES
+    ):
         return True
-    if has_source_like_change and any(phrase in combined_for_kind_claims for phrase in EXECUTABLE_KIND_FALSE_PHRASES):
+    if has_source_like_change and any(
+        phrase in combined_for_kind_claims for phrase in EXECUTABLE_KIND_FALSE_PHRASES
+    ):
         return True
-    if has_test_like_change and any(phrase in combined for phrase in TEST_KIND_FALSE_PHRASES):
+    if has_test_like_change and any(
+        phrase in combined for phrase in TEST_KIND_FALSE_PHRASES
+    ):
         return True
     return False
 
@@ -500,7 +637,12 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     """Return whether an approval names an exact current-head changed file."""
     changed_files = current_changed_files()
     combined = f"{reason}\n{summary}".casefold()
-    if not changed_files and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined or "no ui codebase changes" in combined):
+    if not changed_files and (
+        "no executable changes" in combined
+        or "no changed files" in combined
+        or "no changes" in combined
+        or "no ui codebase changes" in combined
+    ):
         return True
     if not changed_files:
         return mentions_changed_file_evidence(reason, summary)
@@ -511,7 +653,12 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
 def mentions_verification_posture(reason: str, summary: str) -> bool:
     """Return whether an approval records the concrete review surfaces checked."""
     combined = f"{reason}\n{summary}".casefold()
-    if not current_changed_files() and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined or "no ui codebase changes" in combined):
+    if not current_changed_files() and (
+        "no executable changes" in combined
+        or "no changed files" in combined
+        or "no changes" in combined
+        or "no ui codebase changes" in combined
+    ):
         # Handle no-op PRs with empty/no changed files where deep verification labels may be omitted by model.
         return True
     return (
@@ -558,12 +705,9 @@ def coverage_section_is_valid(section: str) -> bool:
     """Return whether one approval coverage label cites acceptable evidence."""
     if "coverage execution evidence" not in section:
         return False
-    if (
-        "not applicable" in section
-        and (
-            "no supported source files or package manifests" in section
-            or "no supported changed source files or package manifests" in section
-        )
+    if "not applicable" in section and (
+        "no supported source files or package manifests" in section
+        or "no supported changed source files or package manifests" in section
     ):
         return True
     if any(phrase in section for phrase in COVERAGE_FAILURE_PHRASES):
@@ -582,7 +726,12 @@ def coverage_section_is_valid(section: str) -> bool:
 def mentions_full_coverage(reason: str, summary: str) -> bool:
     """Return whether test and docstring coverage labels cite valid evidence."""
     combined = f"{reason}\n{summary}".casefold()
-    if not current_changed_files() and ("no executable changes" in combined or "no changed files" in combined or "no changes" in combined or "no ui codebase changes" in combined):
+    if not current_changed_files() and (
+        "no executable changes" in combined
+        or "no changed files" in combined
+        or "no changes" in combined
+        or "no ui codebase changes" in combined
+    ):
         return True
     coverage_section = label_section(combined, "coverage:")
     docstring_section = label_section(combined, "docstring coverage:")
@@ -657,7 +806,8 @@ def evidence_coverage_mode(text: str) -> str | None:
         return "full"
     if (
         "- test evidence: supported repository test suites passed" in section
-        and "- docstring evidence: configured repository docstring gates passed or docstring coverage was advisory" in section
+        and "- docstring evidence: configured repository docstring gates passed or docstring coverage was advisory"
+        in section
     ):
         return "suite_passed"
     no_source = (
@@ -729,7 +879,7 @@ Breaking-change/backcompat: deployment evidence and changed-file history were ch
 Performance: changed surfaces were checked for performance risk in bounded evidence.
 Developer experience: changed automation, review, test, setup, and maintenance surfaces were checked for helpful or obstructive DX impact in bounded evidence.
 User experience: connected user, operator, API, CLI, documentation, review-comment, status-check, rendering, and workflow-reader behavior was checked for contradictions against code, docs, and tests in bounded evidence.
-Visual/DOM: Playwright visual, DOM locator, ARIA snapshot, console, and responsive evidence were checked when a web UI surface was present; for non-web surfaces, API/CLI/log/docs/workflow interaction evidence was reviewed instead.
+Visual/DOM: deterministic repair does not infer browser runtime execution; source-backed DOM/UI evidence and trusted workflow receipts were reviewed when present, and non-web surfaces used API/CLI/log/docs/workflow evidence instead.
 Accessibility/i18n: accessibility, localization, and human-readable text surfaces were checked where UI, CLI, API message, docs, logs, or review text changed.
 Supply-chain/license: dependency, package, model, container, and external-tool changes were checked in bounded evidence.
 Packaging: package, build, test, lint, and security contracts were checked in bounded evidence.
@@ -792,6 +942,7 @@ def repair_approval_reason(reason: str, summary: str) -> str:
 
 def check_structural_approval(control_file: Path) -> int:
     """Validate an already-normalized control block before publishing approval."""
+
     def reject(reason: str) -> int:
         """Reject approval with a stable no-conclusion reason."""
         print(f"NO_CONCLUSION: {reason}", file=sys.stderr)
@@ -816,6 +967,11 @@ def check_structural_approval(control_file: Path) -> int:
     )
     if adversarial_error:
         return reject(adversarial_error)
+    runtime_tool = unreceipted_runtime_tool_claim(control_review_text(value))
+    if runtime_tool:
+        return reject(
+            f"review claims {runtime_tool} execution without a trusted workflow receipt"
+        )
 
     if value.get("result") == "APPROVE" and admits_missing_structural_review(
         str(value.get("reason", "")),
@@ -836,7 +992,9 @@ def check_structural_approval(control_file: Path) -> int:
         str(value.get("reason", "")),
         str(value.get("summary", "")),
     ):
-        return reject("approval does not prove 100% coverage or an explicit no-source exception")
+        return reject(
+            "approval does not prove 100% coverage or an explicit no-source exception"
+        )
     if value.get("result") == "APPROVE" and contradicts_changed_file_kinds(
         str(value.get("reason", "")),
         str(value.get("summary", "")),
@@ -882,9 +1040,7 @@ def canonicalize_finding_fields(finding: dict[str, Any]) -> dict[str, Any]:
 
     finding = dict(finding)
     priority = finding.pop("priority", None)
-    if not has_non_blank_text(finding.get("severity")) and has_non_blank_text(
-        priority
-    ):
+    if not has_non_blank_text(finding.get("severity")) and has_non_blank_text(priority):
         finding["severity"] = priority
     return finding
 
@@ -933,6 +1089,8 @@ def valid_control(
         findings=findings,
     )
     if adversarial_error:
+        return None
+    if unreceipted_runtime_tool_claim(control_review_text(value)):
         return None
     if contains_non_actionable_failed_check_review(value):
         return None
@@ -1078,7 +1236,12 @@ def main(argv: list[str]) -> int:
         if control is None:
             continue
 
-        normalized_json = json.dumps(control, separators=(",", ":"), ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        normalized_json = (
+            json.dumps(control, separators=(",", ":"), ensure_ascii=False)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
         output_file.write_text(
             "\n".join(
                 [
