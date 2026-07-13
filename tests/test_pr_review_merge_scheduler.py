@@ -122,6 +122,31 @@ def inspect(pr, **overrides):
     return sched.inspect_pr("owner/repo", pr, **kwargs)
 
 
+def last_push_restamp_candidate(**overrides):
+    value = make_pr(
+        mergeStateStatus="BLOCKED",
+        restMergeableState="BLOCKED",
+        reviewDecision="APPROVED",
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        commits={
+            "nodes": [
+                {
+                    "commit": {
+                        "oid": "head",
+                        "authoredDate": "2026-06-25T07:00:00Z",
+                        "committedDate": "2026-06-25T07:00:00Z",
+                        "messageHeadline": "fix: current head",
+                    }
+                }
+            ]
+        },
+    )
+    value.update(overrides)
+    return value
+
+
 def test_run_split_repo_and_graphql(monkeypatch):
     assert sched.run([sys.executable, "-c", "print('ok')"]).strip() == "ok"
     with pytest.raises(RuntimeError):
@@ -1562,6 +1587,67 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     ]
 
 
+def test_last_push_approval_restamp_creates_same_tree_child(monkeypatch):
+    calls = []
+    head_sha = "a" * 40
+    tree_sha = "b" * 40
+    new_head = "c" * 40
+
+    def fake_run(args, stdin=None):
+        calls.append((args, stdin))
+        if args == ["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".head.sha"]:
+            return head_sha
+        if args == ["gh", "api", f"repos/owner/repo/git/commits/{head_sha}"]:
+            return json.dumps({"tree": {"sha": tree_sha}})
+        if args == ["gh", "api", "-X", "POST", "repos/owner/repo/git/commits", "--input", "-"]:
+            payload = json.loads(stdin)
+            assert payload == {
+                "message": sched.LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
+                "tree": tree_sha,
+                "parents": [head_sha],
+            }
+            return json.dumps({"sha": new_head})
+        if args == ["gh", "api", "-X", "PATCH", "repos/owner/repo/git/refs/heads/feature", "--input", "-"]:
+            assert json.loads(stdin) == {"sha": new_head, "force": False}
+            return "{}"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    pr = make_pr(number=7, headRefOid=head_sha, headRefName="feature")
+
+    assert sched.restamp_pr_head_for_last_push_approval("owner/repo", pr, dry_run=False) == new_head
+    assert calls[-1][0][-2:] == ["--input", "-"]
+
+
+def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
+    head_sha = "a" * 40
+
+    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
+
+    external = make_pr(
+        number=7,
+        headRefOid=head_sha,
+        isCrossRepository=True,
+        maintainerCanModify=False,
+        headRepository={"nameWithOwner": "fork/repo"},
+    )
+    with pytest.raises(RuntimeError, match="same-repository PR heads"):
+        sched.restamp_pr_head_for_last_push_approval("owner/repo", external, dry_run=False)
+
+    monkeypatch.setattr(
+        sched,
+        "run",
+        lambda args, stdin=None: "d" * 40
+        if args == ["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".head.sha"]
+        else "{}",
+    )
+    stale = make_pr(number=7, headRefOid=head_sha, headRefName="feature")
+    with pytest.raises(RuntimeError, match="PR head changed"):
+        sched.restamp_pr_head_for_last_push_approval("owner/repo", stale, dry_run=False)
+
+
 def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypatch):
     calls = []
 
@@ -2543,6 +2629,77 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_auto_decision.reason
     assert "required approving review" in blocked_auto_decision.reason
     assert "rerun the scheduler" in blocked_auto_decision.reason
+
+    assert sched.latest_commit_headline(make_pr(commits={"nodes": []})) == ""
+    restamp_candidate = last_push_restamp_candidate()
+    assert sched.latest_commit_headline(restamp_candidate) == "fix: current head"
+    assert not sched.head_already_restamped_for_last_push_approval(restamp_candidate)
+    assert sched.should_restamp_for_last_push_approval(
+        "owner/repo",
+        restamp_candidate,
+        "BLOCKED",
+        current_head_approved=True,
+        auto_merge_enabled=True,
+    )
+    assert not sched.should_restamp_for_last_push_approval(
+        "owner/repo",
+        last_push_restamp_candidate(
+            isCrossRepository=True,
+            maintainerCanModify=False,
+            headRepository={"nameWithOwner": "fork/repo"},
+        ),
+        "BLOCKED",
+        current_head_approved=True,
+        auto_merge_enabled=True,
+    )
+    assert not sched.should_restamp_for_last_push_approval(
+        "owner/repo",
+        last_push_restamp_candidate(statusCheckRollup={"contexts": {"nodes": []}}),
+        "BLOCKED",
+        current_head_approved=True,
+        auto_merge_enabled=True,
+    )
+
+    disabled_restamp = inspect(restamp_candidate, update_branches=False)
+    assert disabled_restamp.action == "wait"
+    assert "last-push approval head refresh disabled" in disabled_restamp.reason
+    limited_restamp = inspect(restamp_candidate, branch_update_allowed=False, branch_update_limit=0)
+    assert limited_restamp.action == "wait"
+    assert "branch update limit reached" in limited_restamp.reason
+
+    already_restamped = last_push_restamp_candidate(
+        commits={
+            "nodes": [
+                {
+                    "commit": {
+                        "oid": "head",
+                        "committedDate": "2026-06-25T07:00:00Z",
+                        "messageHeadline": sched.LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
+                    }
+                }
+            ]
+        }
+    )
+    assert sched.head_already_restamped_for_last_push_approval(already_restamped)
+    already_restamped_decision = inspect(already_restamped)
+    assert already_restamped_decision.action == "wait"
+    assert "head refresh already exists" in already_restamped_decision.reason
+
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_for_last_push_approval",
+        lambda repo, pr, dry_run: "f" * 40,
+    )
+    restamp_decision = inspect(restamp_candidate)
+    assert restamp_decision.action == "restamp_head"
+    assert restamp_decision.notes == ("last-push approval head refresh created same-tree head ffffffffffff",)
+    assert sched.contract_decision(restamp_decision) == "UPDATE_BRANCH"
+    restamp_guidance = sched.decision_guidance(restamp_decision)
+    assert restamp_guidance["type"] == "last_push_approval_restamp"
+    assert restamp_guidance["head_guard"] == "live PR head check plus force=false Git ref update"
+    summary = sched.last_push_approval_restamp_summary([restamp_decision])
+    assert "Last-push approval head refresh" in "\n".join(summary)
+    assert "same-tree head ffffffffffff" in "\n".join(summary)
 
     stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
     dispatched = []

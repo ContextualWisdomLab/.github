@@ -83,10 +83,22 @@ jobs:
             --exclude='docs/research/**/standards' \
             --error \
             --sarif \
-            --output=semgrep-results.sarif \
+            --output=semgrep-results.raw.sarif \
             --metrics=off
           echo "rc=$?" >> "$GITHUB_OUTPUT"
           set -e
+      - name: Remove explicitly suppressed findings from Semgrep SARIF
+        id: semgrep_sarif
+        if: always() && hashFiles('semgrep-results.raw.sarif') != ''
+        run: |
+          set -euo pipefail
+          suppressed_count=$(jq '[.runs[]?.results[]? | select(((.suppressions // []) | length) > 0)] | length' semgrep-results.raw.sarif)
+          jq '(.runs[]? | .results) |= ((. // []) | map(select(((.suppressions // []) | length) == 0)))' \
+            semgrep-results.raw.sarif > semgrep-results.sarif
+          finding_count=$(jq '[.runs[]?.results[]?] | length' semgrep-results.sarif)
+          echo "suppressed_count=$suppressed_count" >> "$GITHUB_OUTPUT"
+          echo "finding_count=$finding_count" >> "$GITHUB_OUTPUT"
+          echo "SEMGREP_SUPPRESSED_COUNT=$suppressed_count SEMGREP_FINDING_COUNT=$finding_count"
       - name: Upload Semgrep SARIF to code scanning
         if: always() && hashFiles('semgrep-results.sarif') != ''
         continue-on-error: true
@@ -98,10 +110,11 @@ jobs:
         if: always() && hashFiles('semgrep-results.sarif') != ''
         env:
           SEMGREP_RC: ${{ steps.semgrep.outputs.rc }}
+          SEMGREP_SUPPRESSED_COUNT: ${{ steps.semgrep_sarif.outputs.suppressed_count }}
         run: |
           set -euo pipefail
           finding_count=$(jq '[.runs[]?.results[]?] | length' semgrep-results.sarif)
-          echo "SEMGREP_FINDING_COUNT=${finding_count} SEMGREP_RC=${SEMGREP_RC:-missing}"
+          echo "SEMGREP_FINDING_COUNT=${finding_count} SEMGREP_SUPPRESSED_COUNT=${SEMGREP_SUPPRESSED_COUNT:-missing} SEMGREP_RC=${SEMGREP_RC:-missing}"
           jq -r '
             .runs[]? as $run
             | ($run.tool.driver.rules // []
@@ -119,11 +132,12 @@ jobs:
             echo "SEMGREP_ENGINE_FAILURE rc=${SEMGREP_RC:-missing}: Semgrep failed without a WARNING/ERROR SARIF result; inspect the scan command output above."
           fi
       - name: Enforce Semgrep gate (fail on Medium+ findings)
-        if: steps.semgrep.outputs.rc != '0'
+        if: always() && (steps.semgrep_sarif.outputs.finding_count != '0' || steps.semgrep.outputs.rc != '0')
         env:
           SEMGREP_RC: ${{ steps.semgrep.outputs.rc }}
+          SEMGREP_FINDING_COUNT: ${{ steps.semgrep_sarif.outputs.finding_count }}
         run: |
-          if [ "${SEMGREP_RC}" = "1" ]; then
+          if [ "${SEMGREP_FINDING_COUNT:-missing}" != "0" ]; then
             echo "::error::Semgrep found WARNING/ERROR (Medium+) findings. Every rule, path, line, and message is listed in the preceding report step and the 'semgrep' code scanning category."
           else
             echo "::error::Semgrep engine/configuration failed with rc=${SEMGREP_RC}. The concrete scan output and SARIF report are logged above."

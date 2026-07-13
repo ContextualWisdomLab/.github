@@ -220,7 +220,11 @@ jobs:
               "base/head comparison."
           )
       - name: Upload OSV SARIF to code scanning
+        id: upload_osv_sarif
         if: always() && hashFiles('results.sarif') != ''
+        # The reporter above is the vulnerability gate. Preserve an upload
+        # quota failure in this step's log without reclassifying it as a CVE.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: results.sarif
@@ -229,6 +233,11 @@ jobs:
           # merge ref and fail with "commit_oid is not a merge commit".
           ref: refs/pull/${{ github.event.pull_request.number }}/head
           sha: ${{ github.event.pull_request.head.sha }}
+          wait-for-processing: false
+      - name: Report OSV SARIF upload failure
+        if: steps.upload_osv_sarif.outcome == 'failure'
+        run: |
+          echo "::warning::OSV SARIF upload to code scanning failed after the base/head comparison. The PR-introduced vulnerability reporter above remains the hard gate, so upload rate limits cannot hide OSV findings."
       - name: Upload OSV debug artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
@@ -370,11 +379,19 @@ jobs:
               print("Remediate each finding at the shared base branch so open PRs inherit the fix.")
               raise SystemExit(1)
       - name: Upload Trivy SARIF to code scanning
+        id: upload_trivy_sarif
         if: always() && hashFiles('trivy-results.sarif') != ''
+        # The parser above fails on every fixable Medium+ finding independently.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
+          wait-for-processing: false
+      - name: Report Trivy SARIF upload failure
+        if: steps.upload_trivy_sarif.outcome == 'failure'
+        run: |
+          echo "::warning::Trivy SARIF upload to code scanning failed after the filesystem scan. The Trivy finding log above remains the hard gate, so upload rate limits cannot hide CRITICAL/HIGH/MEDIUM findings."
 
   scorecard:
     if: github.event.action != 'closed'
@@ -437,7 +454,15 @@ jobs:
           )
           PY
       - name: Upload Scorecard SARIF to code scanning
+        id: upload_scorecard_sarif
+        # Scorecard is soft repository-posture evidence; upload quota is external.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: results.sarif
           category: scorecard
+          wait-for-processing: false
+      - name: Report Scorecard SARIF upload failure
+        if: steps.upload_scorecard_sarif.outcome == 'failure'
+        run: |
+          echo "::warning::Scorecard SARIF upload to code scanning failed after delegated PR-only findings were filtered. Scorecard is PR posture evidence only; CodeQL, OSV, Trivy, and dependency-review remain the hard gates."
