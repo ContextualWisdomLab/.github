@@ -725,7 +725,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s"' in workflow
     assert "OpenCode model pool exceeded the outer" in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
     assert re.search(r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: 8", workflow)
     assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 10", workflow)
@@ -749,7 +749,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert 'OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt' in workflow
     assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
@@ -761,7 +761,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
         "      - name: Run merge scheduler after approval", 1
