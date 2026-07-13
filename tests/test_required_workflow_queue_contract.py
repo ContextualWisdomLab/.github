@@ -673,6 +673,19 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
     assert "VulnerabilitiesID" not in default_branch_scorecard
 
 
+def test_standalone_scorecard_delegates_code_scanning_upload_to_central_gate() -> None:
+    """The supplemental Scorecard run must not duplicate the central SARIF upload."""
+    standalone = workflow_text("scorecard-pr.yml")
+    central = workflow_text("security-scan.yml")
+
+    assert "security-events: write" not in standalone
+    assert "github/codeql-action/upload-sarif" not in standalone
+    assert "Preserve Scorecard PR SARIF evidence" in standalone
+    assert "actions/upload-artifact" in standalone
+    assert "Upload Scorecard SARIF to code scanning" in central
+    assert "category: scorecard" in central
+
+
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     assert "fail-on-severity: moderate" in workflow
