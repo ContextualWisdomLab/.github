@@ -612,6 +612,8 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     workflow = workflow_text("strix.yml")
 
     assert "RateLimitError|Too many requests" in workflow
+    assert "exceeded your current quota" in workflow
+    assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow

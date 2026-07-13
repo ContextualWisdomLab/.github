@@ -2735,6 +2735,11 @@ is_rate_limit_error() {
 		return 0
 	fi
 
+	if grep -Eiq '(exceeded your current quota|insufficient_quota|billing details)' "$STRIX_LOG" &&
+		grep -Eiq "$LLM_PROVIDER_ONLY_REGEX" "$STRIX_LOG"; then
+		return 0
+	fi
+
 	# Bare HTTP 429 — require a provider marker so we don't misclassify
 	# target-application rate-limit responses as LLM provider errors.
 	if grep -Eq '(^|[^0-9])429([^0-9]|$)' "$STRIX_LOG" &&
