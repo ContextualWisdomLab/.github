@@ -11,6 +11,7 @@ from scripts.ci import opencode_review_normalize_output as norm
 @pytest.fixture(autouse=True)
 def clear_caches():
     norm.current_changed_files.cache_clear()
+    norm.trusted_execution_receipts.cache_clear()
 
 
 FULL_SUMMARY = """\
@@ -109,34 +110,43 @@ def test_adversarial_validation_requires_two_falsified_material_probes(
 ):
     require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
     approved = control(adversarial_validation=adversarial_validation())
-    assert norm.valid_control(
-        approved,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is not None
+    assert (
+        norm.valid_control(
+            approved,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is not None
+    )
 
     one_probe = control(
         adversarial_validation=adversarial_validation(outcomes=("falsified",))
     )
-    assert norm.valid_control(
-        one_probe,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is None
+    assert (
+        norm.valid_control(
+            one_probe,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
 
     confirmed_probe = control(
         adversarial_validation=adversarial_validation(
             outcomes=("falsified", "confirmed")
         )
     )
-    assert norm.valid_control(
-        confirmed_probe,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is None
+    assert (
+        norm.valid_control(
+            confirmed_probe,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
 
 
 def test_adversarial_request_changes_requires_confirmed_probe_at_finding(
@@ -150,12 +160,15 @@ def test_adversarial_request_changes_requires_confirmed_probe_at_finding(
             status="failed", outcomes=("falsified", "confirmed")
         ),
     )
-    assert norm.valid_control(
-        blocked,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is not None
+    assert (
+        norm.valid_control(
+            blocked,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is not None
+    )
 
     wrong_anchor = control(
         result="REQUEST_CHANGES",
@@ -164,12 +177,15 @@ def test_adversarial_request_changes_requires_confirmed_probe_at_finding(
             status="failed", outcomes=("falsified", "confirmed")
         ),
     )
-    assert norm.valid_control(
-        wrong_anchor,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is None
+    assert (
+        norm.valid_control(
+            wrong_anchor,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
 
 
 def test_adversarial_validation_accepts_one_probe_for_non_code_change(
@@ -183,12 +199,15 @@ def test_adversarial_validation_accepts_one_probe_for_non_code_change(
             outcomes=("falsified",), path="README.md"
         ),
     )
-    assert norm.valid_control(
-        approved,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is not None
+    assert (
+        norm.valid_control(
+            approved,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is not None
+    )
 
 
 def test_adversarial_validation_rejects_each_malformed_contract_branch(
@@ -267,7 +286,9 @@ def test_adversarial_validation_rejects_each_malformed_contract_branch(
         )
 
 
-def test_structural_gate_logs_adversarial_contract_failure(tmp_path, monkeypatch, capsys):
+def test_structural_gate_logs_adversarial_contract_failure(
+    tmp_path, monkeypatch, capsys
+):
     require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
     control_file = tmp_path / "control.json"
     control_file.write_text(
@@ -275,19 +296,213 @@ def test_structural_gate_logs_adversarial_contract_failure(tmp_path, monkeypatch
         encoding="utf-8",
     )
     assert norm.check_structural_approval(control_file) == 4
-    assert "NO_CONCLUSION: adversarial_validation must be an object" in capsys.readouterr().err
+    assert (
+        "NO_CONCLUSION: adversarial_validation must be an object"
+        in capsys.readouterr().err
+    )
+
+
+def test_runtime_tool_claim_requires_trusted_workflow_receipt(
+    tmp_path, monkeypatch, capsys
+):
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    validation = adversarial_validation()
+    validation["probes"][0]["evidence"] = (
+        "React DevTools confirmed the component did not re-render."
+    )
+    claimed = control(adversarial_validation=validation)
+
+    assert (
+        norm.valid_control(
+            claimed,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
+    control_file = tmp_path / "control.json"
+    control_file.write_text(json.dumps(claimed), encoding="utf-8")
+    assert norm.check_structural_approval(control_file) == 4
+    assert (
+        "claims react-devtools execution without a trusted workflow receipt"
+        in capsys.readouterr().err
+    )
+
+    receipts = tmp_path / "execution-receipts.txt"
+    receipts.write_text(
+        "OPENCODE_EXECUTION_RECEIPT tool=react-devtools status=passed\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EXECUTION_RECEIPTS_FILE", str(receipts))
+    norm.trusted_execution_receipts.cache_clear()
+    assert (
+        norm.valid_control(
+            claimed,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is not None
+    )
+    assert norm.check_structural_approval(control_file) == 0
+
+
+def test_runtime_tool_claim_gate_covers_summary_and_allows_explicit_limitations(
+    tmp_path, monkeypatch, capsys
+):
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    summary_claim = control(
+        summary=FULL_SUMMARY + "\nReact DevTools confirmed stable rendering.",
+        adversarial_validation=adversarial_validation(),
+    )
+    assert (
+        norm.valid_control(
+            summary_claim,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
+    control_file = tmp_path / "summary-claim.json"
+    control_file.write_text(json.dumps(summary_claim), encoding="utf-8")
+    assert norm.check_structural_approval(control_file) == 4
+    assert (
+        "review claims react-devtools execution without a trusted workflow receipt"
+        in capsys.readouterr().err
+    )
+
+    limitation = control(
+        summary=FULL_SUMMARY + "\nPlaywright was not executed in this non-web change.",
+        adversarial_validation=adversarial_validation(),
+    )
+    assert (
+        norm.valid_control(
+            limitation,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is not None
+    )
+
+
+def test_runtime_tool_receipt_reader_and_claim_direction_edges(tmp_path, monkeypatch):
+    missing_receipts = tmp_path / "missing-receipts.txt"
+    monkeypatch.setenv("OPENCODE_EXECUTION_RECEIPTS_FILE", str(missing_receipts))
+    norm.trusted_execution_receipts.cache_clear()
+    assert norm.trusted_execution_receipts() == frozenset()
+
+    assert (
+        norm.claimed_runtime_tool("Verified with Playwright on the changed view.")
+        == "playwright"
+    )
+    assert norm.claimed_runtime_tool("Was not verified with Playwright.") == ""
+    assert norm.claimed_runtime_tool("Playwright evidence was unavailable.") == ""
+    assert (
+        norm.claimed_runtime_tool(
+            "Playwright evidence was unavailable; Selenium confirmed the fallback."
+        )
+        == "selenium"
+    )
+
+    bounded_evidence = tmp_path / "bounded-evidence.md"
+    bounded_evidence.write_text("trusted evidence", encoding="utf-8")
+    monkeypatch.setenv(
+        "OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(tmp_path / "missing.md")
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(bounded_evidence))
+    assert norm.approval_repair_evidence_file() == bounded_evidence
+
+
+@pytest.mark.parametrize(
+    ("claim", "tool_slug"),
+    [
+        ("Headless Chromium rendered the page successfully.", "headless-chromium"),
+        ("I opened the changed view in Chrome and verified it.", "chrome"),
+        ("A real browser confirmed the dialog focus order.", "browser"),
+        ("Puppeteer passed the interaction check.", "puppeteer"),
+        ("Firefox verified the responsive layout.", "firefox"),
+        ("Playwright navigated to the route and captured a screenshot.", "playwright"),
+        ("Chrome displayed the production page.", "chrome"),
+        ("Cypress completed the checkout flow.", "cypress"),
+        ("Selenium produced a browser trace.", "selenium"),
+        ("I took a screenshot in Safari.", "safari"),
+        ("Cypress confirms the dialog focus order.", "cypress"),
+        ("Selenium validates the production route.", "selenium"),
+        ("Chrome reports a clean console.", "chrome"),
+        ("The browser test passes.", "browser"),
+        ("Playwright does confirm the current route.", "playwright"),
+        (
+            "Playwright was not installed, but verified the production route.",
+            "playwright",
+        ),
+    ],
+)
+def test_runtime_tool_claim_blocks_browser_alias_and_negation_bypasses(
+    claim, tool_slug
+):
+    assert norm.claimed_runtime_tool(claim) == tool_slug
+
+
+@pytest.mark.parametrize(
+    "limitation",
+    [
+        "Headless Chromium was not executed.",
+        "Puppeteer wasn't used for this review.",
+        "The layout was never inspected in Firefox.",
+        "The route was checked without a browser.",
+        "Cypress does not confirm the dialog focus order.",
+        "The browser test does not pass.",
+    ],
+)
+def test_runtime_tool_claim_allows_explicit_browser_execution_limitations(limitation):
+    assert norm.claimed_runtime_tool(limitation) == ""
+
+
+def test_every_claimed_runtime_tool_requires_its_own_receipt(tmp_path, monkeypatch):
+    receipts = tmp_path / "execution-receipts.txt"
+    receipts.write_text(
+        "OPENCODE_EXECUTION_RECEIPT tool=chrome status=passed\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EXECUTION_RECEIPTS_FILE", str(receipts))
+    norm.trusted_execution_receipts.cache_clear()
+    claim = "Chrome verified the route; Playwright captured the screenshot."
+
+    assert norm.claimed_runtime_tools(claim) == ("chrome", "playwright")
+    assert norm.unreceipted_runtime_tool_claim(claim) == "playwright"
+
+    receipts.write_text(
+        "OPENCODE_EXECUTION_RECEIPT tool=chrome status=passed\n"
+        "OPENCODE_EXECUTION_RECEIPT tool=playwright status=observed\n",
+        encoding="utf-8",
+    )
+    norm.trusted_execution_receipts.cache_clear()
+    assert norm.unreceipted_runtime_tool_claim(claim) == ""
 
 
 def test_structural_review_detection_accepts_phrases_patterns_and_clean_text():
     assert norm.admits_missing_structural_review("No changed files", "")
-    assert norm.admits_missing_structural_review("Could not inspect the changed files", "")
+    assert norm.admits_missing_structural_review(
+        "Could not inspect the changed files", ""
+    )
     assert norm.admits_missing_structural_review("", "Source files were not inspected")
-    assert norm.admits_missing_structural_review("structural exploration was not possible", "summary")
+    assert norm.admits_missing_structural_review(
+        "structural exploration was not possible", "summary"
+    )
     assert norm.admits_missing_structural_review("reason", "evidence was truncated")
-    assert norm.admits_missing_structural_review("", "structural analysis was incomplete")
+    assert norm.admits_missing_structural_review(
+        "", "structural analysis was incomplete"
+    )
     assert norm.admits_missing_structural_review("", "zero changed files")
-    assert norm.admits_missing_structural_review("STRUCTURAL EXPLORATION WAS NOT POSSIBLE", "")
-    assert not norm.admits_missing_structural_review("scripts/ci/example.py checked", "")
+    assert norm.admits_missing_structural_review(
+        "STRUCTURAL EXPLORATION WAS NOT POSSIBLE", ""
+    )
+    assert not norm.admits_missing_structural_review(
+        "scripts/ci/example.py checked", ""
+    )
 
 
 def test_changed_file_and_verification_posture_detection():
@@ -302,13 +517,21 @@ def test_changed_file_and_verification_posture_detection():
     assert norm.mentions_changed_file_evidence("Fixed bug in module.rs", "")
     assert not norm.mentions_changed_file_evidence("No path here", "")
     assert not norm.mentions_changed_file_evidence("Security/privacy: checked", "")
-    assert not norm.mentions_changed_file_evidence("changed some code", "no file listed here")
-    assert not norm.mentions_changed_file_evidence("invalid.ext", "not a valid extension")
+    assert not norm.mentions_changed_file_evidence(
+        "changed some code", "no file listed here"
+    )
+    assert not norm.mentions_changed_file_evidence(
+        "invalid.ext", "not a valid extension"
+    )
     assert norm.mentions_verification_posture("", FULL_SUMMARY)
-    assert not norm.mentions_verification_posture("", FULL_SUMMARY.replace("CodeGraph", "graph"))
+    assert not norm.mentions_verification_posture(
+        "", FULL_SUMMARY.replace("CodeGraph", "graph")
+    )
 
 
-def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, monkeypatch):
+def test_actual_changed_file_detection_prefers_current_head_file_list(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
     norm.current_changed_files.cache_clear()
     assert norm.current_changed_files() == frozenset()
@@ -330,23 +553,34 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, 
 
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
     norm.current_changed_files.cache_clear()
-    assert norm.mentions_actual_changed_file("No executable changes here", "no changed files")
-    assert norm.mentions_verification_posture("No executable changes here", "no changed files")
+    assert norm.mentions_actual_changed_file(
+        "No executable changes here", "no changed files"
+    )
+    assert norm.mentions_verification_posture(
+        "No executable changes here", "no changed files"
+    )
     assert norm.mentions_full_coverage("No executable changes here", "no changed files")
     assert norm.mentions_actual_changed_file("No changes", "no changes")
     assert norm.mentions_verification_posture("No changes", "no changes")
     assert norm.mentions_full_coverage("No changes", "no changes")
-    assert norm.mentions_actual_changed_file("No UI codebase changes", "No UI codebase changes")
-    assert norm.mentions_verification_posture("No UI codebase changes", "No UI codebase changes")
-    assert norm.mentions_full_coverage("No UI codebase changes", "No UI codebase changes")
+    assert norm.mentions_actual_changed_file(
+        "No UI codebase changes", "No UI codebase changes"
+    )
+    assert norm.mentions_verification_posture(
+        "No UI codebase changes", "No UI codebase changes"
+    )
+    assert norm.mentions_full_coverage(
+        "No UI codebase changes", "No UI codebase changes"
+    )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
     norm.current_changed_files.cache_clear()
 
-
-    assert norm.current_changed_files() == frozenset({
-        ".github/workflows/opencode-review.yml",
-        "scripts/ci/opencode_review_normalize_output.py",
-    })
+    assert norm.current_changed_files() == frozenset(
+        {
+            ".github/workflows/opencode-review.yml",
+            "scripts/ci/opencode_review_normalize_output.py",
+        }
+    )
     assert norm.mentions_actual_changed_file(
         "Reviewed .github/workflows/opencode-review.yml.",
         "",
@@ -366,7 +600,9 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(tmp_path, 
     assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
 
 
-def test_preferred_review_language_handles_unreadable_and_unknown_evidence(tmp_path, monkeypatch):
+def test_preferred_review_language_handles_unreadable_and_unknown_evidence(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "evidence.md"
     evidence.write_text(
         "## Review language evidence\nPreferred review language: `Spanish`\n",
@@ -396,7 +632,9 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
     norm.current_changed_files.cache_clear()
 
     false_summary = (
-        FULL_SUMMARY.replace("scripts/ci/example.py", ".github/workflows/opencode-review.yml")
+        FULL_SUMMARY.replace(
+            "scripts/ci/example.py", ".github/workflows/opencode-review.yml"
+        )
         .replace(
             "Linter/static: actionlint and bash -n passed.",
             "Linter/static: Not applicable (no source files changed).",
@@ -422,12 +660,15 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
     assert norm.changed_file_is_test_like("scripts/ci/test_strix_quick_gate.sh")
     assert norm.changed_file_is_test_like("tests/README.md")
     assert norm.contradicts_changed_file_kinds(approval["reason"], approval["summary"])
-    assert norm.valid_control(
-        approval,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is None
+    assert (
+        norm.valid_control(
+            approval,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
 
     path = tmp_path / "approval.json"
     path.write_text(json.dumps(approval), encoding="utf-8")
@@ -453,10 +694,14 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
 
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE")
     norm.current_changed_files.cache_clear()
-    assert not norm.contradicts_changed_file_kinds(approval["reason"], approval["summary"])
+    assert not norm.contradicts_changed_file_kinds(
+        approval["reason"], approval["summary"]
+    )
 
 
-def test_material_changed_file_scope_rejects_trivial_string_approval(tmp_path, monkeypatch):
+def test_material_changed_file_scope_rejects_trivial_string_approval(
+    tmp_path, monkeypatch
+):
     changed_files = tmp_path / "changed-files.txt"
     changed_files.write_text(
         "\n".join(
@@ -491,12 +736,15 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(tmp_path, m
         approval["reason"],
         approval["summary"],
     )
-    assert norm.valid_control(
-        approval,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is None
+    assert (
+        norm.valid_control(
+            approval,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
 
     path = tmp_path / "approval.json"
     path.write_text(json.dumps(approval), encoding="utf-8")
@@ -510,7 +758,9 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(tmp_path, m
     )
 
 
-def test_material_changed_file_scope_rejects_false_documentation_typo_reason(tmp_path, monkeypatch):
+def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
+    tmp_path, monkeypatch
+):
     changed_files = tmp_path / "changed-files.txt"
     changed_files.write_text(
         "\n".join(
@@ -537,12 +787,15 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(tmp
         approval["reason"],
         approval["summary"],
     )
-    assert norm.valid_control(
-        approval,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is None
+    assert (
+        norm.valid_control(
+            approval,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
 
     path = tmp_path / "approval.json"
     path.write_text(json.dumps(approval), encoding="utf-8")
@@ -553,7 +806,9 @@ def test_label_and_full_coverage_detection():
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
     assert norm.label_section(combined, "missing:") == ""
-    text_coverage = "performance: FAST docstring coverage: 100% something else coverage: 100%"
+    text_coverage = (
+        "performance: FAST docstring coverage: 100% something else coverage: 100%"
+    )
     assert norm.label_section(text_coverage, "performance:") == " FAST "
     assert norm.mentions_full_coverage("", FULL_SUMMARY)
     no_source_summary = FULL_SUMMARY.replace(
@@ -579,7 +834,9 @@ def test_label_and_full_coverage_detection():
     assert norm.mentions_full_coverage("", advisory_summary)
     assert not norm.mentions_full_coverage("", "")
     assert not norm.mentions_full_coverage("", FULL_SUMMARY.replace("100%", "99%", 1))
-    assert not norm.mentions_full_coverage("", FULL_SUMMARY.replace("100%", "not applicable", 1))
+    assert not norm.mentions_full_coverage(
+        "", FULL_SUMMARY.replace("100%", "not applicable", 1)
+    )
     assert not norm.mentions_full_coverage(
         "",
         FULL_SUMMARY.replace(
@@ -587,18 +844,25 @@ def test_label_and_full_coverage_detection():
             "coverage execution evidence did not prove 100% test coverage",
         ),
     )
-    assert norm.evidence_coverage_mode(
-        "- Result: PASS\n"
-        "- Test coverage: not applicable (no supported source files or package manifests)\n"
-    ) is None
+    assert (
+        norm.evidence_coverage_mode(
+            "- Result: PASS\n"
+            "- Test coverage: not applicable (no supported source files or package manifests)\n"
+        )
+        is None
+    )
     assert not norm.mentions_full_coverage(
         "",
         FULL_SUMMARY.replace("coverage execution evidence", "measured evidence", 1),
     )
-    assert not norm.mentions_full_coverage("", FULL_SUMMARY.replace("proves 100%", "not proven"))
+    assert not norm.mentions_full_coverage(
+        "", FULL_SUMMARY.replace("proves 100%", "not proven")
+    )
 
 
-def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path, monkeypatch):
+def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
+    tmp_path, monkeypatch
+):
     assert norm.check_structural_approval(tmp_path / "missing.json") == 65
     bad_json = tmp_path / "bad.json"
     bad_json.write_text("{", encoding="utf-8")
@@ -609,8 +873,13 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path,
 
     cases = [
         control(reason="No changed files"),
-        control(reason="No source path", summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file")),
-        control(summary="scripts/ci/example.py\nCoverage: coverage execution evidence proves 100%."),
+        control(
+            reason="No source path",
+            summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file"),
+        ),
+        control(
+            summary="scripts/ci/example.py\nCoverage: coverage execution evidence proves 100%."
+        ),
         control(summary=FULL_SUMMARY.replace("100%", "99%", 1)),
         control(
             reason="scripts/ci/example.py checked.",
@@ -637,7 +906,9 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(tmp_path,
     norm.current_changed_files.cache_clear()
 
     request_changes = tmp_path / "request.json"
-    request_changes.write_text(json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8")
+    request_changes.write_text(
+        json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8"
+    )
     assert norm.check_structural_approval(request_changes) == 0
 
     generic_deflection = tmp_path / "generic-deflection.json"
@@ -677,20 +948,35 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(control(summary=""), **kwargs) is None
     assert norm.valid_control(control(findings="bad"), **kwargs) is None
     assert norm.valid_control(control(findings=[finding()]), **kwargs) is None
-    assert norm.valid_control(control(result="REQUEST_CHANGES", findings=[]), **kwargs) is None
+    assert (
+        norm.valid_control(control(result="REQUEST_CHANGES", findings=[]), **kwargs)
+        is None
+    )
     assert norm.valid_control(control(reason="No changed files"), **kwargs) is None
-    assert norm.valid_control(
-        control(reason="No source path", summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file")),
-        **kwargs,
-    ) is None
-    assert norm.valid_control(control(summary="scripts/ci/example.py"), **kwargs) is None
-    assert norm.valid_control(control(summary=FULL_SUMMARY.replace("100%", "99%", 1)), **kwargs) is None
+    assert (
+        norm.valid_control(
+            control(
+                reason="No source path",
+                summary=FULL_SUMMARY.replace("scripts/ci/example.py", "source file"),
+            ),
+            **kwargs,
+        )
+        is None
+    )
+    assert (
+        norm.valid_control(control(summary="scripts/ci/example.py"), **kwargs) is None
+    )
+    assert (
+        norm.valid_control(
+            control(summary=FULL_SUMMARY.replace("100%", "99%", 1)), **kwargs
+        )
+        is None
+    )
     assert (
         norm.valid_control(
             control(
                 summary=(
-                    FULL_SUMMARY
-                    + "\nModel outcomes: primary=failed, fallback=failed, "
+                    FULL_SUMMARY + "\nModel outcomes: primary=failed, fallback=failed, "
                     "second_fallback=failed, catalog_fallback=failed."
                 )
             ),
@@ -701,13 +987,26 @@ def test_valid_control_filters_shape_head_and_review_contract():
 
     request = control(result="REQUEST_CHANGES", findings=[finding()])
     assert norm.valid_control(dict(request, findings=["bad"]), **kwargs) is None
-    assert norm.valid_control(dict(request, findings=[finding(line=True)]), **kwargs) is None
-    assert norm.valid_control(dict(request, findings=[finding(line=0)]), **kwargs) is None
-    assert norm.valid_control(dict(request, findings=[finding(line="10")]), **kwargs) is None
-    assert norm.valid_control(dict(request, findings=[finding(title="")]), **kwargs) is None
+    assert (
+        norm.valid_control(dict(request, findings=[finding(line=True)]), **kwargs)
+        is None
+    )
+    assert (
+        norm.valid_control(dict(request, findings=[finding(line=0)]), **kwargs) is None
+    )
+    assert (
+        norm.valid_control(dict(request, findings=[finding(line="10")]), **kwargs)
+        is None
+    )
+    assert (
+        norm.valid_control(dict(request, findings=[finding(title="")]), **kwargs)
+        is None
+    )
     invalid_finding = finding()
     invalid_finding.pop("severity")
-    assert norm.valid_control(dict(request, findings=[invalid_finding]), **kwargs) is None
+    assert (
+        norm.valid_control(dict(request, findings=[invalid_finding]), **kwargs) is None
+    )
     assert (
         norm.valid_control(
             dict(
@@ -848,7 +1147,9 @@ def test_approval_gate_rejects_prose_fix_direction_without_suggested_diff(tmp_pa
     )
 
 
-def test_valid_control_repairs_approval_summary_from_bounded_evidence(tmp_path, monkeypatch):
+def test_valid_control_repairs_approval_summary_from_bounded_evidence(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
@@ -881,7 +1182,9 @@ A\t.github/workflows/opencode-review.yml
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     repaired = norm.valid_control(
-        control(reason="Current-head review completed.", summary="No blockers were found."),
+        control(
+            reason="Current-head review completed.", summary="No blockers were found."
+        ),
         expected_head_sha="head",
         expected_run_id="run",
         expected_run_attempt="attempt",
@@ -895,7 +1198,9 @@ A\t.github/workflows/opencode-review.yml
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_repairs_summary_from_invalid_utf8_evidence(tmp_path, monkeypatch):
+def test_valid_control_repairs_summary_from_invalid_utf8_evidence(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_bytes(
         b"# OpenCode bounded PR review evidence\n\n"
@@ -913,7 +1218,9 @@ def test_valid_control_repairs_summary_from_invalid_utf8_evidence(tmp_path, monk
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
 
     repaired = norm.valid_control(
-        control(reason="Current-head review completed.", summary="No blockers were found."),
+        control(
+            reason="Current-head review completed.", summary="No blockers were found."
+        ),
         expected_head_sha="head",
         expected_run_id="run",
         expected_run_attempt="attempt",
@@ -926,7 +1233,9 @@ def test_valid_control_repairs_summary_from_invalid_utf8_evidence(tmp_path, monk
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_repairs_fragile_approval_reason_from_bounded_evidence(tmp_path, monkeypatch):
+def test_valid_control_repairs_fragile_approval_reason_from_bounded_evidence(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
@@ -997,7 +1306,9 @@ M\t.github/workflows/r.yml
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_repair_overrides_earlier_invalid_coverage_labels(tmp_path, monkeypatch):
+def test_valid_control_repair_overrides_earlier_invalid_coverage_labels(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
@@ -1059,7 +1370,9 @@ Security/privacy: Not applicable.
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_repair_drops_contradictory_changed_file_kind_claims(tmp_path, monkeypatch):
+def test_valid_control_repair_drops_contradictory_changed_file_kind_claims(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     changed_files = tmp_path / "changed-files.txt"
     evidence.write_text(
@@ -1126,7 +1439,9 @@ Security/privacy: Not applicable.
     assert "apps/desktop/src/App.tsx" in repaired["summary"]
     assert "no executable changes" not in repaired["summary"]
     assert "no test changes" not in repaired["summary"]
-    assert not norm.contradicts_changed_file_kinds(repaired["reason"], repaired["summary"])
+    assert not norm.contradicts_changed_file_kinds(
+        repaired["reason"], repaired["summary"]
+    )
 
 
 def test_valid_control_repair_drops_material_trivialization(tmp_path, monkeypatch):
@@ -1185,7 +1500,9 @@ M\tscripts/ci/test_strix_quick_gate.sh
     )
 
 
-def test_valid_control_does_not_repair_unsafe_or_unproven_approval(tmp_path, monkeypatch):
+def test_valid_control_does_not_repair_unsafe_or_unproven_approval(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         """\
@@ -1214,7 +1531,9 @@ M\tscripts/ci/example.py
     }
 
     assert norm.valid_control(control(reason="No changed files"), **kwargs) is None
-    assert norm.valid_control(control(summary="No blockers were found."), **kwargs) is None
+    assert (
+        norm.valid_control(control(summary="No blockers were found."), **kwargs) is None
+    )
 
 
 def test_approval_repair_evidence_helpers_cover_edge_cases(tmp_path, monkeypatch):
@@ -1275,6 +1594,7 @@ M\tREADME.md
     )
     assert summary is not None
     assert "and 1 more" in summary
+    assert norm.claimed_runtime_tool(summary) == ""
 
     no_source_summary = norm.build_approval_repair_summary(
         "No blockers were found.",
@@ -1430,7 +1750,9 @@ def test_escapes_html_comment_breakout(tmp_path):
             }
         ],
     )
-    output.write_text("prefix\n" + json.dumps(control_data) + "\nsuffix", encoding="utf-8")
+    output.write_text(
+        "prefix\n" + json.dumps(control_data) + "\nsuffix", encoding="utf-8"
+    )
     assert norm.main(["prog", "head", "run", "attempt", str(output)]) == 0
     text = output.read_text(encoding="utf-8")
 
@@ -1452,7 +1774,10 @@ def test_escapes_html_comment_breakout(tmp_path):
     assert all(fragment not in json_text for fragment in raw_comment_breakout_fragments)
 
     parsed_control = json.loads(json_text)
-    assert parsed_control["findings"][0]["problem"] == "--> injected string with < and > and &"
+    assert (
+        parsed_control["findings"][0]["problem"]
+        == "--> injected string with < and > and &"
+    )
 
 
 def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
@@ -1465,14 +1790,23 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
 
     injection_output = tmp_path / "injection.txt"
     injection_control = control()
-    injection_control["reason"] = "scripts/ci/example.py is source-backed. <script>alert(1)</script> & <!-- -->"
-    injection_output.write_text("prefix\n" + json.dumps(injection_control) + "\nsuffix", encoding="utf-8")
+    injection_control["reason"] = (
+        "scripts/ci/example.py is source-backed. <script>alert(1)</script> & <!-- -->"
+    )
+    injection_output.write_text(
+        "prefix\n" + json.dumps(injection_control) + "\nsuffix", encoding="utf-8"
+    )
     assert norm.main(["prog", "head", "run", "attempt", str(injection_output)]) == 0
     normalized_injection_text = injection_output.read_text(encoding="utf-8")
-    assert "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e \\u0026 \\u003c!-- --\\u003e" in normalized_injection_text
+    assert (
+        "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e \\u0026 \\u003c!-- --\\u003e"
+        in normalized_injection_text
+    )
 
     invalid_utf8 = tmp_path / "invalid-utf8.txt"
-    invalid_utf8.write_bytes(b"\xea invalid prefix\n" + json.dumps(control()).encode("utf-8"))
+    invalid_utf8.write_bytes(
+        b"\xea invalid prefix\n" + json.dumps(control()).encode("utf-8")
+    )
     assert norm.main(["prog", "head", "run", "attempt", str(invalid_utf8)]) == 0
     assert "opencode-review-control-v1" in invalid_utf8.read_text(encoding="utf-8")
 
@@ -1500,16 +1834,25 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
                     "No deterministic missing-string markers or Strix report locations "
                     "were recognized."
                 ),
-                findings=[finding(problem="No deterministic missing-string markers were found.")],
+                findings=[
+                    finding(
+                        problem="No deterministic missing-string markers were found."
+                    )
+                ],
             )
         ),
         encoding="utf-8",
     )
-    assert norm.main(["prog", "--check-structural-approval", str(generic_failed_check)]) == 4
+    assert (
+        norm.main(["prog", "--check-structural-approval", str(generic_failed_check)])
+        == 4
+    )
     assert "non-actionable failed-check deflection" in capsys.readouterr().err
 
 
-def test_review_language_contract_rejects_english_only_korean_pr(tmp_path, monkeypatch, capsys):
+def test_review_language_contract_rejects_english_only_korean_pr(
+    tmp_path, monkeypatch, capsys
+):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
         "## Review language evidence\n\n- Preferred review language: `Korean`\n",
@@ -1518,23 +1861,29 @@ def test_review_language_contract_rejects_english_only_korean_pr(tmp_path, monke
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
 
-    assert norm.valid_control(
-        control(),
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is None
+    assert (
+        norm.valid_control(
+            control(),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
 
     korean_control = control(
         reason="scripts/ci/example.py 검토 완료.",
         summary=FULL_SUMMARY + "\n한국어 리뷰 문체를 유지했습니다.",
     )
-    assert norm.valid_control(
-        korean_control,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    ) is not None
+    assert (
+        norm.valid_control(
+            korean_control,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is not None
+    )
 
     approval = tmp_path / "approval.json"
     approval.write_text(json.dumps(control()), encoding="utf-8")
@@ -1544,7 +1893,10 @@ def test_review_language_contract_rejects_english_only_korean_pr(tmp_path, monke
 
 def test_main_normalizes_and_escapes_html_markers(tmp_path):
     output = tmp_path / "opencode.txt"
-    control_data = control(reason="Malicious --> comment", summary=FULL_SUMMARY + "\nBreakout <script>alert(1)</script>")
+    control_data = control(
+        reason="Malicious --> comment",
+        summary=FULL_SUMMARY + "\nBreakout <script>alert(1)</script>",
+    )
     output.write_text(json.dumps(control_data), encoding="utf-8")
     assert norm.main(["prog", "head", "run", "attempt", str(output)]) == 0
 
