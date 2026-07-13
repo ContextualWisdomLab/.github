@@ -844,7 +844,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert not re.search(r"--slurp\s*\\\n\s*--jq", workflow)
     assert workflow.count('["opencode-review","coverage-evidence","metadata-only gate evaluation"]') >= 2
     metadata_gate_filter = 'select((.name // "") != "metadata-only gate evaluation")'
-    assert workflow.count(metadata_gate_filter) >= 2
+    assert workflow.count(metadata_gate_filter) >= 3
     failed_check_collector = Path(
         "scripts/ci/collect_failed_check_evidence.sh"
     ).read_text(encoding="utf-8")
@@ -853,6 +853,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         '(.name // "") == "metadata-only gate evaluation" and '
         '(.checkSuite.workflowRun.workflow.name // "") == "PR Governance"'
         not in failed_check_collector
+    )
+    assert (
+        '["opencode-review", "coverage-evidence", "coverage-source-tree", '
+        '"required-workflow-bootstrap", "metadata-only gate evaluation"]'
+        in workflow
     )
     assert "falling back to current-head REST check-runs" in workflow
 
