@@ -3234,7 +3234,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 30
+        timeout-minutes: 20
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3258,13 +3258,11 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # A provider gets ten minutes for a tool-using review before the pool
-          # advances by default. Dynamic cadence below shortens small PRs and
-          # lengthens larger ones only within the 30-minute model step cap, so
-          # one stalled endpoint cannot occupy the org queue indefinitely.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
+          # Keep stale providers from pinning required review jobs for hours;
+          # deterministic current-head fallback remains the escape hatch.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "300"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "1500"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"
           # Visit the high-sensitivity candidate catalog once. Per-provider
           # failures and timeouts are logged before the publish gate evaluates
           # the current-head result and fails closed when no verdict exists.
