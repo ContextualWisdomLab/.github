@@ -859,7 +859,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
     )
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 90", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 150", workflow)
     assert "timeout-minutes: 12" in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 65", workflow
@@ -879,16 +879,18 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         workflow,
     )
     assert re.search(
-        r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: 14",
+        r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: 34",
         workflow,
     )
     assert re.search(
-        r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 16", workflow
+        r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 36", workflow
     )
     assert workflow.count('APPROVAL_CHECK_WAIT_ATTEMPTS: "36"') == 2
+    assert workflow.count('APPROVAL_SLOW_BUILD_CHECK_WAIT_ATTEMPTS: "180"') == 2
     assert workflow.count('APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "60"') == 2
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
     assert workflow.count("current-head image validation is still running") == 2
+    assert workflow.count("current-head package/GPU build checks are still running") == 2
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in workflow
     assert (
@@ -1640,6 +1642,12 @@ def test_peer_check_wait_budget_fits_publication_step_timeouts():
             r'APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "(\d+)"', workflow
         )
     ]
+    slow_build_attempts = [
+        int(value)
+        for value in re.findall(
+            r'APPROVAL_SLOW_BUILD_CHECK_WAIT_ATTEMPTS: "(\d+)"', workflow
+        )
+    ]
     sleeps = [
         int(value)
         for value in re.findall(r'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "(\d+)"', workflow)
@@ -1654,11 +1662,12 @@ def test_peer_check_wait_budget_fits_publication_step_timeouts():
     )
 
     assert normal_attempts == [36, 36]
+    assert slow_build_attempts == [180, 180]
     assert slow_image_attempts == [60, 60]
     assert sleeps == [10, 10]
     assert fast_timeout is not None
     assert publish_timeout is not None
-    wait_seconds = (slow_image_attempts[0] - 1) * sleeps[0]
+    wait_seconds = (max(slow_build_attempts[0], slow_image_attempts[0]) - 1) * sleeps[0]
     assert int(fast_timeout.group(1)) * 60 - wait_seconds >= 120
     assert int(publish_timeout.group(1)) * 60 - wait_seconds >= 240
 
@@ -1684,23 +1693,29 @@ def test_slow_peer_wait_matches_only_image_validation_checks():
         ("- docs image validation: in_progress\n", False, False),
     )
     for candidate, fast_expected, general_expected in probes:
-        fast_match = (
-            subprocess.run(
-                ["grep", "-Eiq", "--", fast_pattern],
-                input=candidate,
-                text=True,
-                check=False,
-            ).returncode
-            == 0
-        )
+        fast_match = re.search(fast_pattern, candidate, re.IGNORECASE) is not None
         general_match = (
-            subprocess.run(
-                ["grep", "-Eiq", "--", general_pattern],
-                input=candidate,
-                text=True,
-                check=False,
-            ).returncode
-            == 0
+            re.search(general_pattern, candidate, re.IGNORECASE) is not None
         )
         assert fast_match is fast_expected, candidate
         assert general_match is general_expected, candidate
+
+    gpu_pattern = r"^- ([^/]+/)?gpu-build([\s(]|:)"
+    package_build_pattern = (
+        r"^- ([^/]+/)?build \([^)]*"
+        r"(src-tauri/target/release/bundle|bundle/|\.msi|\.dmg|\.deb|\.appimage|AppImage)"
+    )
+    slow_build_probes = (
+        ("- Release/gpu-build (ubuntu-22.04): IN_PROGRESS\n", True),
+        ("- gpu-build (windows-2022) check run: in_progress\n", True),
+        ("- Release/build (windows-latest, src-tauri/target/release/bundle/msi/*.msi): IN_PROGRESS\n", True),
+        ("- build (macos-latest, src-tauri/target/release/bundle/dmg/*.dmg): IN_PROGRESS\n", True),
+        ("- build (ubuntu-latest, unit tests): IN_PROGRESS\n", False),
+        ("- docs-build: IN_PROGRESS\n", False),
+    )
+    for candidate, slow_build_expected in slow_build_probes:
+        slow_build_match = (
+            re.search(gpu_pattern, candidate, re.IGNORECASE) is not None
+            or re.search(package_build_pattern, candidate, re.IGNORECASE) is not None
+        )
+        assert slow_build_match is slow_build_expected, candidate
