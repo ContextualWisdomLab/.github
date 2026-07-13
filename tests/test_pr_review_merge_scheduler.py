@@ -1158,6 +1158,29 @@ def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
     assert dispatched == [("owner/repo", "OpenCode Review", head, True)]
 
 
+def test_deterministic_fallback_detection_ignores_unrelated_reviews():
+    head = "a" * 40
+    pr = make_pr(
+        headRefOid=head,
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", head),
+                opencode_review("APPROVED", "b" * 40),
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "human-reviewer"},
+                    "commit": {"oid": head},
+                },
+            ]
+        },
+    )
+
+    assert not sched.has_current_head_deterministic_fallback_approval(pr)
+    assert not sched.has_current_head_deterministic_fallback_approval(
+        make_pr(reviews={"nodes": []})
+    )
+
+
 def test_current_head_approval_cleans_previous_head_change_gate_before_merge():
     pr = make_pr(
         reviews={
