@@ -257,3 +257,17 @@ def test_scheduled_audit_and_rollout_document_the_semgrep_requirement() -> None:
     assert "audit_central_required_workflows.py" in workflow
     assert "Ruleset audit could not read inherited organization ruleset" in workflow
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
+
+
+def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/sast-semgrep.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--output=semgrep-results.raw.sarif" in workflow
+    assert "Remove explicitly suppressed findings from Semgrep SARIF" in workflow
+    assert ".suppressions // []" in workflow
+    assert "SEMGREP_SUPPRESSED_COUNT" in workflow
+    assert "semgrep_sarif.outputs.finding_count != '0'" in workflow
+    assert 'SEMGREP_FINDING_COUNT:-missing}' in workflow
+    assert "--output=semgrep-results.sarif" not in workflow
