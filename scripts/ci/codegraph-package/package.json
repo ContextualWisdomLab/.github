@@ -1,0 +1,8 @@
+{
+  "name": "contextualwisdomlab-opencode-codegraph-tooling",
+  "private": true,
+  "description": "Pinned CodeGraph CLI package for trusted OpenCode review workflows.",
+  "dependencies": {
+    "@colbymchenry/codegraph": "0.9.9"
+  }
+}
