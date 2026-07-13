@@ -1169,6 +1169,19 @@ def test_opencode_model_pool_failure_stops_without_review_state_change():
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
+    assert "same_head_opencode_approval_exists" in workflow
+    assert "EXISTING_CURRENT_HEAD_APPROVAL" in workflow
+    assert "no duplicate APPROVE review was posted" in workflow
+    assert "## Adversarial validation" in workflow
+    assert "mandatory structured adversarial probes" in workflow
+    assert 'create_pull_review "APPROVE"' in workflow
+    model_unavailable_block = re.search(
+        r"if \[ \"\$opencode_review_outcome\" != \"success\" \]; then"
+        r"(?P<body>[\s\S]{0,900})stop_without_review_after_model_unavailable",
+        workflow,
+    )
+    assert model_unavailable_block is not None
+    assert 'create_pull_review "APPROVE"' not in model_unavailable_block.group("body")
 
 
 def test_opencode_review_thread_jq_filters_preserve_bash_single_quotes():
