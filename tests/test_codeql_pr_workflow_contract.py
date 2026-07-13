@@ -36,6 +36,7 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "github.event.pull_request.merge_commit_sha" in workflow
     assert "refs/pull/{0}/head" in workflow
     assert "refs/pull/{0}/merge" in workflow
+    assert workflow.count("security-events: read") == 2
     assert "security-events: write" not in workflow
 
 

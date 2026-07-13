@@ -73,6 +73,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      security-events: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
@@ -179,6 +180,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      security-events: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
