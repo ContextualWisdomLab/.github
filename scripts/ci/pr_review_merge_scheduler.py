@@ -1452,16 +1452,23 @@ def run_head_guarded_merge(
     auto: bool,
 ) -> None:
     """Run a head-guarded merge using an allowed repository merge method."""
+    merge_flag = repository_auto_merge_flag(repo) if auto else "--squash"
     args = ["gh", "pr", "merge", number, "--repo", repo]
     if auto:
         args.append("--auto")
-    args.extend(["--squash", "--match-head-commit", head])
+        print(
+            f"PR #{number}: enabling auto-merge with repository-enabled method "
+            f"{merge_flag.removeprefix('--')} at guarded head {head}."
+        )
+    args.extend([merge_flag, "--match-head-commit", head])
     try:
         run(args)
         return
     except RuntimeError as exc:
         detail = str(exc).lower()
-        if not any(marker in detail for marker in SQUASH_MERGE_DISABLED_MARKERS):
+        if merge_flag != "--squash" or not any(
+            marker in detail for marker in SQUASH_MERGE_DISABLED_MARKERS
+        ):
             raise
         reason = str(exc).splitlines()[-1][:400]
 
@@ -1475,6 +1482,35 @@ def run_head_guarded_merge(
         merge_args.append("--auto")
     merge_args.extend(["--merge", "--match-head-commit", head])
     run(merge_args)
+
+
+def repository_auto_merge_flag(repo: str) -> str:
+    """Return the first merge method enabled in repository settings."""
+    raw = run_github_read(["gh", "api", f"repos/{repo}"])
+    try:
+        settings = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Could not select an auto-merge method for {repo}: "
+            "repository settings were not valid JSON."
+        ) from exc
+    if not isinstance(settings, dict):
+        raise RuntimeError(
+            f"Could not select an auto-merge method for {repo}: "
+            "repository settings were not an object."
+        )
+
+    for setting, flag in (
+        ("allow_squash_merge", "--squash"),
+        ("allow_merge_commit", "--merge"),
+        ("allow_rebase_merge", "--rebase"),
+    ):
+        if settings.get(setting) is True:
+            return flag
+    raise RuntimeError(
+        f"Could not enable auto-merge for {repo}: repository settings expose "
+        "no enabled merge method."
+    )
 
 
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:

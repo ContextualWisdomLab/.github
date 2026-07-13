@@ -1557,6 +1557,10 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
 
     def fake_run(args, stdin=None):
         calls.append(args)
+        if args == ["gh", "api", "repos/owner/repo"]:
+            return json.dumps(
+                {"allow_squash_merge": False, "allow_merge_commit": True}
+            )
         if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
             return '{"workflow_runs": []}'
         return ""
@@ -1580,10 +1584,12 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.update_branch("owner/repo", pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
-    assert calls[0][:4] == ["gh", "pr", "merge", "1"]
-    assert "--squash" in calls[0]
-    assert calls[0][-2:] == ["--match-head-commit", head_sha]
-    assert calls[1] == [
+    assert calls[0] == ["gh", "api", "repos/owner/repo"]
+    assert calls[1][:4] == ["gh", "pr", "merge", "1"]
+    assert "--auto" in calls[1]
+    assert "--merge" in calls[1]
+    assert calls[1][-2:] == ["--match-head-commit", head_sha]
+    assert calls[2] == [
         "gh",
         "pr",
         "merge",
@@ -1594,13 +1600,13 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         "--match-head-commit",
         head_sha,
     ]
-    assert calls[2] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
-    assert calls[3][:4] == ["gh", "api", "-X", "PUT"]
-    assert calls[3][-1] == f"expected_head_sha={head_sha}"
-    assert calls[4][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
-    assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[3] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
+    assert calls[4][:4] == ["gh", "api", "-X", "PUT"]
+    assert calls[4][-1] == f"expected_head_sha={head_sha}"
+    assert calls[5][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
     assert calls[6][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[7][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+    assert calls[7][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[8][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
     calls.clear()
 
     required_workflow_pr = make_pr(
@@ -1686,9 +1692,8 @@ def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
         sched.restamp_pr_head_for_last_push_approval("owner/repo", stale, dry_run=False)
 
 
-@pytest.mark.parametrize("auto", [False, True])
 def test_head_guarded_merge_retries_merge_commit_when_squash_is_disabled(
-    monkeypatch, capsys, auto
+    monkeypatch, capsys
 ):
     calls = []
     head_sha = "a" * 40
@@ -1707,16 +1712,76 @@ def test_head_guarded_merge_retries_merge_commit_when_squash_is_disabled(
         "owner/repo",
         "7",
         head_sha,
-        auto=auto,
+        auto=False,
     )
 
     assert len(calls) == 2
     assert "--squash" in calls[0]
     assert "--merge" in calls[1]
-    assert ("--auto" in calls[1]) is auto
+    assert "--auto" not in calls[1]
     assert calls[0][-2:] == ["--match-head-commit", head_sha]
     assert calls[1][-2:] == ["--match-head-commit", head_sha]
     assert "Squash merges are not allowed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected_flag"),
+    [
+        ({"allow_squash_merge": True, "allow_merge_commit": True}, "--squash"),
+        ({"allow_squash_merge": False, "allow_merge_commit": True}, "--merge"),
+        (
+            {
+                "allow_squash_merge": False,
+                "allow_merge_commit": False,
+                "allow_rebase_merge": True,
+            },
+            "--rebase",
+        ),
+    ],
+)
+def test_head_guarded_auto_merge_uses_repository_enabled_method(
+    monkeypatch, capsys, settings, expected_flag
+):
+    calls = []
+    head_sha = "a" * 40
+
+    monkeypatch.setattr(sched, "run_github_read", lambda _args: json.dumps(settings))
+    monkeypatch.setattr(sched, "run", lambda args, stdin=None: calls.append(args) or "")
+
+    sched.run_head_guarded_merge("owner/repo", "7", head_sha, auto=True)
+
+    assert calls == [
+        [
+            "gh",
+            "pr",
+            "merge",
+            "7",
+            "--repo",
+            "owner/repo",
+            "--auto",
+            expected_flag,
+            "--match-head-commit",
+            head_sha,
+        ]
+    ]
+    assert expected_flag.removeprefix("--") in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ("not-json", "not valid JSON"),
+        ("[]", "not an object"),
+        ("{}", "no enabled merge method"),
+    ],
+)
+def test_repository_auto_merge_flag_explains_invalid_settings(
+    monkeypatch, payload, message
+):
+    monkeypatch.setattr(sched, "run_github_read", lambda _args: payload)
+
+    with pytest.raises(RuntimeError, match=message):
+        sched.repository_auto_merge_flag("owner/repo")
 
 
 def test_head_guarded_merge_does_not_mask_unrelated_failure(monkeypatch):

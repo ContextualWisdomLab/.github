@@ -1234,6 +1234,11 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "pull_request_review:" in workflow
     assert "types: [submitted, dismissed]" in workflow
     assert (
+        "types: [opened, synchronize, reopened, ready_for_review, closed]"
+        in workflow
+    )
+    assert "auto_merge_enabled" not in workflow
+    assert (
         "github.event_name == 'pull_request_review' && "
         "format('pr-{0}', github.event.pull_request.number)" in workflow
     )
