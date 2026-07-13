@@ -258,7 +258,7 @@ cap_dynamic_cadence_for_queue() {
 
 	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 600)"
 	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 1800)"
-	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 1)"
+	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 0)"
 	previous_run_timeout="$original_run_timeout"
 	previous_budget_seconds="$budget_seconds"
 	previous_max_cycles="$max_cycles"
