@@ -727,10 +727,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "OpenCode model pool exceeded the outer" in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
-    assert re.search(r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: 8", workflow)
-    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 10", workflow)
+    assert re.search(r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: 14", workflow)
+    assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 16", workflow)
     assert workflow.count('APPROVAL_CHECK_WAIT_ATTEMPTS: "36"') == 2
+    assert workflow.count('APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "60"') == 2
     assert 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' in workflow
+    assert workflow.count("current-head image validation is still running") == 2
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in workflow
     assert "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair" in workflow
@@ -1375,9 +1377,15 @@ def test_peer_check_wait_budget_fits_publication_step_timeouts():
         encoding="utf-8"
     )
 
-    attempts = [
+    normal_attempts = [
         int(value)
         for value in re.findall(r'APPROVAL_CHECK_WAIT_ATTEMPTS: "(\d+)"', workflow)
+    ]
+    slow_image_attempts = [
+        int(value)
+        for value in re.findall(
+            r'APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "(\d+)"', workflow
+        )
     ]
     sleeps = [
         int(value)
@@ -1394,10 +1402,50 @@ def test_peer_check_wait_budget_fits_publication_step_timeouts():
         workflow,
     )
 
-    assert attempts == [36, 36]
+    assert normal_attempts == [36, 36]
+    assert slow_image_attempts == [60, 60]
     assert sleeps == [10, 10]
     assert fast_timeout is not None
     assert publish_timeout is not None
-    wait_seconds = (attempts[0] - 1) * sleeps[0]
+    wait_seconds = (slow_image_attempts[0] - 1) * sleeps[0]
     assert int(fast_timeout.group(1)) * 60 - wait_seconds >= 120
     assert int(publish_timeout.group(1)) * 60 - wait_seconds >= 240
+
+
+def test_slow_peer_wait_matches_only_image_validation_checks():
+    """Reject lookalike labels when selecting the extended peer-check budget."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+    fast_pattern = r"^- validate [^:/]+ image:"
+    general_pattern = r"^- (Build and Publish Docker Images/)?validate [^:/]+ image:"
+
+    assert workflow.count(f"grep -Eiq -- '{fast_pattern}'") == 1
+    assert workflow.count(f"grep -Eiq -- '{general_pattern}'") == 1
+
+    probes = (
+        ("- validate naruon image: in_progress\n", True, True),
+        (
+            "- Build and Publish Docker Images/validate frontend image: IN_PROGRESS\n",
+            False,
+            True,
+        ),
+        ("- invalidate naruon image: in_progress\n", False, False),
+        ("- validate security/image: in_progress\n", False, False),
+        ("- docs image validation: in_progress\n", False, False),
+    )
+    for candidate, fast_expected, general_expected in probes:
+        fast_match = subprocess.run(
+            ["grep", "-Eiq", "--", fast_pattern],
+            input=candidate,
+            text=True,
+            check=False,
+        ).returncode == 0
+        general_match = subprocess.run(
+            ["grep", "-Eiq", "--", general_pattern],
+            input=candidate,
+            text=True,
+            check=False,
+        ).returncode == 0
+        assert fast_match is fast_expected, candidate
+        assert general_match is general_expected, candidate

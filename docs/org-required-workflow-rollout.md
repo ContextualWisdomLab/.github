@@ -43,7 +43,7 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; `github.token` remains the last fallback and publication failures are soft-failed
 - Coverage execution posture: privileged `pull_request_target` coverage runs only for same-repository PR heads; fork PR heads must be covered by an unprivileged PR-side check or manually trusted dispatch before approval
 - Fork posture: PR heads are fetched through `refs/pull/<number>/head` when direct head-SHA fetch is not available, so review can inspect fork PR source as data without executing it in the trusted workflow context
-- Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate still rechecks current-head peer checks before approving
+- Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate rechecks current-head peer checks and extends its bounded wait only while image-validation checks remain pending, logging the reason before approval
 
 Keep the OpenCode required workflow active only while the central workflow keeps proving current-head coverage, CodeGraph initialization, bounded evidence, model review output, and approval-gate publication on the current head.
 

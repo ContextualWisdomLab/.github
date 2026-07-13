@@ -3660,10 +3660,9 @@ jobs:
           && steps.opencode_review_model_pool.outputs.review_status == 'success'
           && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
         continue-on-error: true
-        # Some target repositories run multi-language CodeQL, Strix, or R CMD
-        # checks for several minutes. Keep this step alive long enough for the
-        # bounded six-minute peer-check window plus publication overhead.
-        timeout-minutes: 8
+        # Keep the normal peer-check hold short, but leave bounded room for the
+        # dynamic image-validation extension and review publication overhead.
+        timeout-minutes: 14
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3683,6 +3682,7 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT: ${{ steps.central_review_process_fallback_scope.outputs.changed_count || '0' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "36"
+          APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "60"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "15"
         run: |
@@ -3770,7 +3770,10 @@ jobs:
           check_runs_file="$(mktemp)"
           pending_checks_file="$(mktemp)"
           failed_checks_file="$(mktemp)"
-          for attempt in $(seq 1 "${APPROVAL_CHECK_WAIT_ATTEMPTS:-36}"); do
+          attempts="${APPROVAL_CHECK_WAIT_ATTEMPTS:-36}"
+          slow_image_attempts="${APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS:-60}"
+          attempt=1
+          while [ "$attempt" -le "$attempts" ]; do
             curl_api_read "${api_url}/repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" >"$check_runs_file"
             jq -r "${self_check_filter}
               latest_peer_checks
@@ -3780,11 +3783,17 @@ jobs:
             if [ ! -s "$pending_checks_file" ]; then
               break
             fi
-            if [ "$attempt" -lt "${APPROVAL_CHECK_WAIT_ATTEMPTS:-36}" ]; then
-              printf 'Central fast approval waiting for peer checks (%s/%s):\n' "$attempt" "${APPROVAL_CHECK_WAIT_ATTEMPTS:-36}"
+            if [ "$attempts" -lt "$slow_image_attempts" ] &&
+              grep -Eiq -- '^- validate [^:/]+ image:' "$pending_checks_file"; then
+              printf '::notice::Extending central fast approval peer-check wait from %s to %s attempts because current-head image validation is still running.\n' "$attempts" "$slow_image_attempts"
+              attempts="$slow_image_attempts"
+            fi
+            if [ "$attempt" -lt "$attempts" ]; then
+              printf 'Central fast approval waiting for peer checks (%s/%s):\n' "$attempt" "$attempts"
               cat "$pending_checks_file"
               sleep "${APPROVAL_CHECK_WAIT_SLEEP_SECONDS:-10}"
             fi
+            attempt=$((attempt + 1))
           done
           if [ -s "$pending_checks_file" ]; then
             echo "::error::CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS: peer GitHub Checks remained pending for current head ${HEAD_SHA}."
@@ -3943,9 +3952,9 @@ jobs:
         # keeps GitHub review publication bounded. Failed-check evidence is
         # collected from logs/SARIF before this point; central review-process
         # self-repair must not run a second model pass from the publish step.
-        # The approval gate may spend up to six minutes waiting for peer checks;
-        # retain bounded time for API retries and review publication afterwards.
-        timeout-minutes: 10
+        # The approval gate normally waits about six minutes, with a bounded
+        # extension for image validation plus API and publication overhead.
+        timeout-minutes: 16
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3989,6 +3998,7 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "36"
+          APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "60"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "1"
           CHECK_LOOKUP_RETRY_SLEEP_SECONDS: "2"
@@ -6263,6 +6273,7 @@ jobs:
           wait_for_peer_github_checks() {
             local output_file="$1"
             local attempts="${APPROVAL_CHECK_WAIT_ATTEMPTS:-36}"
+            local slow_image_attempts="${APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS:-60}"
             local sleep_seconds="${APPROVAL_CHECK_WAIT_SLEEP_SECONDS:-10}"
             local attempt=1
 
@@ -6272,6 +6283,11 @@ jobs:
               fi
               if [ ! -s "$output_file" ]; then
                 return 0
+              fi
+              if [ "$attempts" -lt "$slow_image_attempts" ] &&
+                grep -Eiq -- '^- (Build and Publish Docker Images/)?validate [^:/]+ image:' "$output_file"; then
+                printf '::notice::Extending OpenCode peer-check wait from %s to %s attempts because current-head image validation is still running.\n' "$attempts" "$slow_image_attempts"
+                attempts="$slow_image_attempts"
               fi
               if [ "$attempt" -lt "$attempts" ]; then
                 printf 'Waiting for peer GitHub Checks before OpenCode approval (%s/%s):\n' "$attempt" "$attempts"
