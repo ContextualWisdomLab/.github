@@ -628,8 +628,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
-    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "300"' in workflow
-    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "420"' in workflow
+    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "120"' in workflow
+    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "180"' in workflow
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
     assert "Central review-process evidence fallback eligible" in model_pool_runner
     assert "provider delay is logged before the publish fallback evaluates current-head peer evidence" in model_pool_runner
@@ -643,6 +643,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]' not in current_head_fallback
     assert 'if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]' not in current_head_fallback
     assert "collect_open_code_scanning_alerts" in workflow
+    assert (
+        "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
+        "github.token }}"
+    ) in workflow
+    assert "CODE_SCANNING_TOKEN_SOURCE" in workflow
+    assert 'GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s"' in workflow
+    assert "Open code-scanning alert lookup skipped because no target-repository read token" in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
@@ -660,6 +668,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "300"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "1080"' in workflow
+    assert 'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-1080}s"' in workflow
+    assert "OpenCode model pool exceeded the outer" in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
     assert re.search(r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 8", workflow)
@@ -681,12 +692,18 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "300"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "1080"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert 'OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt' in workflow
     assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "300"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "600"' in workflow
     assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "420"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "420"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "1080"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "420"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
@@ -894,11 +911,16 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "python3 scripts/ci/pr_review_merge_scheduler.py" in workflow
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
     assert "github.event_name == 'pull_request_target'" in workflow
+    status_step = workflow.split("      - name: Publish workflow_dispatch OpenCode status", 1)[1].split(
+        "      - name: Run merge scheduler after approval", 1
+    )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
         "github.token }}"
-    ) in workflow
+    ) in status_step
+    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
+    assert "using %s token" in status_step
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
     assert (
         "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || "
