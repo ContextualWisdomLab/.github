@@ -843,7 +843,7 @@ def test_approval_gate_rejects_prose_fix_direction_without_suggested_diff(tmp_pa
     assert completed_process.returncode == 4
     assert completed_process.stdout.strip() == "NO_CONCLUSION"
     assert (
-        "finding 0 field suggested_diff must be a non-empty string"
+        "finding 1 field suggested_diff must be a non-empty string"
         in completed_process.stderr
     )
 
