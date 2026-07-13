@@ -324,6 +324,16 @@ PR #381: wait: OpenCode review is already in progress
 
 ## Remaining Proof Gaps
 
+- 2026-07-13 KST `.github` PR #510 merged at `c7a568bde942d25d2a735b1bbfbb52b057b53b2f`
+  while GitHub still reported `reviewDecision=REVIEW_REQUIRED` and the complete
+  REST review list was empty. The previously enabled auto-merge request therefore
+  completed without a current-head real-model review while Required OpenCode run
+  `29225918664` attempt 7 was still in progress. Existing-approval reuse must not
+  treat an actor, state, and commit match as sufficient evidence: the review body
+  must also contain the exact real-model marker, current head/run/attempt, an
+  `APPROVE` result, and a passed adversarial-validation object whose material
+  probes were falsified. Deterministic, fallback, and model-unavailable markers
+  remain explicitly ineligible and every rejection reason is emitted to the log.
 - 2026-06-29 KST `html4tree` onboarding gap: PR #3 is the lowest open PR and is
   cleanly mergeable by GitHub, but current head
   `d0c4cbc2bb267aed407e4bf6308f4f3cfd3b504c` has no check runs and no reviews.
