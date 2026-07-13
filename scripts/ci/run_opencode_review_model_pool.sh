@@ -253,6 +253,38 @@ env_integer_or_default() {
 	fi
 }
 
+cap_dynamic_cadence_for_queue() {
+	local timeout_cap budget_cap cycle_cap previous_run_timeout previous_budget_seconds previous_max_cycles
+
+	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 600)"
+	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 1800)"
+	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 1)"
+	previous_run_timeout="$original_run_timeout"
+	previous_budget_seconds="$budget_seconds"
+	previous_max_cycles="$max_cycles"
+
+	if [ "$timeout_cap" -gt 0 ] && [ "$original_run_timeout" -gt "$timeout_cap" ]; then
+		original_run_timeout="$timeout_cap"
+	fi
+	if [ "$budget_cap" -gt 0 ] && [ "$budget_seconds" -gt "$budget_cap" ]; then
+		budget_seconds="$budget_cap"
+	fi
+	if [ "$cycle_cap" -gt 0 ]; then
+		if [ "$max_cycles" -eq 0 ] || [ "$max_cycles" -gt "$cycle_cap" ]; then
+			max_cycles="$cycle_cap"
+		fi
+	fi
+
+	if [ "$original_run_timeout" != "$previous_run_timeout" ] ||
+		[ "$budget_seconds" != "$previous_budget_seconds" ] ||
+		[ "$max_cycles" != "$previous_max_cycles" ]; then
+		printf 'OpenCode dynamic review cadence queue cap applied: per-attempt %ss -> %ss, total budget %ss -> %ss, max-cycles %s -> %s; set OPENCODE_DYNAMIC_*_CAP_SECONDS or OPENCODE_DYNAMIC_MAX_CYCLES_CAP to 0 to disable a specific queue cap.\n' \
+			"$previous_run_timeout" "$original_run_timeout" \
+			"$previous_budget_seconds" "$budget_seconds" \
+			"$previous_max_cycles" "$max_cycles"
+	fi
+}
+
 count_changed_files_for_cadence() {
 	local changed_files_file="${OPENCODE_CHANGED_FILES_FILE:-}"
 
@@ -646,12 +678,14 @@ main() {
 				budget_seconds="$(env_integer_or_default OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS 7200)"
 			fi
 			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
+			cap_dynamic_cadence_for_queue
 			printf 'OpenCode dynamic review cadence selected %ss per attempt and %ss total budget for %s changed file(s); max-cycles=%s.\n' \
 				"$original_run_timeout" "$budget_seconds" "$changed_file_count" "$max_cycles"
 		else
 			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
 			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
 			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
+			cap_dynamic_cadence_for_queue
 			printf 'OpenCode dynamic review cadence could not read OPENCODE_CHANGED_FILES_FILE; using %ss per attempt and %ss total budget; max-cycles=%s.\n' \
 				"$original_run_timeout" "$budget_seconds" "$max_cycles"
 		fi

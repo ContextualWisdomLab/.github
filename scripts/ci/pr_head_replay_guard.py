@@ -8,10 +8,21 @@ the stale snapshot also restores its old tests.
 
 This guard inspects the PR head history, finds the newest merge commit on the
 first-parent path from the supplied base, and evaluates commits made after that
-merge.  It blocks an exact replay of any pre-merge first-parent tree.  It also
-blocks a conservative bulk-regression signature: at least five tracked files and
-500 lines removed, with deletions at least four times additions.  Every decision
-is printed with the exact SHAs and diff counts so the failure is actionable.
+merge.  It blocks, regardless of diff size:
+
+- an exact replay of any pre-merge first-parent tree;
+- targeted unmerges of base work: any path whose post-merge content reverted
+  exactly to its pre-merge first-parent content, discarding what the base
+  merge brought in (observed in appguardrail#297, where a stale snapshot
+  reverted an accessibility wrapper and deleted its regression tests in a
+  push far below the bulk thresholds);
+- test regression without replacement: post-merge commits deleting or
+  shrinking test files while adding no new test file anywhere in the push;
+- the conservative bulk-regression signature: at least five tracked files and
+  500 lines removed, with deletions at least four times additions.
+
+Every decision is printed with the exact SHAs, diff counts, and offending
+paths so the failure is actionable.
 """
 
 from __future__ import annotations
@@ -27,6 +38,8 @@ MAX_PRE_MERGE_ANCESTORS = 200
 MIN_REMOVED_FILES = 5
 MIN_DELETED_LINES = 500
 MIN_DELETION_RATIO = 4
+MAX_LISTED_PATHS = 10
+TEST_DIR_SEGMENTS = frozenset({"tests", "test", "__tests__", "spec", "specs"})
 
 
 @dataclass(frozen=True)
@@ -41,6 +54,9 @@ class ReplayEvidence:
     removed_files: int = 0
     added_lines: int = 0
     deleted_lines: int = 0
+    unmerged_paths: tuple[str, ...] = ()
+    regressed_test_paths: tuple[str, ...] = ()
+    added_test_files: int = 0
 
     @property
     def suspicious_bulk_regression(self) -> bool:
@@ -52,9 +68,24 @@ class ReplayEvidence:
         )
 
     @property
+    def unmerges_base_work(self) -> bool:
+        """Return whether any path reverted exactly to its pre-merge content."""
+        return bool(self.unmerged_paths)
+
+    @property
+    def suspicious_test_regression(self) -> bool:
+        """Return whether tests were deleted or shrunk with no replacement test file."""
+        return bool(self.regressed_test_paths) and self.added_test_files == 0
+
+    @property
     def blocked(self) -> bool:
-        """Return whether exact-tree or bulk-regression evidence blocks the head."""
-        return self.exact_replay_of is not None or self.suspicious_bulk_regression
+        """Return whether any replay, unmerge, or test-regression evidence blocks the head."""
+        return (
+            self.exact_replay_of is not None
+            or self.unmerges_base_work
+            or self.suspicious_test_regression
+            or self.suspicious_bulk_regression
+        )
 
 
 def git_output(repo_root: Path, args: Sequence[str]) -> str:
@@ -125,6 +156,69 @@ def diff_statistics(repo_root: Path, start: str, end: str) -> tuple[int, int, in
     return removed_files, added_lines, deleted_lines
 
 
+def is_test_path(path: str) -> bool:
+    """Return whether a repository path looks like an automated test file."""
+    parts = path.replace("\\", "/").split("/")
+    if any(part in TEST_DIR_SEGMENTS for part in parts[:-1]):
+        return True
+    name = parts[-1]
+    stem = name.split(".", 1)[0]
+    return (
+        stem.startswith("test_")
+        or stem.endswith("_test")
+        or ".spec." in name
+        or ".test." in name
+    )
+
+
+def changed_paths(repo_root: Path, start: str, end: str) -> set[str]:
+    """Return the set of paths whose content differs between two commits."""
+    output = git_output(repo_root, ["diff", "--name-only", start, end])
+    return {line for line in output.splitlines() if line}
+
+
+def unmerged_base_paths(repo_root: Path, merge_anchor: str, head_sha: str) -> tuple[str, ...]:
+    """Return post-merge paths reverted exactly to their pre-merge content.
+
+    A path that changed after the merge anchor yet is byte-identical to the
+    pre-merge first parent means the push discarded exactly what the base
+    merge brought in for that path — the targeted-revert signature of a stale
+    agent workspace snapshot, however small the diff.
+    """
+    since_merge = changed_paths(repo_root, merge_anchor, head_sha)
+    since_pre_merge = changed_paths(repo_root, f"{merge_anchor}^1", head_sha)
+    return tuple(sorted(since_merge - since_pre_merge))
+
+
+def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str, ...], int]:
+    """Return regressed (deleted or net-shrunk) test paths and the added-test count."""
+    regressed: set[str] = set()
+    added = 0
+    for line in git_output(repo_root, ["diff", "--name-status", start, end]).splitlines():
+        fields = line.split("\t")
+        if len(fields) < 2 or not is_test_path(fields[-1]):
+            continue
+        status = fields[0][:1]
+        if status == "D":
+            regressed.add(fields[-1])
+        elif status == "A":
+            added += 1
+    for line in git_output(repo_root, ["diff", "--numstat", start, end]).splitlines():
+        fields = line.split("\t", 2)
+        if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
+            continue
+        if is_test_path(fields[2]) and int(fields[1]) > int(fields[0]):
+            regressed.add(fields[2])
+    return tuple(sorted(regressed)), added
+
+
+def summarize_paths(paths: Sequence[str]) -> str:
+    """Render a bounded, comma-separated path list for the report."""
+    listed = ", ".join(paths[:MAX_LISTED_PATHS])
+    extra = len(paths) - MAX_LISTED_PATHS
+    return f"{listed} (+{extra} more)" if extra > 0 else listed
+
+
 def collect_evidence(repo_root: Path, base_sha: str, head_sha: str) -> ReplayEvidence:
     """Collect exact-tree and bulk-diff evidence for the supplied PR head."""
     git_output(repo_root, ["rev-parse", "--verify", f"{base_sha}^{{commit}}"])
@@ -149,6 +243,8 @@ def collect_evidence(repo_root: Path, base_sha: str, head_sha: str) -> ReplayEvi
         merge_anchor,
         head_sha,
     )
+    unmerged = unmerged_base_paths(repo_root, merge_anchor, head_sha)
+    regressed_tests, added_tests = test_file_changes(repo_root, merge_anchor, head_sha)
     return ReplayEvidence(
         base_sha=base_sha,
         head_sha=head_sha,
@@ -158,6 +254,9 @@ def collect_evidence(repo_root: Path, base_sha: str, head_sha: str) -> ReplayEvi
         removed_files=removed_files,
         added_lines=added_lines,
         deleted_lines=deleted_lines,
+        unmerged_paths=unmerged,
+        regressed_test_paths=regressed_tests,
+        added_test_files=added_tests,
     )
 
 
@@ -171,24 +270,35 @@ def format_report(evidence: ReplayEvidence) -> str:
         f"- Post-merge commits: {evidence.post_merge_commits}",
         f"- Post-merge removed files: {evidence.removed_files}",
         f"- Post-merge added/deleted lines: {evidence.added_lines}/{evidence.deleted_lines}",
+        f"- Paths reverted to pre-merge content: {summarize_paths(evidence.unmerged_paths) or 'none'}",
+        f"- Regressed test files: {summarize_paths(evidence.regressed_test_paths) or 'none'}",
+        f"- Added test files: {evidence.added_test_files}",
     ]
+    reasons = []
     if evidence.exact_replay_of is not None:
-        lines.extend(
-            [
-                "- Result: FAIL",
-                "- Reason: current HEAD exactly replays the tree of pre-merge ancestor "
-                f"{evidence.exact_replay_of}; a stale agent workspace discarded the base merge.",
-            ]
+        reasons.append(
+            "current HEAD exactly replays the tree of pre-merge ancestor "
+            f"{evidence.exact_replay_of}; a stale agent workspace discarded the base merge."
         )
-    elif evidence.suspicious_bulk_regression:
-        lines.extend(
-            [
-                "- Result: FAIL",
-                "- Reason: post-merge changes match the stale bulk-replay signature "
-                f"(removed files >= {MIN_REMOVED_FILES}, deleted lines >= {MIN_DELETED_LINES}, "
-                f"deletion/addition ratio >= {MIN_DELETION_RATIO}:1).",
-            ]
+    if evidence.unmerges_base_work:
+        reasons.append(
+            "post-merge commits reverted base-merged work back to its exact pre-merge "
+            f"content (unmerged base work): {summarize_paths(evidence.unmerged_paths)}."
         )
+    if evidence.suspicious_test_regression:
+        reasons.append(
+            "post-merge commits deleted or shrank test files without adding any "
+            f"replacement test file: {summarize_paths(evidence.regressed_test_paths)}."
+        )
+    if evidence.suspicious_bulk_regression:
+        reasons.append(
+            "post-merge changes match the stale bulk-replay signature "
+            f"(removed files >= {MIN_REMOVED_FILES}, deleted lines >= {MIN_DELETED_LINES}, "
+            f"deletion/addition ratio >= {MIN_DELETION_RATIO}:1)."
+        )
+    if reasons:
+        lines.append("- Result: FAIL")
+        lines.extend(f"- Reason: {reason}" for reason in reasons)
     elif evidence.merge_anchor is None:
         lines.extend(
             [
@@ -208,7 +318,8 @@ def format_report(evidence: ReplayEvidence) -> str:
         lines.extend(
             [
                 "- Result: PASS",
-                "- Reason: post-merge changes neither match a pre-merge tree nor exceed the conservative bulk-regression thresholds.",
+                "- Reason: post-merge changes neither match a pre-merge tree, revert base-merged work, "
+                "regress tests without replacement, nor exceed the conservative bulk-regression thresholds.",
             ]
         )
     return "\n".join(lines)
