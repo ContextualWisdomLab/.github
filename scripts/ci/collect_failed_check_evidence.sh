@@ -520,7 +520,10 @@ gh api graphql \
 			if .__typename == "CheckRun" then
 				select((.status // "") == "COMPLETED")
 				| select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
-				| select(((.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)
+				# The metadata-only gate is derived from the OpenCode review state.
+				# GitHub can misattribute its workflow name (for example, as CodeQL),
+				# so its stable check name is the only safe cycle-breaking key.
+				| select((.name // "") != "metadata-only gate evaluation")
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.checkSuite.workflowRun.workflow.name // "") == "CodeQL") | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")) | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("${{"))) | not)

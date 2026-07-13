@@ -575,13 +575,15 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "not a generic model-exhaustion message" "opencode review tells models to return concrete missing-evidence findings instead of progress-only output"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "tokens_limit_reached" "opencode review detects provider context-window overflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 45' "opencode review target releases stalled review runners within the bounded queue budget"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 90' "opencode review target releases stalled review runners within the bounded queue budget"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode model pool gives multiple candidates a bounded review window while capping stalled model attempts"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 65' "opencode model pool gives multiple candidates a bounded review window while capping stalled model attempts"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 8' "opencode approval publication is bounded so a stalled review releases queue capacity promptly"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' "opencode primary review advances after a bounded stalled provider attempt"
-	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' "opencode primary review advances after a bounded stalled provider attempt"
+	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
 	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "1"' "opencode model pool visits the candidate catalog once without reoccupying the queue"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model pool only runs after coverage evidence passed"
 	assert_file_contains "$workflow_file" "id: opencode_review_model_pool" "opencode DeepSeek V3 fallback still runs after a primary model timeout or step failure when coverage evidence passed"
@@ -654,12 +656,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'load_selected_review_output()' "opencode approval step has a direct selected-output fallback when the overview comment is stale or invalid"
 	assert_file_contains "$workflow_file" "gate result from Review Overview comment" "opencode approval step distinguishes overview-comment gate results"
 	assert_file_contains "$workflow_file" "gate result from selected OpenCode output" "opencode approval step can recover from an invalid overview by validating the selected successful output"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 8' "opencode approval step has a short bounded wall-clock timeout"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 10' "opencode approval step has a bounded wall-clock timeout that covers slow peer checks"
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' "opencode publish-stage diagnosis is a short best-effort augmentation"
 	assert_file_not_contains "$workflow_file" "rekick_model_pool_on_exhaustion" "opencode publication must not rerun the exhausted model catalog after the model-pool step"
 	assert_file_contains "$workflow_file" "publish stage performs no duplicate model-catalog pass" "opencode publication logs that exhausted model retries are delegated to the scheduler"
 	assert_file_contains "$workflow_file" 'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"' "opencode failed-check diagnosis bounds export so the publication gate cannot hang silently"
-	assert_file_contains "$workflow_file" 'APPROVAL_CHECK_WAIT_ATTEMPTS: "12"' "opencode approval gives slow peer checks a bounded hold window before scheduler retry"
+	assert_file_contains "$workflow_file" 'APPROVAL_CHECK_WAIT_ATTEMPTS: "36"' "opencode approval gives slow peer checks a bounded six-minute hold window before scheduler retry"
 	assert_file_contains "$workflow_file" 'APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"' "opencode approval poll cadence keeps peer-check API volume bounded"
 	assert_file_not_contains "$workflow_file" 'REVIEW_PUBLISH_STEP_TIMEOUT_SECONDS' "opencode review publication relies on the Actions step timeout instead of a background watchdog"
 	assert_file_not_contains "$workflow_file" "PUBLISH_STEP_TIMEOUT" "opencode review publication does not leave orphaned watchdog processes"
@@ -676,13 +678,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "approve_current_head_after_model_unavailable" "opencode general PRs cannot approve without model-backed adversarial evidence"
 	assert_file_contains "$workflow_file" "publish_blockers_after_model_unavailable" "opencode still publishes source-backed blockers after model-output failures"
 	assert_file_contains "$workflow_file" "Current-head model-unavailable evidence fallback candidate" "opencode model-unavailable fallback logs repository, head, and scope evidence"
-	assert_file_contains "$workflow_file" "MODEL_UNAVAILABLE_CLEAN_EVIDENCE" "model-unavailable path can satisfy the required check only after clean deterministic current-head evidence"
+	assert_file_contains "$workflow_file" "model-unavailable approvals are limited to existing same-head real-model approvals or allowlisted central review-process self-repair" "model-unavailable path refuses generic deterministic approvals"
 	assert_file_contains "$workflow_file" "same_head_opencode_approval_exists" "model-unavailable path reuses an existing same-head OpenCode approval before publishing fallback approval"
 	assert_file_contains "$workflow_file" "EXISTING_CURRENT_HEAD_APPROVAL" "existing same-head approval fallback logs an explicit required-check result"
 	assert_file_contains "$workflow_file" "no duplicate APPROVE review was posted" "existing same-head approval fallback does not publish a duplicate approval review"
 	assert_file_contains "$workflow_file" "opencode_existing_approval_gate.py" "existing approval reuse requires machine-validated real-model adversarial evidence"
-	assert_file_contains "$workflow_file" "no adversarial_validation block was fabricated" "deterministic model-unavailable approval must not fabricate model adversarial evidence"
-	assert_file_contains "$workflow_file" 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' "deterministic model-unavailable approval is explicit and source-evidence gated"
+	assert_file_not_contains "$workflow_file" 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' "model-unavailable path must not publish generic deterministic approval reviews"
 	assert_file_contains "$workflow_file" "approval still pending" "pending peer checks cannot satisfy the required OpenCode gate without a review"
 	assert_file_contains "$workflow_file" "Cross-repository workflow_dispatch approval hold" "cross-repository pending approvals avoid poisoning the central source-branch check"
 	assert_file_contains "$workflow_file" "CENTRAL_FAST_APPROVAL_ADVERSARIAL_INVALID" "central fast approval revalidates structured adversarial evidence"
@@ -726,7 +727,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary and fallback paths avoid multi-attempt stalls on one model"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode catalog fallback tries each model once before moving on"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' "opencode catalog fallback advances after a bounded stalled provider attempt"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' "opencode catalog fallback advances after a bounded stalled provider attempt"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries DeepSeek V3 before OpenAI fallbacks"
@@ -897,14 +898,14 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")' "failed-check evidence only appends Strix workflow runs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'group_by(.__context_key)' "failed-check evidence groups manual Strix statuses by context before accepting superseding success"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'map(last)' "failed-check evidence accepts only the latest status per context"
-	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select(((.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)' "failed-check evidence ignores metadata-only PR Governance review-state gates"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.name // "") != "metadata-only gate evaluation")' "failed-check evidence ignores metadata-only review-state gates even when GitHub misattributes their workflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'isRequired(pullRequestId: $prId)' "failed-check evidence reads PR-required status for check runs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.isRequired // false) | not) and (.checkSuite.workflowRun.workflow.name // "") == "CodeQL"' "failed-check evidence ignores non-required cancelled CodeQL checks without logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")' "failed-check evidence ignores cancelled scheduler queue replacement checks"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.name // "") | contains("${{"))' "failed-check evidence ignores cancelled matrix-template helper checks without logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "noema-review"' "failed-check evidence ignores cancelled Noema queue replacement checks without source logs"
-	assert_file_contains "$workflow_file" 'select(((.name // "") == "metadata-only gate evaluation" and (.workflow // "") == "PR Governance") | not)' "opencode failed-check collection ignores metadata-only PR Governance review-state gates"
-	metadata_gate_filter_count="$(grep -Fc 'select(((.name // "") == "metadata-only gate evaluation" and (.workflow // "") == "PR Governance") | not)' "$workflow_file")"
+	assert_file_contains "$workflow_file" 'select((.name // "") != "metadata-only gate evaluation")' "opencode failed-check collection ignores metadata-only review-state gates regardless of workflow attribution"
+	metadata_gate_filter_count="$(grep -Fc 'select((.name // "") != "metadata-only gate evaluation")' "$workflow_file")"
 	if [ "$metadata_gate_filter_count" -lt 2 ]; then
 		fail "opencode failed- and pending-check collection both ignore metadata-only PR Governance review-state gates (found ${metadata_gate_filter_count}, expected at least 2)"
 	fi
@@ -1018,7 +1019,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "collect_failed_check_evidence.sh" "opencode review workflow collects failed check logs and annotations"
 	assert_file_contains "$workflow_file" 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}' "opencode evidence step passes HEAD_SHA to failed-check evidence collection"
 	assert_file_contains "$workflow_file" "FAILED_CHECK_EVIDENCE_ATTEMPTS" "opencode review workflow bounds waiting for peer check failures before model review"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode model stage has a bounded multi-provider timeout"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 65' "opencode model stage has a bounded multi-provider timeout"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation has a bounded peer-check wait timeout"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"' "opencode review workflow keeps pre-model peer-check waiting bounded for required workflow DX"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "5"' "opencode review workflow retries peer-check evidence without stalling the model stage for Strix-scale durations"
@@ -3195,6 +3196,22 @@ case "${FAKE_STRIX_SCENARIO:?}" in
 		*)
 			echo "Error: resource exhausted fallback path unexpected (${STRIX_LLM:-})" >&2
 			exit 23
+			;;
+		esac
+		;;
+	openai-primary-quota-fallback-success)
+		case "${STRIX_LLM:-}" in
+		openai/quota-primary)
+			echo "openai.agents: Error streaming response: You exceeded your current quota, please check your plan and billing details."
+			exit 1
+			;;
+		openai/fallback-one)
+			echo "scan ok after quota fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: quota fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 24
 			;;
 		esac
 		;;
@@ -8397,6 +8414,16 @@ run_gate_case_allow_provider_signal "vertex-primary-resource-exhausted-fallback-
 	"2" \
 	"vertex_ai/resource-exhausted-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
+
+run_gate_case_allow_provider_signal "openai-primary-quota-fallback-success" \
+	"openai/quota-primary" \
+	"openai/fallback-one openai/fallback-two" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'openai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"openai/quota-primary|openai/fallback-one" \
+	"<unset>|<unset>" \
+	"openai"
 
 run_gate_case_allow_provider_signal "vertex-primary-429-fallback-success" \
 	"vertex_ai/http429-primary" \
