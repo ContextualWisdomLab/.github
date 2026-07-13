@@ -424,6 +424,11 @@ def test_runtime_tool_receipt_reader_and_claim_direction_edges(tmp_path, monkeyp
         ("A real browser confirmed the dialog focus order.", "browser"),
         ("Puppeteer passed the interaction check.", "puppeteer"),
         ("Firefox verified the responsive layout.", "firefox"),
+        ("Playwright navigated to the route and captured a screenshot.", "playwright"),
+        ("Chrome displayed the production page.", "chrome"),
+        ("Cypress completed the checkout flow.", "cypress"),
+        ("Selenium produced a browser trace.", "selenium"),
+        ("I took a screenshot in Safari.", "safari"),
         (
             "Playwright was not installed, but verified the production route.",
             "playwright",
@@ -447,6 +452,28 @@ def test_runtime_tool_claim_blocks_browser_alias_and_negation_bypasses(
 )
 def test_runtime_tool_claim_allows_explicit_browser_execution_limitations(limitation):
     assert norm.claimed_runtime_tool(limitation) == ""
+
+
+def test_every_claimed_runtime_tool_requires_its_own_receipt(tmp_path, monkeypatch):
+    receipts = tmp_path / "execution-receipts.txt"
+    receipts.write_text(
+        "OPENCODE_EXECUTION_RECEIPT tool=chrome status=passed\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EXECUTION_RECEIPTS_FILE", str(receipts))
+    norm.trusted_execution_receipts.cache_clear()
+    claim = "Chrome verified the route; Playwright captured the screenshot."
+
+    assert norm.claimed_runtime_tools(claim) == ("chrome", "playwright")
+    assert norm.unreceipted_runtime_tool_claim(claim) == "playwright"
+
+    receipts.write_text(
+        "OPENCODE_EXECUTION_RECEIPT tool=chrome status=passed\n"
+        "OPENCODE_EXECUTION_RECEIPT tool=playwright status=observed\n",
+        encoding="utf-8",
+    )
+    norm.trusted_execution_receipts.cache_clear()
+    assert norm.unreceipted_runtime_tool_claim(claim) == ""
 
 
 def test_structural_review_detection_accepts_phrases_patterns_and_clean_text():

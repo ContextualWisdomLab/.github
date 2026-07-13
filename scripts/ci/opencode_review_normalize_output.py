@@ -239,7 +239,9 @@ RUNTIME_TOOL_PATTERN = re.compile(
 RUNTIME_ASSERTION_PATTERN = re.compile(
     r"\b(?:ran|executed|used|observed|verified|confirmed|validated|passed|"
     r"proved|demonstrated|showed|launched|opened|inspected|rendered|exercised|"
-    r"tested|checked)\b",
+    r"tested|checked|navigated|visited|browsed|loaded|displayed|captured|recorded|"
+    r"profiled|traced|clicked|typed|submitted|interacted|completed|succeeded|"
+    r"worked|generated|produced|took|reproduced|replayed|debugged)\b",
     re.IGNORECASE,
 )
 NEGATED_RUNTIME_ASSERTION_PATTERN = re.compile(
@@ -402,8 +404,9 @@ def runtime_assertion_is_negated(
     return NEGATED_RUNTIME_ASSERTION_PATTERN.search(f"{prefix}{suffix}") is not None
 
 
-def claimed_runtime_tool(text: str) -> str:
-    """Return a browser tool asserted as executed, excluding explicit limits."""
+def claimed_runtime_tools(text: str) -> tuple[str, ...]:
+    """Return every browser tool asserted as executed, excluding explicit limits."""
+    claimed_tools: list[str] = []
     for tool_match in RUNTIME_TOOL_PATTERN.finditer(text):
         before = text[max(0, tool_match.start() - 96) : tool_match.start()]
         after = text[tool_match.end() : tool_match.end() + 96]
@@ -417,18 +420,27 @@ def claimed_runtime_tool(text: str) -> str:
                 before_match,
                 suffix=before[before_match.end() :],
             ):
-                return runtime_tool_slug(tool_match.group(0))
-        for after_match in RUNTIME_ASSERTION_PATTERN.finditer(after):
-            if not runtime_assertion_is_negated(after, after_match):
-                return runtime_tool_slug(tool_match.group(0))
-    return ""
+                claimed_tools.append(runtime_tool_slug(tool_match.group(0)))
+                continue
+        if any(
+            not runtime_assertion_is_negated(after, after_match)
+            for after_match in RUNTIME_ASSERTION_PATTERN.finditer(after)
+        ):
+            claimed_tools.append(runtime_tool_slug(tool_match.group(0)))
+    return tuple(dict.fromkeys(claimed_tools))
+
+
+def claimed_runtime_tool(text: str) -> str:
+    """Return the first browser tool asserted as executed, if one exists."""
+    return next(iter(claimed_runtime_tools(text)), "")
 
 
 def unreceipted_runtime_tool_claim(text: str) -> str:
     """Return an asserted browser tool missing a trusted execution receipt."""
-    tool_slug = claimed_runtime_tool(text)
-    if tool_slug and tool_slug not in trusted_execution_receipts():
-        return tool_slug
+    receipts = trusted_execution_receipts()
+    for tool_slug in claimed_runtime_tools(text):
+        if tool_slug not in receipts:
+            return tool_slug
     return ""
 
 
