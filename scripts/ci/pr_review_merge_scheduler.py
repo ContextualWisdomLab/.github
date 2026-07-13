@@ -1106,6 +1106,19 @@ def is_opencode_review(review: dict[str, Any]) -> bool:
     return review_author_login(review) in {"opencode-agent", "opencode-agent[bot]"}
 
 
+def is_legacy_actions_opencode_review(review: dict[str, Any]) -> bool:
+    """Return whether a legacy Actions-authored review contains OpenCode evidence."""
+    login = review_author_login(review)
+    return login in {"github-actions", "github-actions[bot]"} and "opencode" in (
+        review.get("body") or ""
+    ).lower()
+
+
+def is_automated_opencode_review(review: dict[str, Any]) -> bool:
+    """Return whether a review is OpenCode automation evidence, including legacy writes."""
+    return is_opencode_review(review) or is_legacy_actions_opencode_review(review)
+
+
 def is_deterministic_fallback_approval(review: dict[str, Any]) -> bool:
     """Return whether an old fail-open approval body is not review evidence."""
     if (review.get("state") or "").upper() != "APPROVED":
@@ -1157,16 +1170,136 @@ def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
             continue
         if review_matches_current_head(review, pr):
             continue
-        login = review_author_login(review)
-        legacy_actions_review = login in {"github-actions", "github-actions[bot]"} and "opencode" in (
-            review.get("body") or ""
-        ).lower()
-        if not (is_opencode_review(review) or legacy_actions_review):
+        if not is_automated_opencode_review(review):
             continue
         review_id = review.get("databaseId")
         if isinstance(review_id, int) and review_id > 0:
             review_ids.append(review_id)
     return review_ids
+
+
+def stale_opencode_approval_ids(pr: dict[str, Any]) -> list[int]:
+    """Return active automated approvals whose evidence is not for the live head.
+
+    GitHub evaluates the latest review from each author. Older review objects may
+    remain ``APPROVED`` after a later same-author review supersedes them, and the
+    dismissal API treats those historical objects as no-ops. Inspect only the
+    latest OpenCode review per automation identity so cleanup targets effective
+    policy state rather than immutable review history.
+    """
+    latest_by_author: dict[str, dict[str, Any]] = {}
+    for review in (pr.get("reviews") or {}).get("nodes") or []:
+        if not is_automated_opencode_review(review):
+            continue
+        latest_by_author[review_author_login(review)] = review
+
+    review_ids: list[int] = []
+    for review in latest_by_author.values():
+        if (review.get("state") or "").upper() != "APPROVED":
+            continue
+        if review_matches_current_head(review, pr):
+            continue
+        review_id = review.get("databaseId")
+        if isinstance(review_id, int) and review_id > 0:
+            review_ids.append(review_id)
+    return review_ids
+
+
+def dismiss_pull_request_review(
+    repo: str,
+    number: str,
+    review_id: int,
+    *,
+    message: str,
+) -> bool:
+    """Dismiss one review and verify GitHub actually changed its state."""
+    try:
+        run(
+            [
+                "gh",
+                "api",
+                "-X",
+                "PUT",
+                f"repos/{repo}/pulls/{number}/reviews/{review_id}/dismissals",
+                "-f",
+                f"message={message}",
+            ]
+        )
+        live_state = run_github_read(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/pulls/{number}/reviews/{review_id}",
+                "--jq",
+                ".state",
+            ]
+        ).strip().upper()
+    except RuntimeError as exc:
+        print(
+            "::warning::Stale OpenCode review dismissal failed for "
+            f"PR #{number} review {review_id}: {scrub_sensitive_data(str(exc))}"
+        )
+        return False
+    if live_state == "DISMISSED":
+        return True
+    print(
+        "::warning::GitHub accepted stale OpenCode review dismissal for "
+        f"PR #{number} review {review_id}, but the verified review state is "
+        f"{live_state or '<missing>'}; the review remains non-authoritative unless its explicit "
+        "Head SHA matches the live PR head."
+    )
+    return False
+
+
+def dismiss_stale_opencode_approvals(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> tuple[int, int]:
+    """Dismiss latest automated approvals that do not match the exact live head."""
+    review_ids = stale_opencode_approval_ids(pr)
+    if not review_ids:
+        return 0, 0
+    if dry_run:
+        return len(review_ids), 0
+
+    require_github_actions_mutation_actor("dismiss-stale-opencode-approval")
+    repo = validate_github_repository(repo)
+    number = str(int(pr["number"]))
+    expected_head = validate_git_sha(pr["headRefOid"])
+    live_head = run_github_read(
+        ["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
+    ).strip()
+    if live_head != expected_head:
+        raise RuntimeError(
+            "PR head changed before stale approval dismissal; "
+            f"expected {expected_head}, observed {live_head or '<missing>'}"
+        )
+
+    dismissed = 0
+    for review_id in review_ids:
+        message = (
+            "Superseded automated OpenCode approval whose explicit review evidence does not match "
+            f"exact current head {expected_head}; a fresh current-head review is required."
+        )
+        if dismiss_pull_request_review(repo, number, review_id, message=message):
+            dismissed += 1
+    return dismissed, len(review_ids) - dismissed
+
+
+def stale_approval_cleanup_note(dismissed: int, retained: int, *, dry_run: bool) -> str | None:
+    """Render exact stale-approval cleanup evidence for scheduler logs."""
+    notes: list[str] = []
+    if dismissed:
+        verb = "would dismiss" if dry_run else "dismissed"
+        notes.append(f"{verb} {dismissed} latest previous-head automated OpenCode approval(s)")
+    if retained:
+        notes.append(
+            f"GitHub retained {retained} stale automated approval(s) after dismissal attempts; "
+            "their head evidence remains non-authoritative"
+        )
+    return "; ".join(notes) if notes else None
 
 
 def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry_run: bool) -> int:
@@ -1434,7 +1567,19 @@ def post_update_branch_followup(
             "wait for GitHub to refresh branch-freshness and required-check evidence"
         )
 
+    dismissed_approvals, retained_approvals = dismiss_stale_opencode_approvals(
+        repo,
+        updated_pr,
+        dry_run=dry_run,
+    )
+    cleanup_note = stale_approval_cleanup_note(
+        dismissed_approvals,
+        retained_approvals,
+        dry_run=dry_run,
+    )
     head_note = f"updated head {short_sha(updated_head)} observed after update-branch"
+    if cleanup_note:
+        head_note = f"{head_note}; {cleanup_note}"
     if not trigger_reviews:
         return f"{head_note}; review dispatch is disabled for this scheduler run"
     if not review_dispatch_allowed:
@@ -1873,6 +2018,11 @@ def inspect_pr(
 
     outdated_cleanup_count = resolve_outdated_review_threads(pr, dry_run=dry_run)
     stale_review_cleanup_count = 0
+    stale_approval_cleanup_count, retained_stale_approval_count = dismiss_stale_opencode_approvals(
+        repo,
+        pr,
+        dry_run=dry_run,
+    )
 
     def finish(decision: Decision) -> Decision:
         """Attach obsolete review cleanup evidence to the final decision."""
@@ -1892,6 +2042,18 @@ def inspect_pr(
                 decision.action,
                 decision.reason,
                 (*decision.notes, note),
+            )
+        approval_note = stale_approval_cleanup_note(
+            stale_approval_cleanup_count,
+            retained_stale_approval_count,
+            dry_run=dry_run,
+        )
+        if approval_note:
+            decision = Decision(
+                decision.pr,
+                decision.action,
+                decision.reason,
+                (*decision.notes, approval_note),
             )
         return decision
 
