@@ -989,7 +989,19 @@ def test_review_state_and_failed_checks():
     assert not sched.is_deterministic_fallback_approval(
         opencode_review("CHANGES_REQUESTED", exact_head)
     )
+    assert sched.has_current_head_deterministic_fallback_approval(deterministic_fallback)
     assert not sched.has_current_head_approval(deterministic_fallback)
+    fallback_scan_without_current_opencode = make_pr(
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "old"),
+                opencode_review("APPROVED", "head", login="human"),
+            ]
+        }
+    )
+    assert not sched.has_current_head_deterministic_fallback_approval(
+        fallback_scan_without_current_opencode
+    )
     stale_review = make_pr(
         reviews={
             "nodes": [
