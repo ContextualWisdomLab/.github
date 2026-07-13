@@ -1114,6 +1114,50 @@ def test_review_state_and_failed_checks():
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
 
 
+def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
+    head = "a" * 40
+    fallback_review = {
+        **opencode_review("APPROVED", head),
+        "body": (
+            "OpenCode model providers were unavailable, so deterministic current-head evidence "
+            f"was used.\n\n- Head SHA: `{head}`"
+        ),
+    }
+    pr = make_pr(
+        headRefOid=head,
+        reviews={"nodes": [fallback_review]},
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    opencode_check(status="COMPLETED"),
+                ]
+            }
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, current_pr, dry_run: dispatched.append(
+            (repo, workflow, current_pr["headRefOid"], dry_run)
+        ),
+    )
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    followup = inspect(pr)
+
+    assert followup.action == "wait"
+    assert "next scheduler heartbeat" in followup.reason
+    assert dispatched == []
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    heartbeat = inspect(pr)
+
+    assert heartbeat.action == "review_dispatch"
+    assert dispatched == [("owner/repo", "OpenCode Review", head, True)]
+
+
 def test_current_head_approval_cleans_previous_head_change_gate_before_merge():
     pr = make_pr(
         reviews={
