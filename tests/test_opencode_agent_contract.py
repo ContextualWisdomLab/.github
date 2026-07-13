@@ -634,6 +634,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]' not in current_head_fallback
     assert 'if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]' not in current_head_fallback
     assert "collect_open_code_scanning_alerts" in workflow
+    assert (
+        "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
+        "github.token }}"
+    ) in workflow
+    assert "CODE_SCANNING_TOKEN_SOURCE" in workflow
+    assert 'GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s"' in workflow
+    assert "Open code-scanning alert lookup skipped because no target-repository read token" in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
@@ -884,11 +892,16 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "python3 scripts/ci/pr_review_merge_scheduler.py" in workflow
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
     assert "github.event_name == 'pull_request_target'" in workflow
+    status_step = workflow.split("      - name: Publish workflow_dispatch OpenCode status", 1)[1].split(
+        "      - name: Run merge scheduler after approval", 1
+    )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
         "github.token }}"
-    ) in workflow
+    ) in status_step
+    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
+    assert "using %s token" in status_step
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
     assert (
         "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || "
