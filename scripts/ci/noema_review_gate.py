@@ -22,7 +22,6 @@ from typing import Any
 PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
     "opencode-agent",
-    "github-actions[bot]",
 }
 PRIMARY_REVIEW_MARKERS = (
     "OpenCode reviewed the current-head bounded evidence and found no blocking issues.",

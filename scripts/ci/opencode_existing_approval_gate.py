@@ -9,11 +9,14 @@ import re
 import sys
 from typing import Any, TextIO
 
+try:
+    from adversarial_evidence import adversarial_evidence_rejection_reason
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
 
-APPROVAL_AUTHORS = frozenset(
-    {"opencode-agent", "opencode-agent[bot]", "github-actions[bot]"}
-)
 OPENCODE_APP_APPROVAL_AUTHORS = frozenset({"opencode-agent", "opencode-agent[bot]"})
+APPROVAL_AUTHORS = OPENCODE_APP_APPROVAL_AUTHORS
+KNOWN_PUBLICATION_ACTORS = APPROVAL_AUTHORS | {"github-actions[bot]"}
 FALLBACK_MARKERS = (
     "deterministic current-head evidence",
     "deterministic fallback approval",
@@ -76,6 +79,9 @@ def adversarial_rejection_reason(body: str) -> str | None:
         return "missing parseable adversarial-validation JSON"
     if str(evidence.get("status") or "").lower() != "passed":
         return "adversarial-validation status is not passed"
+    residual_risk = evidence.get("residual_risk")
+    if not isinstance(residual_risk, str) or not residual_risk.strip():
+        return "adversarial-validation residual_risk is missing"
 
     probes = evidence.get("probes")
     if not isinstance(probes, list) or not probes:
@@ -91,10 +97,12 @@ def adversarial_rejection_reason(body: str) -> str | None:
                 return f"adversarial-validation probe is missing {field}"
         if probe["outcome"].strip().lower() != "falsified":
             return "approval probe outcome is not falsified"
-
-    residual_risk = evidence.get("residual_risk")
-    if not isinstance(residual_risk, str) or not residual_risk.strip():
-        return "adversarial-validation residual_risk is missing"
+        evidence_error = adversarial_evidence_rejection_reason(
+            str(probe["evidence"]),
+            str(probe["path"]),
+        )
+        if evidence_error:
+            return f"adversarial-validation probe evidence {evidence_error}"
     return None
 
 
@@ -146,7 +154,7 @@ def has_reusable_real_model_approval(
         login = str((review.get("user") or {}).get("login") or "")
         if state != "APPROVED" or commit_id.lower() != head_sha.lower():
             continue
-        if login not in APPROVAL_AUTHORS:
+        if login not in KNOWN_PUBLICATION_ACTORS:
             continue
         candidate_count += 1
         reason = review_rejection_reason(

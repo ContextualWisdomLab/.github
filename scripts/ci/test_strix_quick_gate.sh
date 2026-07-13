@@ -785,6 +785,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Run merge scheduler after approval" "opencode approval runs the merge scheduler after current-head review publication"
 	assert_file_contains "$workflow_file" "python3 scripts/ci/pr_review_merge_scheduler.py" "opencode approval directly executes the trusted central merge scheduler when required workflows are not repo-local dispatch targets"
 	assert_file_contains "$workflow_file" "--require-opencode-app" "opencode approval reuse and post-publication follow-up reject GitHub Actions-authored review evidence"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_prompt_template.md" "exact command, test/assertion, log/check/SARIF receipt" "opencode adversarial probes must cite independent executable or source evidence"
+	assert_file_contains "$REPO_ROOT/scripts/ci/adversarial_evidence.py" "properly handles all cases" "opencode adversarial evidence gate rejects circular all-cases claims"
 	assert_file_contains "$workflow_file" "approval_attempt in 1 2 3 4 5 6" "opencode post-publication follow-up waits dynamically for exact-head App review visibility"
 	assert_file_contains "$workflow_file" "current-head OpenCode App approval did not become visible" "opencode post-publication approval propagation failures remain visible in logs"
 	assert_file_contains "$workflow_file" "pull-requests: write" "opencode approval has pull-request mutation permission for merge/update follow-up"

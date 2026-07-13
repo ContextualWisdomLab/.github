@@ -264,6 +264,30 @@ def test_adversarial_validation_rejects_each_malformed_contract_branch(
             "field evidence must be non-empty",
         ),
         (
+            {
+                **valid,
+                "probes": [
+                    {**first_probe, "evidence": "The retry logic handles this case."},
+                    second_probe,
+                ],
+            },
+            "APPROVE",
+            [],
+            "independent proof",
+        ),
+        (
+            {
+                **valid,
+                "probes": [
+                    {**first_probe, "evidence": "Increasing delays are present."},
+                    second_probe,
+                ],
+            },
+            "APPROVE",
+            [],
+            "must cite",
+        ),
+        (
             {**valid, "probes": [{**first_probe, "outcome": "unknown"}, second_probe]},
             "APPROVE",
             [],

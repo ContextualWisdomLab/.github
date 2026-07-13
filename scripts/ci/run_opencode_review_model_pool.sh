@@ -149,7 +149,7 @@ EOF
 						line: $model_line,
 						hypothesis: "A constrained GitHub GPT-5 endpoint can consume the complete medium-change cadence and starve later candidates.",
 						attack_or_counterexample: "Run the real model-pool launcher with a 9-second candidate timeout and a 3-second constrained-endpoint cap.",
-						evidence: "test_github_gpt5_runtime_cap_preserves_queue_budget passed and observed the 3-second cap in launcher output.",
+						evidence: "pytest command tests/test_opencode_model_pool_runner.py::test_github_gpt5_runtime_cap_preserves_queue_budget passed and observed the 3-second cap in launcher output.",
 						outcome: "falsified"
 					},
 					{
@@ -165,7 +165,7 @@ EOF
 						line: $strix_line,
 						hypothesis: "A legitimate mode-160000 gitlink is treated as an unreadable irregular file and blocks the PR scope gate.",
 						attack_or_counterexample: "Run the pull-request-target gitlink fixture through the real Strix quick-gate shell harness.",
-						evidence: "pull-request-target-gitlink-is-explicitly-skipped passed while non-gitlink irregular entries remain fail-closed.",
+						evidence: "command STRIX_TEST_CASE_FILTER=pull-request-target-gitlink-is-explicitly-skipped bash scripts/ci/test_strix_quick_gate.sh passed while non-gitlink irregular entries remain fail-closed.",
 						outcome: "falsified"
 					}
 				],

@@ -105,6 +105,13 @@ def test_review_state_helpers_cover_current_head_logic():
     assert noema.current_primary_approval(make_pr(reviews={"nodes": [old]})) is None
     assert noema.current_primary_approval(make_pr(reviews={"nodes": [review("COMMENTED", body=marker_body)]})) is None
     assert noema.current_primary_approval(make_pr(reviews={"nodes": [review(login="human", body=marker_body)]})) is None
+    assert noema.current_primary_approval(
+        make_pr(
+            reviews={
+                "nodes": [review(login="github-actions[bot]", body=marker_body)]
+            }
+        )
+    ) is None
     assert noema.has_current_changes_requested(make_pr(reviews={"nodes": [review("CHANGES_REQUESTED")]}))
     assert not noema.has_current_changes_requested(make_pr(reviews={"nodes": [review("CHANGES_REQUESTED", commit="old")]}))
     assert noema.has_unresolved_threads(make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}))

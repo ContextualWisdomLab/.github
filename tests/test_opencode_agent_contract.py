@@ -1290,6 +1290,18 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "current-head OpenCode App approval did not become visible" in workflow
 
 
+def test_opencode_adversarial_prompt_requires_independent_proof():
+    """Reject circular probe evidence that only restates the implementation."""
+    prompt = Path("scripts/ci/opencode_review_prompt_template.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "exact command, test/assertion, log/check/SARIF receipt" in prompt
+    assert '"handles this case"' in prompt
+    assert '"properly handles all cases"' in prompt
+    assert "is circular and invalid" in prompt
+
+
 def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     """Guard the Strix-proven command, fork, package, and output-file boundaries."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")

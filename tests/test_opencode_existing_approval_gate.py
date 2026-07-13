@@ -211,7 +211,7 @@ def test_opencode_app_only_mode_rejects_github_actions_approval():
     default_log = io.StringIO()
     strict_log = io.StringIO()
 
-    assert gate.has_reusable_real_model_approval(
+    assert not gate.has_reusable_real_model_approval(
         [actions_review], HEAD, log=default_log
     )
     assert not gate.has_reusable_real_model_approval(
@@ -221,6 +221,7 @@ def test_opencode_app_only_mode_rejects_github_actions_approval():
         approval_authors=gate.OPENCODE_APP_APPROVAL_AUTHORS,
     )
     assert "not an allowed OpenCode publication actor" in strict_log.getvalue()
+    assert "not an allowed OpenCode publication actor" in default_log.getvalue()
 
 
 def test_opencode_app_only_mode_accepts_app_approval():
@@ -233,6 +234,29 @@ def test_opencode_app_only_mode_accepts_app_approval():
         approval_authors=gate.OPENCODE_APP_APPROVAL_AUTHORS,
     )
     assert "author=opencode-agent[bot]" in log.getvalue()
+
+
+def test_adversarial_validation_rejects_circular_or_unanchored_evidence():
+    weak = {
+        "status": "passed",
+        "probes": [
+            {
+                "path": ".github/workflows/opencode-review.yml",
+                "line": 1,
+                "hypothesis": "The retry can race.",
+                "attack_or_counterexample": "Delay the review API.",
+                "evidence": "The retry logic handles this case.",
+                "outcome": "falsified",
+            }
+        ],
+        "residual_risk": "API behavior can change.",
+    }
+    body = f"## Adversarial validation\n```json\n{json.dumps(weak)}\n```"
+    assert "independent proof" in gate.adversarial_rejection_reason(body)
+
+    weak["probes"][0]["evidence"] = "Increasing delays are present."
+    body = f"## Adversarial validation\n```json\n{json.dumps(weak)}\n```"
+    assert "must cite" in gate.adversarial_rejection_reason(body)
 
 
 def test_parse_args_and_main(monkeypatch, capsys):
