@@ -22,12 +22,15 @@ which the workflow exports for cross-repository reads.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+SBOM_FETCH_WORKERS = 10
 
 # Licenses that violate the commercial-license-only policy. Matched as
 # case-insensitive substrings against the normalized SPDX license expression so
@@ -277,7 +280,12 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
 
     lines.extend(["", "## Flagged components (policy violations)", ""])
     if inventory["flagged_licenses"]:
-        lines.extend(["| Repository | Component | Version | License |", "| --- | --- | --- | --- |"])
+        lines.extend(
+            [
+                "| Repository | Component | Version | License |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
         for item in inventory["flagged_licenses"]:
             lines.append(
                 f"| {item['repo']} | {item['name']} | {item['version'] or '—'} | {item['license']} |"
@@ -297,7 +305,9 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
             lines.append("No components reported.")
             lines.append("")
             continue
-        lines.extend(["| Component | Version | License | Flagged |", "| --- | --- | --- | --- |"])
+        lines.extend(
+            ["| Component | Version | License | Flagged |", "| --- | --- | --- | --- |"]
+        )
         for component in repo["components"]:
             flag = "yes" if component["flagged"] else "no"
             lines.append(
@@ -346,15 +356,25 @@ def fetch_repo_sbom(repo: str) -> RepoInventory:  # pragma: no cover - network
         raw = _run(["gh", "api", f"/repos/{repo}/dependency-graph/sbom"])
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip().splitlines()
-        return RepoInventory(repo=repo, error=detail[-1] if detail else "sbom unavailable")
+        return RepoInventory(
+            repo=repo, error=detail[-1] if detail else "sbom unavailable"
+        )
     payload = json.loads(raw or "{}")
     document = payload.get("sbom", payload)
     return RepoInventory(repo=repo, components=parse_sbom(document))
 
 
-def collect_inventories(repos: Sequence[str]) -> list[RepoInventory]:  # pragma: no cover - network
+def collect_inventories(
+    repos: Sequence[str],
+) -> list[RepoInventory]:  # pragma: no cover - network
     """Fetch every repository's SBOM into per-repo inventories."""
-    return [fetch_repo_sbom(repo) for repo in repos]
+    if len(repos) <= 1:
+        return [fetch_repo_sbom(repo) for repo in repos]
+
+    max_workers = min(SBOM_FETCH_WORKERS, len(repos))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Keep original order by using map and converting to list
+        return list(executor.map(fetch_repo_sbom, repos))
 
 
 def self_test() -> None:
@@ -364,8 +384,18 @@ def self_test() -> None:
         "SPDXID": "SPDXRef-DOCUMENT",
         "packages": [
             {"SPDXID": "SPDXRef-root", "name": "self", "versionInfo": "1.0"},
-            {"SPDXID": "SPDXRef-a", "name": "left-pad", "versionInfo": "1.3.0", "licenseConcluded": "MIT"},
-            {"SPDXID": "SPDXRef-b", "name": "readline", "versionInfo": "8.2", "licenseDeclared": "GPL-3.0-or-later"},
+            {
+                "SPDXID": "SPDXRef-a",
+                "name": "left-pad",
+                "versionInfo": "1.3.0",
+                "licenseConcluded": "MIT",
+            },
+            {
+                "SPDXID": "SPDXRef-b",
+                "name": "readline",
+                "versionInfo": "8.2",
+                "licenseDeclared": "GPL-3.0-or-later",
+            },
         ],
         "relationships": [
             {"relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-root"},
@@ -385,8 +415,12 @@ def self_test() -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser for the aggregator."""
-    parser = argparse.ArgumentParser(description="Aggregate org SBOMs into a central inventory.")
-    parser.add_argument("--org", default="ContextualWisdomLab", help="GitHub organization login")
+    parser = argparse.ArgumentParser(
+        description="Aggregate org SBOMs into a central inventory."
+    )
+    parser.add_argument(
+        "--org", default="ContextualWisdomLab", help="GitHub organization login"
+    )
     parser.add_argument(
         "--output-dir",
         default="docs/sbom",
@@ -399,8 +433,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Explicit repo (owner/name); repeatable. Overrides org discovery.",
     )
-    parser.add_argument("--generated-at", default="", help="Timestamp label for the markdown header")
-    parser.add_argument("--self-test", action="store_true", help="Run in-process assertions and exit")
+    parser.add_argument(
+        "--generated-at", default="", help="Timestamp label for the markdown header"
+    )
+    parser.add_argument(
+        "--self-test", action="store_true", help="Run in-process assertions and exit"
+    )
     return parser
 
 
