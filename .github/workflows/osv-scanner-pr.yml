@@ -1,7 +1,7 @@
-# Uploads an osv-scanner code scanning analysis on every PR so the org
-# ruleset "CWL Central required workflows" -> code_scanning(osv-scanner)
-# requirement can actually be satisfied. Without this, the required tool
-# never reports on PR refs and every PR stays mergeStateStatus=BLOCKED.
+# Keeps the upstream OSV base/head diff check available on every PR. The
+# central Security Scan workflow owns the blocking OSV result, finding logs,
+# and SARIF upload so this supplemental check does not duplicate installation
+# API calls or fail an otherwise clean PR when GitHub's upload quota is spent.
 name: OSV-Scanner PR
 
 on:
@@ -43,7 +43,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
     with:
       # Keep the PR code-scanning upload deterministic: direct manifest
       # vulnerabilities are uploaded, but public registry rate limits cannot
@@ -56,7 +55,10 @@ jobs:
         --no-resolve
         -r
         ./
-      # Merge gating is done by the org code_scanning ruleset rule
-      # (medium_or_higher), not by failing this check. Keep the check green
-      # so it only supplies the analysis; the ruleset decides blocking.
+      # The required central security-scan.yml job uploads the comprehensive
+      # current-head OSV SARIF. Avoid a second upload through the reusable
+      # workflow because installation rate-limit failures are not findings.
+      upload-sarif: false
+      # Merge gating is done by central security-scan.yml with
+      # --fail-on-vuln=true after printing package, version, OSV ID and aliases.
       fail-on-vuln: false

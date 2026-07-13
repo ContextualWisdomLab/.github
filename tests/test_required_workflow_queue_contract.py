@@ -589,6 +589,18 @@ def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
     assert "category:" not in upload_step
 
 
+def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
+    """The supplemental OSV diff must not duplicate the central SARIF upload."""
+    standalone = workflow_text("osv-scanner-pr.yml")
+    central = workflow_text("security-scan.yml")
+
+    assert "upload-sarif: false" in standalone
+    assert "security-events: write" not in standalone
+    assert "--fail-on-vuln=true" in central
+    assert "Print OSV findings being compared" in central
+    assert "Upload OSV SARIF to code scanning" in central
+
+
 def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Print OSV findings being compared\n"
