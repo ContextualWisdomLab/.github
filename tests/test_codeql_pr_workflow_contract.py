@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -38,6 +39,22 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "refs/pull/{0}/merge" in workflow
     assert workflow.count("security-events: read") == 2
     assert "security-events: write" not in workflow
+
+
+def test_codeql_action_steps_use_one_version_per_workflow() -> None:
+    """Prevent CodeQL init/analyze version splits from failing PR analysis."""
+    for filename in ("codeql-pr.yml", "scheduled-security-scan.yml"):
+        workflow = (REPO_ROOT / ".github/workflows" / filename).read_text(
+            encoding="utf-8"
+        )
+        refs = set(
+            re.findall(
+                r"github/codeql-action/(?:init|analyze|upload-sarif)@([0-9a-f]{40})",
+                workflow,
+            )
+        )
+
+        assert len(refs) == 1, f"{filename} mixes CodeQL action refs: {sorted(refs)}"
 
 
 def test_codeql_sarif_gate_logs_and_fails_only_unsuppressed_medium_plus(
