@@ -219,13 +219,18 @@ def test_opencode_bounded_evidence_context_is_resolved_from_event_payload():
 def test_opencode_ignores_superseded_cancelled_rollup_checks():
     """Do not fail approval on stale cancelled queue entries after same-head success."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    function = workflow.split("filter_superseded_cancelled_rollup_checks() {", 1)[1].split(
+        "collect_current_head_commit_check_runs() {", 1
+    )[0]
 
     assert "collect_current_head_successful_check_run_names()" in workflow
     assert "filter_superseded_cancelled_rollup_checks()" in workflow
-    assert "Ignoring superseded cancelled check rollup" in workflow
-    assert 'if (line ~ /^- .*: CANCELLED/)' in workflow
-    assert 'sub(/^.*\\//, "", name)' in workflow
-    assert "successful[name] || successful[label]" in workflow
+    assert "Ignoring superseded cancelled check rollup" in function
+    assert 'if (line ~ /^- .*: CANCELLED/)' in function
+    assert 'sub(/^.*\\//, "", name)' in function
+    assert "successful[name] || successful[label]" in function
+    assert 'awk -v successful_names_file="$successful_names_file"' in function
+    assert "' successful_names_file=\"$successful_names_file\"" not in function
     assert (
         'filter_superseded_cancelled_rollup_checks "$rollup_file" '
         '"$successful_check_names_file" "$filtered_rollup_file"'

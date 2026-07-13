@@ -5782,7 +5782,7 @@ jobs:
             local successful_names_file="$2"
             local output_file="$3"
 
-            awk '
+            awk -v successful_names_file="$successful_names_file" '
               BEGIN {
                 while ((getline name < successful_names_file) > 0) {
                   successful[name] = 1
@@ -5803,7 +5803,7 @@ jobs:
                 }
                 print
               }
-            ' successful_names_file="$successful_names_file" "$input_file" >"$output_file"
+            ' "$input_file" >"$output_file"
           }
 
           collect_current_head_commit_check_runs() {
