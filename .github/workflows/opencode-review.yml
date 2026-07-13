@@ -3623,6 +3623,7 @@ jobs:
           && needs.coverage-evidence.result == 'success'
           && steps.opencode_review_model_pool.outputs.review_status == 'success'
           && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
+        continue-on-error: true
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
@@ -3709,6 +3710,22 @@ jobs:
             def self_check:
               (.name // "") as $n
               | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap"] | index($n);
+            def latest_peer_checks:
+              [
+                (.check_runs // [])[]
+                | select(self_check | not)
+                | . + {
+                    checkedAt: (
+                      if ((.started_at // "") != "") then .started_at
+                      else (.completed_at // "")
+                      end
+                    )
+                  }
+              ]
+              | sort_by(.app.slug // "", .name // "", .checkedAt // "", .id // 0)
+              | group_by([.app.slug // "", .name // ""])
+              | map(last)
+              | .[];
           '
 
           check_runs_file="$(mktemp)"
@@ -3717,9 +3734,8 @@ jobs:
           for attempt in $(seq 1 "${APPROVAL_CHECK_WAIT_ATTEMPTS:-12}"); do
             curl_api_read "${api_url}/repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" >"$check_runs_file"
             jq -r "${self_check_filter}
-              (.check_runs // [])
-              | .[]
-              | select((self_check | not) and (.status // \"\") != \"completed\")
+              latest_peer_checks
+              | select((.status // \"\") != \"completed\")
               | \"- \" + (.name // \"check\") + \": \" + (.status // \"unknown\") + (if (.html_url // \"\") != \"\" then \" (\" + .html_url + \")\" else \"\" end)
             " "$check_runs_file" >"$pending_checks_file"
             if [ ! -s "$pending_checks_file" ]; then
@@ -3737,9 +3753,8 @@ jobs:
             exit 1
           fi
           jq -r "${self_check_filter}
-            (.check_runs // [])
-            | .[]
-            | select((self_check | not) and (.status // \"\") == \"completed\")
+            latest_peer_checks
+            | select((.status // \"\") == \"completed\")
             | select((.conclusion // \"\") as \$c | [\"success\", \"neutral\", \"skipped\"] | index(\$c) | not)
             | \"- \" + (.name // \"check\") + \": \" + (.conclusion // \"unknown\") + (if (.html_url // \"\") != \"\" then \" (\" + .html_url + \")\" else \"\" end)
           " "$check_runs_file" >"$failed_checks_file"

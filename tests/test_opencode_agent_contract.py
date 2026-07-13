@@ -1060,6 +1060,13 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
     )
     assert "Publish central OpenCode fast approval" in workflow
     assert "steps.central_fast_approval.outputs.published != 'true'" in workflow
+    fast_approval = workflow.split("      - name: Publish central OpenCode fast approval", 1)[
+        1
+    ].split("      - name: Publish OpenCode review outcome", 1)[0]
+    assert "continue-on-error: true" in fast_approval
+    assert "def latest_peer_checks:" in fast_approval
+    assert 'group_by([.app.slug // "", .name // ""])' in fast_approval
+    assert fast_approval.count("latest_peer_checks") == 3
     assert "CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS" in workflow
     assert "CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS" in workflow
     assert "Central fast approval published APPROVE review" in workflow
