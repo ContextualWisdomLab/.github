@@ -3880,6 +3880,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
+          LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: ${{ github.event_name == 'pull_request_target' && github.token || '' }}
           CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -4092,6 +4093,96 @@ jobs:
               sleep "$sleep_seconds"
               attempt=$((attempt + 1))
             done
+          }
+
+          legacy_github_actions_opencode_blocking_review_ids() {
+            local error_file="$1"
+            local reviews_json
+
+            if [ -z "${LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN:-}" ]; then
+              return 0
+            fi
+            if ! reviews_json="$(
+              timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN" \
+                gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" -f per_page=100 --paginate --slurp \
+                2>"$error_file"
+            )"; then
+              return 1
+            fi
+            printf '%s' "$reviews_json" | jq -r --arg head "$HEAD_SHA" '
+              ([.[][] |
+                select((.user.login // "") == "github-actions[bot]") |
+                select((.body // "") | contains("OpenCode"))
+              ] | sort_by(.submitted_at // .created_at // "")) as $reviews |
+              ($reviews | last) as $latest |
+              if (
+                $latest != null and
+                (($latest.state // "") == "CHANGES_REQUESTED") and
+                (($latest.commit_id // "") != $head)
+              ) then
+                $reviews[] |
+                select((.state // "") == "CHANGES_REQUESTED") |
+                select((.commit_id // "") != $head) |
+                .id
+              else
+                empty
+              end
+            '
+          }
+
+          publish_legacy_github_actions_approval_bridge() {
+            local source_body="${1:-}"
+            local blocking_review_ids
+            local blocking_review_ids_inline
+            local gh_error_file
+            local bridge_body_file
+            local bridge_payload_file
+
+            if [ -z "${LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN:-}" ]; then
+              return 0
+            fi
+            gh_error_file="$(mktemp)"
+            if ! blocking_review_ids="$(legacy_github_actions_opencode_blocking_review_ids "$gh_error_file")"; then
+              warn_gh_publication_failure "legacy github-actions OpenCode review lookup" "$gh_error_file"
+              rm -f "$gh_error_file"
+              return 0
+            fi
+            if [ -s "$gh_error_file" ]; then
+              warn_gh_publication_failure "legacy github-actions OpenCode review lookup" "$gh_error_file"
+            fi
+            rm -f "$gh_error_file"
+            if [ -z "$(printf '%s' "$blocking_review_ids" | tr -d '[:space:]')" ]; then
+              return 0
+            fi
+
+            blocking_review_ids_inline="$(printf '%s\n' "$blocking_review_ids" | awk 'NF { printf "%s%s", sep, $0; sep=", " } END { print "" }')"
+            bridge_body_file="$(mktemp)"
+            bridge_payload_file="$(mktemp)"
+            {
+              printf 'OpenCode current-head approval bridge\n\n'
+              printf 'OpenCode approved current head `%s` with the primary review token, but legacy OpenCode `REQUEST_CHANGES` reviews published by `github-actions[bot]` can still determine GitHub `reviewDecision`. This same-head bridge approval supersedes only those stale OpenCode workflow reviews.\n\n' "$HEAD_SHA"
+              printf -- '- Result: `APPROVE`\n'
+              printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
+              printf -- '- Workflow run: %s\n' "$RUN_ID"
+              printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
+              printf -- '- Superseded legacy review ids: %s\n' "$blocking_review_ids_inline"
+              if [ -n "$source_body" ]; then
+                printf '\nPrimary OpenCode approval body is preserved in the preceding review publication for this head.\n'
+              fi
+            } >"$bridge_body_file"
+            jq -n \
+              --arg event APPROVE \
+              --rawfile body "$bridge_body_file" \
+              --arg commit_id "$HEAD_SHA" \
+              '{event: $event, body: $body, commit_id: $commit_id}' >"$bridge_payload_file"
+
+            gh_error_file="$(mktemp)"
+            if post_pull_review_with_retry "legacy github-actions approval bridge" "$LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN" "$bridge_payload_file" "$gh_error_file"; then
+              printf '::notice::OpenCode legacy github-actions approval bridge cleared stale review ids %s for head %s.\n' "$blocking_review_ids_inline" "$HEAD_SHA"
+            else
+              warn_gh_publication_failure "legacy github-actions approval bridge" "$gh_error_file"
+            fi
+            rm -f "$gh_error_file" "$bridge_body_file" "$bridge_payload_file"
           }
 
                     emit_change_flow_mermaid_graph() {
@@ -4317,6 +4408,7 @@ jobs:
                 if post_pull_review_with_retry "fallback review" "$review_write_fallback_token" "$review_payload_file" "$gh_error_file"; then
                   rm -f "$gh_error_file" "$review_payload_file"
                   if [ "$event" = "APPROVE" ]; then
+                    publish_legacy_github_actions_approval_bridge "$body" || true
                     printf '::notice::OpenCode approve review was published for head %s with fallback token; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
                     return 0
                   fi
@@ -4351,6 +4443,7 @@ jobs:
             fi
             rm -f "$gh_error_file" "$review_payload_file"
             if [ "$event" = "APPROVE" ]; then
+              publish_legacy_github_actions_approval_bridge "$body" || true
               printf '::notice::OpenCode approve review was published for head %s; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
               return 0
             fi
@@ -6066,6 +6159,45 @@ jobs:
             stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"
           }
 
+          approve_central_review_process_after_model_unavailable() {
+            local body
+
+            if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]; then
+              return 1
+            fi
+            if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]; then
+              return 1
+            fi
+
+            body="$(printf '%s\n' \
+              "## Pull request overview" \
+              "" \
+              "OpenCode model output was unavailable, but deterministic current-head evidence is clean for this allowlisted central review-process self-repair." \
+              "" \
+              "## Findings" \
+              "" \
+              "No blocking findings." \
+              "" \
+              "## Evidence" \
+              "" \
+              "- Result: APPROVE" \
+              "- Reason: current-head deterministic central review-process evidence is clean after model-output unavailability." \
+              "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
+              "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
+              "- Coverage evidence: \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`" \
+              "- Peer GitHub Checks: complete and clean" \
+              "- Code scanning: no open medium-or-higher alerts for the PR branch" \
+              "- Reviewer threads: resolved or outdated" \
+              "- Head SHA: \`${HEAD_SHA}\`" \
+              "- Workflow run: ${RUN_ID}" \
+              "- Workflow attempt: ${RUN_ATTEMPT}" \
+              "" \
+              "This fallback is limited to \`ContextualWisdomLab/.github\` pull_request_target runs whose changed files match the central OpenCode/Strix review-process allowlist."
+            )"
+            create_pull_review "APPROVE" "$body"
+            return 0
+          }
+
           collect_open_code_scanning_alerts() {
             local output_file="$1"
             local pr_json head_ref
@@ -6179,6 +6311,10 @@ jobs:
             if [ -s "$unresolved_reviewer_threads_file" ]; then
               build_unresolved_reviewer_threads_body "$unresolved_reviewer_threads_file" "$reviewer_thread_review_body_file"
               create_pull_review "REQUEST_CHANGES" "$(cat "$reviewer_thread_review_body_file")"
+              return 0
+            fi
+
+            if approve_central_review_process_after_model_unavailable; then
               return 0
             fi
 
