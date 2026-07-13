@@ -619,7 +619,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "publish_blockers_after_model_unavailable" in workflow
     assert 'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"' in workflow
     assert "CENTRAL_FAST_APPROVAL_ADVERSARIAL_INVALID" in workflow
-    assert "MODEL_UNAVAILABLE_CLEAN_EVIDENCE" in workflow
+    assert "model-unavailable approvals are limited to existing same-head real-model approvals" in workflow
     assert '"adversarial_validation"' in model_pool_runner
     assert "ContextualWisdomLab/.github:ci-review-prompt.md | \\" in workflow
     assert "ContextualWisdomLab/.github:code-reviewer-prompt.md | \\" in workflow
@@ -667,14 +667,16 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "hash-pinned uv runtime is not installed in the model-pool job" in model_pool_runner
     assert "provider delay is logged before the publish fallback evaluates current-head peer evidence" in model_pool_runner
     assert "model pool was intentionally skipped" not in workflow
-    assert "current-head deterministic evidence is clean" in workflow
+    assert "current-head deterministic central review-process evidence is clean" in workflow
     assert 'collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"' in workflow
     current_head_fallback = workflow.split("publish_blockers_after_model_unavailable()", 1)[1].split(
         "request_changes_for_merge_conflict_if_present()", 1
     )[0]
     assert "wait_for_peer_github_checks" not in current_head_fallback
-    assert 'if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]' not in current_head_fallback
-    assert 'if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]' not in current_head_fallback
+    assert "if approve_central_review_process_after_model_unavailable; then" in current_head_fallback
+    assert "allowlisted central review-process self-repair" in current_head_fallback
+    assert "clean_evidence_fallback_body" not in current_head_fallback
+    assert 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' not in workflow
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
         "CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
@@ -1241,8 +1243,8 @@ def test_opencode_jq_filters_do_not_embed_literal_expression_openers():
     assert 'contains("$" + "{{")' in workflow
 
 
-def test_opencode_model_pool_failure_uses_gated_clean_evidence_fallback():
-    """A model-pool failure may approve only after all deterministic gates are clean."""
+def test_opencode_model_pool_failure_uses_only_real_or_central_fallback():
+    """A model-pool failure may not publish a generic deterministic APPROVE review."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
         encoding="utf-8"
     )
@@ -1262,12 +1264,12 @@ def test_opencode_model_pool_failure_uses_gated_clean_evidence_fallback():
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
     assert "same_head_opencode_approval_exists" in workflow
     assert "EXISTING_CURRENT_HEAD_APPROVAL" in workflow
-    assert "MODEL_UNAVAILABLE_CLEAN_EVIDENCE" in workflow
-    assert "no adversarial_validation block was fabricated" in workflow
+    assert "allowlisted central review-process self-repair" in workflow
+    assert "model-unavailable approvals are limited to existing same-head real-model approvals" in workflow
     assert "no duplicate APPROVE review was posted" in workflow
     assert 'opencode_existing_approval_gate.py --head "$HEAD_SHA"' in workflow
     assert "same-head real-model OpenCode approval with passed adversarial evidence" in workflow
-    assert 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' in workflow
+    assert 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' not in workflow
     model_unavailable_block = re.search(
         r"if \[ \"\$opencode_review_outcome\" != \"success\" \]; then"
         r"(?P<body>[\s\S]{0,900})stop_without_review_after_model_unavailable",
