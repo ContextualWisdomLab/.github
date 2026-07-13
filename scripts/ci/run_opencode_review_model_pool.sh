@@ -143,7 +143,7 @@ write_prompt() {
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
 		printf 'Required control block shape:\n'
 		printf '```json\n'
-		printf '{"head_sha":"%s","run_id":"%s","run_attempt":"%s","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and all required labels","findings":[]}\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
+		printf '{"head_sha":"%s","run_id":"%s","run_attempt":"%s","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and all required labels","adversarial_validation":{"status":"passed or failed","probes":[{"path":"exact/current-head/changed-file","line":1,"hypothesis":"concrete failure hypothesis","attack_or_counterexample":"input, state, race, threat, or boundary used to challenge it","evidence":"executed command or source-backed trace and observed outcome","outcome":"falsified or confirmed"}],"residual_risk":"bounded residual risk after the probes"},"findings":[]}\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
 		printf '```\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'

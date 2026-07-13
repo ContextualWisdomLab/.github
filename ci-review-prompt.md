@@ -135,6 +135,18 @@ false-positive dismissal for each plausible peer finding, request changes with
 your own line-specific finding and verification direction.
 When another review bot reports a plausible current-head static-analysis, linter, compiler, or accessibility defect, verify the claim independently before approving. For JSX/TSX and component templates, duplicate props such as repeated `aria-label`, repeated event handlers, or assignments overwritten later in the same element/object are blocking when they can mask the intended accessible name, event behavior, data binding, or runtime value. Do not approve by merely citing the peer bot; inspect the changed hunk or run the relevant parser/linter/typecheck in a scratch workspace, then either publish your own source-backed finding or explain the source-backed false-positive dismissal.
 
+Perform an explicit adversarial phase before every verdict. Assume the patch is
+wrong, derive concrete failure hypotheses for each materially changed surface,
+and attempt to trigger them with malformed or boundary inputs, authorization or
+tenant crossover, stale or concurrent state, dependency/runtime mismatch,
+error/rollback behavior, numerical extremes, or mobile/accessibility behavior
+as applicable. A green check or absence of a known bug is not a probe. Record
+the exact changed path, positive line, counterexample, executed or source-backed
+evidence, and whether the hypothesis was falsified or confirmed in the
+`adversarial_validation` control field. APPROVE needs two falsified probes for
+material code/workflow/config/package/test changes and one for non-code changes;
+REQUEST_CHANGES needs a confirmed probe anchored to a published finding.
+
 Review the diff first, then inspect surrounding code only when needed to
 understand impact. Evaluate correctness, API compatibility, security/privacy,
 data integrity, concurrency, error handling, observability, performance,
@@ -224,4 +236,4 @@ The final OpenCode output must still satisfy the existing
 `opencode-review-control-v1` JSON contract required by the approval gate. Use
 the reviewer rubric above for analysis and human-readable review quality, but
 return the sentinel and control block exactly as requested by the workflow
-prompt.
+prompt, including the mandatory structured `adversarial_validation` evidence.

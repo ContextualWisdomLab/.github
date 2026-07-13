@@ -67,6 +67,214 @@ def finding(**overrides):
     return value
 
 
+def adversarial_validation(
+    *,
+    status="passed",
+    outcomes=("falsified", "falsified"),
+    path="scripts/ci/example.py",
+):
+    return {
+        "status": status,
+        "probes": [
+            {
+                "path": path,
+                "line": 7 + index,
+                "hypothesis": f"The changed path fails under adversarial scenario {index + 1}.",
+                "attack_or_counterexample": f"Exercise boundary or failure input {index + 1}.",
+                "evidence": (
+                    f"Focused source trace and regression command {index + 1} "
+                    "disproved or confirmed the hypothesis."
+                ),
+                "outcome": outcome,
+            }
+            for index, outcome in enumerate(outcomes)
+        ],
+        "residual_risk": "Provider and platform behavior outside the bounded current-head evidence remains monitored.",
+    }
+
+
+def require_adversarial_validation(tmp_path, monkeypatch, *paths):
+    changed_files = tmp_path / "changed-files.txt"
+    changed_files.write_text("\n".join(paths) + "\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    monkeypatch.setenv("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "true")
+    norm.current_changed_files.cache_clear()
+
+
+def test_adversarial_validation_requires_two_falsified_material_probes(
+    tmp_path, monkeypatch
+):
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    approved = control(adversarial_validation=adversarial_validation())
+    assert norm.valid_control(
+        approved,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    ) is not None
+
+    one_probe = control(
+        adversarial_validation=adversarial_validation(outcomes=("falsified",))
+    )
+    assert norm.valid_control(
+        one_probe,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    ) is None
+
+    confirmed_probe = control(
+        adversarial_validation=adversarial_validation(
+            outcomes=("falsified", "confirmed")
+        )
+    )
+    assert norm.valid_control(
+        confirmed_probe,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    ) is None
+
+
+def test_adversarial_request_changes_requires_confirmed_probe_at_finding(
+    tmp_path, monkeypatch
+):
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    blocked = control(
+        result="REQUEST_CHANGES",
+        findings=[finding(line=8)],
+        adversarial_validation=adversarial_validation(
+            status="failed", outcomes=("falsified", "confirmed")
+        ),
+    )
+    assert norm.valid_control(
+        blocked,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    ) is not None
+
+    wrong_anchor = control(
+        result="REQUEST_CHANGES",
+        findings=[finding(line=99)],
+        adversarial_validation=adversarial_validation(
+            status="failed", outcomes=("falsified", "confirmed")
+        ),
+    )
+    assert norm.valid_control(
+        wrong_anchor,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    ) is None
+
+
+def test_adversarial_validation_accepts_one_probe_for_non_code_change(
+    tmp_path, monkeypatch
+):
+    require_adversarial_validation(tmp_path, monkeypatch, "README.md")
+    approved = control(
+        reason="README.md is source-backed.",
+        summary=FULL_SUMMARY.replace("scripts/ci/example.py", "README.md"),
+        adversarial_validation=adversarial_validation(
+            outcomes=("falsified",), path="README.md"
+        ),
+    )
+    assert norm.valid_control(
+        approved,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    ) is not None
+
+
+def test_adversarial_validation_rejects_each_malformed_contract_branch(
+    tmp_path, monkeypatch
+):
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    valid = adversarial_validation()
+    first_probe = valid["probes"][0]
+    second_probe = valid["probes"][1]
+    cases = [
+        (None, "APPROVE", [], "must be an object"),
+        ({}, "APPROVE", [], "status must be passed or failed"),
+        (
+            {**valid, "residual_risk": ""},
+            "APPROVE",
+            [],
+            "residual_risk must be a non-empty string",
+        ),
+        ({**valid, "probes": "bad"}, "APPROVE", [], "probes must be a list"),
+        (
+            {**valid, "probes": [None, second_probe]},
+            "APPROVE",
+            [],
+            "probe 1 must be an object",
+        ),
+        (
+            {**valid, "probes": [{**first_probe, "path": ""}, second_probe]},
+            "APPROVE",
+            [],
+            "path must be a non-empty string",
+        ),
+        (
+            {**valid, "probes": [{**first_probe, "path": "../secret"}, second_probe]},
+            "APPROVE",
+            [],
+            "path is unsafe",
+        ),
+        (
+            {**valid, "probes": [{**first_probe, "path": "other.py"}, second_probe]},
+            "APPROVE",
+            [],
+            "path is not a current-head changed file",
+        ),
+        (
+            {**valid, "probes": [{**first_probe, "line": 0}, second_probe]},
+            "APPROVE",
+            [],
+            "line must be a positive integer",
+        ),
+        (
+            {**valid, "probes": [{**first_probe, "evidence": ""}, second_probe]},
+            "APPROVE",
+            [],
+            "field evidence must be non-empty",
+        ),
+        (
+            {**valid, "probes": [{**first_probe, "outcome": "unknown"}, second_probe]},
+            "APPROVE",
+            [],
+            "outcome must be falsified or confirmed",
+        ),
+        ({**valid, "status": "failed"}, "APPROVE", [], "status=passed"),
+        ({**valid, "status": "passed"}, "REQUEST_CHANGES", [], "status=failed"),
+        (
+            {**valid, "status": "failed"},
+            "REQUEST_CHANGES",
+            [],
+            "at least one confirmed adversarial probe",
+        ),
+    ]
+    for value, result, findings, expected in cases:
+        assert expected in norm.adversarial_validation_error(
+            value,
+            result=result,
+            findings=findings,
+        )
+
+
+def test_structural_gate_logs_adversarial_contract_failure(tmp_path, monkeypatch, capsys):
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    control_file = tmp_path / "control.json"
+    control_file.write_text(
+        json.dumps(control(findings=None, adversarial_validation=None)),
+        encoding="utf-8",
+    )
+    assert norm.check_structural_approval(control_file) == 4
+    assert "NO_CONCLUSION: adversarial_validation must be an object" in capsys.readouterr().err
+
+
 def test_structural_review_detection_accepts_phrases_patterns_and_clean_text():
     assert norm.admits_missing_structural_review("No changed files", "")
     assert norm.admits_missing_structural_review("Could not inspect the changed files", "")
