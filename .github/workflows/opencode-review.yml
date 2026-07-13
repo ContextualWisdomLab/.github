@@ -7131,6 +7131,12 @@ jobs:
           RETRY_DELAY_SECONDS: "300"
           CENTRAL_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
           CENTRAL_WORKFLOW_FILE: opencode-review.yml
+          # The trusted ref of the CENTRAL workflow repository, not the target
+          # repository's default branch; develop-default target repositories
+          # still dispatch the central workflow from its own default branch,
+          # the same way the merge scheduler's SCHEDULER_REQUIRED_WORKFLOW_REF
+          # does.
+          CENTRAL_WORKFLOW_REF: main
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -7160,7 +7166,7 @@ jobs:
 
           if ! GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh workflow run "$CENTRAL_WORKFLOW_FILE" \
             --repo "$CENTRAL_WORKFLOW_REPOSITORY" \
-            --ref main \
+            --ref "$CENTRAL_WORKFLOW_REF" \
             -f "target_repository=${GITHUB_REPOSITORY}" \
             -f "pr_number=${PR_NUMBER}" \
             -f "pr_base_ref=${PR_BASE_REF}" \
