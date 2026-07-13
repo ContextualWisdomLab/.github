@@ -268,6 +268,10 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
 	assert_file_contains "$workflow_file" "github_models/openai/o3 github_models/openai/gpt-5-chat" "strix workflow keeps GitHub Models fallback on tool-capable OpenAI models without GPT-4.1 downgrade"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives direct-OpenAI scans GitHub Models fallbacks so provider quota outages degrade instead of skipping"
+	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
+	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
+	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
 	assert_file_contains "$workflow_file" '${strix_model#github_models/}' "strix workflow strips manual github_models routing prefix for OpenAI GPT model names before passing model names to LiteLLM"
 	assert_file_contains "$workflow_file" "openai_direct/%s" "strix workflow keeps manual direct OpenAI scans distinct from GitHub Models openai/gpt-* routing"
@@ -3038,6 +3042,31 @@ case "${FAKE_STRIX_SCENARIO:?}" in
 			;;
 		esac
 		;;
+	openai-direct-quota-github-models-fallback-success)
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5.6-luna)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected direct-OpenAI key for primary (${LLM_API_KEY:-<unset>})" >&2
+				exit 15
+			fi
+			echo "Error getting response: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details.', 'type': 'insufficient_quota', 'code': 'insufficient_quota'}}"
+			echo "openai.RateLimitError: Error code: 429"
+			exit 1
+			;;
+		openai/o3)
+			if [ "${LLM_API_KEY:-}" != "github-models-fallback-token" ]; then
+				echo "unexpected GitHub Models key for fallback (${LLM_API_KEY:-<unset>})" >&2
+				exit 16
+			fi
+			echo "scan ok with GitHub Models fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5107,6 +5136,12 @@ PY
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
 		)
 	fi
+	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
+		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
+		printf '%s' 'github-models-fallback-token' >"$tmp_dir/github_models_key.txt"
+		env_cmd+=(STRIX_GITHUB_MODELS_API_BASE_FILE="$tmp_dir/github_models_api_base.txt")
+		env_cmd+=(STRIX_GITHUB_MODELS_KEY_FILE="$tmp_dir/github_models_key.txt")
+	fi
 	if [ "$min_fail_severity" = "__UNSET__" ]; then
 		local next_env_cmd=()
 		local env_pair
@@ -5373,6 +5408,36 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+		;;
+	openai-direct-quota-github-models-fallback-success)
+		run_gate_case "openai-direct-quota-github-models-fallback-success" \
+			"openai_direct/gpt-5.6-luna" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+			"2" \
+			"openai/gpt-5.6-luna|openai/o3" \
+			"<unset>|https://models.github.ai/inference" \
+			"vertex_ai" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"github_models/openai/o3"
 		;;
 	gemini-timeout-fallback-success)
 		run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
@@ -11050,6 +11115,38 @@ run_gate_case "github-models-token-limit-fallback-success" \
 	"" \
 	"" \
 	"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+
+# Direct-OpenAI primary hits a quota/rate-limit error and falls back to a
+# GitHub Models candidate, switching both the API base and the API key per
+# model (the fake strix asserts the key swap and exits nonzero on a leak).
+run_gate_case "openai-direct-quota-github-models-fallback-success" \
+	"openai_direct/gpt-5.6-luna" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+	"2" \
+	"openai/gpt-5.6-luna|openai/o3" \
+	"<unset>|https://models.github.ai/inference" \
+	"vertex_ai" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"github_models/openai/o3"
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
 	"vertex_ai/missing-primary" \

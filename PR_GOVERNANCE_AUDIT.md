@@ -135,10 +135,19 @@ the organization GitHub Models budget cap made LLM-backed security evidence
 unreliable) to direct OpenAI `gpt-5.6-luna` through the existing
 `openai_direct` gate path, reusing the organization `OPENAI_API_KEY` secret
 when the dedicated `STRIX_OPENAI_API_KEY` secret is absent. GitHub Models
-`o3`/`gpt-5-chat` fallbacks remain wired for github_models mode only; direct
-mode keeps failing closed on provider signals instead of downgrading models.
+`o3`/`gpt-5-chat` fallbacks remain wired for github_models mode only.
 Recording the migration in this audit also routes its PR through the standard
 small-change review cadence instead of the central-scope fast path.
+Follow-up (same day): the first post-migration runs passed only through the
+backend-unavailable neutral skip because the OpenAI project quota re-tripped,
+which meant green checks with no security evidence. Direct-OpenAI scans now
+mirror the OpenCode model pool's fall-through behavior: the same
+`github_models/openai/o3 github_models/openai/gpt-5-chat` fallback list used
+by github_models mode is wired for openai_direct mode, with the GitHub Models
+token and inference endpoint supplied per fallback model
+(`STRIX_GITHUB_MODELS_KEY_FILE`/`STRIX_GITHUB_MODELS_API_BASE_FILE`), so a
+provider quota outage degrades to a slower scan instead of skipping evidence.
+The pinned ban on GPT-4.1-or-weaker Strix evidence stays in force.
 
 ## Live Repository Inventory
 
