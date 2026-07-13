@@ -1,4 +1,7 @@
 import json
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -743,18 +746,20 @@ def test_valid_control_canonicalizes_known_safe_finding_field_drift():
 
     diffless = finding()
     del diffless["suggested_diff"]
-    normalized = norm.valid_control(
-        control(result="REQUEST_CHANGES", findings=[diffless]), **kwargs
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[diffless]), **kwargs
+        )
+        is None
     )
-    assert normalized is not None
-    assert normalized["findings"][0]["suggested_diff"] == "Restore the guard."
 
     blank_diff = finding(suggested_diff="  ")
-    normalized = norm.valid_control(
-        control(result="REQUEST_CHANGES", findings=[blank_diff]), **kwargs
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[blank_diff]), **kwargs
+        )
+        is None
     )
-    assert normalized is not None
-    assert normalized["findings"][0]["suggested_diff"] == "Restore the guard."
 
     canonical_severity_wins = finding(priority="P2")
     normalized = norm.valid_control(
@@ -780,6 +785,66 @@ def test_valid_control_canonicalizes_known_safe_finding_field_drift():
             control(result="REQUEST_CHANGES", findings=[no_remedy]), **kwargs
         )
         is None
+    )
+
+
+def test_approval_gate_rejects_prose_fix_direction_without_suggested_diff(tmp_path):
+    bash_command = shutil.which("bash")
+    if bash_command is None:
+        pytest.skip("bash is unavailable")
+    try:
+        subprocess.run(
+            [bash_command, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"bash is not usable for this regression test: {exc}")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_script = repo_root / "scripts" / "ci" / "opencode_review_approve_gate.sh"
+    control_data = control(
+        result="REQUEST_CHANGES",
+        findings=[finding(fix_direction="Restore the guard.")],
+    )
+    del control_data["findings"][0]["suggested_diff"]
+    comment_file = tmp_path / "comment.md"
+    comment_file.write_text(
+        "\n".join(
+            [
+                "<!-- opencode-review-gate head_sha=head run_id=run run_attempt=attempt -->",
+                "<!-- opencode-review-control-v1",
+                json.dumps(control_data),
+                "-->",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed_process = subprocess.run(
+        [
+            bash_command,
+            str(gate_script),
+            "head",
+            "run",
+            "attempt",
+            str(comment_file),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert completed_process.returncode == 4
+    assert completed_process.stdout.strip() == "NO_CONCLUSION"
+    assert (
+        "finding 0 field suggested_diff must be a non-empty string"
+        in completed_process.stderr
     )
 
 

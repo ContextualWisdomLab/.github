@@ -869,24 +869,23 @@ def canonicalize_finding_fields(finding: dict[str, Any]) -> dict[str, Any]:
 
     Findings only exist on REQUEST_CHANGES control blocks (valid_control rejects
     APPROVE blocks that carry findings), so rescuing a drifted finding can only
-    publish a blocking review — it can never loosen approval evidence. Two
-    observed drifts from otherwise-complete blocks are repaired: ``priority``
-    used in place of ``severity``, and a missing ``suggested_diff`` when
-    ``fix_direction`` still states the concrete remedy.
+    publish a blocking review — it can never loosen approval evidence. The
+    observed safe drift is repaired: ``priority`` used in place of
+    ``severity``. Source-backed ``suggested_diff`` evidence must remain
+    explicit because the downstream publication gate verifies it against the
+    current-head diff.
     """
 
-    def non_empty(candidate: Any) -> bool:
-        """Return whether a candidate field value is a non-blank string."""
-        return isinstance(candidate, str) and bool(candidate.strip())
+    def has_non_blank_text(field_candidate: Any) -> bool:
+        """Return whether a field candidate is a non-blank string."""
+        return isinstance(field_candidate, str) and bool(field_candidate.strip())
 
     finding = dict(finding)
     priority = finding.pop("priority", None)
-    if not non_empty(finding.get("severity")) and non_empty(priority):
-        finding["severity"] = priority
-    if not non_empty(finding.get("suggested_diff")) and non_empty(
-        finding.get("fix_direction")
+    if not has_non_blank_text(finding.get("severity")) and has_non_blank_text(
+        priority
     ):
-        finding["suggested_diff"] = finding["fix_direction"]
+        finding["severity"] = priority
     return finding
 
 
