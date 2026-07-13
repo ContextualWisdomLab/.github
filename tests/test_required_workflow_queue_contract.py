@@ -595,7 +595,8 @@ def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
     central = workflow_text("security-scan.yml")
 
     assert "upload-sarif: false" in standalone
-    assert "security-events: write" not in standalone
+    assert "pinned upstream reusable workflow declares this permission" in standalone
+    assert "security-events: write" in standalone
     assert "--fail-on-vuln=true" in central
     assert "Print OSV findings being compared" in central
     assert "Upload OSV SARIF to code scanning" in central

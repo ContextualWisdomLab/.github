@@ -43,6 +43,9 @@ jobs:
     permissions:
       actions: read
       contents: read
+      # The pinned upstream reusable workflow declares this permission at its
+      # top level, so GitHub validates it even when upload-sarif is false.
+      security-events: write
     with:
       # Keep the PR code-scanning upload deterministic: direct manifest
       # vulnerabilities are uploaded, but public registry rate limits cannot
