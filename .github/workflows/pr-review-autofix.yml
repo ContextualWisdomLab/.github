@@ -472,6 +472,24 @@ jobs:
           conflicted_files="$(git diff --name-only --diff-filter=U || true)"
           printf 'Conflicted files:\n%s\n' "${conflicted_files:-<none>}"
 
+          # No-op success path: the base is already contained in the head
+          # (git reports "Already up to date"), so there is no merge in
+          # progress, no conflicts, and nothing to resolve or push. This
+          # happens when the PR stopped being conflicted between scheduler
+          # dispatch and worker execution (e.g. the head was refreshed).
+          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+            if [ -z "$conflicted_files" ] \
+              && git diff --quiet \
+              && git diff --cached --quiet \
+              && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+              echo "Base ${PR_BASE_REF} (${PR_BASE_SHA}) is already merged into head ${PR_HEAD_SHA}; no conflict resolution needed. Exiting as a no-op."
+              exit 0
+            fi
+            echo "::error::Base merge left no merge in progress but the working tree is not clean; refusing to continue."
+            git status --short
+            exit 1
+          fi
+
           if [ -n "$conflicted_files" ]; then
             prompt_file="${RUNNER_TEMP}/opencode-conflict-prompt.md"
             cat >"$prompt_file" <<EOF

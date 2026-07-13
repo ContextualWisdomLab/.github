@@ -436,6 +436,9 @@ pr_head_regular_file_mode() {
 	if [ "$tree_path" != "$relative_path" ]; then
 		return 2
 	fi
+	if [ "$object_type" = "commit" ] && [ "$mode" = "160000" ]; then
+		return 4
+	fi
 	if [ "$object_type" != "blob" ]; then
 		return 3
 	fi
@@ -462,6 +465,10 @@ changed_file_exists_for_scan() {
 		1)
 			return 1
 			;;
+		4)
+			echo "INFO: pull request changed file is a git submodule pointer; excluding content from PR-scoped Strix input: $relative_path" >&2
+			return 1
+			;;
 		3)
 			echo "ERROR: pull request changed file is not a regular PR-head file; failing closed: $relative_path" >&2
 			return 2
@@ -486,6 +493,10 @@ changed_file_exists_for_scan() {
 		;;
 	2)
 		return 2
+		;;
+	4)
+		echo "INFO: pull request changed file is a git submodule pointer; excluding content from PR-scoped Strix input: $relative_path" >&2
+		return 1
 		;;
 	3)
 		echo "ERROR: pull request changed file is not a regular PR-head file; failing closed: $relative_path" >&2
@@ -1195,6 +1206,10 @@ is_scannable_changed_file() {
 		0)
 			;;
 		1)
+			return 1
+			;;
+		4)
+			echo "INFO: pull request changed file is a git submodule pointer; excluding content from PR-scoped Strix input: $normalized_changed_file" >&2
 			return 1
 			;;
 		3)
@@ -2717,6 +2732,11 @@ is_rate_limit_error() {
 	fi
 
 	if grep -Eq '"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	if grep -Eiq '(exceeded your current quota|insufficient_quota|billing details)' "$STRIX_LOG" &&
+		grep -Eiq "$LLM_PROVIDER_ONLY_REGEX" "$STRIX_LOG"; then
 		return 0
 	fi
 

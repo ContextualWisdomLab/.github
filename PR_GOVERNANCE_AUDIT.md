@@ -129,6 +129,17 @@ required-workflow mechanism cannot cover that repository. Repo-specific security
 or product checks can stay local, but they are separate from the Strix
 governance contract.
 
+2026-07-13 KST provider migration: the Strix default PR-evidence model moved
+from `openai/gpt-5` (GitHub Models mode, where the 4000-token request cap and
+the organization GitHub Models budget cap made LLM-backed security evidence
+unreliable) to direct OpenAI `gpt-5.6-luna` through the existing
+`openai_direct` gate path, reusing the organization `OPENAI_API_KEY` secret
+when the dedicated `STRIX_OPENAI_API_KEY` secret is absent. GitHub Models
+`o3`/`gpt-5-chat` fallbacks remain wired for github_models mode only; direct
+mode keeps failing closed on provider signals instead of downgrading models.
+Recording the migration in this audit also routes its PR through the standard
+small-change review cadence instead of the central-scope fast path.
+
 ## Live Repository Inventory
 
 Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST. PR #58, #65, #66, #68, #71, #79, and #80 post-merge refreshes: 2026-06-25 to 2026-06-26 KST. The 2026-07-02 18:15 KST refresh found 17 public non-fork repositories, adding `kaefa` and `waf-ids-ai-soc` to the prior public non-fork inventory. The public fork inventory still contains 6 repositories. `VibeSec` was not in that target set, and `appguardrail` was.
@@ -324,6 +335,20 @@ PR #381: wait: OpenCode review is already in progress
 
 ## Remaining Proof Gaps
 
+- 2026-07-13 KST `.github` PR #510 merged at `c7a568bde942d25d2a735b1bbfbb52b057b53b2f`
+  while GitHub still reported `reviewDecision=REVIEW_REQUIRED` and the complete
+  REST review list was empty. Although an auto-squash request had been enabled,
+  the resulting commit is a separate two-parent `MERGE` attributed to the user,
+  created while Required OpenCode run `29225918664` attempt 7 was still in
+  progress. The repository ruleset also required zero approvals even though the
+  legacy branch protection required one; ruleset `17921150` now independently
+  requires one approval, last-push approval, stale-review dismissal, and thread
+  resolution with no bypass actors. Existing-approval reuse must not
+  treat an actor, state, and commit match as sufficient evidence: the review body
+  must also contain the exact real-model marker, current head/run/attempt, an
+  `APPROVE` result, and a passed adversarial-validation object whose material
+  probes were falsified. Deterministic, fallback, and model-unavailable markers
+  remain explicitly ineligible and every rejection reason is emitted to the log.
 - 2026-07-13 KST `.github` workflow-dispatch run `29227653777` produced a
   current-head real-model approval for PR #506 after 409 tests, 100% executable
   coverage, 100% docstring coverage, and three falsified adversarial probes, but
@@ -358,6 +383,7 @@ PR #381: wait: OpenCode review is already in progress
 - `scopeweave` PR #127 now proves the current-head approval/check -> scheduler decision -> action-error leg: dry-run `28147098767` selected `auto_merge`, and live run `28147157319` reported `action_error` for `mergePullRequest` instead of posting a false code finding or aborting earlier PR decisions. Commit `6601953` showed why blindly adding `contents: write` is not an acceptable universal fix: Scorecard raised an unresolved Token-Permissions thread on the new head. Commit `c5c5530` restores the safer pattern: lower-privilege update-branch by GitHub Actions, with merge through Actions only where the repo deliberately accepts the contents-write exception. The current PR #127 head is merge-ready by review/check state but remains intentionally unmerged by the low-privilege scheduler policy.
 - `bandscope` also proved the large-queue scan risk: `max_prs=120` initially failed with `Resource limits for this query exceeded` while reading 80 open PRs. After reducing the GraphQL page size to 25, the same dry-run scanned all 80 open PRs and returned `{"block": 67, "update_branch": 1, "wait": 12}`, including PR #378 as `update_branch` and PR #404 as a conflict block with repair guidance.
 - `newsdom-api` no longer has a smaller current update-branch proof candidate in the 15:12 KST dry-run. PRs #187, #203, #205, and #206 all block before update because the current head has no OpenCode approval.
+- 2026-07-13 KST `.github` model-pool starvation incident: `opencode run` hangs to the full run timeout when a provider returns a fatal error (`ContextOverflowError` "Request body too large ... Max size: 4000 tokens" on `github-models/openai/gpt-5`, `html4tree` PR #166 run `29221961969`), burning 2×300s of a 600s retry budget before pool candidates 5-7 were tried. PR #511 adds an early-kill watchdog to `run_opencode_review_model_pool.sh` that polls the JSON event log while `opencode run` executes and kills hung processes within seconds of a structured fatal `"type":"error"` event. The same day exposed a central-scope review starvation loop: PRs whose changed files are all central review-process core receive the 120s/attempt fallback cadence, but since PR #508 removed the model-unavailable approve path, such PRs can only pass with a full model verdict inside 120s — `openai/gpt-5.6-luna` (the only live candidate while the GitHub Models org budget is capped) exceeded 120s twice on PR #511 itself, so the required check exhausted deterministically while the skipped evidence fallback published nothing. Recording the incident in this audit file also routes PR #511 through the standard small-change cadence (300s/attempt) — the same full-contract adversarial-probe review every other small PR receives — instead of the starved 120s fast path whose approval authority no longer exists. The durable repair is raising the central-scope cadence timeout or reviving the budget-capped candidates (org Billing → Budgets).
 - `.github` PR #58 exposed that a cancelled manual Strix run can keep its manual status publisher queued and delay the next same-PR Strix run. PR #58 now skips that publisher when the workflow is cancelled, scopes Strix PR concurrency by head SHA so obsolete scans do not serialize newer evidence, and requires conflict reviews to include a concrete `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` repair path.
 - PR #721 in `naruon` remains the historical fixture for this proof: head `b683deaf8b4761399321799279f58d884db57141`, current-head OpenCode approval `4558310923`, unresolved review threads `0`, and `mergeStateStatus=BEHIND`. Central `.github` dry-run selected `update_branch`, but `naruon` workflow run `28073586594` used the then-stale repo-local scheduler and did not update it. PR #756 has since rolled the central scheduler into `naruon`, so the next proof must use a fresh current-head outdated PR instead of reusing stale evidence from #721.
 - `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.

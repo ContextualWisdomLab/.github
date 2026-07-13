@@ -12,20 +12,14 @@ fi
 
 OUTPUT_FILE="$1"
 FAILED_CHECK_LOG_LINES="${FAILED_CHECK_LOG_LINES:-180}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 strip_ansi() {
 	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g'
 }
 
 redact_sensitive_log() {
-	perl -pe '
-		s/\b(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/[REDACTED_GITHUB_TOKEN]/g;
-		s/\b(sk-[A-Za-z0-9_-]{20,})/[REDACTED_API_KEY]/g;
-		s/\b(xox[baprs]-[A-Za-z0-9-]{20,})/[REDACTED_SLACK_TOKEN]/g;
-		s/\b(AKIA[0-9A-Z]{16})/[REDACTED_AWS_ACCESS_KEY]/g;
-		s/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["'\'']?[^"'\''\s]+["'\'']?/${1}[REDACTED]/ig;
-		s/((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+/${1}[REDACTED]/ig;
-	'
+	python3 "$SCRIPT_DIR/redact_sensitive_log.py"
 }
 
 emit_bounded_file() {
@@ -520,7 +514,10 @@ gh api graphql \
 			if .__typename == "CheckRun" then
 				select((.status // "") == "COMPLETED")
 				| select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
-				| select(((.name // "") == "metadata-only gate evaluation" and (.checkSuite.workflowRun.workflow.name // "") == "PR Governance") | not)
+				# The metadata-only gate is derived from the OpenCode review state.
+				# GitHub can misattribute its workflow name (for example, as CodeQL),
+				# so its stable check name is the only safe cycle-breaking key.
+				| select((.name // "") != "metadata-only gate evaluation")
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.checkSuite.workflowRun.workflow.name // "") == "CodeQL") | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")) | not)
 				| select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("${{"))) | not)

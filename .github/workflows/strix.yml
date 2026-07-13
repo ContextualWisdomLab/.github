@@ -79,7 +79,7 @@ on:
       strix_llm:
         description: Optional Strix model override for manual evidence runs
         required: false
-        default: openai/gpt-5
+        default: gpt-5.6-luna
         type: string
 
 concurrency:
@@ -397,8 +397,8 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'openai/gpt-5' }}
-          STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY }}
+          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'gpt-5.6-luna' }}
+          STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_VERTEX_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
         run: |
@@ -464,7 +464,7 @@ jobs:
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && secrets.STRIX_OPENAI_API_KEY || '' }}
+          LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || '' }}
         run: |
           # Sanitize CR/LF before masking to prevent broken ::add-mask::
           # commands and potential workflow command injection.
@@ -480,7 +480,7 @@ jobs:
       - name: Prepare LLM API key input file
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && secrets.STRIX_OPENAI_API_KEY || '' }}
+          LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || '' }}
           PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}
         run: |
           sanitized="$(printf '%s' "$LLM_API_KEY_SECRET" | tr -d '\r\n')"
@@ -559,7 +559,7 @@ jobs:
       - name: Prepare Strix model input file
         if: steps.gate.outputs.enabled == 'true'
         env:
-          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'openai/gpt-5' }}
+          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'gpt-5.6-luna' }}
         run: |
           umask 077
           strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
@@ -651,8 +651,8 @@ jobs:
           # Capture the gate exit code plus its console output. The gate returns
           # exit 1 both for genuine blocking vulnerabilities AND for
           # LLM-backend-unavailable outcomes (GitHub Models "Too many requests"
-          # rate limits, 413 tokens_limit_reached token-cap, connection/warm-up
-          # failures) that could not complete a scan. A backend outage is CI
+          # rate limits, OpenAI quota starvation, 413 tokens_limit_reached
+          # token-cap, connection/warm-up failures) that could not complete a scan. A backend outage is CI
           # infrastructure noise, not a security finding, so it must not fail
           # the required check and block merges.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
@@ -674,7 +674,7 @@ jobs:
           fi
 
           # Recognized signals that the LLM backend was unavailable / starved.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure'
+          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the
           # severity branch anchored away from identifiers so environment lines

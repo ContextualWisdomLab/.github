@@ -864,6 +864,31 @@ def check_structural_approval(control_file: Path) -> int:
     return 0
 
 
+def canonicalize_finding_fields(finding: dict[str, Any]) -> dict[str, Any]:
+    """Map known-safe model vocabulary drift onto the canonical finding schema.
+
+    Findings only exist on REQUEST_CHANGES control blocks (valid_control rejects
+    APPROVE blocks that carry findings), so rescuing a drifted finding can only
+    publish a blocking review — it can never loosen approval evidence. The
+    observed safe drift is repaired: ``priority`` used in place of
+    ``severity``. Source-backed ``suggested_diff`` evidence must remain
+    explicit because the downstream publication gate verifies it against the
+    current-head diff.
+    """
+
+    def has_non_blank_text(field_candidate: Any) -> bool:
+        """Return whether a field candidate is a non-blank string."""
+        return isinstance(field_candidate, str) and bool(field_candidate.strip())
+
+    finding = dict(finding)
+    priority = finding.pop("priority", None)
+    if not has_non_blank_text(finding.get("severity")) and has_non_blank_text(
+        priority
+    ):
+        finding["severity"] = priority
+    return finding
+
+
 def valid_control(
     value: Any,
     *,
@@ -944,15 +969,18 @@ def valid_control(
         "regression_test_direction",
         "suggested_diff",
     )
+    normalized_findings = []
     for finding in findings:
         if not isinstance(finding, dict):
             return None
         line = finding.get("line")
         if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
             return None
+        finding = canonicalize_finding_fields(finding)
         for field in required_finding_fields:
             if not isinstance(finding.get(field), str) or not finding[field].strip():
                 return None
+        normalized_findings.append(finding)
 
     normalized = {
         "head_sha": value["head_sha"],
@@ -961,7 +989,7 @@ def valid_control(
         "result": result,
         "reason": reason,
         "summary": summary,
-        "findings": findings,
+        "findings": normalized_findings,
     }
     if isinstance(value.get("adversarial_validation"), dict):
         normalized["adversarial_validation"] = value["adversarial_validation"]

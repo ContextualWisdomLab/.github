@@ -1124,6 +1124,43 @@ def test_review_state_and_failed_checks():
     )
     assert sched.stale_opencode_change_request_ids(stale_gate_reviews) == [101, 102]
 
+    exact_head_approval = {
+        **opencode_review("APPROVED", exact_head),
+        "databaseId": 302,
+        "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
+    }
+    stale_approval_history = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", exact_head),
+                    "databaseId": 300,
+                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_body_head}`",
+                },
+                {
+                    **opencode_review("APPROVED", exact_head),
+                    "databaseId": 301,
+                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_body_head}`",
+                },
+                exact_head_approval,
+                {
+                    **opencode_review("APPROVED", exact_head, login="github-actions[bot]"),
+                    "databaseId": 303,
+                    "body": f"OpenCode gate.\n\n- Head SHA: `{stale_body_head}`",
+                },
+                {
+                    **opencode_review("APPROVED", exact_head, login="human"),
+                    "databaseId": 304,
+                    "body": f"OpenCode mentioned.\n\n- Head SHA: `{stale_body_head}`",
+                },
+            ]
+        },
+    )
+    assert sched.stale_opencode_approval_ids(stale_approval_history) == [303]
+    stale_approval_history["reviews"]["nodes"].remove(exact_head_approval)
+    assert sched.stale_opencode_approval_ids(stale_approval_history) == [301, 303]
+
     failed = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1163,6 +1200,28 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
+    opencode_pr_target_failure_without_status = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "FAILURE"},
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(opencode_pr_target_failure_without_status) == ["opencode-review"]
+    manual_opencode_supersedes_pr_target_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "FAILURE"},
+                    {"context": "opencode-review", "state": "SUCCESS"},
+                    {"context": "lint", "state": "ERROR"},
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(manual_opencode_supersedes_pr_target_failure) == ["lint"]
 
 
 def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
@@ -2050,6 +2109,103 @@ def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypa
     with pytest.raises(RuntimeError, match="head changed before stale review dismissal"):
         sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False)
     assert len(calls) == 1
+
+
+def test_dismiss_stale_opencode_approvals_verifies_live_state(monkeypatch, capsys):
+    exact_head = "a" * 40
+    stale_head = "b" * 40
+    pr = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", exact_head),
+                    "databaseId": 301,
+                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_head}`",
+                }
+            ]
+        },
+    )
+    calls = []
+    states = iter([exact_head, "DISMISSED"])
+    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or next(states))
+    monkeypatch.setattr(sched, "run", lambda args, stdin=None: calls.append(args) or "")
+
+    assert sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=True) == (1, 0)
+    assert calls == []
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "local-token")
+    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
+        sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False)
+    assert calls == []
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    assert sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False) == (1, 0)
+    assert calls[0] == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]
+    assert calls[1][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/301/dismissals"]
+    assert calls[2] == [
+        "gh",
+        "api",
+        "repos/owner/repo/pulls/1/reviews/301",
+        "--jq",
+        ".state",
+    ]
+
+    calls.clear()
+    states = iter([exact_head, "APPROVED"])
+    assert sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False) == (0, 1)
+    assert "GitHub accepted stale OpenCode review dismissal" in capsys.readouterr().out
+    assert sched.stale_approval_cleanup_note(0, 1, dry_run=False) == (
+        "GitHub retained 1 stale automated approval(s) after dismissal attempts; "
+        "their head evidence remains non-authoritative"
+    )
+
+    calls.clear()
+    states = iter(["c" * 40])
+    with pytest.raises(RuntimeError, match="head changed before stale approval dismissal"):
+        sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False)
+    assert len(calls) == 1
+
+
+def test_inspect_pr_reports_stale_approval_cleanup_in_final_decision():
+    exact_head = "a" * 40
+    stale_head = "b" * 40
+    pr = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", exact_head),
+                    "databaseId": 301,
+                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_head}`",
+                }
+            ]
+        },
+    )
+
+    decision = inspect(pr)
+
+    assert decision.action == "security_dispatch"
+    assert decision.notes == (
+        "would dismiss 1 latest previous-head automated OpenCode approval(s)",
+    )
+
+
+def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys):
+    def fail(_args, stdin=None):
+        raise RuntimeError("Resource not accessible by integration")
+
+    monkeypatch.setattr(sched, "run", fail)
+
+    assert not sched.dismiss_pull_request_review(
+        "owner/repo",
+        "1",
+        301,
+        message="stale review",
+    )
+    assert "Resource not accessible by integration" in capsys.readouterr().out
 
 
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
@@ -2976,6 +3132,49 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
             statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
         )
     )
+
+
+def test_post_update_branch_followup_dismisses_stale_approval_before_dispatch(monkeypatch):
+    original = make_pr(headRefOid="old-head")
+    updated = make_pr(
+        headRefOid="new-head",
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", "new-head"),
+                    "databaseId": 301,
+                    "body": f"Head SHA: `{'a' * 40}`",
+                }
+            ]
+        },
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+    events = []
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
+    monkeypatch.setattr(
+        sched,
+        "dismiss_stale_opencode_approvals",
+        lambda repo, pr, dry_run: events.append(("dismiss", pr["headRefOid"])) or (1, 0),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: events.append(("dispatch", pr["headRefOid"])),
+    )
+
+    note = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+
+    assert events == [("dismiss", "new-head"), ("dispatch", "new-head")]
+    assert "dismissed 1 latest previous-head automated OpenCode approval(s)" in note
 
 
 def test_post_update_branch_followup_waits_for_central_strix_without_dispatch_credential(monkeypatch):
