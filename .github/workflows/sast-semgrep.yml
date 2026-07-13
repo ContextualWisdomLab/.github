@@ -93,8 +93,38 @@ jobs:
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
+      - name: Report every Semgrep finding in the job log
+        if: always() && hashFiles('semgrep-results.sarif') != ''
+        env:
+          SEMGREP_RC: ${{ steps.semgrep.outputs.rc }}
+        run: |
+          set -euo pipefail
+          finding_count=$(jq '[.runs[]?.results[]?] | length' semgrep-results.sarif)
+          echo "SEMGREP_FINDING_COUNT=${finding_count} SEMGREP_RC=${SEMGREP_RC:-missing}"
+          jq -r '
+            .runs[]? as $run
+            | ($run.tool.driver.rules // []
+                | map({key: .id, value: (.defaultConfiguration.level // "unknown")})
+                | from_entries) as $levels
+            | $run.results[]?
+            | (.locations[0].physicalLocation // {}) as $location
+            | "SEMGREP_FINDING rule=\(.ruleId // "unknown")"
+              + " level=\(.level // $levels[.ruleId] // "unknown")"
+              + " path=\($location.artifactLocation.uri // "unknown")"
+              + " line=\($location.region.startLine // 0)"
+              + " message=\((.message.text // "no message") | gsub("[\r\n]+"; " "))"
+          ' semgrep-results.sarif
+          if [ "$finding_count" -eq 0 ] && [ "${SEMGREP_RC:-missing}" != "0" ]; then
+            echo "SEMGREP_ENGINE_FAILURE rc=${SEMGREP_RC:-missing}: Semgrep failed without a WARNING/ERROR SARIF result; inspect the scan command output above."
+          fi
       - name: Enforce Semgrep gate (fail on Medium+ findings)
         if: steps.semgrep.outputs.rc != '0'
+        env:
+          SEMGREP_RC: ${{ steps.semgrep.outputs.rc }}
         run: |
-          echo "::error::Semgrep found WARNING/ERROR (Medium+) findings. See the 'semgrep' code scanning category."
+          if [ "${SEMGREP_RC}" = "1" ]; then
+            echo "::error::Semgrep found WARNING/ERROR (Medium+) findings. Every rule, path, line, and message is listed in the preceding report step and the 'semgrep' code scanning category."
+          else
+            echo "::error::Semgrep engine/configuration failed with rc=${SEMGREP_RC}. The concrete scan output and SARIF report are logged above."
+          fi
           exit 1

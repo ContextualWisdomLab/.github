@@ -74,6 +74,22 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
+def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:
+    workflow = workflow_text("sast-semgrep.yml")
+
+    assert "Report every Semgrep finding in the job log" in workflow
+    assert "SEMGREP_FINDING_COUNT=" in workflow
+    assert "SEMGREP_FINDING rule=" in workflow
+    assert 'level=\\(.level // $levels[.ruleId] // "unknown")' in workflow
+    assert 'path=\\($location.artifactLocation.uri // "unknown")' in workflow
+    assert 'line=\\($location.region.startLine // 0)' in workflow
+    assert "message=" in workflow
+    assert "SEMGREP_ENGINE_FAILURE rc=" in workflow
+    assert 'if [ "${SEMGREP_RC}" = "1" ]' in workflow
+    assert "Every rule, path, line, and message is listed" in workflow
+    assert "Semgrep engine/configuration failed with rc=${SEMGREP_RC}" in workflow
+
+
 def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
