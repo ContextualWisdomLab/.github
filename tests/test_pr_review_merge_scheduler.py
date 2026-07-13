@@ -941,6 +941,9 @@ def test_review_state_and_failed_checks():
     assert sched.current_head_review_state(pr, "APPROVED")
     assert sched.has_current_head_approval(pr)
     assert not sched.has_current_head_changes_requested(pr)
+    assert not sched.has_current_head_approval(
+        make_pr(headRefOid="", reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    )
     exact_head = "a" * 40
     stale_body_head = "b" * 40
     body_sha_mismatch = make_pr(
