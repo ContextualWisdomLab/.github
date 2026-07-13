@@ -10,7 +10,6 @@ import pathlib
 import re
 import shlex
 import subprocess
-import sys
 from collections.abc import Sequence
 
 RUN_LINE_RE = re.compile(r"\s*(?:-\s*)?run:\s*(.+?)\s*$")
