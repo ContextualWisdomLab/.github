@@ -569,7 +569,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "not a generic model-exhaustion message" "opencode review tells models to return concrete missing-evidence findings instead of progress-only output"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "tokens_limit_reached" "opencode review detects provider context-window overflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 45' "opencode review target releases stalled review runners within the bounded queue budget"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 75' "opencode review target releases stalled review runners within the bounded queue budget"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode model pool gives multiple candidates a bounded review window while capping stalled model attempts"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 8' "opencode approval publication is bounded so a stalled review releases queue capacity promptly"

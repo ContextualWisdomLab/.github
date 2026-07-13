@@ -1529,10 +1529,10 @@ jobs:
       )
     runs-on: ubuntu-latest
     # Coverage and current-head evidence are prepared before the model pool.
-    # The model pool has a 25-minute retry budget and its publish gate has an
-    # 8-minute cap, so 45 minutes releases genuinely hung runners without
-    # truncating the bounded multi-provider review path.
-    timeout-minutes: 45
+    # The model pool step is capped at 50 minutes (2880s shell watchdog) and
+    # its publish gate has an 8-minute cap, so 75 minutes releases genuinely
+    # hung runners without truncating the bounded multi-provider review path.
+    timeout-minutes: 75
     permissions:
       actions: read
       checks: read
@@ -3251,7 +3251,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 20
+        timeout-minutes: 50
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3285,7 +3285,7 @@ jobs:
           OPENCODE_RUN_TIMEOUT_SECONDS: "300"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "1080"
+          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "2880"
           # Visit the high-sensitivity candidate catalog once. Per-provider
           # failures and timeouts are logged before the publish gate evaluates
           # the current-head result and fails closed when no verdict exists.
@@ -3293,14 +3293,19 @@ jobs:
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "300"
-          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "600"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "420"
-          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "900"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "420"
-          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "1080"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "420"
-          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "900"
+          # Cadence sized for the direct-OpenAI slot (gpt-5.6-luna), the only
+          # candidate producing verdicts while the GitHub Models org budget is
+          # capped: at the previous 420s/900s a substantive multi-file review
+          # timed out mid-run and the exhausted pool stalled the org merge
+          # queue (2026-07-13). The outer watchdog still bounds the step.
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "900"
+          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "1500"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "1500"
+          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "2400"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "2700"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "1500"
+          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "2400"
           OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
@@ -3326,13 +3331,13 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-1080}s" \
+          timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-2880}s" \
             bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
           pool_status=$?
           set -e
           if [ "$pool_status" -eq 124 ] || [ "$pool_status" -eq 137 ] || [ "$pool_status" -eq 143 ]; then
             printf 'OpenCode model pool exceeded the outer %ss step budget; marking the pool exhausted so current-head evidence fallback can publish a bounded reason instead of blocking the org queue.\n' \
-              "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-1080}"
+              "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-2880}"
             {
               printf 'review_model=\n'
               printf 'review_status=exhausted\n'
