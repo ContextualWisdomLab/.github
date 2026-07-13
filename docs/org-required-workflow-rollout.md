@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-02 18:15 KST
+Updated: 2026-07-13 21:10 KST
 
 ## Decision
 
@@ -13,12 +13,12 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
 - Active required workflow paths:
-  - `.github/workflows/strix.yml`
+  - `.github/workflows/close-empty-pr.yml`
   - `.github/workflows/opencode-review.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
-  - `.github/workflows/osv-scanner-pr.yml`
-  - `.github/workflows/scorecard-pr.yml`
-  - `.github/workflows/codeql-pr.yml`
+  - `.github/workflows/security-scan.yml`
+  - `.github/workflows/strix.yml`
+  - `.github/workflows/sast-semgrep.yml`
 - Required workflow ref: `refs/heads/main`
 - Last verified workflow implementation base commit: `ef9950e6b55bf943c0295e1df3e34c94210d21cc` (`#283`)
 - Required workflow trigger support: `pull_request_target`, `push`, `workflow_run`
@@ -180,6 +180,7 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - On 2026-07-01 06:30 KST, organization ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.
 - On 2026-07-02 07:25 KST, organization ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the same three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.
 - On 2026-07-11 11:30 KST, organization ruleset `18156473` was normalized to keep the five central required workflows, stale-review dismissal, last-pusher protection, and review-thread resolution while setting `required_approving_review_count=0` and `require_code_owner_review=false`. The merge gate remains current-head OpenCode approval plus required checks and scheduler evidence; the change removes self-authored/code-owner deadlocks that left approved PRs unable to merge.
+- On 2026-07-13 21:10 KST, live inspection found that `sast-semgrep.yml` described itself as the central replacement for removed repository-local Semgrep jobs but was absent from ruleset `18156473`. The active ruleset was updated to require that workflow from `.github@refs/heads/main`, while preserving one approval, stale-review dismissal, last-push approval, and review-thread resolution. `scripts/ci/audit_central_required_workflows.py` and the scheduled ruleset audit now report each missing workflow, wrong source ref, or weakened review protection explicitly.
 - `.github` PR `#225` raised high reasoning effort for all reasoning-capable OpenCode review model definitions and merged at `50c6ef82f52af3eeb0e58c174902fc9855c36682`.
 - `.github` PR `#226` stopped the merge scheduler from treating old deterministic fallback approval bodies as current-head approval evidence and merged at `57a1fa580731a0f76b31dcf29a597c5715dba2fd`.
 - `.github` PR `#230` added changed-file candidates to merge-conflict guidance so `DIRTY` or `CONFLICTING` PRs name the first files to inspect instead of giving only generic conflict instructions. It merged at `0cab5c8d46e88c1a3f68ef3f71b5d44d971cd2ef`.
