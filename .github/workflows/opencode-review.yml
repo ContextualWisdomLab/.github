@@ -6016,7 +6016,7 @@ jobs:
                       | select((.workflow // "") != "Required OpenCode Review")
                       | select((.workflow // "") != "OpenCode PR Review")
                       | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
-                      | select(((.name // "") == "metadata-only gate evaluation" and (.workflow // "") == "PR Governance") | not)
+                      | select((.name // "") != "metadata-only gate evaluation")
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.workflow // "") == "CodeQL") | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")) | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
@@ -6143,7 +6143,7 @@ jobs:
                       | select((.workflow // "") != "OpenCode Review")
                       | select((.workflow // "") != "Required OpenCode Review")
                       | select((.workflow // "") != "OpenCode PR Review")
-                      | select(((.name // "") == "metadata-only gate evaluation" and (.workflow // "") == "PR Governance") | not)
+                      | select((.name // "") != "metadata-only gate evaluation")
                       | select((.status // "") != "COMPLETED")
                       | "- " + (.label // "check") + ": " + (.status // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
                     elif .kind == "status" then
