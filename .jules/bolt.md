@@ -40,3 +40,6 @@
 ## 2024-11-23 - Memoize File-Based Subprocess Queries in Embedded Python Scripts
 **Learning:** Found an N+1 subprocess bottleneck in `scripts/ci/opencode_review_approve_gate.sh` where `changed_new_lines` invoked `git diff` for every finding, even when multiple findings pointed to the same file. Repeatedly shelling out inside loops is a severe performance anti-pattern.
 **Action:** When validating multiple findings against the same file, decorate the inspection function with `@functools.cache` and ensure the return value is immutable (e.g., `frozenset` instead of `set`) to avoid redundant subprocess calls.
+## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
+**Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
+**Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
