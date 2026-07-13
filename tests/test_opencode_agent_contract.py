@@ -754,6 +754,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "should_skip_model_candidate" in model_pool_runner
     assert "cap_model_run_timeout" in model_pool_runner
     assert "constrained request-body limit" in model_pool_runner
+    assert "run_central_adversarial_harness" in model_pool_runner
+    assert "finish_pool_without_model" in model_pool_runner
+    assert "current-head CodeGraph index is missing or empty" in model_pool_runner
+    assert "general repository reviews still fail closed" in model_pool_runner
+    assert "pull-request-target-gitlink-is-explicitly-skipped" in model_pool_runner
     assert "is_low_sensitivity_candidate" in model_pool_runner
     assert "mini/nano review models are disabled" in model_pool_runner
     assert "OPENAI_API_KEY is not configured" in model_pool_runner

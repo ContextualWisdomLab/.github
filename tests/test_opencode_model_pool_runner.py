@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -13,6 +14,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
+
+CENTRAL_FALLBACK_ENV = {
+    "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE",
+    "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL",
+    "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION",
+}
 
 
 def bash_command() -> str:
@@ -106,6 +113,8 @@ def run_failed_model(
     fake_opencode.chmod(0o755)
     github_output = tmp_path / "github-output.txt"
     env = os.environ.copy()
+    for name in CENTRAL_FALLBACK_ENV:
+        env.pop(name, None)
     env.update(
         {
             "FAKE_OPENCODE_JSON": json_line,
@@ -142,6 +151,146 @@ def run_failed_model(
         check=False,
         timeout=30,
     )
+
+
+def run_central_fallback(
+    tmp_path: Path,
+    *,
+    changed_files: list[str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
+    """Run the bounded central fallback with deterministic local command fixtures."""
+    command = bash_command()
+    skip_if_windows_bash_is_unresponsive(command)
+    source_dir = tmp_path / "source"
+    review_dir = tmp_path / "review"
+    runner_temp = tmp_path / "runner-temp"
+    fake_bin = tmp_path / "bin"
+    for path in (
+        source_dir / ".codegraph",
+        source_dir / "scripts" / "ci",
+        source_dir / "tests",
+        review_dir,
+        runner_temp,
+        fake_bin,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+    (source_dir / ".codegraph" / "codegraph.db").write_bytes(b"indexed")
+    (source_dir / "scripts" / "ci" / "run_opencode_review_model_pool.sh").write_text(
+        "#!/usr/bin/env bash\ncap_model_run_timeout() { :; }\n",
+        encoding="utf-8",
+    )
+    (source_dir / "scripts" / "ci" / "javascript_coverage_gate.py").write_text(
+        "def normalize_coverage_path():\n    return None\n",
+        encoding="utf-8",
+    )
+    (source_dir / "scripts" / "ci" / "strix_quick_gate.sh").write_text(
+        "#!/usr/bin/env bash\nmode=160000\n",
+        encoding="utf-8",
+    )
+    strix_test = source_dir / "scripts" / "ci" / "test_strix_quick_gate.sh"
+    strix_test.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "test \"${STRIX_TEST_CASE_FILTER:-}\" = "
+        "pull-request-target-gitlink-is-explicitly-skipped\n"
+        "printf 'pull-request-target-gitlink-is-explicitly-skipped: PASS\\n'\n",
+        encoding="utf-8",
+    )
+    strix_test.chmod(0o755)
+
+    uv_log = tmp_path / "uv.log"
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" > \"${FAKE_UV_LOG:?}\"\n"
+        "printf 'focused pytest: PASS\\n'\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    required_paths = [
+        "scripts/ci/run_opencode_review_model_pool.sh",
+        "scripts/ci/javascript_coverage_gate.py",
+        "scripts/ci/strix_quick_gate.sh",
+    ]
+    changed_files_file = tmp_path / "changed-files.txt"
+    changed_files_file.write_text(
+        "\n".join(required_paths if changed_files is None else changed_files) + "\n",
+        encoding="utf-8",
+    )
+    output_file = tmp_path / "selected-output.json"
+    github_output = tmp_path / "github-output.txt"
+    env = os.environ.copy()
+    for name in CENTRAL_FALLBACK_ENV:
+        env.pop(name, None)
+    env.update(
+        {
+            "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE": "true",
+            "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL": "central-review-process",
+            "FAKE_UV_LOG": bash_path(uv_log),
+            "GITHUB_OUTPUT": bash_path(github_output),
+            "GITHUB_WORKSPACE": bash_path(ROOT),
+            "HEAD_SHA": "2" * 40,
+            "OPENCODE_CHANGED_FILES_FILE": bash_path(changed_files_file),
+            "OPENCODE_MODEL_CANDIDATES": "",
+            "OPENCODE_OUTPUT_FILE": bash_path(output_file),
+            "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION": "true",
+            "OPENCODE_REVIEW_WORKDIR": bash_path(review_dir),
+            "OPENCODE_SOURCE_WORKDIR": bash_path(source_dir),
+            "PATH": f"{bash_path(fake_bin)}:{env['PATH']}",
+            "RUNNER_TEMP": bash_path(runner_temp),
+            "RUN_ATTEMPT": "1",
+            "RUN_ID": "central-fallback-test",
+        }
+    )
+    result = subprocess.run(
+        [command, bash_path(RUNNER)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    return result, output_file, github_output, uv_log
+
+
+def test_central_fallback_emits_structured_adversarial_approval(tmp_path: Path) -> None:
+    """Central self-repair can approve only after all bounded probes execute."""
+    result, output_file, github_output, uv_log = run_central_fallback(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "valid current-head APPROVE control block" in result.stdout
+    assert "review_model=central-current-head-adversarial-harness" in github_output.read_text(
+        encoding="utf-8"
+    )
+    assert "review_status=success" in github_output.read_text(encoding="utf-8")
+    assert "test_github_gpt5_runtime_cap_preserves_queue_budget" in uv_log.read_text(
+        encoding="utf-8"
+    )
+    control = json.loads(output_file.read_text(encoding="utf-8"))
+    assert control["result"] == "APPROVE"
+    assert control["adversarial_validation"]["status"] == "passed"
+    assert len(control["adversarial_validation"]["probes"]) == 3
+    assert {probe["outcome"] for probe in control["adversarial_validation"]["probes"]} == {
+        "falsified"
+    }
+
+
+def test_central_fallback_fails_closed_when_required_scope_is_missing(tmp_path: Path) -> None:
+    """A central-looking change cannot use the harness without every reviewed core path."""
+    result, output_file, github_output, uv_log = run_central_fallback(
+        tmp_path,
+        changed_files=["scripts/ci/run_opencode_review_model_pool.sh"],
+    )
+
+    assert result.returncode == 1
+    assert "required current-head path scripts/ci/javascript_coverage_gate.py is not changed" in result.stdout
+    assert "review_status=exhausted" in github_output.read_text(encoding="utf-8")
+    assert output_file.read_text(encoding="utf-8") == ""
+    assert not uv_log.exists()
 
 
 def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: Path) -> None:
