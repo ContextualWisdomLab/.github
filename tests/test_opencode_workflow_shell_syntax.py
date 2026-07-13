@@ -44,6 +44,7 @@ def test_opencode_review_run_blocks_are_valid_bash():
         "Prepare bounded OpenCode review evidence",
         "Enforce changed-file syntax gate",
         "Publish OpenCode review outcome",
+        "Run merge scheduler after approval",
     ):
         script = _extract_run_block(workflow_text, step_name)
         result = subprocess.run(
@@ -55,3 +56,29 @@ def test_opencode_review_run_blocks_are_valid_bash():
         )
 
         assert result.returncode == 0, f"{step_name}: {result.stderr}"
+
+
+def test_merge_scheduler_review_followup_run_block_is_valid_bash():
+    """The App-review follow-up keeps its dynamic wait logic valid Bash."""
+    if sys.platform == "win32":
+        return
+    bash = shutil.which("bash")
+    if bash is None:
+        return
+
+    workflow_text = (
+        REPO_ROOT / ".github/workflows/pr-review-merge-scheduler.yml"
+    ).read_text(encoding="utf-8")
+    script = _extract_run_block(
+        workflow_text,
+        "Wait for approved OpenCode publication run to finish",
+    )
+    result = subprocess.run(
+        [bash, "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

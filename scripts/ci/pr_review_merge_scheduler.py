@@ -133,6 +133,10 @@ DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "merge requirements",
     "required status check",
 )
+SQUASH_MERGE_DISABLED_MARKERS = (
+    "squash merge is not allowed",
+    "squash merges are not allowed",
+)
 REST_MERGEABLE_STATE_MAP = {
     "behind": "BEHIND",
     "blocked": "BLOCKED",
@@ -1440,14 +1444,47 @@ def workflow_action_required_reason(checks: list[str]) -> str:
     )
 
 
+def run_head_guarded_merge(
+    repo: str,
+    number: str,
+    head: str,
+    *,
+    auto: bool,
+) -> None:
+    """Run a head-guarded merge using an allowed repository merge method."""
+    args = ["gh", "pr", "merge", number, "--repo", repo]
+    if auto:
+        args.append("--auto")
+    args.extend(["--squash", "--match-head-commit", head])
+    try:
+        run(args)
+        return
+    except RuntimeError as exc:
+        detail = str(exc).lower()
+        if not any(marker in detail for marker in SQUASH_MERGE_DISABLED_MARKERS):
+            raise
+        reason = str(exc).splitlines()[-1][:400]
+
+    mode = "auto-merge" if auto else "direct merge"
+    print(
+        f"PR #{number}: squash is disabled; retrying {mode} with a merge commit "
+        f"at guarded head {head}. GitHub reason: {reason}"
+    )
+    merge_args = ["gh", "pr", "merge", number, "--repo", repo]
+    if auto:
+        merge_args.append("--auto")
+    merge_args.extend(["--merge", "--match-head-commit", head])
+    run(merge_args)
+
+
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
-    """Enable squash auto-merge for a PR at its current head."""
+    """Enable auto-merge for a PR at its current head using an allowed method."""
     number = str(pr["number"])
     if dry_run:
         return
     require_github_actions_mutation_actor("enable-auto-merge")
     head = validate_git_sha(pr["headRefOid"])
-    run(["gh", "pr", "merge", number, "--repo", repo, "--auto", "--squash", "--match-head-commit", head])
+    run_head_guarded_merge(repo, number, head, auto=True)
 
 
 def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -1457,7 +1494,7 @@ def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
         return
     require_github_actions_mutation_actor("direct-merge")
     head = validate_git_sha(pr["headRefOid"])
-    run(["gh", "pr", "merge", number, "--repo", repo, "--squash", "--match-head-commit", head])
+    run_head_guarded_merge(repo, number, head, auto=False)
 
 
 def direct_merge_can_fallback_to_auto_merge(error: Exception) -> bool:

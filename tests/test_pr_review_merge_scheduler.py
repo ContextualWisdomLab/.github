@@ -1648,6 +1648,58 @@ def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
         sched.restamp_pr_head_for_last_push_approval("owner/repo", stale, dry_run=False)
 
 
+@pytest.mark.parametrize("auto", [False, True])
+def test_head_guarded_merge_retries_merge_commit_when_squash_is_disabled(
+    monkeypatch, capsys, auto
+):
+    calls = []
+    head_sha = "a" * 40
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if "--squash" in args:
+            raise RuntimeError(
+                "GraphQL: Squash merges are not allowed on this repository."
+            )
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    sched.run_head_guarded_merge(
+        "owner/repo",
+        "7",
+        head_sha,
+        auto=auto,
+    )
+
+    assert len(calls) == 2
+    assert "--squash" in calls[0]
+    assert "--merge" in calls[1]
+    assert ("--auto" in calls[1]) is auto
+    assert calls[0][-2:] == ["--match-head-commit", head_sha]
+    assert calls[1][-2:] == ["--match-head-commit", head_sha]
+    assert "Squash merges are not allowed" in capsys.readouterr().out
+
+
+def test_head_guarded_merge_does_not_mask_unrelated_failure(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        raise RuntimeError("required status check is still pending")
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="required status check"):
+        sched.run_head_guarded_merge(
+            "owner/repo",
+            "7",
+            "a" * 40,
+            auto=False,
+        )
+    assert len(calls) == 1
+
+
 def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypatch):
     calls = []
 

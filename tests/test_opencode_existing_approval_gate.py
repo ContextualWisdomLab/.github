@@ -206,8 +206,42 @@ def test_has_reusable_real_model_approval_logs_rejected_candidates():
     assert "same-head candidates=1" in log.getvalue()
 
 
+def test_opencode_app_only_mode_rejects_github_actions_approval():
+    actions_review = review(user={"login": "github-actions[bot]"})
+    default_log = io.StringIO()
+    strict_log = io.StringIO()
+
+    assert gate.has_reusable_real_model_approval(
+        [actions_review], HEAD, log=default_log
+    )
+    assert not gate.has_reusable_real_model_approval(
+        [actions_review],
+        HEAD,
+        log=strict_log,
+        approval_authors=gate.OPENCODE_APP_APPROVAL_AUTHORS,
+    )
+    assert "not an allowed OpenCode publication actor" in strict_log.getvalue()
+
+
+def test_opencode_app_only_mode_accepts_app_approval():
+    log = io.StringIO()
+
+    assert gate.has_reusable_real_model_approval(
+        [review()],
+        HEAD,
+        log=log,
+        approval_authors=gate.OPENCODE_APP_APPROVAL_AUTHORS,
+    )
+    assert "author=opencode-agent[bot]" in log.getvalue()
+
+
 def test_parse_args_and_main(monkeypatch, capsys):
-    assert gate.parse_args(["--head", HEAD]).head == HEAD
+    args = gate.parse_args(["--head", HEAD])
+    assert args.head == HEAD
+    assert not args.require_opencode_app
+
+    strict_args = gate.parse_args(["--head", HEAD, "--require-opencode-app"])
+    assert strict_args.require_opencode_app
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps([[review()]])))
     assert gate.main(["--head", HEAD]) == 0
@@ -222,3 +256,10 @@ def test_parse_args_and_main(monkeypatch, capsys):
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
     assert gate.main(["--head", HEAD]) == 1
+
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps([[review(user={"login": "github-actions[bot]"})]])),
+    )
+    assert gate.main(["--head", HEAD, "--require-opencode-app"]) == 1

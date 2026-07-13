@@ -13,6 +13,7 @@ from typing import Any, TextIO
 APPROVAL_AUTHORS = frozenset(
     {"opencode-agent", "opencode-agent[bot]", "github-actions[bot]"}
 )
+OPENCODE_APP_APPROVAL_AUTHORS = frozenset({"opencode-agent", "opencode-agent[bot]"})
 FALLBACK_MARKERS = (
     "deterministic current-head evidence",
     "deterministic fallback approval",
@@ -97,7 +98,12 @@ def adversarial_rejection_reason(body: str) -> str | None:
     return None
 
 
-def review_rejection_reason(review: dict[str, Any], head_sha: str) -> str | None:
+def review_rejection_reason(
+    review: dict[str, Any],
+    head_sha: str,
+    *,
+    approval_authors: frozenset[str] = APPROVAL_AUTHORS,
+) -> str | None:
     """Explain why a review cannot prove a real current-head model approval."""
     if str(review.get("state") or "").upper() != "APPROVED":
         return "review state is not APPROVED"
@@ -105,8 +111,8 @@ def review_rejection_reason(review: dict[str, Any], head_sha: str) -> str | None
         return "review commit does not match current head"
 
     login = str((review.get("user") or {}).get("login") or "")
-    if login not in APPROVAL_AUTHORS:
-        return "review author is not an OpenCode publication actor"
+    if login not in approval_authors:
+        return "review author is not an allowed OpenCode publication actor"
 
     body = str(review.get("body") or "")
     body_lower = body.lower()
@@ -126,7 +132,11 @@ def review_rejection_reason(review: dict[str, Any], head_sha: str) -> str | None
 
 
 def has_reusable_real_model_approval(
-    reviews: list[dict[str, Any]], head_sha: str, *, log: TextIO
+    reviews: list[dict[str, Any]],
+    head_sha: str,
+    *,
+    log: TextIO,
+    approval_authors: frozenset[str] = APPROVAL_AUTHORS,
 ) -> bool:
     """Return whether reviews contain a real-model approval for the exact head."""
     candidate_count = 0
@@ -139,7 +149,11 @@ def has_reusable_real_model_approval(
         if login not in APPROVAL_AUTHORS:
             continue
         candidate_count += 1
-        reason = review_rejection_reason(review, head_sha)
+        reason = review_rejection_reason(
+            review,
+            head_sha,
+            approval_authors=approval_authors,
+        )
         review_id = review.get("id", "unknown")
         if reason is None:
             print(
@@ -166,6 +180,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse existing-approval gate command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--head", required=True)
+    parser.add_argument(
+        "--require-opencode-app",
+        action="store_true",
+        help="accept only reviews authored by the OpenCode GitHub App",
+    )
     return parser.parse_args(argv)
 
 
@@ -180,7 +199,21 @@ def main(argv: list[str]) -> int:
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"existing-approval gate could not parse reviews: {exc}", file=sys.stderr)
         return 2
-    return 0 if has_reusable_real_model_approval(reviews, args.head, log=sys.stderr) else 1
+    approval_authors = (
+        OPENCODE_APP_APPROVAL_AUTHORS
+        if args.require_opencode_app
+        else APPROVAL_AUTHORS
+    )
+    return (
+        0
+        if has_reusable_real_model_approval(
+            reviews,
+            args.head,
+            log=sys.stderr,
+            approval_authors=approval_authors,
+        )
+        else 1
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

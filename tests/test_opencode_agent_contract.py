@@ -1208,6 +1208,30 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert '--branch-update-limit "$ORG_SWEEP_BRANCH_UPDATE_LIMIT"' in workflow
+    assert "pull_request_review:" in workflow
+    assert "types: [submitted, dismissed]" in workflow
+    assert (
+        "github.event_name == 'pull_request_review' && "
+        "format('pr-{0}', github.event.pull_request.number)" in workflow
+    )
+    assert "Wait for approved OpenCode publication run to finish" in workflow
+    assert "github.event.review.user.login == 'opencode-agent'" in workflow
+    assert "github.event.review.user.login == 'opencode-agent[bot]'" in workflow
+    assert "REVIEW_HEAD_SHA: ${{ github.event.review.commit_id }}" in workflow
+    assert 'repos/${GITHUB_REPOSITORY}/pulls/${REVIEW_PR_NUMBER}' in workflow
+    assert "live pull request snapshot could not be read" in workflow
+    assert (
+        'repos/${GITHUB_REPOSITORY}/commits/${REVIEW_HEAD_SHA}/check-runs?per_page=100'
+        in workflow
+    )
+    assert 'select(.name == "opencode-review")' in workflow
+    assert "check_delay=\"$((check_attempt * 2))\"" in workflow
+    assert "steps.review_followup.outputs.proceed != 'false'" in workflow
+    assert "The scheduled organization sweep remains authoritative." in workflow
+    assert (
+        "github.event_name == 'pull_request_review' || "
+        "github.event_name == 'workflow_dispatch'" in workflow
+    )
 
 
 def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch():
@@ -1260,6 +1284,10 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "--no-trigger-reviews" in workflow
     assert "--enable-auto-merge" in workflow
     assert "--no-update-branches" in workflow
+    assert "--require-opencode-app" in workflow
+    assert "approval_attempt in 1 2 3 4 5 6" in workflow
+    assert "approval_delay=\"$((approval_attempt * 2))\"" in workflow
+    assert "current-head OpenCode App approval did not become visible" in workflow
 
 
 def test_opencode_privileged_review_security_boundaries_are_fail_closed():
@@ -1599,7 +1627,9 @@ def test_opencode_model_pool_failure_uses_only_real_or_central_fallback():
         in workflow
     )
     assert "no duplicate APPROVE review was posted" in workflow
-    assert 'opencode_existing_approval_gate.py --head "$HEAD_SHA"' in workflow
+    assert "opencode_existing_approval_gate.py" in workflow
+    assert '--head "$HEAD_SHA"' in workflow
+    assert "--require-opencode-app" in workflow
     assert (
         "same-head real-model OpenCode approval with passed adversarial evidence"
         in workflow

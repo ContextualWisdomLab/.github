@@ -27,6 +27,13 @@ its own `pull_request_target` job token to repository-write permission; its
 immediate post-approval scheduler follow-up uses only an explicit merge token or
 the OpenCode app token, otherwise it leaves the separate scheduler required
 workflow and schedule authoritative.
+Post-approval reuse and follow-up accept only an exact-head review authored by
+the OpenCode GitHub App; a GitHub Actions-authored review is not OpenCode
+approval evidence. The separate scheduler also listens for that App review,
+waits for the publishing OpenCode check to finish, and then retries direct merge
+outside the review job when repository auto-merge is unavailable. Every merge
+keeps `--match-head-commit`; it prefers squash and retries with a merge commit
+only when the target repository explicitly reports that squash is disabled.
 That `update_branch` path is deliberately not used for `DIRTY` or
 `CONFLICTING` PRs: GitHub cannot synthesize a safe conflict resolution for the
 author, so the merge scheduler must give the author a repair path instead of pretending
