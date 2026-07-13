@@ -1163,6 +1163,28 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
+    opencode_pr_target_failure_without_status = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "FAILURE"},
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(opencode_pr_target_failure_without_status) == ["opencode-review"]
+    manual_opencode_supersedes_pr_target_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "FAILURE"},
+                    {"context": "opencode-review", "state": "SUCCESS"},
+                    {"context": "lint", "state": "ERROR"},
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(manual_opencode_supersedes_pr_target_failure) == ["lint"]
 
 
 def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
