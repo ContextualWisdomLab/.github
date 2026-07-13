@@ -111,6 +111,35 @@ def test_review_state_helpers_cover_current_head_logic():
     assert not noema.has_unresolved_threads(make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": True}]}))
 
 
+def test_review_state_helpers_reject_explicit_previous_head_evidence():
+    current_head = "a" * 40
+    previous_head = "b" * 40
+    approval_marker = "Result: APPROVE"
+    stale_approval = review(
+        commit=current_head,
+        body=f"{approval_marker}\n\n- Head SHA: `{previous_head}`",
+    )
+    exact_approval = review(
+        commit=current_head,
+        body=f"{approval_marker}\n\n- Head SHA: `{current_head}`",
+    )
+    stale_change_request = review(
+        "CHANGES_REQUESTED",
+        commit=current_head,
+        body=f"Result: REQUEST_CHANGES\n\n- Head SHA: `{previous_head}`",
+    )
+
+    assert noema.current_primary_approval(
+        make_pr(headRefOid=current_head, reviews={"nodes": [stale_approval]})
+    ) is None
+    assert noema.current_primary_approval(
+        make_pr(headRefOid=current_head, reviews={"nodes": [exact_approval]})
+    ) == exact_approval
+    assert not noema.has_current_changes_requested(
+        make_pr(headRefOid=current_head, reviews={"nodes": [stale_change_request]})
+    )
+
+
 def test_check_helpers_and_existing_noema_review():
     status_context = {"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}
     check_run = {
