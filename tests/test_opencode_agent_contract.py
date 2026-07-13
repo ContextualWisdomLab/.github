@@ -216,6 +216,22 @@ def test_opencode_bounded_evidence_context_is_resolved_from_event_payload():
     assert "GITHUB_ENV" not in step
 
 
+def test_opencode_ignores_superseded_cancelled_rollup_checks():
+    """Do not fail approval on stale cancelled queue entries after same-head success."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+
+    assert "collect_current_head_successful_check_run_names()" in workflow
+    assert "filter_superseded_cancelled_rollup_checks()" in workflow
+    assert "Ignoring superseded cancelled check rollup" in workflow
+    assert 'if (line ~ /^- .*: CANCELLED/)' in workflow
+    assert 'sub(/^.*\\//, "", name)' in workflow
+    assert "successful[name] || successful[label]" in workflow
+    assert (
+        'filter_superseded_cancelled_rollup_checks "$rollup_file" '
+        '"$successful_check_names_file" "$filtered_rollup_file"'
+    ) in workflow
+
+
 def test_opencode_target_coverage_materializes_merge_tree_without_checkout_action():
     """Avoid pull_request_target action checkouts of untrusted PR refs."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")

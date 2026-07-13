@@ -5757,6 +5757,55 @@ jobs:
             rm -f "$runs_json"
           }
 
+          collect_current_head_successful_check_run_names() {
+            local output_file="$1"
+
+            timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+              -f per_page=100 \
+              --paginate \
+              --slurp |
+              jq -r '
+                [.[].check_runs[]?]
+                | sort_by((.started_at // .completed_at // .created_at // ""), (.id // 0))
+                | group_by(.name // "")
+                | map(last)
+                | .[]?
+                | select((.status // "") == "completed")
+                | select((.conclusion // "" | ascii_downcase) == "success")
+                | .name // empty
+              ' >"$output_file"
+          }
+
+          filter_superseded_cancelled_rollup_checks() {
+            local input_file="$1"
+            local successful_names_file="$2"
+            local output_file="$3"
+
+            awk '
+              BEGIN {
+                while ((getline name < successful_names_file) > 0) {
+                  successful[name] = 1
+                }
+              }
+              {
+                line = $0
+                if (line ~ /^- .*: CANCELLED/) {
+                  label = line
+                  sub(/^- /, "", label)
+                  sub(/: CANCELLED.*/, "", label)
+                  name = label
+                  sub(/^.*\//, "", name)
+                  if (successful[name] || successful[label]) {
+                    printf "Ignoring superseded cancelled check rollup: %s\n", line > "/dev/stderr"
+                    next
+                  }
+                }
+                print
+              }
+            ' successful_names_file="$successful_names_file" "$input_file" >"$output_file"
+          }
+
           collect_current_head_commit_check_runs() {
             local output_file="$1"
             local mode="$2"
@@ -5989,10 +6038,12 @@ jobs:
             local strix_runs_file
             local commit_check_runs_file
             local filtered_rollup_file
+            local successful_check_names_file
             rollup_file="$(mktemp)"
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             filtered_rollup_file="$(mktemp)"
+            successful_check_names_file="$(mktemp)"
             if ! pr_node_id="$(timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
@@ -6106,13 +6157,19 @@ jobs:
             fi
             filter_superseded_strix_failures "$rollup_file" "$filtered_rollup_file"
             mv "$filtered_rollup_file" "$rollup_file"
+            if ! collect_current_head_successful_check_run_names "$successful_check_names_file"; then
+              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
+              return 1
+            fi
+            filter_superseded_cancelled_rollup_checks "$rollup_file" "$successful_check_names_file" "$filtered_rollup_file"
+            mv "$filtered_rollup_file" "$rollup_file"
 
             if ! collect_current_head_strix_workflow_runs "$strix_runs_file" failed; then
-              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file"
+              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
               return 1
             fi
             if ! collect_current_head_commit_check_runs "$commit_check_runs_file" failed; then
-              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file"
+              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
               return 1
             fi
             if grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"; then
@@ -6120,7 +6177,7 @@ jobs:
             else
               cat "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" | sort -u >"$output_file"
             fi
-            rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file"
+            rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
 
           }
 
