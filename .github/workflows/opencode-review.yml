@@ -6742,16 +6742,21 @@ jobs:
           && steps.opencode_review_model_pool.outputs.review_status != ''
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ github.event.inputs.target_repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
-          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
         run: |
           set -euo pipefail
           if [ -z "${PR_HEAD_SHA:-}" ]; then
             echo "::warning::OpenCode workflow_dispatch status publication skipped because pr_head_sha was empty."
+            exit 0
+          fi
+          if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
+            [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ]; then
+            echo "::warning::OpenCode workflow_dispatch status publication skipped because only the same-repository github.token is available for cross-repository target ${GH_REPOSITORY}; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish this status."
             exit 0
           fi
 
