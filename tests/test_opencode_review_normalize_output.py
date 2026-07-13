@@ -429,6 +429,11 @@ def test_runtime_tool_receipt_reader_and_claim_direction_edges(tmp_path, monkeyp
         ("Cypress completed the checkout flow.", "cypress"),
         ("Selenium produced a browser trace.", "selenium"),
         ("I took a screenshot in Safari.", "safari"),
+        ("Cypress confirms the dialog focus order.", "cypress"),
+        ("Selenium validates the production route.", "selenium"),
+        ("Chrome reports a clean console.", "chrome"),
+        ("The browser test passes.", "browser"),
+        ("Playwright does confirm the current route.", "playwright"),
         (
             "Playwright was not installed, but verified the production route.",
             "playwright",
@@ -448,6 +453,8 @@ def test_runtime_tool_claim_blocks_browser_alias_and_negation_bypasses(
         "Puppeteer wasn't used for this review.",
         "The layout was never inspected in Firefox.",
         "The route was checked without a browser.",
+        "Cypress does not confirm the dialog focus order.",
+        "The browser test does not pass.",
     ],
 )
 def test_runtime_tool_claim_allows_explicit_browser_execution_limitations(limitation):

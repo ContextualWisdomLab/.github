@@ -241,7 +241,16 @@ RUNTIME_ASSERTION_PATTERN = re.compile(
     r"proved|demonstrated|showed|launched|opened|inspected|rendered|exercised|"
     r"tested|checked|navigated|visited|browsed|loaded|displayed|captured|recorded|"
     r"profiled|traced|clicked|typed|submitted|interacted|completed|succeeded|"
-    r"worked|generated|produced|took|reproduced|replayed|debugged)\b",
+    r"worked|generated|produced|took|reproduced|replayed|debugged|runs|executes|"
+    r"uses|observes|verifies|confirms|validates|passes|proves|demonstrates|shows|"
+    r"launches|opens|inspects|renders|exercises|checks|navigates|visits|browses|"
+    r"loads|displays|captures|records|profiles|traces|clicks|types|submits|"
+    r"interacts|completes|succeeds|works|generates|produces|takes|reproduces|"
+    r"replays|debugs|reports|indicates|(?:did|does|do)\s+(?:run|execute|use|"
+    r"observe|verify|confirm|validate|pass|prove|demonstrate|show|launch|open|"
+    r"inspect|render|exercise|check|navigate|visit|browse|load|display|capture|"
+    r"record|profile|trace|click|type|submit|interact|complete|succeed|work|"
+    r"generate|produce|take|reproduce|replay|debug|report|indicate))\b",
     re.IGNORECASE,
 )
 NEGATED_RUNTIME_ASSERTION_PATTERN = re.compile(
