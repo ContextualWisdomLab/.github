@@ -3895,9 +3895,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
-          CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          CODE_SCANNING_GH_TOKEN: ${{ github.token }}
+          CODE_SCANNING_FALLBACK_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
-          CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          CODE_SCANNING_TOKEN_SOURCE: github-token
+          CODE_SCANNING_FALLBACK_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || '' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
@@ -6086,8 +6088,11 @@ jobs:
 
           collect_open_code_scanning_alerts() {
             local output_file="$1"
-            local pr_json head_ref scan_token lookup_error_file
+            local pr_json head_ref scan_token scan_source fallback_token fallback_source lookup_error_file
             scan_token="${CODE_SCANNING_GH_TOKEN:-${GH_TOKEN:-}}"
+            scan_source="${CODE_SCANNING_TOKEN_SOURCE:-primary}"
+            fallback_token="${CODE_SCANNING_FALLBACK_GH_TOKEN:-}"
+            fallback_source="${CODE_SCANNING_FALLBACK_TOKEN_SOURCE:-fallback}"
             if [ -z "$scan_token" ]; then
               printf '::warning::Open code-scanning alert lookup skipped because no target-repository read token was configured.\n' >&2
               return 1
@@ -6095,6 +6100,7 @@ jobs:
             lookup_error_file="$(mktemp)"
             if ! pr_json="$(GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s" \
               gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json headRefName 2>"$lookup_error_file")"; then
+              printf '::warning::Open code-scanning PR lookup with %s failed.\n' "$scan_source" >&2
               sed 's/^/gh: /' "$lookup_error_file" >&2 || true
               rm -f "$lookup_error_file"
               return 1
@@ -6123,7 +6129,36 @@ jobs:
                   | .[]
                   | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
                 ' >"$output_file" 2>"$lookup_error_file"; then
+              printf '::warning::Open code-scanning alert lookup with %s failed.\n' "$scan_source" >&2
               sed 's/^/gh: /' "$lookup_error_file" >&2 || true
+              if [ -n "$fallback_token" ] && [ "$fallback_token" != "$scan_token" ]; then
+                printf '::notice::Retrying open code-scanning alert lookup with %s.\n' "$fallback_source"
+                if GH_TOKEN="$fallback_token" timeout "$(check_lookup_api_timeout_seconds)s" \
+                  gh api -X GET "repos/${GH_REPOSITORY}/code-scanning/alerts" \
+                    -f "ref=refs/heads/${head_ref}" \
+                    -f state=open \
+                    -F per_page=100 \
+                    --jq '
+                      [
+                        .[]
+                        | {
+                            number: (.number // 0),
+                            rule: (.rule.id // .rule.name // "unknown"),
+                            tool: (.tool.name // "code-scanning"),
+                            severity: (.rule.security_severity_level // .rule.severity // "unknown"),
+                            url: (.html_url // "")
+                          }
+                        | select((.severity | ascii_downcase) as $s | ["medium","high","critical","warning","error"] | index($s))
+                      ]
+                      | .[]
+                      | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
+                    ' >"$output_file" 2>"$lookup_error_file"; then
+                  rm -f "$lookup_error_file"
+                  return 0
+                fi
+                printf '::warning::Open code-scanning alert lookup with %s failed.\n' "$fallback_source" >&2
+                sed 's/^/gh: /' "$lookup_error_file" >&2 || true
+              fi
               rm -f "$lookup_error_file"
               return 1
             fi

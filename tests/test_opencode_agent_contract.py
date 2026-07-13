@@ -599,7 +599,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "publish_blockers_after_model_unavailable" in workflow
     assert 'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"' in workflow
     assert "CENTRAL_FAST_APPROVAL_ADVERSARIAL_INVALID" in workflow
-    assert "no APPROVE review will be published without mandatory structured adversarial probes" in workflow
+    assert "current-head model-unavailable evidence fallback" in workflow
+    assert "This fallback does not suppress failed checks" in workflow
     assert '"adversarial_validation"' in model_pool_runner
     assert "ContextualWisdomLab/.github:ci-review-prompt.md | \\" in workflow
     assert "ContextualWisdomLab/.github:code-reviewer-prompt.md | \\" in workflow
@@ -634,7 +635,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Central review-process evidence fallback eligible" in model_pool_runner
     assert "provider delay is logged before the publish fallback evaluates current-head peer evidence" in model_pool_runner
     assert "model pool was intentionally skipped" not in workflow
-    assert "current-head model-unavailable evidence fallback" not in workflow
+    assert "current-head model-unavailable evidence fallback" in workflow
     assert 'collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"' in workflow
     current_head_fallback = workflow.split("publish_blockers_after_model_unavailable()", 1)[1].split(
         "request_changes_for_merge_conflict_if_present()", 1
@@ -643,12 +644,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]' not in current_head_fallback
     assert 'if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]' not in current_head_fallback
     assert "collect_open_code_scanning_alerts" in workflow
-    assert (
-        "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
-        "github.token }}"
-    ) in workflow
-    assert "CODE_SCANNING_TOKEN_SOURCE" in workflow
+    assert "CODE_SCANNING_GH_TOKEN: ${{ github.token }}" in workflow
+    assert "CODE_SCANNING_FALLBACK_GH_TOKEN" in workflow
+    assert "CODE_SCANNING_TOKEN_SOURCE: github-token" in workflow
+    assert "CODE_SCANNING_FALLBACK_TOKEN_SOURCE" in workflow
+    assert "Open code-scanning alert lookup with %s failed" in workflow
+    assert "Retrying open code-scanning alert lookup with %s" in workflow
     assert 'GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s"' in workflow
     assert "Open code-scanning alert lookup skipped because no target-repository read token" in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
