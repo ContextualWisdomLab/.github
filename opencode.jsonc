@@ -56,7 +56,6 @@
       "mode": "primary",
       "prompt": "{file:./ci-review-prompt.md}",
       "steps": 4,
-      "reasoningEffort": "high",
       "permission": {
         "edit": "deny",
         "bash": "allow",
@@ -76,7 +75,6 @@
       "mode": "primary",
       "prompt": "{file:./ci-review-prompt.md}",
       "steps": 12,
-      "reasoningEffort": "high",
       "permission": {
         "edit": "deny",
         "bash": "allow",
@@ -97,7 +95,6 @@
       "prompt": "{file:./code-reviewer-prompt.md}",
       "steps": 16,
       "color": "#7c3aed",
-      "reasoningEffort": "high",
       "permission": {
         "edit": "deny",
         "read": "allow",
