@@ -154,6 +154,152 @@ def test_diff_statistics_skips_non_numeric_numstat(monkeypatch, tmp_path):
     assert guard.diff_statistics(tmp_path, "a", "b") == (2, 3, 4)
 
 
+def fixture_repo_with_base_tests(tmp_path: Path) -> tuple[Path, str, str]:
+    """Create a merged PR whose base merge brought a wrapper and its regression test."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    write(repo, "feature.txt", "base\n")
+    commit(repo, "base")
+
+    git(repo, "checkout", "-b", "feature")
+    write(repo, "feature.txt", "feature\n")
+    write(repo, "tests/test_feature.py", "def test_feature():\n    assert True\n\n\ndef test_edge():\n    assert True\n")
+    commit(repo, "feature with tests")
+
+    git(repo, "checkout", "main")
+    write(repo, "src/wrapper.py", "def wrap():\n    return 'accessible'\n")
+    write(repo, "tests/test_wrapper.py", "def test_wrap():\n    assert True\n")
+    current_base = commit(repo, "base adds wrapper and regression test")
+
+    git(repo, "checkout", "feature")
+    git(repo, "merge", "--no-ff", "--no-edit", "main")
+    merge_anchor = git(repo, "rev-parse", "HEAD")
+    return repo, current_base, merge_anchor
+
+
+def test_targeted_unmerge_of_base_work_fails_below_bulk_thresholds(tmp_path, capsys):
+    """A small stale revert that drops base-merged files is blocked and named."""
+    repo, current_base, merge_anchor = fixture_repo_with_base_tests(tmp_path)
+    (repo / "src/wrapper.py").unlink()
+    (repo / "tests/test_wrapper.py").unlink()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "stale targeted revert")
+    head = git(repo, "rev-parse", "HEAD")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.merge_anchor == merge_anchor
+    assert evidence.unmerged_paths == ("src/wrapper.py", "tests/test_wrapper.py")
+    assert evidence.unmerges_base_work
+    assert evidence.regressed_test_paths == ("tests/test_wrapper.py",)
+    assert evidence.suspicious_test_regression
+    assert not evidence.suspicious_bulk_regression
+    assert evidence.blocked
+    assert guard.main(["--repo-root", str(repo), "--base-sha", current_base, "--head-sha", head]) == 1
+    report = capsys.readouterr().out
+    assert "Result: FAIL" in report
+    assert "unmerged base work" in report
+    assert "src/wrapper.py" in report
+    assert "tests/test_wrapper.py" in report
+
+
+def test_shrunk_test_without_replacement_fails(tmp_path):
+    """Weakening an existing test file with no new test file is blocked."""
+    repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
+    write(repo, "tests/test_feature.py", "def test_feature():\n    assert True\n")
+    head = commit(repo, "swap regression test for weaker one")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.unmerged_paths == ()
+    assert evidence.regressed_test_paths == ("tests/test_feature.py",)
+    assert evidence.suspicious_test_regression
+    assert evidence.blocked
+    assert "deleted or shrank test files" in guard.format_report(evidence)
+
+
+def test_test_refactor_with_replacement_passes(tmp_path):
+    """Deleting a test while adding a replacement test file is not blocked."""
+    repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
+    (repo / "tests/test_feature.py").unlink()
+    write(repo, "tests/test_feature_v2.py", "def test_feature_v2():\n    assert True\n\n\ndef test_edge_v2():\n    assert True\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "rename test module")
+    head = git(repo, "rev-parse", "HEAD")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.regressed_test_paths == ("tests/test_feature.py",)
+    assert evidence.added_test_files == 1
+    assert not evidence.suspicious_test_regression
+    assert evidence.unmerged_paths == ()
+    assert not evidence.blocked
+
+
+def test_is_test_path_covers_common_layouts():
+    """Test-path detection recognizes directories, prefixes, suffixes, and spec names."""
+    assert guard.is_test_path("tests/test_guard.py")
+    assert guard.is_test_path("pkg/__tests__/button.js")
+    assert guard.is_test_path("test_guard.py")
+    assert guard.is_test_path("pkg/guard_test.go")
+    assert guard.is_test_path("app/button.spec.ts")
+    assert guard.is_test_path("app/button.test.tsx")
+    assert guard.is_test_path("tests\\test_windows.py")
+    assert not guard.is_test_path("scripts/ci/guard.py")
+    assert not guard.is_test_path("docs/testing.md")
+
+
+def test_signal_properties_require_their_evidence():
+    """Unmerge and test-regression signals fire only on their exact evidence."""
+    common = {"base_sha": "base", "head_sha": "head", "merge_anchor": "merge", "post_merge_commits": 1}
+    assert not guard.ReplayEvidence(**common).blocked
+    assert guard.ReplayEvidence(**common, unmerged_paths=("a.py",)).blocked
+    assert guard.ReplayEvidence(**common, regressed_test_paths=("tests/test_a.py",)).blocked
+    assert not guard.ReplayEvidence(
+        **common, regressed_test_paths=("tests/test_a.py",), added_test_files=1
+    ).blocked
+
+
+def test_summarize_paths_bounds_long_lists():
+    """Path lists in reports are capped with an explicit overflow count."""
+    paths = [f"tests/test_{index}.py" for index in range(12)]
+    summary = guard.summarize_paths(paths)
+    assert summary.endswith("(+2 more)")
+    assert "tests/test_9.py" in summary
+    assert guard.summarize_paths(["one.py"]) == "one.py"
+
+
+def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
+    """Deleted, shrunk, added, malformed, and non-test records are classified correctly."""
+    name_status = "\n".join(
+        [
+            "D\ttests/test_gone.py",
+            "A\ttests/test_new.py",
+            "M\ttests/test_kept.py",
+            "D\tsrc/app_old.py",
+            "badline",
+        ]
+    )
+    numstat = "\n".join(
+        [
+            "1\t5\ttests/test_shrunk.py",
+            "5\t1\ttests/test_grown.py",
+            "-\t-\ttests/blob.bin",
+            "2\t9\tsrc/big.py",
+        ]
+    )
+    outputs = iter([name_status, numstat])
+    monkeypatch.setattr(guard, "git_output", lambda _root, _args: next(outputs))
+
+    regressed, added = guard.test_file_changes(tmp_path, "a", "b")
+
+    assert regressed == ("tests/test_gone.py", "tests/test_shrunk.py")
+    assert added == 1
+
+
 def test_invalid_commit_fails_closed_with_reason(tmp_path, capsys):
     """Missing git evidence fails closed and exposes the exact git reason."""
     repo, _, _, _ = fixture_repo(tmp_path)
