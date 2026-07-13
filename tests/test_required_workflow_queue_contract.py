@@ -86,7 +86,8 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     assert 'line=\\($location.region.startLine // 0)' in workflow
     assert "message=" in workflow
     assert "SEMGREP_ENGINE_FAILURE rc=" in workflow
-    assert 'if [ "${SEMGREP_RC}" = "1" ]' in workflow
+    assert "semgrep_sarif.outputs.finding_count != '0'" in workflow
+    assert 'if [ "${SEMGREP_FINDING_COUNT:-missing}" != "0" ]' in workflow
     assert "Every rule, path, line, and message is listed" in workflow
     assert "Semgrep engine/configuration failed with rc=${SEMGREP_RC}" in workflow
 
