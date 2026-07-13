@@ -191,6 +191,27 @@ is_context_overflow_failure() {
 	grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file"
 }
 
+is_fatal_provider_failure() {
+	local opencode_json_file="$1"
+
+	if is_context_overflow_failure "$opencode_json_file"; then
+		return 0
+	fi
+	[ -s "$opencode_json_file" ] || return 1
+	grep -Eiq 'budget limit|insufficient_quota' "$opencode_json_file"
+}
+
+has_fatal_provider_error_event() {
+	local opencode_json_file="$1"
+
+	[ -s "$opencode_json_file" ] || return 1
+	# Only structured "type":"error" events count while the process is still
+	# running: model prose or tool output quoting these signatures is
+	# JSON-escaped inside event strings, so a healthy streaming run is never
+	# killed for merely discussing context windows or quota errors.
+	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
+}
+
 emit_sanitized_opencode_failure_detail() {
 	local opencode_json_file="$1"
 	local opencode_stderr_file="$2"
@@ -317,9 +338,11 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
+	local opencode_pid fatal_poll_seconds
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
+	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
@@ -330,7 +353,27 @@ run_one_model_attempt() {
 		--model "$model_candidate" \
 		--format json \
 		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
-		>"$opencode_json_file" 2>"$opencode_stderr_file"
+		>"$opencode_json_file" 2>"$opencode_stderr_file" &
+	opencode_pid=$!
+	# Some providers (github-models ContextOverflowError) log a fatal error and
+	# then hang instead of exiting, burning the whole run timeout. Watch the JSON
+	# log while opencode runs and kill the process early so the pool falls
+	# through to the next candidate within seconds instead of minutes.
+	while kill -0 "$opencode_pid" 2>/dev/null; do
+		if has_fatal_provider_error_event "$opencode_json_file"; then
+			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
+				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
+			kill "$opencode_pid" 2>/dev/null
+			for _ in $(seq 1 30); do
+				kill -0 "$opencode_pid" 2>/dev/null || break
+				sleep 1
+			done
+			kill -9 "$opencode_pid" 2>/dev/null
+			break
+		fi
+		sleep "$fatal_poll_seconds"
+	done
+	wait "$opencode_pid"
 	opencode_status=$?
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
@@ -339,8 +382,8 @@ run_one_model_attempt() {
 		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
 			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
 		fi
-		if is_context_overflow_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+		if is_fatal_provider_failure "$opencode_json_file"; then
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
@@ -350,8 +393,8 @@ run_one_model_attempt() {
 	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
 		cat "$opencode_json_file"
-		if is_context_overflow_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s exceeded the provider context window; skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+		if is_fatal_provider_failure "$opencode_json_file"; then
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
