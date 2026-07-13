@@ -25,6 +25,24 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     assert "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''" in workflow
 
 
+def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
+    """Guard the runner-token dispatch credential for central review workflows.
+
+    The OpenCode app installation has no Actions permission and no
+    PR_REVIEW_MERGE_TOKEN / OPENCODE_APPROVE_TOKEN PAT is configured, so before
+    this credential existed the org sweep deadlocked every PR needing current-head
+    review evidence with "no cross-repository workflow-dispatch credential". The
+    scheduler and the sweep both run inside ContextualWisdomLab/.github — the same
+    repository the required workflows are dispatched on — so the runner's own
+    github.token (actions: write) must be passed through SCHEDULER_DISPATCH_TOKEN
+    in BOTH jobs; the scheduler only uses it when GITHUB_REPOSITORY equals the
+    dispatch repository.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 2
+
+
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     for filename in (
         "close-empty-pr.yml",
