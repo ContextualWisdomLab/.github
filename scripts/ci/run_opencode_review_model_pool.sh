@@ -307,6 +307,27 @@ should_skip_model_candidate() {
 	return 1
 }
 
+cap_model_run_timeout() {
+	local model_candidate="$1"
+	local run_timeout_seconds="$2"
+	local cap_seconds
+
+	case "$model_candidate" in
+	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
+		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
+		;;
+	*)
+		printf '%s\n' "$run_timeout_seconds"
+		return 0
+		;;
+	esac
+	if [ "$cap_seconds" -gt 0 ] && [ "$run_timeout_seconds" -gt "$cap_seconds" ]; then
+		printf '%s\n' "$cap_seconds"
+	else
+		printf '%s\n' "$run_timeout_seconds"
+	fi
+}
+
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -377,6 +398,7 @@ run_one_model_attempt() {
 main() {
 	local attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
 	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
+	local uncapped_run_timeout
 	local changed_file_count small_file_threshold medium_file_threshold
 	local -a model_candidates
 
@@ -458,6 +480,12 @@ main() {
 				OPENCODE_RUN_TIMEOUT_SECONDS="$original_run_timeout"
 				if [ "$deadline" -gt 0 ] && [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -gt "$remaining" ]; then
 					OPENCODE_RUN_TIMEOUT_SECONDS="$remaining"
+				fi
+				uncapped_run_timeout="$OPENCODE_RUN_TIMEOUT_SECONDS"
+				OPENCODE_RUN_TIMEOUT_SECONDS="$(cap_model_run_timeout "$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS")"
+				if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -lt "$uncapped_run_timeout" ]; then
+					printf 'OpenCode %s runtime cap selected %ss instead of %ss because this installation has returned a constrained request-body limit for that endpoint.\n' \
+						"$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$uncapped_run_timeout"
 				fi
 				export OPENCODE_RUN_TIMEOUT_SECONDS
 				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"

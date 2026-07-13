@@ -87,6 +87,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidate_pairs == [
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
+        ["github-models", "openai/gpt-4.1"],
         ["github-models", "openai/gpt-5"],
         ["github-models", "openai/gpt-5-chat"],
         ["github-models", "openai/o3"],
@@ -97,6 +98,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
+        "openai/gpt-4.1",
         "openai/gpt-5",
         "openai/gpt-5-chat",
         "openai/o3",
@@ -682,6 +684,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5.6-luna "
+        "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
@@ -704,6 +707,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "1080"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "420"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "900"' in workflow
+    assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[1].split(
@@ -748,6 +752,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "do not request changes solely because your own tool or file read did not" in workflow
     assert "while :" in model_pool_runner
     assert "should_skip_model_candidate" in model_pool_runner
+    assert "cap_model_run_timeout" in model_pool_runner
+    assert "constrained request-body limit" in model_pool_runner
     assert "is_low_sensitivity_candidate" in model_pool_runner
     assert "mini/nano review models are disabled" in model_pool_runner
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
@@ -768,6 +774,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5.6-luna "
+        "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
