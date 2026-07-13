@@ -1029,6 +1029,9 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
     assert "steps.central_fast_approval.outputs.published != 'true'" in workflow
     assert "CENTRAL_FAST_APPROVAL_WAITING_FOR_CHECKS" in workflow
     assert "CENTRAL_FAST_APPROVAL_CODE_SCANNING_ALERTS" in workflow
+    assert "CENTRAL_FAST_APPROVAL_LIVE_HEAD_UNAVAILABLE" in workflow
+    assert "the pull request advanced from event head" in workflow
+    assert "This pull request has been updated since you started reviewing" in workflow
     assert "Central fast approval published APPROVE review" in workflow
     assert (
         "Branch protection and rulesets remain authoritative if a matching GitHub pull review is required"

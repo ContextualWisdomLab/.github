@@ -3867,6 +3867,19 @@ jobs:
             exit 1
           fi
 
+          live_pr_file="$(mktemp)"
+          if ! curl_api_read "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" >"$live_pr_file"; then
+            echo "::warning::CENTRAL_FAST_APPROVAL_LIVE_HEAD_UNAVAILABLE: could not re-check the live pull request head immediately before publishing an approval for ${HEAD_SHA}; skipping this GitHub side effect."
+            rm -f "$live_pr_file"
+            exit 0
+          fi
+          live_head_sha="$(jq -r '.head.sha // empty' "$live_pr_file")"
+          rm -f "$live_pr_file"
+          if [ "$live_head_sha" != "$HEAD_SHA" ]; then
+            echo "::notice::Central fast approval skipped because the pull request advanced from event head ${HEAD_SHA} to live head ${live_head_sha} before review publication."
+            exit 0
+          fi
+
           model_reason="$(jq -r '.reason' "$normalized_control_file")"
           model_summary="$(jq -r '.summary' "$normalized_control_file")"
           adversarial_evidence="$(jq -c '.adversarial_validation' "$normalized_control_file")"
@@ -3899,7 +3912,20 @@ jobs:
           payload_file="$(mktemp)"
           jq -n --arg event APPROVE --arg body "$body" --arg commit_id "$HEAD_SHA" \
             '{event: $event, body: $body, commit_id: $commit_id}' >"$payload_file"
-          curl_api_write -X POST --data-binary "@${payload_file}" "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+          review_response_file="$(mktemp)"
+          review_error_file="$(mktemp)"
+          if ! curl_api_write -X POST --data-binary "@${payload_file}" "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" >"$review_response_file" 2>"$review_error_file"; then
+            if grep -Fq "This pull request has been updated since you started reviewing" "$review_response_file" "$review_error_file"; then
+              echo "::notice::Central fast approval skipped because GitHub reported that the pull request advanced during review publication for event head ${HEAD_SHA}."
+              rm -f "$payload_file" "$review_response_file" "$review_error_file"
+              exit 0
+            fi
+            cat "$review_response_file" >&2 || true
+            cat "$review_error_file" >&2 || true
+            rm -f "$payload_file" "$review_response_file" "$review_error_file"
+            exit 1
+          fi
+          rm -f "$review_response_file" "$review_error_file"
           echo "::notice::Central fast approval published APPROVE review for ${GH_REPOSITORY}#${PR_NUMBER} at ${HEAD_SHA}."
           echo "published=true" >>"$GITHUB_OUTPUT"
 
