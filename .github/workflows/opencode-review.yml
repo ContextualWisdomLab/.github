@@ -7158,9 +7158,19 @@ jobs:
             exit 0
           fi
 
+          central_workflow_ref="$(
+            GH_TOKEN="$RETRY_DISPATCH_TOKEN" \
+              gh api "repos/${CENTRAL_WORKFLOW_REPOSITORY}" \
+              --jq '.default_branch // empty' 2>/dev/null || true
+          )"
+          if [ -z "$central_workflow_ref" ]; then
+            echo "::warning::Deferred exhausted-pool retry skipped because the central workflow repository default branch could not be resolved; the merge scheduler org sweep remains the retry path."
+            exit 0
+          fi
+
           if ! GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh workflow run "$CENTRAL_WORKFLOW_FILE" \
             --repo "$CENTRAL_WORKFLOW_REPOSITORY" \
-            --ref main \
+            --ref "$central_workflow_ref" \
             -f "target_repository=${GITHUB_REPOSITORY}" \
             -f "pr_number=${PR_NUMBER}" \
             -f "pr_base_ref=${PR_BASE_REF}" \
