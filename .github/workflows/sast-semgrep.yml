@@ -86,12 +86,100 @@ jobs:
             --metrics=off
           echo "rc=$?" >> "$GITHUB_OUTPUT"
           set -e
-      - name: Upload Semgrep SARIF to code scanning
+      - name: Print Semgrep findings that failed the gate
+        if: steps.semgrep.outputs.rc != '0' && hashFiles('semgrep-results.sarif') != ''
+        run: |
+          python3 <<'PY'
+          import json
+          import pathlib
+
+          sarif_path = pathlib.Path("semgrep-results.sarif")
+          try:
+              sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+          except OSError as exc:
+              raise SystemExit(f"Could not read Semgrep SARIF file {sarif_path}: {exc}") from exc
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"Semgrep SARIF file {sarif_path} is not valid JSON: {exc}") from exc
+          if not isinstance(sarif, dict):
+              raise SystemExit(f"Semgrep SARIF file {sarif_path} must contain a JSON object.")
+
+          findings = []
+          for run in sarif.get("runs") or []:
+              if not isinstance(run, dict):
+                  continue
+              rule_levels = {}
+              driver = ((run.get("tool") or {}).get("driver") or {})
+              for rule in driver.get("rules") or []:
+                  if not isinstance(rule, dict):
+                      continue
+                  rule_levels[str(rule.get("id") or "")] = str(rule.get("defaultConfiguration", {}).get("level") or "")
+              for result in run.get("results") or []:
+                  if not isinstance(result, dict) or result.get("suppressions"):
+                      continue
+                  location = ((result.get("locations") or [{}])[0].get("physicalLocation") or {})
+                  artifact = (location.get("artifactLocation") or {}).get("uri") or "unknown"
+                  region = location.get("region") or {}
+                  line = region.get("startLine") or "unknown"
+                  rule_id = str(result.get("ruleId") or "unknown")
+                  level = str(result.get("level") or rule_levels.get(rule_id) or "warning")
+                  message = str((result.get("message") or {}).get("text") or "").replace("\n", " ")
+                  findings.append((level, rule_id, artifact, line, message[:500]))
+
+          if not findings:
+              print("::error::Semgrep exited non-zero but no unsuppressed SARIF findings were available.")
+              raise SystemExit(0)
+
+          print(f"::error::Semgrep reported {len(findings)} unsuppressed WARNING/ERROR finding(s):")
+          for level, rule_id, artifact, line, message in findings:
+              print(f"- [{level}] {rule_id} {artifact}:{line} {message}")
+          PY
+      - name: Filter suppressed Semgrep SARIF results
         if: always() && hashFiles('semgrep-results.sarif') != ''
+        run: |
+          python3 <<'PY'
+          import json
+          import pathlib
+
+          input_path = pathlib.Path("semgrep-results.sarif")
+          output_path = pathlib.Path("semgrep-results.upload.sarif")
+          try:
+              sarif = json.loads(input_path.read_text(encoding="utf-8"))
+          except OSError as exc:
+              raise SystemExit(f"Could not read Semgrep SARIF file {input_path}: {exc}") from exc
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"Semgrep SARIF file {input_path} is not valid JSON: {exc}") from exc
+          if not isinstance(sarif, dict):
+              raise SystemExit(f"Semgrep SARIF file {input_path} must contain a JSON object.")
+
+          removed = 0
+          remaining = 0
+          for run in sarif.get("runs") or []:
+              if not isinstance(run, dict):
+                  continue
+              results = run.get("results")
+              if not isinstance(results, list):
+                  continue
+              kept = []
+              for result in results:
+                  if isinstance(result, dict) and result.get("suppressions"):
+                      removed += 1
+                      continue
+                  kept.append(result)
+              run["results"] = kept
+              remaining += len(kept)
+
+          output_path.write_text(json.dumps(sarif, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(
+              f"Filtered {removed} in-source suppressed Semgrep SARIF result(s); "
+              f"{remaining} upload result(s) remain."
+          )
+          PY
+      - name: Upload Semgrep SARIF to code scanning
+        if: always() && hashFiles('semgrep-results.upload.sarif') != ''
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
-          sarif_file: semgrep-results.sarif
+          sarif_file: semgrep-results.upload.sarif
           category: semgrep
       - name: Enforce Semgrep gate (fail on Medium+ findings)
         if: steps.semgrep.outputs.rc != '0'

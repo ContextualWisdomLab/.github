@@ -642,6 +642,29 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
     assert "VulnerabilitiesID" not in default_branch_scorecard
 
 
+def test_sast_semgrep_filters_suppressed_sarif_before_upload() -> None:
+    """In-source Semgrep suppressions should not become blocking GHAS alerts."""
+    workflow = workflow_text("sast-semgrep.yml")
+
+    log_step = "      - name: Print Semgrep findings that failed the gate\n"
+    filter_step = "      - name: Filter suppressed Semgrep SARIF results\n"
+    upload_step = "      - name: Upload Semgrep SARIF to code scanning\n"
+    log_start = workflow.index(log_step)
+    filter_start = workflow.index(filter_step)
+    upload_start = workflow.index(upload_step)
+    filter_block = workflow[filter_start:upload_start]
+    upload_end = workflow.index("\n      - name:", upload_start + len(upload_step))
+    upload_block = workflow[upload_start:upload_end]
+
+    assert log_start < filter_start < upload_start
+    assert "Semgrep reported {len(findings)} unsuppressed WARNING/ERROR finding(s)" in workflow
+    assert "result.get(\"suppressions\")" in filter_block
+    assert "semgrep-results.upload.sarif" in filter_block
+    assert "Filtered {removed} in-source suppressed Semgrep SARIF result(s)" in filter_block
+    assert "sarif_file: semgrep-results.upload.sarif" in upload_block
+    assert "sarif_file: semgrep-results.sarif" not in upload_block
+
+
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
     workflow = workflow_text("security-scan.yml")
     assert "fail-on-severity: moderate" in workflow

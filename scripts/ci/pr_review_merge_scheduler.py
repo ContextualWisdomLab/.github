@@ -41,6 +41,7 @@ fragment SchedulerPullRequestFields on PullRequest {
         oid
         authoredDate
         committedDate
+        messageHeadline
       }
     }
   }
@@ -149,6 +150,7 @@ DETERMINISTIC_APPROVAL_MARKERS = (
     "deterministic fallback approval",
     "did not emit a usable current-head control block",
 )
+LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
 
 
 @dataclass
@@ -220,7 +222,7 @@ def mutation_actor_label() -> str:
 
 def contract_decision(decision: Decision) -> str:
     """Map scheduler actions into the bounded PR decision contract."""
-    if decision.action == "update_branch":
+    if decision.action in {"update_branch", "restamp_head"}:
         return "UPDATE_BRANCH"
     if decision.action in {"wait", "security_dispatch", "review_dispatch", "disable_auto_merge", "action_error"}:
         return "WAIT"
@@ -351,6 +353,24 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
                 "required GitHub Checks success",
                 "zero active unresolved review threads",
                 "maintainer manual merge decision",
+            ],
+        }
+    if parse_last_push_approval_restamp_reason(decision.reason):
+        return {
+            "type": "last_push_approval_restamp",
+            "actor": mutation_actor_label(),
+            "token": mutation_token_label(),
+            "required_permission": "contents: write",
+            "head_guard": "live PR head check plus force=false Git ref update",
+            "summary": "GitHub Actions creates a same-tree child commit so require_last_push_approval can be satisfied by a later non-pusher approval.",
+            "automation_limit": "The refreshed head is not merge evidence by itself; all current-head checks, Strix evidence, OpenCode review, and review-thread gates must rerun after the new commit.",
+            "next_required_evidence": [
+                "new same-tree head SHA after the restamp mutation",
+                "OpenCode approval on that exact new head",
+                "same-head Strix evidence",
+                "required GitHub Checks success",
+                "zero active unresolved review threads",
+                "approving review from an actor who did not push the refreshed head",
             ],
         }
     if decision.action == "update_branch":
@@ -1504,6 +1524,94 @@ def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     )
 
 
+def latest_commit_headline(pr: dict[str, Any]) -> str:
+    """Return the latest PR commit headline from the GraphQL payload."""
+    commits = pr.get("commits") or {}
+    nodes = commits.get("nodes") or []
+    if not nodes:
+        return ""
+    commit = nodes[-1].get("commit") or {}
+    return str(commit.get("messageHeadline") or "")
+
+
+def head_already_restamped_for_last_push_approval(pr: dict[str, Any]) -> bool:
+    """Return whether the latest PR commit is the scheduler restamp commit."""
+    return latest_commit_headline(pr) == LAST_PUSH_APPROVAL_RESTAMP_MESSAGE
+
+
+def should_restamp_for_last_push_approval(
+    repo: str,
+    pr: dict[str, Any],
+    merge_state: str,
+    *,
+    current_head_approved: bool,
+    auto_merge_enabled: bool,
+) -> bool:
+    """Return whether a BLOCKED approved PR likely needs a last-push approval restamp."""
+    if merge_state != "BLOCKED":
+        return False
+    if not current_head_approved or not auto_merge_enabled:
+        return False
+    if not same_repository_head(repo, pr):
+        return False
+    if str(pr.get("reviewDecision") or "").upper() != "APPROVED":
+        return False
+    if strix_evidence_state(pr) != "complete":
+        return False
+    return branch_outdated_by_base(pr, merge_state) == 0
+
+
+def last_push_approval_block_reason() -> str:
+    """Return the explicit scheduler reason for suspected last-push approval blocking."""
+    return (
+        "current head is approved and auto-merge is queued, but GitHub mergeability is BLOCKED "
+        "while reviewDecision is APPROVED; likely require_last_push_approval cannot be satisfied "
+        "by the actor who pushed the current head"
+    )
+
+
+def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry_run: bool) -> str | None:
+    """Create a same-tree child commit and move the PR head with a force=false ref update."""
+    if dry_run:
+        return None
+    require_github_actions_mutation_actor("last-push-approval-head-refresh")
+    repo = validate_github_repository(repo)
+    if not same_repository_head(repo, pr):
+        raise RuntimeError("last-push approval head refresh only supports same-repository PR heads")
+
+    number = str(int(pr["number"]))
+    head = validate_git_sha(pr["headRefOid"])
+    head_ref = validate_git_ref(pr["headRefName"])
+    live_head = run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]).strip()
+    if live_head != head:
+        raise RuntimeError(
+            "PR head changed before last-push approval head refresh; "
+            f"expected {head}, observed {live_head or '<missing>'}"
+        )
+
+    current_commit = json.loads(run(["gh", "api", f"repos/{repo}/git/commits/{head}"]))
+    tree = current_commit.get("tree") or {}
+    tree_sha = validate_git_sha(str(tree.get("sha") or ""))
+    created_commit = json.loads(
+        run(
+            ["gh", "api", "-X", "POST", f"repos/{repo}/git/commits", "--input", "-"],
+            stdin=json.dumps(
+                {
+                    "message": LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
+                    "tree": tree_sha,
+                    "parents": [head],
+                }
+            ),
+        )
+    )
+    new_head = validate_git_sha(str(created_commit.get("sha") or ""))
+    run(
+        ["gh", "api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{head_ref}", "--input", "-"],
+        stdin=json.dumps({"sha": new_head, "force": False}),
+    )
+    return new_head
+
+
 def short_sha(value: str | None) -> str:
     """Return a compact SHA for human-readable scheduler notes."""
     if not value:
@@ -2260,6 +2368,46 @@ def inspect_pr(
             )
         return request_branch_update(freshness_reason, suffix=suffix)
 
+    if should_restamp_for_last_push_approval(
+        repo,
+        pr,
+        merge_state,
+        current_head_approved=current_head_approved,
+        auto_merge_enabled=auto_merge_enabled,
+    ):
+        block_reason = last_push_approval_block_reason()
+        if head_already_restamped_for_last_push_approval(pr):
+            return decide(
+                "wait",
+                f"{block_reason}; last-push approval head refresh already exists on the latest commit, "
+                "so wait for current-head checks, OpenCode approval, Strix evidence, a non-pusher approval, "
+                "or GitHub native auto-merge to clear the remaining rule blocker",
+            )
+        if not update_branches:
+            return decide(
+                "wait",
+                f"{block_reason}; last-push approval head refresh disabled by scheduler inputs",
+            )
+        if not branch_update_allowed:
+            return decide(
+                "wait",
+                f"branch update limit reached ({branch_update_limit} update/run); "
+                "defer last-push approval head refresh to the next scheduler run",
+            )
+        new_head = restamp_pr_head_for_last_push_approval(repo, pr, dry_run=dry_run)
+        notes = ()
+        if new_head:
+            notes = (f"last-push approval head refresh created same-tree head {short_sha(new_head)}",)
+        return finish(
+            Decision(
+                number,
+                "restamp_head",
+                f"{block_reason}; last-push approval head refresh requested with {mutation_token_label()} "
+                f"inside GitHub Actions as {mutation_actor_label()}",
+                notes,
+            )
+        )
+
     opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
     if opencode_state == "running":
         return decide("wait", "OpenCode review is already in progress")
@@ -2493,6 +2641,7 @@ def write_actions_summary(
     lines.extend(conflict_repair_summary(decisions))
     lines.extend(outdated_thread_cleanup_summary(decisions))
     lines.extend(update_branch_summary(decisions))
+    lines.extend(last_push_approval_restamp_summary(decisions))
     lines.extend(external_head_update_summary(decisions))
     lines.extend(external_head_merge_summary(decisions))
     lines.extend(workflow_action_required_summary(decisions))
@@ -2638,6 +2787,35 @@ def update_branch_summary(decisions: list[Decision]) -> list[str]:
     if followups:
         lines.extend(["", "Follow-up evidence:"])
         lines.extend(f"- PR #{decision.pr}: {note}" for decision, note in followups)
+    return lines
+
+
+def parse_last_push_approval_restamp_reason(reason: str) -> bool:
+    """Return whether a reason describes a last-push approval head refresh."""
+    return "last-push approval head refresh" in reason
+
+
+def last_push_approval_restamp_summary(decisions: list[Decision]) -> list[str]:
+    """Return a summary section explaining last-push approval restamps."""
+    restamps = [decision for decision in decisions if parse_last_push_approval_restamp_reason(decision.reason)]
+    if not restamps:
+        return []
+    token_label = mutation_token_label()
+    actor_label = mutation_actor_label()
+    lines = [
+        "",
+        "### Last-push approval head refresh",
+        "",
+        "These PRs were already current-head approved and had native auto-merge queued, but GitHub still reported `BLOCKED` while `reviewDecision` was `APPROVED`.",
+        "That combination is a strong signal that `require_last_push_approval` is still unsatisfied because the approving maintainer also pushed the current head.",
+        f"The scheduler may create a same-tree child commit with `{token_label}` as `{actor_label}` and move the same-repository PR branch with a `force=false` Git ref update.",
+        "The refreshed head is not merge evidence by itself. Wait for required checks, same-head Strix evidence, OpenCode approval, review-thread checks, and an approving review from a non-pusher before merge.",
+    ]
+    for decision in restamps:
+        lines.extend(["", f"- PR #{decision.pr}: {decision.reason}"])
+        for note in decision.notes:
+            if "last-push approval head refresh" in note:
+                lines.append(f"  - {note}")
     return lines
 
 
@@ -2842,6 +3020,7 @@ def self_test() -> None:
                     "commit": {
                         "oid": "abc",
                         "committedDate": "2026-06-25T16:38:22Z",
+                        "messageHeadline": "feat: sample",
                     }
                 }
             ]
@@ -3191,7 +3370,92 @@ def self_test() -> None:
     assert conflict_guidance["merge_state"] == "DIRTY"
     assert "update-branch cannot choose" in conflict_guidance["automation_limit"]
     assert "git status --short" in conflict_guidance["commands"]
+    blocked_sample = {
+        "number": 2,
+        "headRefOid": "abc",
+        "baseRefName": "main",
+        "baseRefOid": "base",
+        "headRefName": "feature",
+        "mergeStateStatus": "BLOCKED",
+        "restMergeableState": "BLOCKED",
+        "compareStatus": "identical",
+        "compareBehindBy": 0,
+        "isDraft": False,
+        "isCrossRepository": False,
+        "maintainerCanModify": False,
+        "headRepository": {"nameWithOwner": "owner/repo"},
+        "reviewDecision": "APPROVED",
+        "autoMergeRequest": {"enabledAt": "2026-01-01T00:02:00Z"},
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "oid": "abc",
+                        "committedDate": "2026-06-25T16:38:22Z",
+                        "messageHeadline": "ci: exercise blocked approval path",
+                    }
+                }
+            ]
+        },
+        "reviewThreads": {"nodes": []},
+        "reviews": {
+            "nodes": [
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "opencode-agent"},
+                    "body": "OpenCode Agent approved this head.",
+                    "submittedAt": "2026-06-25T15:42:19Z",
+                    "commit": {"oid": "abc"},
+                }
+            ]
+        },
+        "statusCheckRollup": {
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "strix",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    }
+                ]
+            }
+        },
+    }
+    decision = inspect_pr(
+        "owner/repo",
+        blocked_sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "restamp_head"
+    assert "require_last_push_approval" in decision.reason
+    assert "last-push approval head refresh requested" in decision.reason
+    restamp_guidance = decision_guidance(decision)
+    assert restamp_guidance
+    assert restamp_guidance["type"] == "last_push_approval_restamp"
+    assert restamp_guidance["head_guard"] == "live PR head check plus force=false Git ref update"
+    blocked_sample["commits"]["nodes"][0]["commit"]["messageHeadline"] = LAST_PUSH_APPROVAL_RESTAMP_MESSAGE
+    decision = inspect_pr(
+        "owner/repo",
+        blocked_sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "wait"
+    assert "head refresh already exists" in decision.reason
     assert contract_decision(Decision(1, "update_branch", "ok")) == "UPDATE_BRANCH"
+    assert contract_decision(Decision(1, "restamp_head", "ok")) == "UPDATE_BRANCH"
     assert contract_decision(Decision(1, "wait", "ok")) == "WAIT"
     assert contract_decision(Decision(1, "action_error", "ok")) == "WAIT"
     assert contract_decision(Decision(1, "disable_auto_merge", "ok")) == "WAIT"
@@ -3215,6 +3479,11 @@ def self_test() -> None:
     assert merge_guidance["type"] == "github_actions_direct_merge"
     assert merge_guidance["head_guard"] == "gh pr merge --match-head-commit"
     assert decision_guidance(Decision(1, "wait", "ok")) is None
+    restamp_guidance = decision_guidance(
+        Decision(1, "restamp_head", f"{last_push_approval_block_reason()}; last-push approval head refresh requested")
+    )
+    assert restamp_guidance
+    assert restamp_guidance["type"] == "last_push_approval_restamp"
     payload = decision_payload(
         [Decision(1, "update_branch", "ok")],
         counts={"update_branch": 1},
@@ -3225,6 +3494,15 @@ def self_test() -> None:
     assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
     assert payload["decisions"][0]["contract_decision"] == "UPDATE_BRANCH"
     assert payload["decisions"][0]["guidance"]["actor"] == "github-actions[bot]"
+    payload = decision_payload(
+        [Decision(1, "restamp_head", f"{last_push_approval_block_reason()}; last-push approval head refresh requested")],
+        counts={"restamp_head": 1},
+        dry_run=True,
+        base_branch="main",
+        project_flow="github-flow",
+    )
+    assert payload["decisions"][0]["contract_decision"] == "UPDATE_BRANCH"
+    assert payload["decisions"][0]["guidance"]["type"] == "last_push_approval_restamp"
     payload = decision_payload(
         [Decision(1, "merge", "ok")],
         counts={"merge": 1},
@@ -3330,7 +3608,7 @@ def main(argv: list[str]) -> int:
         decisions.append(decision)
         if decision.action in {"review_dispatch", "security_dispatch"}:
             review_dispatches_used += 1
-        if decision.action == "update_branch":
+        if decision.action in {"update_branch", "restamp_head"}:
             branch_updates_used += 1
     print_summary(
         decisions,
