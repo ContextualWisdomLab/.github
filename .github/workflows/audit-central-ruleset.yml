@@ -35,16 +35,56 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read live organization ruleset
+      - name: Read live inherited organization ruleset and public scope
         env:
-          RULESET_ENDPOINT: orgs/ContextualWisdomLab/rulesets/18156473
+          ORG_LOGIN: ContextualWisdomLab
+          RULESET_ID: "18156473"
+          RULESET_SENTINEL_REPOSITORY: naruon
         run: |
           set -euo pipefail
           ruleset_json="$RUNNER_TEMP/central-required-workflow-ruleset.json"
+          ruleset_with_scope_json="$RUNNER_TEMP/central-required-workflow-ruleset-with-scope.json"
           ruleset_error="$RUNNER_TEMP/central-required-workflow-ruleset.error"
-          if ! gh api "$RULESET_ENDPOINT" >"$ruleset_json" 2>"$ruleset_error"; then
-            echo "::error::Ruleset audit could not read organization ruleset 18156473."
+          repositories_json="$RUNNER_TEMP/central-required-workflow-public-repositories.json"
+          scope_json="$RUNNER_TEMP/central-required-workflow-scope.json"
+          ruleset_endpoint="repos/${ORG_LOGIN}/${RULESET_SENTINEL_REPOSITORY}/rulesets/${RULESET_ID}?includes_parents=true"
+
+          if ! gh api "$ruleset_endpoint" >"$ruleset_json" 2>"$ruleset_error"; then
+            echo "::error::Ruleset audit could not read inherited organization ruleset ${RULESET_ID} through ${ORG_LOGIN}/${RULESET_SENTINEL_REPOSITORY}."
             sed 's/^/    /' "$ruleset_error"
             exit 1
           fi
-          python3 scripts/ci/audit_central_required_workflows.py "$ruleset_json"
+          if ! gh api --paginate "orgs/${ORG_LOGIN}/repos?type=public&per_page=100" \
+            | jq -s 'add | map(.name) | unique | sort' >"$repositories_json"; then
+            echo "::error::Ruleset audit could not enumerate public repositories for ${ORG_LOGIN}."
+            exit 1
+          fi
+
+          printf '{}\n' >"$scope_json"
+          while IFS= read -r repository; do
+            probe_json="$RUNNER_TEMP/ruleset-probe-${repository//[^A-Za-z0-9_.-]/_}.json"
+            probe_error="$RUNNER_TEMP/ruleset-probe-${repository//[^A-Za-z0-9_.-]/_}.error"
+            probe_endpoint="repos/${ORG_LOGIN}/${repository}/rulesets/${RULESET_ID}?includes_parents=true"
+            inherited=false
+            if gh api "$probe_endpoint" >"$probe_json" 2>"$probe_error"; then
+              if ! jq -e --argjson ruleset_id "$RULESET_ID" '.id == $ruleset_id' "$probe_json" >/dev/null; then
+                echo "::error::Ruleset scope probe for ${ORG_LOGIN}/${repository} returned the wrong ruleset object."
+                jq '{id,name,source_type,source,enforcement,target}' "$probe_json"
+                exit 1
+              fi
+              inherited=true
+            elif ! grep -q 'HTTP 404' "$probe_error"; then
+              echo "::error::Ruleset scope probe for ${ORG_LOGIN}/${repository} failed for a reason other than non-inheritance."
+              sed 's/^/    /' "$probe_error"
+              exit 1
+            fi
+            echo "RULESET_SCOPE repository=${repository} inherited=${inherited}"
+            jq --arg repository "$repository" --argjson inherited "$inherited" \
+              '. + {($repository): $inherited}' "$scope_json" >"${scope_json}.next"
+            mv "${scope_json}.next" "$scope_json"
+          done < <(jq -r '.[]' "$repositories_json")
+
+          jq --slurpfile scope "$scope_json" \
+            '. + {"_audit_repository_scope": $scope[0]}' \
+            "$ruleset_json" >"$ruleset_with_scope_json"
+          python3 scripts/ci/audit_central_required_workflows.py "$ruleset_with_scope_json"

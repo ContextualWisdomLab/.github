@@ -39,6 +39,8 @@ def sanitize_text(text: str) -> str:
 
 
 def main() -> int:
+    """Sanitize a source summary file into the requested destination file."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
