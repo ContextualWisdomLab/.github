@@ -539,51 +539,23 @@ jobs:
             local project_dir="$1"
             local workflow_dir="${project_dir}/.github/workflows"
             [ -d "$workflow_dir" ] || return 0
-
-            python3 - "$workflow_dir" <<'PY'
-          import pathlib
-          import re
-          import shlex
-          import sys
-
-          workflow_dir = pathlib.Path(sys.argv[1])
-          commands = []
-          seen = set()
-          for path in sorted(workflow_dir.glob("ci.y*ml")):
-              for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                  match = re.match(r"\s*run:\s*(.+?)\s*$", line)
-                  if not match:
-                      continue
-                  command = match.group(1).strip()
-                  if "pytest" not in command:
-                      continue
-                  lowered = command.lower()
-                  if lowered.startswith(("pip install", "python -m pip install", "python3 -m pip install")):
-                      continue
-                  try:
-                      words = shlex.split(command)
-                  except ValueError:
-                      continue
-                  if "pytest" not in [pathlib.PurePosixPath(word).name for word in words]:
-                      continue
-                  if command not in seen:
-                      seen.add(command)
-                      commands.append(command)
-          print("\n".join(commands))
-          PY
+            python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" discover \
+              --workflow-dir "$workflow_dir"
           }
 
           run_python_test_coverage() {
             local measured_projects=0
             while IFS= read -r project_dir; do
               measured_projects=1
-              configured_commands="$(configured_python_ci_test_commands "$project_dir")"
-              if [ -n "$configured_commands" ]; then
-                while IFS= read -r configured_command; do
-                  [ -n "$configured_command" ] || continue
+              configured_commands_json="$(configured_python_ci_test_commands "$project_dir")"
+              if [ -n "$configured_commands_json" ]; then
+                while IFS= read -r configured_command_json; do
+                  [ -n "$configured_command_json" ] || continue
                   run_and_capture "Python configured CI test suite (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. bash -lc "$2"' bash "$project_dir" "$configured_command"
-                done <<<"$configured_commands"
+                    python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" execute \
+                      --project-dir "$project_dir" \
+                      --command-json "$configured_command_json"
+                done <<<"$configured_commands_json"
             elif [ -f "${project_dir}/pyproject.toml" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
@@ -1377,10 +1349,14 @@ jobs:
             append "- Failure count: ${failures}"
           fi
 
+          coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+          while grep -Fqx "$coverage_output_delimiter" "$summary_file"; do
+            coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+          done
           {
-            printf 'coverage_summary<<COVERAGE_EOF\n'
+            printf 'coverage_summary<<%s\n' "$coverage_output_delimiter"
             cat "$summary_file"
-            printf 'COVERAGE_EOF\n'
+            printf '%s\n' "$coverage_output_delimiter"
           } >>"$GITHUB_OUTPUT"
 
           cat "$summary_file"
@@ -1429,6 +1405,7 @@ jobs:
         || (
           github.event_name == 'pull_request_target'
           && github.event.action != 'closed'
+          && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
         )
       )
     runs-on: ubuntu-latest
@@ -1503,6 +1480,29 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
+
+      - name: Validate pull request head repository trust
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$GH_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::OpenCode privileged review rejected invalid target repository or pull request metadata."
+            exit 1
+          fi
+          pull_request_json="$(gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}")"
+          head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$pull_request_json")"
+          base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_request_json")"
+          if [ -z "$head_repository" ] || [ "$head_repository" != "$base_repository" ]; then
+            printf '::error::OpenCode privileged review refuses external pull request heads before OIDC, review-token, CodeGraph, or model execution. target=%s#%s head_repo=%s base_repo=%s\n' \
+              "$GH_REPOSITORY" "$PR_NUMBER" "${head_repository:-<missing>}" "${base_repository:-<missing>}"
+            exit 1
+          fi
+          printf 'Validated same-repository OpenCode review source for %s#%s (%s).\n' \
+            "$GH_REPOSITORY" "$PR_NUMBER" "$head_repository"
 
       - name: Exchange OpenCode app token for target repository review reads
         id: review_read_app_token
@@ -1771,14 +1771,22 @@ jobs:
 
       - name: Initialize CodeGraph index for OpenCode
         env:
-          CODEGRAPH_PACKAGE: "@colbymchenry/codegraph@0.9.9"
+          CODEGRAPH_TRUSTED_ROOT: ${{ runner.temp }}/trusted-codegraph
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
         run: |
           set -euo pipefail
+          rm -rf "$CODEGRAPH_TRUSTED_ROOT"
+          mkdir -p "$CODEGRAPH_TRUSTED_ROOT"
+          cp scripts/ci/codegraph-package/package.json \
+            scripts/ci/codegraph-package/package-lock.json \
+            "$CODEGRAPH_TRUSTED_ROOT"/
+          npm ci --ignore-scripts --omit=dev --prefix "$CODEGRAPH_TRUSTED_ROOT"
+          CODEGRAPH_BIN="${CODEGRAPH_TRUSTED_ROOT}/node_modules/.bin/codegraph"
+          test -x "$CODEGRAPH_BIN"
           cd "$OPENCODE_SOURCE_WORKDIR"
-          npx -y "$CODEGRAPH_PACKAGE" init -i
-          npx -y "$CODEGRAPH_PACKAGE" status
+          "$CODEGRAPH_BIN" init -i
+          "$CODEGRAPH_BIN" status
 
       - name: Prepare bounded OpenCode review evidence
         timeout-minutes: 12
@@ -6983,14 +6991,16 @@ jobs:
           always()
           && github.event_name == 'workflow_dispatch'
           && github.event.inputs.target_repository != ''
-          && steps.opencode_review_model_pool.outputs.review_status != ''
+          && github.event.inputs.pr_head_sha != ''
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ github.event.inputs.target_repository }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
+          COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
           OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
         run: |
           set -euo pipefail
@@ -7004,12 +7014,30 @@ jobs:
             exit 0
           fi
 
-          state="success"
-          description="OpenCode workflow_dispatch evidence passed for current head."
-          if [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "success" ] &&
-            [ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "exhausted" ]; then
-            state="failure"
-            description="OpenCode workflow_dispatch evidence did not produce approval evidence."
+          state="failure"
+          description="OpenCode live approval evidence validation failed."
+          pull_request_file="$(mktemp)"
+          reviews_file="$(mktemp)"
+          cleanup_status_evidence() {
+            rm -f "$pull_request_file" "$reviews_file"
+          }
+          trap cleanup_status_evidence EXIT
+
+          if gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" >"$pull_request_file" &&
+            gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp \
+              | jq 'flatten' >"$reviews_file"; then
+            decision_json="$(
+              python3 scripts/ci/opencode_dispatch_status.py \
+                --model-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-missing}" \
+                --coverage-result "${COVERAGE_EVIDENCE_RESULT:-missing}" \
+                --expected-head "$PR_HEAD_SHA" \
+                --pull-request-file "$pull_request_file" \
+                --reviews-file "$reviews_file"
+            )"
+            state="$(jq -r '.state // "failure"' <<<"$decision_json")"
+            description="$(jq -r '.description // "OpenCode live approval evidence validation failed."' <<<"$decision_json")"
+          else
+            echo "::error::OpenCode workflow_dispatch status could not read the live pull request and complete review history; publishing failure."
           fi
 
           printf 'Publishing OpenCode workflow_dispatch status context opencode-review for %s at %s with state=%s using %s token.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state" "${OPENCODE_STATUS_TOKEN_SOURCE:-configured}"

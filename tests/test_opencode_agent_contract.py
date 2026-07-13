@@ -990,7 +990,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "statuses: write" in workflow
     assert 'context="opencode-review"' in workflow
     assert 'repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}' in workflow
-    assert "OpenCode workflow_dispatch evidence passed for current head." in workflow
+    assert "OpenCode live approval evidence validation failed." in workflow
     assert "python3 scripts/ci/pr_review_merge_scheduler.py" in workflow
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
     assert "github.event_name == 'pull_request_target'" in workflow
@@ -1008,6 +1008,12 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         in status_step
     )
     assert "using %s token" in status_step
+    assert "scripts/ci/opencode_dispatch_status.py" in status_step
+    assert "COVERAGE_EVIDENCE_RESULT" in status_step
+    assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}"' in status_step
+    assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in status_step
+    assert '[ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "success" ] &&' not in status_step
+    assert '[ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "exhausted" ]' not in status_step
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
     assert (
         "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || "
@@ -1025,6 +1031,55 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "--no-trigger-reviews" in workflow
     assert "--enable-auto-merge" in workflow
     assert "--no-update-branches" in workflow
+
+
+def test_opencode_privileged_review_security_boundaries_are_fail_closed():
+    """Guard the Strix-proven command, fork, package, and output-file boundaries."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    coverage_start = workflow.index("  coverage-evidence:\n")
+    coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
+    coverage_job = workflow[coverage_start:coverage_end]
+    target_start = coverage_end + 1
+    target_end = workflow.index("\n  opencode-exhausted-retry:", target_start)
+    target_job = workflow[target_start:target_end]
+
+    assert 'scripts/ci/safe_pytest_command.py" discover' in coverage_job
+    assert 'scripts/ci/safe_pytest_command.py" execute' in coverage_job
+    assert 'PYTHONPATH=. bash -lc "$2"' not in coverage_job
+    assert "COVERAGE_EOF" not in coverage_job
+    assert "os.urandom(24).hex()" in coverage_job
+    assert 'grep -Fqx "$coverage_output_delimiter" "$summary_file"' in coverage_job
+
+    assert (
+        "github.event.pull_request.head.repo.full_name == "
+        "github.event.pull_request.base.repo.full_name"
+    ) in target_job
+    trust_step = target_job.split("      - name: Validate pull request head repository trust", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    assert ".head.repo.full_name // empty" in trust_step
+    assert ".base.repo.full_name // empty" in trust_step
+    assert "refuses external pull request heads before OIDC" in trust_step
+    assert target_job.index("Validate pull request head repository trust") < target_job.index(
+        "Exchange OpenCode app token for target repository review reads"
+    )
+    codegraph_step = target_job.split("      - name: Initialize CodeGraph index for OpenCode", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    assert "CODEGRAPH_TRUSTED_ROOT" in codegraph_step
+    assert "cp scripts/ci/codegraph-package/package.json" in codegraph_step
+    assert "scripts/ci/codegraph-package/package-lock.json" in codegraph_step
+    assert 'npm ci --ignore-scripts --omit=dev --prefix "$CODEGRAPH_TRUSTED_ROOT"' in codegraph_step
+    assert '"$CODEGRAPH_BIN" init -i' in codegraph_step
+    assert '"$CODEGRAPH_BIN" status' in codegraph_step
+    assert "npm install --ignore-scripts --no-save" not in codegraph_step
+    assert 'npx -y "$CODEGRAPH_PACKAGE" init -i' not in codegraph_step
+    package_lock = json.loads(
+        Path("scripts/ci/codegraph-package/package-lock.json").read_text(encoding="utf-8")
+    )
+    codegraph_package = package_lock["packages"]["node_modules/@colbymchenry/codegraph"]
+    assert codegraph_package["version"] == "0.9.9"
+    assert codegraph_package["integrity"].startswith("sha512-")
     assert "Merge scheduler follow-up skipped after approval because no mutation credential was available" in workflow
 
 
