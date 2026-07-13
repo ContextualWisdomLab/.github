@@ -1036,6 +1036,16 @@ def test_opencode_review_publication_prefers_app_token_for_review_writes():
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-}"' in workflow
     assert 'post_pull_review_with_retry "fallback review"' not in workflow
     assert "OPENCODE_REVIEW_IDENTITY_UNAVAILABLE" in workflow
+    assert "OPENCODE_REVIEW_STALE_HEAD" in workflow
+    assert "OPENCODE_OVERVIEW_STALE_HEAD" in workflow
+    assert "review_live_head_sha()" in workflow
+    assert "validate_published_review_head()" in workflow
+    assert "dismiss_stale_published_review()" in workflow
+    assert 'review_head_guard_token="${GH_TOKEN:-$review_write_token}"' in workflow
+    assert 'post_pull_review_with_retry "primary review" "$review_write_token" "$review_payload_file" "$gh_error_file" "$review_response_file"' in workflow
+    assert 'post_pull_review_with_retry "inline review" "$review_write_token" "$review_payload_file" "$gh_error_file" "$review_response_file"' in workflow
+    assert 'reviews/${review_id}/dismissals' in workflow
+    assert "CENTRAL_FAST_APPROVAL_STALE_HEAD" in workflow
     assert (
         'select(.user.login == "opencode-agent[bot]" and '
         '(.body | contains("<!-- opencode-review-overview -->")))'

@@ -3378,9 +3378,10 @@ jobs:
           comment_body_file="$(mktemp)"
           normalized_comment_json="$(mktemp)"
           overview_body_file="$(mktemp)"
+          overview_response_file="$(mktemp)"
           gh_error_file="$(mktemp)"
           cleanup_publish_files() {
-            rm -f "$clean_output" "$comment_body_file" "$normalized_comment_json" "$overview_body_file" "$gh_error_file"
+            rm -f "$clean_output" "$comment_body_file" "$normalized_comment_json" "$overview_body_file" "$overview_response_file" "$gh_error_file"
           }
           trap cleanup_publish_files EXIT
 
@@ -3597,6 +3598,13 @@ jobs:
             append_merge_conflict_guidance
           } >"$overview_body_file"
 
+          live_head="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty' 2>"$gh_error_file" || true)"
+          if [ "$live_head" != "$HEAD_SHA" ]; then
+            printf '::error::OPENCODE_OVERVIEW_STALE_HEAD: refusing initial overview publication because expected head %s no longer matches live head %s.\n' "$HEAD_SHA" "${live_head:-missing}"
+            exit 1
+          fi
+
+          published_overview_comment_id=""
           if ! overview_comment_id="$(
             gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
               --jq '[.[] | select(.user.login == "opencode-agent[bot]" and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
@@ -3606,14 +3614,26 @@ jobs:
           elif [ -n "$overview_comment_id" ]; then
             : >"$gh_error_file"
             if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
-              gh api -X PATCH "repos/${GH_REPOSITORY}/issues/comments/${overview_comment_id}" --input - >/dev/null 2>"$gh_error_file"; then
+              gh api -X PATCH "repos/${GH_REPOSITORY}/issues/comments/${overview_comment_id}" --input - >"$overview_response_file" 2>"$gh_error_file"; then
               warn_gh_publication_failure "initial review overview update" "$gh_error_file"
+            else
+              published_overview_comment_id="$overview_comment_id"
             fi
           else
             : >"$gh_error_file"
             if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
-              gh api -X POST "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - >/dev/null 2>"$gh_error_file"; then
+              gh api -X POST "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - >"$overview_response_file" 2>"$gh_error_file"; then
               warn_gh_publication_failure "initial review overview comment" "$gh_error_file"
+            else
+              published_overview_comment_id="$(jq -r '.id // empty' "$overview_response_file")"
+            fi
+          fi
+          if [ -n "$published_overview_comment_id" ]; then
+            live_head="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty' 2>"$gh_error_file" || true)"
+            if [ "$live_head" != "$HEAD_SHA" ]; then
+              gh api -X DELETE "repos/${GH_REPOSITORY}/issues/comments/${published_overview_comment_id}" >/dev/null 2>>"$gh_error_file" || true
+              printf '::error::OPENCODE_OVERVIEW_STALE_HEAD: deleted initial overview after head advanced from %s to %s.\n' "$HEAD_SHA" "${live_head:-missing}"
+              exit 1
             fi
           fi
 
@@ -3841,9 +3861,33 @@ jobs:
             "" \
             "This approval path is limited to ContextualWisdomLab/.github central review-process self-repair.")"
           payload_file="$(mktemp)"
+          live_head_file="$(mktemp)"
+          review_response_file="$(mktemp)"
+          dismissal_payload_file="$(mktemp)"
           jq -n --arg event APPROVE --arg body "$body" --arg commit_id "$HEAD_SHA" \
             '{event: $event, body: $body, commit_id: $commit_id}' >"$payload_file"
-          curl_api_write -X POST --data-binary "@${payload_file}" "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+          curl_api_read "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" >"$live_head_file"
+          live_head="$(jq -r '.head.sha // empty' "$live_head_file")"
+          if [ "$live_head" != "$HEAD_SHA" ]; then
+            echo "::notice::CENTRAL_FAST_APPROVAL_STALE_HEAD: expected ${HEAD_SHA}, observed ${live_head:-missing}; skipping review publication."
+            exit 0
+          fi
+          curl_api_write -X POST --data-binary "@${payload_file}" \
+            "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" >"$review_response_file"
+          curl_api_read "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" >"$live_head_file"
+          live_head="$(jq -r '.head.sha // empty' "$live_head_file")"
+          if [ "$live_head" != "$HEAD_SHA" ]; then
+            review_id="$(jq -r '.id // empty' "$review_response_file")"
+            review_state="$(jq -r '(.state // "") | ascii_upcase' "$review_response_file")"
+            if [ -n "$review_id" ] && { [ "$review_state" = "APPROVED" ] || [ "$review_state" = "CHANGES_REQUESTED" ]; }; then
+              jq -n --arg message "Superseded during publication: expected head ${HEAD_SHA}, observed ${live_head:-missing}." \
+                '{message: $message}' >"$dismissal_payload_file"
+              curl_api_write -X PUT --data-binary "@${dismissal_payload_file}" \
+                "${api_url}/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" >/dev/null
+            fi
+            echo "::error::CENTRAL_FAST_APPROVAL_STALE_HEAD: review publication raced with a head update; expected ${HEAD_SHA}, observed ${live_head:-missing}."
+            exit 1
+          fi
           echo "::notice::Central fast approval published APPROVE review for ${GH_REPOSITORY}#${PR_NUMBER} at ${HEAD_SHA}."
           echo "published=true" >>"$GITHUB_OUTPUT"
 
@@ -3938,6 +3982,7 @@ jobs:
           review_write_token="${OPENCODE_APP_TOKEN:-}"
           review_write_token_source="opencode-app"
           overview_comment_token="$review_write_token"
+          review_head_guard_token="${GH_TOKEN:-$review_write_token}"
           echo "check lookup token source=${check_lookup_token_source}"
           echo "code-scanning lookup token source=${CODE_SCANNING_TOKEN_SOURCE:-configured}"
           echo "review write token source=${review_write_token_source}"
@@ -3972,7 +4017,7 @@ jobs:
           }
 
           post_pull_review_request() {
-            local token_value="$1" review_payload_file="$2" error_file="$3" api_timeout="$4"
+            local token_value="$1" review_payload_file="$2" error_file="$3" api_timeout="$4" response_file="$5"
 
             if command -v curl >/dev/null 2>&1; then
               curl --silent --show-error --fail-with-body \
@@ -3984,13 +4029,63 @@ jobs:
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 --data-binary "@${review_payload_file}" \
                 "https://api.github.com/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-                >/dev/null 2>"$error_file"
+                >"$response_file" 2>"$error_file"
               return $?
             fi
 
             timeout "${api_timeout}s" env GH_TOKEN="$token_value" \
               gh api -X POST "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-              --input "$review_payload_file" >/dev/null 2>"$error_file"
+              --input "$review_payload_file" >"$response_file" 2>"$error_file"
+          }
+
+          review_live_head_sha() {
+            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+              env GH_TOKEN="$review_head_guard_token" \
+              gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty'
+          }
+
+          dismiss_stale_published_review() {
+            local token_value="$1" response_file="$2" observed_head="$3" error_file="$4"
+            local review_id review_state dismissal_payload_file
+
+            review_id="$(jq -r '.id // empty' "$response_file" 2>/dev/null || true)"
+            review_state="$(jq -r '(.state // "") | ascii_upcase' "$response_file" 2>/dev/null || true)"
+            if [ -z "$review_id" ] || { [ "$review_state" != "APPROVED" ] && [ "$review_state" != "CHANGES_REQUESTED" ]; }; then
+              printf 'Published stale review could not be dismissed automatically (id=%s state=%s).\n' "${review_id:-missing}" "${review_state:-missing}" >>"$error_file"
+              return 0
+            fi
+
+            dismissal_payload_file="$(mktemp)"
+            jq -n --arg message "Superseded during publication: expected head ${HEAD_SHA}, observed ${observed_head:-missing}." \
+              '{message: $message}' >"$dismissal_payload_file"
+            if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$token_value" \
+              gh api -X PUT "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
+                --input "$dismissal_payload_file" >/dev/null 2>>"$error_file"; then
+              printf 'GitHub rejected dismissal of stale OpenCode review %s.\n' "$review_id" >>"$error_file"
+              rm -f "$dismissal_payload_file"
+              return 1
+            fi
+            printf 'Dismissed stale OpenCode review %s after head advanced from %s to %s.\n' "$review_id" "$HEAD_SHA" "${observed_head:-missing}" >&2
+            rm -f "$dismissal_payload_file"
+          }
+
+          validate_published_review_head() {
+            local token_value="$1" response_file="$2" error_file="$3"
+            local live_head
+
+            if ! live_head="$(review_live_head_sha 2>>"$error_file")"; then
+              REVIEW_PUBLICATION_STALE_HEAD=1
+              printf 'OPENCODE_REVIEW_STALE_HEAD: live PR head could not be verified after publication for expected head %s.\n' "$HEAD_SHA" >>"$error_file"
+              return 1
+            fi
+            if [ "$live_head" = "$HEAD_SHA" ]; then
+              return 0
+            fi
+
+            REVIEW_PUBLICATION_STALE_HEAD=1
+            printf 'OPENCODE_REVIEW_STALE_HEAD: publication raced with a head update; expected %s, observed %s.\n' "$HEAD_SHA" "${live_head:-missing}" >>"$error_file"
+            dismiss_stale_published_review "$token_value" "$response_file" "$live_head" "$error_file" || true
+            return 1
           }
 
           review_publish_retry_sleep_seconds() {
@@ -4023,8 +4118,8 @@ jobs:
           }
 
           post_pull_review_with_retry() {
-            local token_label="$1" token_value="$2" review_payload_file="$3" error_file="$4"
-            local attempts default_sleep attempt sleep_seconds api_timeout publish_status
+            local token_label="$1" token_value="$2" review_payload_file="$3" error_file="$4" response_file="$5"
+            local attempts default_sleep attempt sleep_seconds api_timeout publish_status live_head
 
             attempts="${REVIEW_PUBLISH_RETRY_ATTEMPTS:-3}"
             default_sleep="${REVIEW_PUBLISH_RETRY_SLEEP_SECONDS:-30}"
@@ -4032,11 +4127,18 @@ jobs:
             attempt=1
             while :; do
               : >"$error_file"
+              : >"$response_file"
+              if ! live_head="$(review_live_head_sha 2>>"$error_file")" || [ "$live_head" != "$HEAD_SHA" ]; then
+                REVIEW_PUBLICATION_STALE_HEAD=1
+                printf 'OPENCODE_REVIEW_STALE_HEAD: refusing publication because expected head %s no longer matches live head %s.\n' "$HEAD_SHA" "${live_head:-missing}" >>"$error_file"
+                return 1
+              fi
               printf 'OpenCode publishing pull review with %s token (attempt %s/%s, timeout %ss).\n' "$token_label" "$attempt" "$attempts" "$api_timeout" >&2
-              post_pull_review_request "$token_value" "$review_payload_file" "$error_file" "$api_timeout"
+              post_pull_review_request "$token_value" "$review_payload_file" "$error_file" "$api_timeout" "$response_file"
               publish_status=$?
               if [ "$publish_status" -eq 0 ]; then
-                return 0
+                validate_published_review_head "$token_value" "$response_file" "$error_file"
+                return $?
               fi
               printf 'GitHub pull review publication with %s token failed on attempt %s/%s (exit %s).\n' "$token_label" "$attempt" "$attempts" "$publish_status" >>"$error_file"
               if [ "$publish_status" -eq 124 ] || [ "$publish_status" -eq 28 ]; then
@@ -4208,6 +4310,9 @@ jobs:
             local gh_error_file
             local overview_body_file
             local overview_comment_id
+            local overview_response_file
+            local published_overview_comment_id
+            local live_head
 
             if [ -z "${overview_comment_token:-}" ]; then
               printf '::error::OPENCODE_REVIEW_IDENTITY_UNAVAILABLE: refusing to publish or update the OpenCode overview with a GitHub Actions or PAT identity for head %s.\n' "$HEAD_SHA"
@@ -4216,6 +4321,12 @@ jobs:
 
             gh_error_file="$(mktemp)"
             overview_body_file="$(mktemp)"
+            overview_response_file="$(mktemp)"
+            if ! live_head="$(review_live_head_sha 2>"$gh_error_file")" || [ "$live_head" != "$HEAD_SHA" ]; then
+              printf '::error::OPENCODE_OVERVIEW_STALE_HEAD: refusing overview publication because expected head %s no longer matches live head %s.\n' "$HEAD_SHA" "${live_head:-missing}"
+              rm -f "$gh_error_file" "$overview_body_file" "$overview_response_file"
+              return 1
+            fi
             {
               printf '<!-- opencode-review-overview -->\n'
               printf '## OpenCode Review Overview\n\n'
@@ -4237,37 +4348,53 @@ jobs:
                 2>"$gh_error_file"
             )"; then
               warn_gh_publication_failure "review overview lookup" "$gh_error_file"
-              rm -f "$gh_error_file" "$overview_body_file"
+              rm -f "$gh_error_file" "$overview_body_file" "$overview_response_file"
               return 0
             fi
+            published_overview_comment_id=""
             if [ -n "$overview_comment_id" ]; then
               : >"$gh_error_file"
               if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
                 timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
-                  gh api -X PATCH "repos/${GH_REPOSITORY}/issues/comments/${overview_comment_id}" --input - >/dev/null 2>"$gh_error_file"; then
+                  gh api -X PATCH "repos/${GH_REPOSITORY}/issues/comments/${overview_comment_id}" --input - >"$overview_response_file" 2>"$gh_error_file"; then
                 warn_gh_publication_failure "review overview update" "$gh_error_file"
+              else
+                published_overview_comment_id="$overview_comment_id"
               fi
             else
               : >"$gh_error_file"
               if ! jq -n --rawfile body "$overview_body_file" '{body: $body}' |
                 timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
-                  gh api -X POST "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - >/dev/null 2>"$gh_error_file"; then
+                  gh api -X POST "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - >"$overview_response_file" 2>"$gh_error_file"; then
                 warn_gh_publication_failure "review overview comment" "$gh_error_file"
+              else
+                published_overview_comment_id="$(jq -r '.id // empty' "$overview_response_file")"
               fi
             fi
-            rm -f "$gh_error_file" "$overview_body_file"
+            if [ -n "$published_overview_comment_id" ]; then
+              if ! live_head="$(review_live_head_sha 2>>"$gh_error_file")" || [ "$live_head" != "$HEAD_SHA" ]; then
+                timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
+                  gh api -X DELETE "repos/${GH_REPOSITORY}/issues/comments/${published_overview_comment_id}" >/dev/null 2>>"$gh_error_file" || true
+                printf '::error::OPENCODE_OVERVIEW_STALE_HEAD: deleted overview after head advanced from %s to %s.\n' "$HEAD_SHA" "${live_head:-missing}"
+                rm -f "$gh_error_file" "$overview_body_file" "$overview_response_file"
+                return 1
+              fi
+            fi
+            rm -f "$gh_error_file" "$overview_body_file" "$overview_response_file"
           }
 
           create_pull_review() {
             local event="$1" body="$2"
             local gh_error_file
             local review_payload_file
+            local review_response_file
             if [ -z "${review_write_token:-}" ]; then
               printf '::error::OPENCODE_REVIEW_IDENTITY_UNAVAILABLE: refusing to publish %s with a GitHub Actions or PAT identity for head %s.\n' "$event" "$HEAD_SHA"
               return 1
             fi
             gh_error_file="$(mktemp)"
             review_payload_file="$(mktemp)"
+            review_response_file="$(mktemp)"
             if [ "$event" = "APPROVE" ]; then
               printf '::notice::OpenCode APPROVE review skips the non-authoritative changed-file graph before publication so the required approval check can finish promptly.\n'
             else
@@ -4279,9 +4406,13 @@ jobs:
               --arg body "$body" \
               --arg commit_id "$HEAD_SHA" \
               '{event: $event, body: $body, commit_id: $commit_id}' >"$review_payload_file"
-            if ! post_pull_review_with_retry "primary review" "$review_write_token" "$review_payload_file" "$gh_error_file"; then
+            if ! post_pull_review_with_retry "primary review" "$review_write_token" "$review_payload_file" "$gh_error_file" "$review_response_file"; then
               warn_gh_publication_failure "pull review with primary review token" "$gh_error_file"
-              rm -f "$gh_error_file" "$review_payload_file"
+              rm -f "$gh_error_file" "$review_payload_file" "$review_response_file"
+              if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" = "1" ]; then
+                printf '::error::OpenCode review publication stopped because PR head advanced beyond %s.\n' "$HEAD_SHA"
+                return 1
+              fi
               update_review_overview "$event" "$body" || true
               if [ "$event" = "APPROVE" ]; then
                 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -4305,7 +4436,7 @@ jobs:
               esac
               exit 1
             fi
-            rm -f "$gh_error_file" "$review_payload_file"
+            rm -f "$gh_error_file" "$review_payload_file" "$review_response_file"
             if [ "$event" = "APPROVE" ]; then
               printf '::notice::OpenCode approve review was published for head %s; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
               return 0
@@ -4599,8 +4730,10 @@ jobs:
             local event="$1" body="$2" review_payload_file="$3" fallback_body_file="$4"
             local gh_error_file
             local rewritten_payload_file
+            local review_response_file
             gh_error_file="$(mktemp)"
             rewritten_payload_file="$(mktemp)"
+            review_response_file="$(mktemp)"
             body="$(ensure_review_body_has_change_graph "$body")"
             if jq --arg body "$body" '.body = $body' "$review_payload_file" >"$rewritten_payload_file"; then
               mv "$rewritten_payload_file" "$review_payload_file"
@@ -4608,9 +4741,13 @@ jobs:
               rm -f "$rewritten_payload_file"
             fi
             emit_review_body_to_action_log "$event" "$body" "$review_payload_file"
-            if ! post_pull_review_with_retry "inline review" "$review_write_token" "$review_payload_file" "$gh_error_file"; then
+            if ! post_pull_review_with_retry "inline review" "$review_write_token" "$review_payload_file" "$gh_error_file" "$review_response_file"; then
               warn_gh_publication_failure "pull review inline comments" "$gh_error_file"
-              rm -f "$gh_error_file"
+              rm -f "$gh_error_file" "$review_response_file"
+              if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" = "1" ]; then
+                printf '::error::OpenCode inline review publication stopped because PR head advanced beyond %s.\n' "$HEAD_SHA"
+                return 1
+              fi
               if [ -s "$fallback_body_file" ]; then
                 update_review_overview "INLINE_COMMENT_PUBLISH_FAILED" "$(cat "$fallback_body_file")"
               else
@@ -4618,7 +4755,7 @@ jobs:
               fi
               return 1
             fi
-            rm -f "$gh_error_file"
+            rm -f "$gh_error_file" "$review_response_file"
             update_review_overview "$event" "$body"
           }
 
