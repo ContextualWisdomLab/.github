@@ -651,6 +651,18 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CODE_SCANNING_TOKEN_SOURCE" in workflow
     assert 'GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s"' in workflow
     assert "Open code-scanning alert lookup skipped because no target-repository read token" in workflow
+    # Same-repository code-scanning reads must prefer the runner token: the job
+    # grants it security-events: read, while the OpenCode app token has no
+    # security_events permission and 403s the read, silently skipping the
+    # model-unavailable evidence fallback.
+    code_scanning_lookup = workflow.split("collect_open_code_scanning_alerts()", 1)[1].split(
+        "publish_blockers_after_model_unavailable()", 1
+    )[0]
+    assert (
+        '[ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ] && [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]'
+        in code_scanning_lookup
+    )
+    assert 'scan_token="${CHECK_LOOKUP_GH_TOKEN}"' in code_scanning_lookup
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow

@@ -6109,6 +6109,14 @@ jobs:
             local output_file="$1"
             local pr_json head_ref scan_token lookup_error_file
             scan_token="${CODE_SCANNING_GH_TOKEN:-${GH_TOKEN:-}}"
+            if [ "${GH_REPOSITORY:-}" = "${GITHUB_REPOSITORY:-}" ] && [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
+              # Same-repository lookup: prefer the runner token, which carries this
+              # job's security-events: read permission. The OpenCode app token has no
+              # security_events permission, so with no PAT configured the configured
+              # chain 403s the code-scanning read and the model-unavailable evidence
+              # fallback is silently skipped on every eligible PR.
+              scan_token="${CHECK_LOOKUP_GH_TOKEN}"
+            fi
             if [ -z "$scan_token" ]; then
               printf '::warning::Open code-scanning alert lookup skipped because no target-repository read token was configured.\n' >&2
               return 1
