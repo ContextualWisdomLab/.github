@@ -1435,10 +1435,10 @@ jobs:
       # continue-on-error, so it survives the job failing.
       model_pool_outcome: ${{ steps.opencode_review_model_pool.outputs.review_status }}
     # Coverage and current-head evidence are prepared before the model pool.
-    # The model pool has a 60-minute retry budget and its publish gate has an
-    # 8-minute cap, so 90 minutes releases genuinely hung runners without
-    # truncating the bounded multi-provider review path.
-    timeout-minutes: 90
+    # The model pool has a 60-minute retry budget and its publish gate can wait
+    # for long same-head package/GPU checks, so 150 minutes releases genuinely
+    # hung runners without truncating the bounded multi-provider review path.
+    timeout-minutes: 150
     permissions:
       actions: read
       checks: read
@@ -3691,9 +3691,9 @@ jobs:
           && steps.opencode_review_model_pool.outputs.review_status == 'success'
           && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
         continue-on-error: true
-        # Keep the normal peer-check hold short, but leave bounded room for the
-        # dynamic image-validation extension and review publication overhead.
-        timeout-minutes: 14
+        # Keep the normal peer-check hold short, but leave bounded room for
+        # dynamic image/package-build extensions and review publication overhead.
+        timeout-minutes: 34
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -3713,6 +3713,7 @@ jobs:
           CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT: ${{ steps.central_review_process_fallback_scope.outputs.changed_count || '0' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "36"
+          APPROVAL_SLOW_BUILD_CHECK_WAIT_ATTEMPTS: "180"
           APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "60"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
           REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS: "15"
@@ -3802,8 +3803,14 @@ jobs:
           pending_checks_file="$(mktemp)"
           failed_checks_file="$(mktemp)"
           attempts="${APPROVAL_CHECK_WAIT_ATTEMPTS:-36}"
+          slow_build_attempts="${APPROVAL_SLOW_BUILD_CHECK_WAIT_ATTEMPTS:-180}"
           slow_image_attempts="${APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS:-60}"
           attempt=1
+          pending_checks_need_slow_build_wait() {
+            local pending_file="$1"
+            grep -Eiq -- '^- ([^/]+/)?gpu-build([[:space:](]|:)' "$pending_file" ||
+              grep -Eiq -- '^- ([^/]+/)?build \([^)]*(src-tauri/target/release/bundle|bundle/|\.msi|\.dmg|\.deb|\.appimage|AppImage)' "$pending_file"
+          }
           while [ "$attempt" -le "$attempts" ]; do
             curl_api_read "${api_url}/repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" >"$check_runs_file"
             jq -r "${self_check_filter}
@@ -3818,6 +3825,11 @@ jobs:
               grep -Eiq -- '^- validate [^:/]+ image:' "$pending_checks_file"; then
               printf '::notice::Extending central fast approval peer-check wait from %s to %s attempts because current-head image validation is still running.\n' "$attempts" "$slow_image_attempts"
               attempts="$slow_image_attempts"
+            fi
+            if [ "$attempts" -lt "$slow_build_attempts" ] &&
+              pending_checks_need_slow_build_wait "$pending_checks_file"; then
+              printf '::notice::Extending central fast approval peer-check wait from %s to %s attempts because current-head package/GPU build checks are still running.\n' "$attempts" "$slow_build_attempts"
+              attempts="$slow_build_attempts"
             fi
             if [ "$attempt" -lt "$attempts" ]; then
               printf 'Central fast approval waiting for peer checks (%s/%s):\n' "$attempt" "$attempts"
@@ -3983,9 +3995,10 @@ jobs:
         # keeps GitHub review publication bounded. Failed-check evidence is
         # collected from logs/SARIF before this point; central review-process
         # self-repair must not run a second model pass from the publish step.
-        # The approval gate normally waits about six minutes, with a bounded
-        # extension for image validation plus API and publication overhead.
-        timeout-minutes: 16
+        # The approval gate normally waits about six minutes, with bounded
+        # extensions for image validation or package/GPU builds plus API and
+        # publication overhead.
+        timeout-minutes: 36
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -4029,6 +4042,7 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
           APPROVAL_CHECK_WAIT_ATTEMPTS: "36"
+          APPROVAL_SLOW_BUILD_CHECK_WAIT_ATTEMPTS: "180"
           APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS: "60"
           APPROVAL_CHECK_WAIT_SLEEP_SECONDS: "10"
           CHECK_LOOKUP_RETRY_ATTEMPTS: "1"
@@ -5743,6 +5757,55 @@ jobs:
             rm -f "$runs_json"
           }
 
+          collect_current_head_successful_check_run_names() {
+            local output_file="$1"
+
+            timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+              -f per_page=100 \
+              --paginate \
+              --slurp |
+              jq -r '
+                [.[].check_runs[]?]
+                | sort_by((.started_at // .completed_at // .created_at // ""), (.id // 0))
+                | group_by(.name // "")
+                | map(last)
+                | .[]?
+                | select((.status // "") == "completed")
+                | select((.conclusion // "" | ascii_downcase) == "success")
+                | .name // empty
+              ' >"$output_file"
+          }
+
+          filter_superseded_cancelled_rollup_checks() {
+            local input_file="$1"
+            local successful_names_file="$2"
+            local output_file="$3"
+
+            awk '
+              BEGIN {
+                while ((getline name < successful_names_file) > 0) {
+                  successful[name] = 1
+                }
+              }
+              {
+                line = $0
+                if (line ~ /^- .*: CANCELLED/) {
+                  label = line
+                  sub(/^- /, "", label)
+                  sub(/: CANCELLED.*/, "", label)
+                  name = label
+                  sub(/^.*\//, "", name)
+                  if (successful[name] || successful[label]) {
+                    printf "Ignoring superseded cancelled check rollup: %s\n", line > "/dev/stderr"
+                    next
+                  }
+                }
+                print
+              }
+            ' successful_names_file="$successful_names_file" "$input_file" >"$output_file"
+          }
+
           collect_current_head_commit_check_runs() {
             local output_file="$1"
             local mode="$2"
@@ -5975,10 +6038,12 @@ jobs:
             local strix_runs_file
             local commit_check_runs_file
             local filtered_rollup_file
+            local successful_check_names_file
             rollup_file="$(mktemp)"
             strix_runs_file="$(mktemp)"
             commit_check_runs_file="$(mktemp)"
             filtered_rollup_file="$(mktemp)"
+            successful_check_names_file="$(mktemp)"
             if ! pr_node_id="$(timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
@@ -6092,13 +6157,19 @@ jobs:
             fi
             filter_superseded_strix_failures "$rollup_file" "$filtered_rollup_file"
             mv "$filtered_rollup_file" "$rollup_file"
+            if ! collect_current_head_successful_check_run_names "$successful_check_names_file"; then
+              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
+              return 1
+            fi
+            filter_superseded_cancelled_rollup_checks "$rollup_file" "$successful_check_names_file" "$filtered_rollup_file"
+            mv "$filtered_rollup_file" "$rollup_file"
 
             if ! collect_current_head_strix_workflow_runs "$strix_runs_file" failed; then
-              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file"
+              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
               return 1
             fi
             if ! collect_current_head_commit_check_runs "$commit_check_runs_file" failed; then
-              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file"
+              rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
               return 1
             fi
             if grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"; then
@@ -6106,7 +6177,7 @@ jobs:
             else
               cat "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" | sort -u >"$output_file"
             fi
-            rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file"
+            rm -f "$rollup_file" "$strix_runs_file" "$commit_check_runs_file" "$filtered_rollup_file" "$successful_check_names_file"
 
           }
 
@@ -6301,9 +6372,16 @@ jobs:
             return 1
           }
 
+          pending_checks_need_slow_build_wait() {
+            local pending_file="$1"
+            grep -Eiq -- '^- ([^/]+/)?gpu-build([[:space:](]|:)' "$pending_file" ||
+              grep -Eiq -- '^- ([^/]+/)?build \([^)]*(src-tauri/target/release/bundle|bundle/|\.msi|\.dmg|\.deb|\.appimage|AppImage)' "$pending_file"
+          }
+
           wait_for_peer_github_checks() {
             local output_file="$1"
             local attempts="${APPROVAL_CHECK_WAIT_ATTEMPTS:-36}"
+            local slow_build_attempts="${APPROVAL_SLOW_BUILD_CHECK_WAIT_ATTEMPTS:-180}"
             local slow_image_attempts="${APPROVAL_SLOW_IMAGE_CHECK_WAIT_ATTEMPTS:-60}"
             local sleep_seconds="${APPROVAL_CHECK_WAIT_SLEEP_SECONDS:-10}"
             local attempt=1
@@ -6319,6 +6397,11 @@ jobs:
                 grep -Eiq -- '^- (Build and Publish Docker Images/)?validate [^:/]+ image:' "$output_file"; then
                 printf '::notice::Extending OpenCode peer-check wait from %s to %s attempts because current-head image validation is still running.\n' "$attempts" "$slow_image_attempts"
                 attempts="$slow_image_attempts"
+              fi
+              if [ "$attempts" -lt "$slow_build_attempts" ] &&
+                pending_checks_need_slow_build_wait "$output_file"; then
+                printf '::notice::Extending OpenCode peer-check wait from %s to %s attempts because current-head package/GPU build checks are still running.\n' "$attempts" "$slow_build_attempts"
+                attempts="$slow_build_attempts"
               fi
               if [ "$attempt" -lt "$attempts" ]; then
                 printf 'Waiting for peer GitHub Checks before OpenCode approval (%s/%s):\n' "$attempt" "$attempts"
