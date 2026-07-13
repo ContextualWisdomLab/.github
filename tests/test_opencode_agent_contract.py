@@ -645,10 +645,21 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
         "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
-        "github.token }}"
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in workflow
+    # The OpenCode app installation token never carries security-events read, so
+    # preferring it for the code-scanning alert lookup 403s ("Resource not
+    # accessible by integration") and defeats the model-unavailable fallback.
+    code_scanning_token_lines = [
+        line for line in workflow.splitlines() if "CODE_SCANNING_GH_TOKEN:" in line
+    ]
+    assert code_scanning_token_lines
+    assert all("opencode_app_token" not in line for line in code_scanning_token_lines)
     assert "CODE_SCANNING_TOKEN_SOURCE" in workflow
+    code_scanning_source_lines = [
+        line for line in workflow.splitlines() if "CODE_SCANNING_TOKEN_SOURCE:" in line
+    ]
+    assert all("opencode-app" not in line for line in code_scanning_source_lines)
     assert 'GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s"' in workflow
     assert "Open code-scanning alert lookup skipped because no target-repository read token" in workflow
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
