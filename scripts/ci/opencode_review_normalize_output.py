@@ -864,6 +864,32 @@ def check_structural_approval(control_file: Path) -> int:
     return 0
 
 
+def canonicalize_finding_fields(finding: dict[str, Any]) -> dict[str, Any]:
+    """Map known-safe model vocabulary drift onto the canonical finding schema.
+
+    Findings only exist on REQUEST_CHANGES control blocks (valid_control rejects
+    APPROVE blocks that carry findings), so rescuing a drifted finding can only
+    publish a blocking review — it can never loosen approval evidence. Two
+    observed drifts from otherwise-complete blocks are repaired: ``priority``
+    used in place of ``severity``, and a missing ``suggested_diff`` when
+    ``fix_direction`` still states the concrete remedy.
+    """
+
+    def non_empty(candidate: Any) -> bool:
+        """Return whether a candidate field value is a non-blank string."""
+        return isinstance(candidate, str) and bool(candidate.strip())
+
+    finding = dict(finding)
+    priority = finding.pop("priority", None)
+    if not non_empty(finding.get("severity")) and non_empty(priority):
+        finding["severity"] = priority
+    if not non_empty(finding.get("suggested_diff")) and non_empty(
+        finding.get("fix_direction")
+    ):
+        finding["suggested_diff"] = finding["fix_direction"]
+    return finding
+
+
 def valid_control(
     value: Any,
     *,
@@ -944,15 +970,18 @@ def valid_control(
         "regression_test_direction",
         "suggested_diff",
     )
+    normalized_findings = []
     for finding in findings:
         if not isinstance(finding, dict):
             return None
         line = finding.get("line")
         if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
             return None
+        finding = canonicalize_finding_fields(finding)
         for field in required_finding_fields:
             if not isinstance(finding.get(field), str) or not finding[field].strip():
                 return None
+        normalized_findings.append(finding)
 
     normalized = {
         "head_sha": value["head_sha"],
@@ -961,7 +990,7 @@ def valid_control(
         "result": result,
         "reason": reason,
         "summary": summary,
-        "findings": findings,
+        "findings": normalized_findings,
     }
     if isinstance(value.get("adversarial_validation"), dict):
         normalized["adversarial_validation"] = value["adversarial_validation"]

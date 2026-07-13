@@ -725,6 +725,64 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(approve_without_findings_key, **kwargs)["findings"] == []
 
 
+def test_valid_control_canonicalizes_known_safe_finding_field_drift():
+    kwargs = {
+        "expected_head_sha": "head",
+        "expected_run_id": "run",
+        "expected_run_attempt": "attempt",
+    }
+
+    aliased = finding(priority="P1")
+    del aliased["severity"]
+    normalized = norm.valid_control(
+        control(result="REQUEST_CHANGES", findings=[aliased]), **kwargs
+    )
+    assert normalized is not None
+    assert normalized["findings"][0]["severity"] == "P1"
+    assert "priority" not in normalized["findings"][0]
+
+    diffless = finding()
+    del diffless["suggested_diff"]
+    normalized = norm.valid_control(
+        control(result="REQUEST_CHANGES", findings=[diffless]), **kwargs
+    )
+    assert normalized is not None
+    assert normalized["findings"][0]["suggested_diff"] == "Restore the guard."
+
+    blank_diff = finding(suggested_diff="  ")
+    normalized = norm.valid_control(
+        control(result="REQUEST_CHANGES", findings=[blank_diff]), **kwargs
+    )
+    assert normalized is not None
+    assert normalized["findings"][0]["suggested_diff"] == "Restore the guard."
+
+    canonical_severity_wins = finding(priority="P2")
+    normalized = norm.valid_control(
+        control(result="REQUEST_CHANGES", findings=[canonical_severity_wins]),
+        **kwargs,
+    )
+    assert normalized is not None
+    assert normalized["findings"][0]["severity"] == "HIGH"
+    assert "priority" not in normalized["findings"][0]
+
+    blank_alias = finding(priority="   ")
+    del blank_alias["severity"]
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[blank_alias]), **kwargs
+        )
+        is None
+    )
+
+    no_remedy = finding(fix_direction="", suggested_diff="")
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[no_remedy]), **kwargs
+        )
+        is None
+    )
+
+
 def test_valid_control_repairs_approval_summary_from_bounded_evidence(tmp_path, monkeypatch):
     evidence = tmp_path / "bounded-review-evidence.md"
     evidence.write_text(
