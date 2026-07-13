@@ -1,4 +1,7 @@
 import json
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -723,6 +726,126 @@ def test_valid_control_filters_shape_head_and_review_contract():
     approve_without_findings_key = control()
     approve_without_findings_key.pop("findings")
     assert norm.valid_control(approve_without_findings_key, **kwargs)["findings"] == []
+
+
+def test_valid_control_canonicalizes_known_safe_finding_field_drift():
+    kwargs = {
+        "expected_head_sha": "head",
+        "expected_run_id": "run",
+        "expected_run_attempt": "attempt",
+    }
+
+    aliased = finding(priority="P1")
+    del aliased["severity"]
+    normalized = norm.valid_control(
+        control(result="REQUEST_CHANGES", findings=[aliased]), **kwargs
+    )
+    assert normalized is not None
+    assert normalized["findings"][0]["severity"] == "P1"
+    assert "priority" not in normalized["findings"][0]
+
+    diffless = finding()
+    del diffless["suggested_diff"]
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[diffless]), **kwargs
+        )
+        is None
+    )
+
+    blank_diff = finding(suggested_diff="  ")
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[blank_diff]), **kwargs
+        )
+        is None
+    )
+
+    canonical_severity_wins = finding(priority="P2")
+    normalized = norm.valid_control(
+        control(result="REQUEST_CHANGES", findings=[canonical_severity_wins]),
+        **kwargs,
+    )
+    assert normalized is not None
+    assert normalized["findings"][0]["severity"] == "HIGH"
+    assert "priority" not in normalized["findings"][0]
+
+    blank_alias = finding(priority="   ")
+    del blank_alias["severity"]
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[blank_alias]), **kwargs
+        )
+        is None
+    )
+
+    no_remedy = finding(fix_direction="", suggested_diff="")
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[no_remedy]), **kwargs
+        )
+        is None
+    )
+
+
+def test_approval_gate_rejects_prose_fix_direction_without_suggested_diff(tmp_path):
+    bash_command = shutil.which("bash")
+    if bash_command is None:
+        pytest.skip("bash is unavailable")
+    try:
+        subprocess.run(
+            [bash_command, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"bash is not usable for this regression test: {exc}")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_script = repo_root / "scripts" / "ci" / "opencode_review_approve_gate.sh"
+    control_data = control(
+        result="REQUEST_CHANGES",
+        findings=[finding(fix_direction="Restore the guard.")],
+    )
+    del control_data["findings"][0]["suggested_diff"]
+    comment_file = tmp_path / "comment.md"
+    comment_file.write_text(
+        "\n".join(
+            [
+                "<!-- opencode-review-gate head_sha=head run_id=run run_attempt=attempt -->",
+                "<!-- opencode-review-control-v1",
+                json.dumps(control_data),
+                "-->",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed_process = subprocess.run(
+        [
+            bash_command,
+            str(gate_script),
+            "head",
+            "run",
+            "attempt",
+            str(comment_file),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert completed_process.returncode == 4
+    assert completed_process.stdout.strip() == "NO_CONCLUSION"
+    assert (
+        "finding 1 field suggested_diff must be a non-empty string"
+        in completed_process.stderr
+    )
 
 
 def test_valid_control_repairs_approval_summary_from_bounded_evidence(tmp_path, monkeypatch):
