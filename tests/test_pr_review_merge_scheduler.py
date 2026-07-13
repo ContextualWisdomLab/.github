@@ -2157,12 +2157,40 @@ def test_dismiss_stale_opencode_approvals_verifies_live_state(monkeypatch, capsy
     states = iter([exact_head, "APPROVED"])
     assert sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False) == (0, 1)
     assert "GitHub accepted stale OpenCode review dismissal" in capsys.readouterr().out
+    assert sched.stale_approval_cleanup_note(0, 1, dry_run=False) == (
+        "GitHub retained 1 stale automated approval(s) after dismissal attempts; "
+        "their head evidence remains non-authoritative"
+    )
 
     calls.clear()
     states = iter(["c" * 40])
     with pytest.raises(RuntimeError, match="head changed before stale approval dismissal"):
         sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False)
     assert len(calls) == 1
+
+
+def test_inspect_pr_reports_stale_approval_cleanup_in_final_decision():
+    exact_head = "a" * 40
+    stale_head = "b" * 40
+    pr = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", exact_head),
+                    "databaseId": 301,
+                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_head}`",
+                }
+            ]
+        },
+    )
+
+    decision = inspect(pr)
+
+    assert decision.action == "security_dispatch"
+    assert decision.notes == (
+        "would dismiss 1 latest previous-head automated OpenCode approval(s)",
+    )
 
 
 def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys):
