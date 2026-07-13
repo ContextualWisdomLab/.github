@@ -3917,7 +3917,11 @@ jobs:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
           LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: ${{ github.event_name == 'pull_request_target' && github.token || '' }}
-          CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
+          # The OpenCode app installation token is exchanged from api.opencode.ai
+          # and never carries security-events read, so it cannot read the
+          # code-scanning alerts API; github.token has security-events: read from
+          # this job's permissions block, so it is the same-repository default.
+          CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
           CODE_SCANNING_TOKEN_SOURCE: github-token
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
