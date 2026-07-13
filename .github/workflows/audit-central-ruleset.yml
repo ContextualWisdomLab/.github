@@ -1,0 +1,50 @@
+name: Central Required Workflow Ruleset Audit
+
+on:
+  schedule:
+    - cron: "11 2 * * *"
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-central-ruleset.yml"
+      - "scripts/ci/audit_central_required_workflows.py"
+      - "docs/org-required-workflow-rollout.md"
+
+concurrency:
+  group: central-required-workflow-ruleset-audit
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit organization ruleset 18156473
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout trusted audit source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Read live organization ruleset
+        env:
+          RULESET_ENDPOINT: orgs/ContextualWisdomLab/rulesets/18156473
+        run: |
+          set -euo pipefail
+          ruleset_json="$RUNNER_TEMP/central-required-workflow-ruleset.json"
+          ruleset_error="$RUNNER_TEMP/central-required-workflow-ruleset.error"
+          if ! gh api "$RULESET_ENDPOINT" >"$ruleset_json" 2>"$ruleset_error"; then
+            echo "::error::Ruleset audit could not read organization ruleset 18156473."
+            sed 's/^/    /' "$ruleset_error"
+            exit 1
+          fi
+          python3 scripts/ci/audit_central_required_workflows.py "$ruleset_json"
