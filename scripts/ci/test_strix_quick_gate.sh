@@ -575,6 +575,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "not a generic model-exhaustion message" "opencode review tells models to return concrete missing-evidence findings instead of progress-only output"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "tokens_limit_reached" "opencode review detects provider context-window overflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 90' "opencode review target releases stalled review runners within the bounded queue budget"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 65' "opencode model pool gives multiple candidates a bounded review window while capping stalled model attempts"
@@ -3194,6 +3196,22 @@ case "${FAKE_STRIX_SCENARIO:?}" in
 		*)
 			echo "Error: resource exhausted fallback path unexpected (${STRIX_LLM:-})" >&2
 			exit 23
+			;;
+		esac
+		;;
+	openai-primary-quota-fallback-success)
+		case "${STRIX_LLM:-}" in
+		openai/quota-primary)
+			echo "openai.agents: Error streaming response: You exceeded your current quota, please check your plan and billing details."
+			exit 1
+			;;
+		openai/fallback-one)
+			echo "scan ok after quota fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: quota fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 24
 			;;
 		esac
 		;;
@@ -8396,6 +8414,16 @@ run_gate_case_allow_provider_signal "vertex-primary-resource-exhausted-fallback-
 	"2" \
 	"vertex_ai/resource-exhausted-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
+
+run_gate_case_allow_provider_signal "openai-primary-quota-fallback-success" \
+	"openai/quota-primary" \
+	"openai/fallback-one openai/fallback-two" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'openai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"openai/quota-primary|openai/fallback-one" \
+	"<unset>|<unset>" \
+	"openai"
 
 run_gate_case_allow_provider_signal "vertex-primary-429-fallback-success" \
 	"vertex_ai/http429-primary" \
