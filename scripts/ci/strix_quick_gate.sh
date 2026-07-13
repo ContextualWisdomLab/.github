@@ -36,6 +36,7 @@ DEFAULT_PROVIDER_RAW="${STRIX_LLM_DEFAULT_PROVIDER:-}"
 # shellcheck disable=SC2034  # consumed indirectly by sourced model helper functions
 DEFAULT_PROVIDER=""
 LLM_API_BASE_FILE="${LLM_API_BASE_FILE:-}"
+STRIX_GITHUB_MODELS_API_BASE_FILE="${STRIX_GITHUB_MODELS_API_BASE_FILE:-}"
 STRIX_INPUT_FILE_ROOT="${STRIX_INPUT_FILE_ROOT:-${RUNNER_TEMP:-}}"
 STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
@@ -267,6 +268,27 @@ fi
 if [ -z "$LLM_API_KEY" ] && ! is_vertex_model "$NORMALIZED_STRIX_LLM"; then
 	echo "ERROR: LLM_API_KEY_FILE must contain a non-empty API key." >&2
 	exit 2
+fi
+
+# Optional cross-provider fallback credentials: when the primary model runs
+# against the direct OpenAI API, github_models/* fallback models still need
+# the GitHub Models token and inference endpoint. Both files are optional;
+# without them github_models models keep requiring LLM_API_BASE_FILE.
+STRIX_GITHUB_MODELS_KEY_FILE="${STRIX_GITHUB_MODELS_KEY_FILE:-}"
+if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ] && { [ ! -f "$STRIX_GITHUB_MODELS_KEY_FILE" ] || [ -L "$STRIX_GITHUB_MODELS_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_GITHUB_MODELS_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ] && ! STRIX_GITHUB_MODELS_KEY_FILE="$(resolve_trusted_input_file "STRIX_GITHUB_MODELS_KEY_FILE" "$STRIX_GITHUB_MODELS_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_GITHUB_MODELS_KEY=""
+if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
+	STRIX_GITHUB_MODELS_KEY="$(trim_whitespace "$(cat -- "$STRIX_GITHUB_MODELS_KEY_FILE")")"
+	if [ -z "$STRIX_GITHUB_MODELS_KEY" ]; then
+		echo "ERROR: STRIX_GITHUB_MODELS_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
 fi
 
 require_non_negative_integer() {
@@ -2234,7 +2256,17 @@ resolved_llm_api_base_for_model() {
 		return 0
 	fi
 
-	if [ -z "$LLM_API_BASE_FILE" ]; then
+	local api_base_file="$LLM_API_BASE_FILE"
+	local api_base_file_name="LLM_API_BASE_FILE"
+	if [ -z "$api_base_file" ] && is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+		# Cross-provider fallback: a direct-OpenAI primary run keeps its own
+		# key and no API base, while github_models/* fallback models route
+		# through the GitHub Models inference endpoint supplied here.
+		api_base_file="$STRIX_GITHUB_MODELS_API_BASE_FILE"
+		api_base_file_name="STRIX_GITHUB_MODELS_API_BASE_FILE"
+	fi
+
+	if [ -z "$api_base_file" ]; then
 		if is_github_models_model "$model"; then
 			echo "ERROR: GitHub Models Strix scans require LLM_API_BASE_FILE to select the GitHub Models inference endpoint." >&2
 			return 2
@@ -2242,7 +2274,7 @@ resolved_llm_api_base_for_model() {
 		return 0
 	fi
 	local resolved_llm_api_base_file
-	if ! resolved_llm_api_base_file="$(resolve_trusted_input_file "LLM_API_BASE_FILE" "$LLM_API_BASE_FILE")"; then
+	if ! resolved_llm_api_base_file="$(resolve_trusted_input_file "$api_base_file_name" "$api_base_file")"; then
 		return 2
 	fi
 
@@ -2339,6 +2371,11 @@ run_strix_once() {
 	local child_llm_api_key=""
 	if ! is_vertex_model "$(normalize_model "$model")"; then
 		child_llm_api_key="$LLM_API_KEY"
+		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
+			# Cross-provider fallback: github_models/* models authenticate
+			# with the GitHub Models token, not the direct-OpenAI key.
+			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
+		fi
 	fi
 	set -o pipefail
 	set +e
