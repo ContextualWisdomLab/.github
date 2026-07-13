@@ -546,11 +546,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CHECK_LOOKUP_GH_TOKEN" in workflow
     assert "CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE" in workflow
     assert "retrying with workflow github token" in workflow
-    assert 'review_write_token="$OPENCODE_APP_TOKEN"' in workflow
-    assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
-    assert 'review_write_token="$configured_review_write_token"' in workflow
-    assert 'review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
-    assert "review write fallback token source=" in workflow
+    assert 'review_write_token="${OPENCODE_APP_TOKEN:-}"' in workflow
+    assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' not in workflow
+    assert 'review_write_token="$configured_review_write_token"' not in workflow
+    assert "review write fallback token source=disabled" in workflow
     assert "using github-token primary and opencode-app fallback" not in workflow
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-$GH_TOKEN}"' not in workflow
     assert 'REVIEW_PUBLISH_RETRY_ATTEMPTS: "1"' in workflow
@@ -558,7 +557,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "gh_error_is_retryable_publication_failure()" in workflow
     assert "review_publish_retry_sleep_seconds()" in workflow
     assert 'post_pull_review_with_retry "primary review"' in workflow
-    assert 'post_pull_review_with_retry "fallback review"' in workflow
+    assert 'post_pull_review_with_retry "fallback review"' not in workflow
     assert "GitHub review publication retry sleep capped from %s to %s seconds." in workflow
     assert "hit a retryable GitHub API throttle; retrying attempt" in workflow
     assert "GitHub returned HTTP 422 for this review write; likely causes are token/event policy" in workflow
@@ -1024,16 +1023,23 @@ def test_opencode_review_publication_prefers_app_token_for_review_writes():
     )
 
     assert (
-        "GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || "
-        "secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+        "GH_TOKEN: ${{ steps.opencode_app_token.outputs.token }}"
     ) in workflow
     assert (
         "CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && "
         "'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN"
     ) in workflow
-    assert 'review_write_token="$OPENCODE_APP_TOKEN"' in workflow
-    assert 'review_write_token="$CHECK_LOOKUP_GH_TOKEN"' in workflow
+    assert 'review_write_token="${OPENCODE_APP_TOKEN:-}"' in workflow
+    assert 'post_pull_review_with_retry "fallback review"' not in workflow
+    assert "OPENCODE_REVIEW_IDENTITY_UNAVAILABLE" in workflow
+    assert (
+        'select(.user.login == "opencode-agent[bot]" and '
+        '(.body | contains("<!-- opencode-review-overview -->")))'
+    ) in workflow
+    assert (
+        'select((.user.login == "github-actions[bot]" or '
+        '.user.login == "opencode-agent[bot]")'
+    ) not in workflow
     assert 'OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS: "20"' in workflow
     assert '--max-time "${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}"' in workflow
     assert "app token request did not complete within ${OPENCODE_APP_TOKEN_EXCHANGE_TIMEOUT_SECONDS}s" in workflow

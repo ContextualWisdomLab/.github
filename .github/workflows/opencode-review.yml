@@ -3345,8 +3345,9 @@ jobs:
         if: >-
           always()
           && steps.opencode_review_model_pool.outputs.review_status == 'success'
+          && steps.opencode_app_token.outputs.available == 'true'
         env:
-          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
@@ -3598,7 +3599,7 @@ jobs:
 
           if ! overview_comment_id="$(
             gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-              --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
+              --jq '[.[] | select(.user.login == "opencode-agent[bot]" and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
               2>"$gh_error_file"
           )"; then
             warn_gh_publication_failure "initial review overview lookup" "$gh_error_file"
@@ -3626,7 +3627,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 3
         env:
-          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
@@ -3931,44 +3932,16 @@ jobs:
             export GH_TOKEN
             check_lookup_token_source="github-token"
           fi
-          review_write_token="$configured_review_write_token"
-          review_write_fallback_token=""
-          review_write_fallback_token_source=""
-          review_write_token_source="${check_lookup_token_source:-configured}"
-          if [ -n "${OPENCODE_APP_TOKEN:-}" ]; then
-            review_write_token="$OPENCODE_APP_TOKEN"
-            review_write_token_source="opencode-app"
-            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
-              review_write_fallback_token="$configured_review_write_token"
-              review_write_fallback_token_source="$configured_review_write_token_source"
-            elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${CHECK_LOOKUP_GH_TOKEN:-}" != "${review_write_token:-}" ]; then
-              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
-              review_write_fallback_token_source="github-token"
-            fi
-          elif { [ "${configured_review_write_token_source:-}" = "PR_REVIEW_MERGE_TOKEN" ] || [ "${configured_review_write_token_source:-}" = "OPENCODE_APPROVE_TOKEN" ]; } && [ -n "${configured_review_write_token:-}" ]; then
-            review_write_token="$configured_review_write_token"
-            review_write_token_source="$configured_review_write_token_source"
-            if [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ] && [ "${CHECK_LOOKUP_GH_TOKEN:-}" != "${review_write_token:-}" ]; then
-              review_write_fallback_token="$CHECK_LOOKUP_GH_TOKEN"
-              review_write_fallback_token_source="github-token"
-            fi
-          elif [ -n "${CHECK_LOOKUP_GH_TOKEN:-}" ]; then
-            review_write_token="$CHECK_LOOKUP_GH_TOKEN"
-            review_write_token_source="github-token"
-            if [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
-              review_write_fallback_token="$configured_review_write_token"
-              review_write_fallback_token_source="$configured_review_write_token_source"
-            fi
-          fi
-          if [ -z "${review_write_fallback_token:-}" ] && [ -n "${configured_review_write_token:-}" ] && [ "${configured_review_write_token:-}" != "${review_write_token:-}" ]; then
-            review_write_fallback_token="$configured_review_write_token"
-            review_write_fallback_token_source="$configured_review_write_token_source"
-          fi
+          # Review opinions are an OpenCode App identity boundary. Workflow and
+          # PAT credentials remain available for reads and merge scheduling, but
+          # must never author OpenCode comments, approvals, or change requests.
+          review_write_token="${OPENCODE_APP_TOKEN:-}"
+          review_write_token_source="opencode-app"
           overview_comment_token="$review_write_token"
           echo "check lookup token source=${check_lookup_token_source}"
           echo "code-scanning lookup token source=${CODE_SCANNING_TOKEN_SOURCE:-configured}"
           echo "review write token source=${review_write_token_source}"
-          echo "review write fallback token source=${review_write_fallback_token_source:-none}"
+          echo "review write fallback token source=disabled"
 
           app_token_limited_check_lookup() {
             [ "${check_lookup_token_source:-}" = "opencode-app" ] && [ -n "${OPENCODE_APP_TOKEN:-}" ]
@@ -4236,6 +4209,11 @@ jobs:
             local overview_body_file
             local overview_comment_id
 
+            if [ -z "${overview_comment_token:-}" ]; then
+              printf '::error::OPENCODE_REVIEW_IDENTITY_UNAVAILABLE: refusing to publish or update the OpenCode overview with a GitHub Actions or PAT identity for head %s.\n' "$HEAD_SHA"
+              return 1
+            fi
+
             gh_error_file="$(mktemp)"
             overview_body_file="$(mktemp)"
             {
@@ -4255,7 +4233,7 @@ jobs:
             if ! overview_comment_id="$(
               timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                 gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
-                --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
+                --jq '[.[] | select(.user.login == "opencode-agent[bot]" and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
                 2>"$gh_error_file"
             )"; then
               warn_gh_publication_failure "review overview lookup" "$gh_error_file"
@@ -4284,6 +4262,10 @@ jobs:
             local event="$1" body="$2"
             local gh_error_file
             local review_payload_file
+            if [ -z "${review_write_token:-}" ]; then
+              printf '::error::OPENCODE_REVIEW_IDENTITY_UNAVAILABLE: refusing to publish %s with a GitHub Actions or PAT identity for head %s.\n' "$event" "$HEAD_SHA"
+              return 1
+            fi
             gh_error_file="$(mktemp)"
             review_payload_file="$(mktemp)"
             if [ "$event" = "APPROVE" ]; then
@@ -4299,18 +4281,6 @@ jobs:
               '{event: $event, body: $body, commit_id: $commit_id}' >"$review_payload_file"
             if ! post_pull_review_with_retry "primary review" "$review_write_token" "$review_payload_file" "$gh_error_file"; then
               warn_gh_publication_failure "pull review with primary review token" "$gh_error_file"
-              if [ -n "${review_write_fallback_token:-}" ]; then
-                if post_pull_review_with_retry "fallback review" "$review_write_fallback_token" "$review_payload_file" "$gh_error_file"; then
-                  rm -f "$gh_error_file" "$review_payload_file"
-                  if [ "$event" = "APPROVE" ]; then
-                    printf '::notice::OpenCode approve review was published for head %s with fallback token; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
-                    return 0
-                  fi
-                  update_review_overview "$event" "$body"
-                  return 0
-                fi
-                warn_gh_publication_failure "pull review with fallback review token" "$gh_error_file"
-              fi
               rm -f "$gh_error_file" "$review_payload_file"
               update_review_overview "$event" "$body" || true
               if [ "$event" = "APPROVE" ]; then
