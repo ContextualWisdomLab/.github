@@ -139,6 +139,25 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
             assert "variants" not in model_config, model_name
 
 
+def test_central_adversarial_harness_isolates_live_review_environment():
+    """Focused regressions must not consume the parent review's live evidence."""
+    runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
+        encoding="utf-8"
+    )
+    harness = runner.split("run_central_adversarial_harness()", 1)[1].split(
+        "fallback_without_model_catalog()", 1
+    )[0]
+
+    for name in (
+        "OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE",
+        "OPENCODE_CHANGED_FILES_FILE",
+        "OPENCODE_DYNAMIC_REVIEW_CADENCE",
+        "OPENCODE_EVIDENCE_FILE",
+        "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION",
+    ):
+        assert harness.count(f"-u {name}") == 2
+
+
 def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
     """Check out trusted source directly from the workflow identity SHA."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
