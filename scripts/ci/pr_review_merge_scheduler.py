@@ -1255,6 +1255,8 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
         if conclusion in FAILED_CHECK_CONCLUSIONS:
             if is_strix_context(node) and "strix" in successful_status_contexts:
                 continue
+            if is_opencode_context(node) and "opencode-review" in successful_status_contexts:
+                continue
             failed.append(node.get("name") or "check-run")
     for node in status_contexts:
         state = (node.get("state") or "").upper()
