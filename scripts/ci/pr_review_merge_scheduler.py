@@ -972,10 +972,14 @@ def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> b
     """Return whether a review is valid evidence for the current head commit."""
     head = pr.get("headRefOid")
     commit = (review.get("commit") or {}).get("oid")
-    if not head or commit != head:
+    if not head:
         return False
     body_head = review_body_head_sha(review)
-    return body_head is None or body_head.lower() == head.lower()
+    if commit == head:
+        return body_head is None or body_head.lower() == head.lower()
+    if not commit and body_head is not None:
+        return body_head.lower() == head.lower()
+    return False
 
 
 def review_body_head_sha(review: dict[str, Any]) -> str | None:
