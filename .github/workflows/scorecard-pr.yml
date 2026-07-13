@@ -1,14 +1,13 @@
-# Uploads an OpenSSF Scorecard code scanning analysis on every PR so the org
-# ruleset "CWL Central required workflows" -> code_scanning(Scorecard)
-# requirement can be satisfied on PR refs. scorecard-analysis.yml only runs on
-# push/schedule (default branch), so PRs never had a Scorecard analysis and
-# stayed mergeStateStatus=BLOCKED.
+# Runs a supplemental OpenSSF Scorecard analysis on every PR and preserves its
+# filtered SARIF as an artifact. The central Security Scan workflow owns the
+# PR code-scanning upload so this workflow does not duplicate installation API
+# calls or fail a clean PR when GitHub's upload quota is spent.
 #
 # NOTE: Scorecard reports repository-posture findings (branch protection, token
 # permissions, dependency pinning, ...) that are unrelated to the PR diff. The
-# org code_scanning ruleset rule therefore gates Scorecard at a raised
-# threshold (see the ruleset) and delegates PR-only SAST/vulnerability posture
-# findings to the dedicated CodeQL, OSV, Trivy, and dependency-review hard gates.
+# central Security Scan job therefore treats Scorecard as soft visibility and
+# delegates PR-only SAST/vulnerability posture findings to the dedicated
+# CodeQL, OSV, Trivy, and dependency-review hard gates.
 name: Scorecard PR
 
 on:
@@ -38,7 +37,6 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
       contents: read
       actions: read
     steps:
@@ -97,8 +95,10 @@ jobs:
           )
           PY
 
-      - name: Upload to code scanning
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+      - name: Preserve Scorecard PR SARIF evidence
+        if: always() && hashFiles('results.sarif') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          sarif_file: results.sarif
-          category: scorecard-pr
+          name: scorecard-pr-sarif-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results.sarif
+          retention-days: 7

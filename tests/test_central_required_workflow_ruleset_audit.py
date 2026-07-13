@@ -62,6 +62,22 @@ def ruleset_payload() -> dict:
     }
 
 
+def inherited_ruleset_payload() -> dict:
+    """Return the repository-inherited representation used by least-privilege CI."""
+    payload = ruleset_payload()
+    payload["conditions"].pop("repository_name")
+    payload["source_type"] = "Organization"
+    payload["source"] = "ContextualWisdomLab"
+    payload[audit.INHERITED_SCOPE_FIELD] = {
+        ".github": False,
+        "argos": False,
+        "naruon": True,
+        "noema": False,
+        "xtrmLLMBatchPython": True,
+    }
+    return payload
+
+
 def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     monkeypatch.setattr(audit.sys, "stdin", StringIO(json.dumps(ruleset_payload())))
 
@@ -70,6 +86,33 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
         "PASS: ruleset 18156473 enforces 6 central required workflows"
         in capsys.readouterr().out
     )
+
+
+def test_inherited_ruleset_and_public_scope_probes_pass() -> None:
+    assert audit.audit_ruleset(inherited_ruleset_payload()) == []
+
+
+def test_inherited_scope_reports_every_inclusion_and_exclusion_drift() -> None:
+    payload = inherited_ruleset_payload()
+    payload[audit.INHERITED_SCOPE_FIELD][".github"] = True
+    payload[audit.INHERITED_SCOPE_FIELD]["naruon"] = False
+    payload[audit.INHERITED_SCOPE_FIELD].pop("noema")
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "central ruleset unexpectedly applies to excluded repository .github" in errors
+    assert "central ruleset is not inherited by public repository probes: ['naruon']" in errors
+    assert "inherited repository scope probes omit expected exclusions: ['noema']" in errors
+
+
+def test_inherited_scope_rejects_non_boolean_probe_results() -> None:
+    payload = inherited_ruleset_payload()
+    payload[audit.INHERITED_SCOPE_FIELD]["naruon"] = "yes"
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "inherited repository scope probes are not boolean for: ['naruon']" in errors
+    assert "central ruleset is not inherited by public repository probes: ['naruon']" in errors
 
 
 def test_missing_semgrep_workflow_reports_exact_drift(capsys, tmp_path) -> None:
@@ -207,8 +250,24 @@ def test_scheduled_audit_and_rollout_document_the_semgrep_requirement() -> None:
     )
 
     assert 'cron: "11 2 * * *"' in workflow
-    assert "PR_REVIEW_MERGE_TOKEN" in workflow
-    assert "orgs/ContextualWisdomLab/rulesets/18156473" in workflow
+    assert "repos/${ORG_LOGIN}/${RULESET_SENTINEL_REPOSITORY}/rulesets/${RULESET_ID}" in workflow
+    assert 'orgs/${ORG_LOGIN}/repos?type=public&per_page=100' in workflow
+    assert "RULESET_SCOPE repository=${repository} inherited=${inherited}" in workflow
+    assert "HTTP 404" in workflow
     assert "audit_central_required_workflows.py" in workflow
-    assert "Ruleset audit could not read organization ruleset 18156473" in workflow
+    assert "Ruleset audit could not read inherited organization ruleset" in workflow
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
+
+
+def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/sast-semgrep.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--output=semgrep-results.raw.sarif" in workflow
+    assert "Remove explicitly suppressed findings from Semgrep SARIF" in workflow
+    assert ".suppressions // []" in workflow
+    assert "SEMGREP_SUPPRESSED_COUNT" in workflow
+    assert "semgrep_sarif.outputs.finding_count != '0'" in workflow
+    assert 'SEMGREP_FINDING_COUNT:-missing}' in workflow
+    assert "--output=semgrep-results.sarif" not in workflow

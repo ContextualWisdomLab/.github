@@ -14,6 +14,9 @@ RULESET_ID = 18156473
 RULESET_NAME = "CWL Central required workflows"
 SOURCE_REPOSITORY_ID = 1274066402
 SOURCE_REF = "refs/heads/main"
+SOURCE_ORGANIZATION = "ContextualWisdomLab"
+INHERITED_SCOPE_FIELD = "_audit_repository_scope"
+EXPECTED_EXCLUSIONS = {".github", "argos", "noema"}
 REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/close-empty-pr.yml",
     ".github/workflows/opencode-review.yml",
@@ -53,15 +56,52 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     conditions = conditions if isinstance(conditions, dict) else {}
     repository_names = conditions.get("repository_name")
     repository_names = repository_names if isinstance(repository_names, dict) else {}
-    if "~ALL" not in (repository_names.get("include") or []):
-        errors.append("central ruleset does not include all repositories")
-    excluded_repositories = set(repository_names.get("exclude") or [])
-    expected_exclusions = {".github", "argos", "noema"}
-    if excluded_repositories != expected_exclusions:
-        errors.append(
-            "central ruleset repository exclusions drifted: "
-            f"expected {sorted(expected_exclusions)}, got {sorted(excluded_repositories)}"
+    inherited_scope = payload.get(INHERITED_SCOPE_FIELD)
+    inherited_scope = inherited_scope if isinstance(inherited_scope, dict) else {}
+    is_inherited_org_payload = (
+        payload.get("source_type") == "Organization"
+        and payload.get("source") == SOURCE_ORGANIZATION
+        and bool(inherited_scope)
+    )
+    if is_inherited_org_payload:
+        malformed_scope = sorted(
+            name for name, inherited in inherited_scope.items() if not isinstance(inherited, bool)
         )
+        if malformed_scope:
+            errors.append(
+                "inherited repository scope probes are not boolean for: "
+                f"{malformed_scope}"
+            )
+        missing_exclusion_probes = sorted(EXPECTED_EXCLUSIONS - set(inherited_scope))
+        if missing_exclusion_probes:
+            errors.append(
+                "inherited repository scope probes omit expected exclusions: "
+                f"{missing_exclusion_probes}"
+            )
+        for repository in sorted(EXPECTED_EXCLUSIONS):
+            if inherited_scope.get(repository) is True:
+                errors.append(
+                    f"central ruleset unexpectedly applies to excluded repository {repository}"
+                )
+        missing_inheritance = sorted(
+            repository
+            for repository, inherited in inherited_scope.items()
+            if repository not in EXPECTED_EXCLUSIONS and inherited is not True
+        )
+        if missing_inheritance:
+            errors.append(
+                "central ruleset is not inherited by public repository probes: "
+                f"{missing_inheritance}"
+            )
+    else:
+        if "~ALL" not in (repository_names.get("include") or []):
+            errors.append("central ruleset does not include all repositories")
+        excluded_repositories = set(repository_names.get("exclude") or [])
+        if excluded_repositories != EXPECTED_EXCLUSIONS:
+            errors.append(
+                "central ruleset repository exclusions drifted: "
+                f"expected {sorted(EXPECTED_EXCLUSIONS)}, got {sorted(excluded_repositories)}"
+            )
 
     ref_names = conditions.get("ref_name")
     ref_names = ref_names if isinstance(ref_names, dict) else {}
