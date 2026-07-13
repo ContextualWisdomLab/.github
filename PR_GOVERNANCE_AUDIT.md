@@ -326,9 +326,13 @@ PR #381: wait: OpenCode review is already in progress
 
 - 2026-07-13 KST `.github` PR #510 merged at `c7a568bde942d25d2a735b1bbfbb52b057b53b2f`
   while GitHub still reported `reviewDecision=REVIEW_REQUIRED` and the complete
-  REST review list was empty. The previously enabled auto-merge request therefore
-  completed without a current-head real-model review while Required OpenCode run
-  `29225918664` attempt 7 was still in progress. Existing-approval reuse must not
+  REST review list was empty. Although an auto-squash request had been enabled,
+  the resulting commit is a separate two-parent `MERGE` attributed to the user,
+  created while Required OpenCode run `29225918664` attempt 7 was still in
+  progress. The repository ruleset also required zero approvals even though the
+  legacy branch protection required one; ruleset `17921150` now independently
+  requires one approval, last-push approval, stale-review dismissal, and thread
+  resolution with no bypass actors. Existing-approval reuse must not
   treat an actor, state, and commit match as sufficient evidence: the review body
   must also contain the exact real-model marker, current head/run/attempt, an
   `APPROVE` result, and a passed adversarial-validation object whose material
