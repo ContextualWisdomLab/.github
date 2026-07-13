@@ -1810,7 +1810,10 @@ jobs:
             local strix_running
 
             # Exclude this OpenCode check run; otherwise the evidence step would
-            # wait on itself until the bounded retry budget is exhausted.
+            # wait on itself until the bounded retry budget is exhausted. The
+            # metadata-only gate also depends on this review and GitHub can
+            # attribute its check run to CodeQL rather than PR Governance, so
+            # identify that review-state helper by check name, not workflow.
             # shellcheck disable=SC2016
             if ! rollup_running="$(timeout "${OPENCODE_EVIDENCE_GH_API_TIMEOUT_SECONDS:-30}s" gh api graphql \
               -f owner="$owner" \
@@ -1855,6 +1858,7 @@ jobs:
                       | select((.name // "") != "OpenCode Review")
                       | select((.name // "") != "Required OpenCode Review")
                       | select((.name // "") != "OpenCode PR Review")
+                      | select((.name // "") != "metadata-only gate evaluation")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
@@ -3735,7 +3739,7 @@ jobs:
           self_check_filter='
             def self_check:
               (.name // "") as $n
-              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap"] | index($n);
+              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation"] | index($n);
             def latest_peer_checks:
               [
                 (.check_runs // [])[]

@@ -904,11 +904,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")' "failed-check evidence ignores cancelled scheduler queue replacement checks"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.name // "") | contains("${{"))' "failed-check evidence ignores cancelled matrix-template helper checks without logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "noema-review"' "failed-check evidence ignores cancelled Noema queue replacement checks without source logs"
-	assert_file_contains "$workflow_file" 'select((.name // "") != "metadata-only gate evaluation")' "opencode failed-check collection ignores metadata-only review-state gates regardless of workflow attribution"
+	assert_file_contains "$workflow_file" 'select((.name // "") != "metadata-only gate evaluation")' "opencode ignores metadata-only review-state gates without trusting GitHub workflow attribution"
 	metadata_gate_filter_count="$(grep -Fc 'select((.name // "") != "metadata-only gate evaluation")' "$workflow_file")"
-	if [ "$metadata_gate_filter_count" -lt 2 ]; then
-		fail "opencode failed- and pending-check collection both ignore metadata-only PR Governance review-state gates (found ${metadata_gate_filter_count}, expected at least 2)"
+	if [ "$metadata_gate_filter_count" -lt 3 ]; then
+		fail "opencode pre-model, failed-check, and pending-check collection all ignore metadata-only review-state gates (found ${metadata_gate_filter_count}, expected at least 3)"
 	fi
+	assert_file_contains "$workflow_file" '["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation"]' "central fast approval ignores its dependent metadata-only review-state gate"
 	assert_file_contains "$workflow_file" '["opencode-review","coverage-evidence","metadata-only gate evaluation"]' "opencode supplemental check-run collection ignores review-state helper gates"
 	assert_file_contains "$workflow_file" '((.name // "") | contains("$" + "{{"))' "opencode failed-check collection ignores cancelled matrix-template helper checks without logs without exposing a raw Actions expression"
 	assert_file_contains "$workflow_file" '(.name // "") == "noema-review"' "opencode failed-check collection ignores cancelled Noema queue replacement checks without source logs"
