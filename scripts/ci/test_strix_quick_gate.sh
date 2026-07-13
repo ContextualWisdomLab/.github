@@ -680,6 +680,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "same_head_opencode_approval_exists" "model-unavailable path reuses an existing same-head OpenCode approval before publishing fallback approval"
 	assert_file_contains "$workflow_file" "EXISTING_CURRENT_HEAD_APPROVAL" "existing same-head approval fallback logs an explicit required-check result"
 	assert_file_contains "$workflow_file" "no duplicate APPROVE review was posted" "existing same-head approval fallback does not publish a duplicate approval review"
+	assert_file_contains "$workflow_file" "opencode_existing_approval_gate.py" "existing approval reuse requires machine-validated real-model adversarial evidence"
 	assert_file_contains "$workflow_file" "no adversarial_validation block was fabricated" "deterministic model-unavailable approval must not fabricate model adversarial evidence"
 	assert_file_contains "$workflow_file" 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' "deterministic model-unavailable approval is explicit and source-evidence gated"
 	assert_file_contains "$workflow_file" "approval still pending" "pending peer checks cannot satisfy the required OpenCode gate without a review"

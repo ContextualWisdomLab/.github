@@ -1265,6 +1265,8 @@ def test_opencode_model_pool_failure_uses_gated_clean_evidence_fallback():
     assert "MODEL_UNAVAILABLE_CLEAN_EVIDENCE" in workflow
     assert "no adversarial_validation block was fabricated" in workflow
     assert "no duplicate APPROVE review was posted" in workflow
+    assert 'opencode_existing_approval_gate.py --head "$HEAD_SHA"' in workflow
+    assert "same-head real-model OpenCode approval with passed adversarial evidence" in workflow
     assert 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' in workflow
     model_unavailable_block = re.search(
         r"if \[ \"\$opencode_review_outcome\" != \"success\" \]; then"
