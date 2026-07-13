@@ -4588,9 +4588,16 @@ jobs:
                 printf '%s\n' "$body"
               } >>"$GITHUB_STEP_SUMMARY"
             fi
-            printf '::notice::%s: OpenCode review state unchanged; approval pending. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
+            printf '::error::%s: OpenCode review state unchanged; approval still pending. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
+            if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
+              [ -n "${GH_REPOSITORY:-}" ] &&
+              [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
+              printf '::notice::Cross-repository workflow_dispatch approval hold for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
+              echo "::endgroup::"
+              exit 0
+            fi
             echo "::endgroup::"
-            exit 0
+            exit 1
           }
 
           collect_unresolved_reviewer_threads() {

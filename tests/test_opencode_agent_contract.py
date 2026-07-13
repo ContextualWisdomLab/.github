@@ -952,14 +952,21 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "Merge scheduler follow-up skipped after approval because no mutation credential was available" in workflow
 
 
-def test_opencode_pending_peer_checks_hold_approval_without_failing_required_workflow():
-    """Pending peer checks are a review hold, not an OpenCode source failure."""
+def test_opencode_pending_peer_checks_hold_blocks_required_workflow_until_approval():
+    """Pending peer checks cannot satisfy the required gate without a review."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
         encoding="utf-8"
     )
 
     assert "hold_approval_without_review()" in workflow
     assert "OpenCode review state unchanged; approval pending" in workflow
+    assert "OpenCode review state unchanged; approval still pending" in workflow
+    hold_body = workflow.split("hold_approval_without_review()", 1)[1].split(
+        "collect_unresolved_reviewer_threads()", 1
+    )[0]
+    assert "::error::%s: OpenCode review state unchanged; approval still pending." in hold_body
+    assert "Cross-repository workflow_dispatch approval hold" in hold_body
+    assert "exit 1" in hold_body
     assert (
         'hold_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"'
         in workflow
