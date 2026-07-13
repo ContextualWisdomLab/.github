@@ -3258,8 +3258,10 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
+          # Keep stale providers from pinning required review jobs for hours.
           # A provider gets three minutes for a tool-using review before the
-          # pool advances by default. Dynamic cadence below keeps small and
+          # pool advances by default; deterministic current-head fallback
+          # remains the escape hatch. Dynamic cadence below keeps small and
           # medium PRs short so one stalled endpoint cannot occupy the org
           # queue indefinitely.
           OPENCODE_RUN_TIMEOUT_SECONDS: "180"
