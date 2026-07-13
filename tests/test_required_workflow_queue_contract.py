@@ -53,6 +53,24 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 2
 
 
+def test_opencode_exhausted_retry_uses_runner_token_only_for_central_dispatch() -> None:
+    """Keep same-repository retry live without weakening App-only review writes."""
+    workflow = workflow_text("opencode-review.yml")
+    retry_job = workflow.split("  opencode-exhausted-retry:\n", 1)[1]
+
+    assert "actions: write" in retry_job.split("    env:\n", 1)[0]
+    assert (
+        "github.repository == 'ContextualWisdomLab/.github' && github.token"
+        in retry_job
+    )
+    assert (
+        "github.repository == 'ContextualWisdomLab/.github' && 'github-token'"
+        in retry_job
+    )
+    assert "review writes remain" in retry_job
+    assert "GH_TOKEN=\"$RETRY_DISPATCH_TOKEN\" gh workflow run" in retry_job
+
+
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     for filename in (
         "close-empty-pr.yml",

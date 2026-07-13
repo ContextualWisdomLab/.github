@@ -7291,6 +7291,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: write
       contents: read
       pull-requests: read
     env:
@@ -7299,12 +7300,12 @@ jobs:
       - name: Dispatch deferred same-head review retry after model-pool exhaustion
         env:
           GH_TOKEN: ${{ github.token }}
-          # Cross-repository dispatch of the central workflow needs a PAT; the
-          # target-repository runner token cannot dispatch workflows that live
-          # in the central .github repository, and the OpenCode app token has
-          # no Actions permission.
-          RETRY_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
-          RETRY_DISPATCH_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'none' }}
+          # Cross-repository dispatch needs a PAT. Inside the central repository
+          # itself, its runner token can dispatch the same trusted workflow.
+          # This token is only passed to `gh workflow run`; review writes remain
+          # exclusively authenticated by the OpenCode App token.
+          RETRY_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || (github.repository == 'ContextualWisdomLab/.github' && github.token) || '' }}
+          RETRY_DISPATCH_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || github.repository == 'ContextualWisdomLab/.github' && 'github-token' || 'none' }}
           # One fixed backoff window before the single deferred retry. GitHub
           # Models per-minute throttles recover well inside this window; daily
           # quota exhaustion outlives any in-workflow delay and is the org
