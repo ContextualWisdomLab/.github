@@ -1771,6 +1771,7 @@ jobs:
 
       - name: Initialize CodeGraph index for OpenCode
         env:
+          CODEGRAPH_NO_DOWNLOAD: "1"
           CODEGRAPH_TRUSTED_ROOT: ${{ runner.temp }}/trusted-codegraph
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -1781,7 +1782,10 @@ jobs:
           cp scripts/ci/codegraph-package/package.json \
             scripts/ci/codegraph-package/package-lock.json \
             "$CODEGRAPH_TRUSTED_ROOT"/
-          npm ci --ignore-scripts --omit=dev --prefix "$CODEGRAPH_TRUSTED_ROOT"
+          (
+            cd "$CODEGRAPH_TRUSTED_ROOT"
+            npm ci --ignore-scripts --omit=dev --no-audit --no-fund
+          )
           CODEGRAPH_BIN="${CODEGRAPH_TRUSTED_ROOT}/node_modules/.bin/codegraph"
           test -x "$CODEGRAPH_BIN"
           cd "$OPENCODE_SOURCE_WORKDIR"
@@ -2418,6 +2422,8 @@ jobs:
 
       - name: Prepare isolated OpenCode review workspace
         env:
+          CODEGRAPH_BIN: ${{ runner.temp }}/trusted-codegraph/node_modules/.bin/codegraph
+          CODEGRAPH_NO_DOWNLOAD: "1"
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -2788,7 +2794,9 @@ jobs:
           cp "$GITHUB_WORKSPACE/scripts/ci/sandboxed_web_e2e.py" "${OPENCODE_REVIEW_WORKDIR}/scripts/ci/sandboxed_web_e2e.py"
           cp "$GITHUB_WORKSPACE/scripts/ci/review_execution_contracts.py" "${OPENCODE_REVIEW_WORKDIR}/scripts/ci/review_execution_contracts.py"
 
-          jq -n --arg workspace "$OPENCODE_SOURCE_WORKDIR" '{
+          jq -n \
+            --arg workspace "$OPENCODE_SOURCE_WORKDIR" \
+            --arg codegraph_bin "$CODEGRAPH_BIN" '{
             "$schema": "https://opencode.ai/config.json",
             "model": "github-models/deepseek/deepseek-r1-0528",
             "small_model": "github-models/deepseek/deepseek-v3-0324",
@@ -2800,7 +2808,7 @@ jobs:
                 "command": [
                   "bash",
                   "-lc",
-                  ("cd " + ($workspace | @sh) + " && NPM_CONFIG_IGNORE_SCRIPTS=true npx -y @colbymchenry/codegraph@0.9.9 serve --mcp")
+                  ("cd " + ($workspace | @sh) + " && CODEGRAPH_NO_DOWNLOAD=1 exec " + ($codegraph_bin | @sh) + " serve --mcp")
                 ],
                 "enabled": true
               },
