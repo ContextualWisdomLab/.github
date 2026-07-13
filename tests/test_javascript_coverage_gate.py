@@ -312,6 +312,14 @@ def test_coverage_path_normalization_handles_relative_suffix_and_ambiguity(
         )
         is None
     )
+    assert (
+        gate.normalize_coverage_path(
+            str(tmp_path.parent / "outside" / "not-a-match.ts"),
+            tmp_path,
+            {"frontend/src/runtime.ts"},
+        )
+        is None
+    )
 
 
 def test_runtime_line_classifier_distinguishes_types_comments_and_code(
