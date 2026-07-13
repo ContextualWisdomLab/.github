@@ -6246,8 +6246,58 @@ jobs:
               return 0
             fi
 
+            if same_head_opencode_approval_exists; then
+              printf '::notice::MODEL_OUTPUT_UNAVAILABLE: same-head OpenCode approval already exists for head %s, and current-head coverage, peer checks, code-scanning alerts, and review threads are clean; succeeding the required check without publishing a duplicate approval review.\n' "$HEAD_SHA"
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                  printf '## OpenCode required check satisfied by existing same-head approval\n\n'
+                  printf -- '- Result: `EXISTING_CURRENT_HEAD_APPROVAL`\n'
+                  printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
+                  printf -- '- Workflow run: %s\n' "$RUN_ID"
+                  printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
+                  printf -- '- Model-pool outcome: `%s`\n' "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
+                  printf -- '- Reason: a prior OpenCode APPROVED review already targets this exact head, and the fallback rechecked coverage, peer checks, code-scanning alerts, and unresolved review threads before accepting it.\n'
+                  printf -- '- Review state: unchanged; no duplicate APPROVE review was posted from model-output-unavailable evidence.\n\n'
+                } >>"$GITHUB_STEP_SUMMARY"
+              fi
+              return 0
+            fi
+
             printf '::notice::MODEL_OUTPUT_UNAVAILABLE: current-head checks and alerts are clean, but no APPROVE review will be published without mandatory structured adversarial probes for head %s.\n' "$HEAD_SHA"
             return 1
+          }
+
+          same_head_opencode_approval_exists() {
+            local review_lookup_token reviews_json approval_count lookup_error_file
+            review_lookup_token="${CHECK_LOOKUP_GH_TOKEN:-${GH_TOKEN:-}}"
+            if [ -z "$review_lookup_token" ]; then
+              printf '::notice::Existing same-head OpenCode approval lookup skipped because no review read token was configured.\n' >&2
+              return 1
+            fi
+
+            lookup_error_file="$(mktemp)"
+            if ! reviews_json="$(GH_TOKEN="$review_lookup_token" timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api --paginate --slurp "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" 2>"$lookup_error_file")"; then
+              sed 's/^/gh: /' "$lookup_error_file" >&2 || true
+              rm -f "$lookup_error_file"
+              return 1
+            fi
+            rm -f "$lookup_error_file"
+
+            approval_count="$(
+              printf '%s\n' "$reviews_json" |
+                jq --arg head "$HEAD_SHA" '
+                  [
+                    .[][]
+                    | select(.state == "APPROVED")
+                    | select(.commit_id == $head)
+                    | select((.user.login // "") as $login | ["opencode-agent", "opencode-agent[bot]", "github-actions[bot]"] | index($login))
+                  ]
+                  | length
+                '
+            )"
+
+            [ "${approval_count:-0}" -gt 0 ]
           }
 
                     request_changes_for_merge_conflict_if_present() {
