@@ -1438,10 +1438,10 @@ jobs:
       # continue-on-error, so it survives the job failing.
       model_pool_outcome: ${{ steps.opencode_review_model_pool.outputs.review_status }}
     # Coverage and current-head evidence are prepared before the model pool.
-    # The model pool has a 25-minute retry budget and its publish gate has an
-    # 8-minute cap, so 45 minutes releases genuinely hung runners without
+    # The model pool has a 60-minute retry budget and its publish gate has an
+    # 8-minute cap, so 90 minutes releases genuinely hung runners without
     # truncating the bounded multi-provider review path.
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       actions: read
       checks: read
@@ -3178,7 +3178,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 12
+        timeout-minutes: 65
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3210,10 +3210,10 @@ jobs:
           # Keep stale providers from pinning required review jobs for hours.
           # Adversarial validation needs enough room to read the evidence, but
           # dynamic cadence and the outer watchdog still bound each current-head run.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "540"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"
+          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "3600"
           # Visit the high-sensitivity candidate catalog once. Per-provider
           # failures and timeouts are logged before the publish gate evaluates
           # the current-head result and fails closed when no verdict exists.
@@ -3221,14 +3221,14 @@ jobs:
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "90"
-          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "180"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "120"
-          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "360"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "180"
-          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "540"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "120"
-          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "360"
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a
@@ -3237,8 +3237,8 @@ jobs:
           OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "120"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "180"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
@@ -3259,13 +3259,13 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-540}s" \
+          timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s" \
             bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
           pool_status=$?
           set -e
           if [ "$pool_status" -eq 124 ] || [ "$pool_status" -eq 137 ] || [ "$pool_status" -eq 143 ]; then
             printf 'OpenCode model pool exceeded the outer %ss step budget; marking the pool exhausted so current-head evidence fallback can publish a bounded reason instead of blocking the org queue.\n' \
-              "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-540}"
+              "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}"
             {
               printf 'review_model=\n'
               printf 'review_status=exhausted\n'
@@ -6486,42 +6486,8 @@ jobs:
               return 0
             fi
 
-            clean_evidence_fallback_body="$(printf '%s\n' \
-              "## Pull request overview" \
-              "" \
-              "OpenCode model providers were unavailable for this same-head run, but deterministic current-head evidence is clean: coverage evidence passed, peer GitHub Checks are complete, medium-or-higher code-scanning alerts are clear, mergeability is clean, and reviewer threads are resolved or outdated." \
-              "" \
-              "## Findings" \
-              "" \
-              "No blocking findings in deterministic current-head evidence." \
-              "" \
-              "## Evidence" \
-              "" \
-              "- Result: APPROVE" \
-              "- Reason: MODEL_UNAVAILABLE_CLEAN_EVIDENCE" \
-              "- Model-pool outcome: \`${OPENCODE_MODEL_POOL_OUTCOME:-unknown}\`" \
-              "- Head SHA: \`${HEAD_SHA}\`" \
-              "- Workflow run: ${RUN_ID}" \
-              "- Workflow attempt: ${RUN_ATTEMPT}" \
-              "- Review provenance: deterministic fallback after model-output unavailability; no adversarial_validation block was fabricated." \
-              "" \
-              "This fallback does not suppress failed checks, medium-or-higher code-scanning alerts, merge conflicts, unresolved reviewer threads, or failed coverage evidence; any of those conditions still publish REQUEST_CHANGES or leave the approval state unchanged."
-            )"
-            printf '::notice::MODEL_OUTPUT_UNAVAILABLE: current-head deterministic evidence is clean for head %s; publishing MODEL_UNAVAILABLE_CLEAN_EVIDENCE approval so provider outage is not treated as a source blocker.\n' "$HEAD_SHA"
-            create_pull_review "APPROVE" "$clean_evidence_fallback_body"
-            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-              {
-                printf '## OpenCode required check satisfied by clean deterministic evidence\n\n'
-                printf -- '- Result: `MODEL_UNAVAILABLE_CLEAN_EVIDENCE`\n'
-                printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
-                printf -- '- Workflow run: %s\n' "$RUN_ID"
-                printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
-                printf -- '- Model-pool outcome: `%s`\n' "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
-                printf -- '- Reason: model providers were unavailable, while coverage, peer checks, code-scanning alerts, mergeability, and review threads were clean for this exact head.\n'
-                printf -- '- Review state: APPROVE posted from deterministic current-head evidence; no adversarial_validation block was fabricated.\n\n'
-              } >>"$GITHUB_STEP_SUMMARY"
-            fi
-            return 0
+            printf '::notice::MODEL_OUTPUT_UNAVAILABLE: deterministic evidence fallback will not approve %s#%s because model-unavailable approvals are limited to existing same-head real-model approvals or allowlisted central review-process self-repair.\n' "${GH_REPOSITORY:-unknown}" "${PR_NUMBER:-unknown}"
+            return 1
           }
 
           same_head_opencode_approval_exists() {

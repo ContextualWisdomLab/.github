@@ -619,7 +619,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "publish_blockers_after_model_unavailable" in workflow
     assert 'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"' in workflow
     assert "CENTRAL_FAST_APPROVAL_ADVERSARIAL_INVALID" in workflow
-    assert "MODEL_UNAVAILABLE_CLEAN_EVIDENCE" in workflow
+    assert "model-unavailable approvals are limited to existing same-head real-model approvals" in workflow
     assert '"adversarial_validation"' in model_pool_runner
     assert "ContextualWisdomLab/.github:ci-review-prompt.md | \\" in workflow
     assert "ContextualWisdomLab/.github:code-reviewer-prompt.md | \\" in workflow
@@ -660,21 +660,23 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "--only-binary=:all: -r requirements-opencode-review-ci-hashes.txt" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
-    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "180"' in workflow
+    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"' in workflow
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
     assert "Central review-process evidence fallback eligible" in model_pool_runner
     assert "hash-pinned uv runtime is not installed in the model-pool job" in model_pool_runner
     assert "provider delay is logged before the publish fallback evaluates current-head peer evidence" in model_pool_runner
     assert "model pool was intentionally skipped" not in workflow
-    assert "current-head deterministic evidence is clean" in workflow
+    assert "current-head deterministic central review-process evidence is clean" in workflow
     assert 'collect_github_checks_with_retry collect_pending_github_checks "$pending_checks_file"' in workflow
     current_head_fallback = workflow.split("publish_blockers_after_model_unavailable()", 1)[1].split(
         "request_changes_for_merge_conflict_if_present()", 1
     )[0]
     assert "wait_for_peer_github_checks" not in current_head_fallback
-    assert 'if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]' not in current_head_fallback
-    assert 'if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]' not in current_head_fallback
+    assert "if approve_central_review_process_after_model_unavailable; then" in current_head_fallback
+    assert "allowlisted central review-process self-repair" in current_head_fallback
+    assert "clean_evidence_fallback_body" not in current_head_fallback
+    assert 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' not in workflow
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
         "CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
@@ -703,17 +705,17 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert '"## Check outcome"' not in workflow
     assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
     assert re.search(r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12", workflow)
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 45", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 90", workflow)
     assert 'timeout-minutes: 12' in workflow
-    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 12", workflow)
-    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "180"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "360"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "540"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "360"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "540"' in workflow
-    assert 'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-540}s"' in workflow
+    assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 65", workflow)
+    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "3600"' in workflow
+    assert 'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s"' in workflow
     assert "OpenCode model pool exceeded the outer" in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert re.search(r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true", workflow)
@@ -735,21 +737,21 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/deepseek/deepseek-r1"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "180"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "540"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "540"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert 'OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt' in workflow
-    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "90"' in workflow
-    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "180"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "360"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "540"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "360"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
@@ -1253,8 +1255,8 @@ def test_opencode_jq_filters_do_not_embed_literal_expression_openers():
     assert 'contains("$" + "{{")' in workflow
 
 
-def test_opencode_model_pool_failure_uses_gated_clean_evidence_fallback():
-    """A model-pool failure may approve only after all deterministic gates are clean."""
+def test_opencode_model_pool_failure_uses_only_real_or_central_fallback():
+    """A model-pool failure may not publish a generic deterministic APPROVE review."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(
         encoding="utf-8"
     )
@@ -1274,12 +1276,12 @@ def test_opencode_model_pool_failure_uses_gated_clean_evidence_fallback():
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
     assert "same_head_opencode_approval_exists" in workflow
     assert "EXISTING_CURRENT_HEAD_APPROVAL" in workflow
-    assert "MODEL_UNAVAILABLE_CLEAN_EVIDENCE" in workflow
-    assert "no adversarial_validation block was fabricated" in workflow
+    assert "allowlisted central review-process self-repair" in workflow
+    assert "model-unavailable approvals are limited to existing same-head real-model approvals" in workflow
     assert "no duplicate APPROVE review was posted" in workflow
     assert 'opencode_existing_approval_gate.py --head "$HEAD_SHA"' in workflow
     assert "same-head real-model OpenCode approval with passed adversarial evidence" in workflow
-    assert 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' in workflow
+    assert 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' not in workflow
     model_unavailable_block = re.search(
         r"if \[ \"\$opencode_review_outcome\" != \"success\" \]; then"
         r"(?P<body>[\s\S]{0,900})stop_without_review_after_model_unavailable",
