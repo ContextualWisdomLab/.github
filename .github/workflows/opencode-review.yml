@@ -1528,6 +1528,11 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    outputs:
+      # The exhausted-pool deferred retry job reads this after a fail-closed
+      # MODEL_OUTPUT_UNAVAILABLE exit; the model-pool step records it under
+      # continue-on-error, so it survives the job failing.
+      model_pool_outcome: ${{ steps.opencode_review_model_pool.outputs.review_status }}
     # Coverage and current-head evidence are prepared before the model pool.
     # The model pool has a 25-minute retry budget and its publish gate has an
     # 8-minute cap, so 45 minutes releases genuinely hung runners without
@@ -6838,3 +6843,88 @@ jobs:
           if [ "$scheduler_status" -ne 0 ]; then
             printf '::warning::Merge scheduler follow-up failed after approval; leaving OpenCode review intact. Repository=%s base=%s. The scheduled and PR-event scheduler paths remain authoritative.\n' "$GH_REPOSITORY" "$base_branch"
           fi
+
+  opencode-exhausted-retry:
+    name: opencode-exhausted-retry
+    needs: [opencode-review-target]
+    # A pool-exhausted required review fails closed with MODEL_OUTPUT_UNAVAILABLE
+    # after the publish gate has already verified that current-head coverage,
+    # peer checks, code-scanning alerts, and review threads are clean, so a
+    # deferred same-head retry is safe and needs no human. GitHub Actions has no
+    # delayed-dispatch primitive, so this job holds a small runner for one
+    # backoff window and then re-dispatches the central same-head review through
+    # the same trusted workflow_dispatch path the merge scheduler uses. It
+    # retries once; outages longer than the backoff window stay owned by the
+    # merge scheduler org-sweep heartbeat, which keeps re-dispatching the same
+    # current head until a model produces a verdict.
+    if: >-
+      always()
+      && github.event_name == 'pull_request_target'
+      && github.event.action != 'closed'
+      && needs.opencode-review-target.result == 'failure'
+      && needs.opencode-review-target.outputs.model_pool_outcome == 'exhausted'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Dispatch deferred same-head review retry after model-pool exhaustion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Cross-repository dispatch of the central workflow needs a PAT; the
+          # target-repository runner token cannot dispatch workflows that live
+          # in the central .github repository, and the OpenCode app token has
+          # no Actions permission.
+          RETRY_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          RETRY_DISPATCH_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'none' }}
+          # One fixed backoff window before the single deferred retry. GitHub
+          # Models per-minute throttles recover well inside this window; daily
+          # quota exhaustion outlives any in-workflow delay and is the org
+          # sweep's job.
+          RETRY_DELAY_SECONDS: "300"
+          CENTRAL_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
+          CENTRAL_WORKFLOW_FILE: opencode-review.yml
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RETRY_DISPATCH_TOKEN:-}" ]; then
+            echo "::warning::Deferred exhausted-pool retry skipped because no cross-repository dispatch credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) is configured; the merge scheduler org sweep remains the retry path."
+            exit 0
+          fi
+
+          printf 'OpenCode model pool exhausted for head %s; sleeping %ss before one deferred same-head review dispatch with the %s token.\n' \
+            "$PR_HEAD_SHA" "$RETRY_DELAY_SECONDS" "$RETRY_DISPATCH_TOKEN_SOURCE"
+          sleep "$RETRY_DELAY_SECONDS"
+
+          # A head pushed or a PR closed during the backoff window already has
+          # (or no longer needs) its own fresh required review run.
+          live_pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, .head.sha] | join(" ")' || true)"
+          live_state="${live_pr%% *}"
+          live_head="${live_pr##* }"
+          if [ "$live_state" != "open" ] || [ "$live_head" != "$PR_HEAD_SHA" ]; then
+            printf 'Deferred exhausted-pool retry skipped: PR #%s state=%s live head=%s no longer matches exhausted head %s.\n' \
+              "$PR_NUMBER" "${live_state:-unknown}" "${live_head:-unknown}" "$PR_HEAD_SHA"
+            exit 0
+          fi
+
+          if ! GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh workflow run "$CENTRAL_WORKFLOW_FILE" \
+            --repo "$CENTRAL_WORKFLOW_REPOSITORY" \
+            --ref main \
+            -f "target_repository=${GITHUB_REPOSITORY}" \
+            -f "pr_number=${PR_NUMBER}" \
+            -f "pr_base_ref=${PR_BASE_REF}" \
+            -f "pr_base_sha=${PR_BASE_SHA}" \
+            -f "pr_head_ref=${PR_HEAD_REF}" \
+            -f "pr_head_sha=${PR_HEAD_SHA}"; then
+            echo "::warning::Deferred exhausted-pool retry dispatch failed; the merge scheduler org sweep remains the retry path."
+            exit 0
+          fi
+          printf 'Deferred same-head OpenCode review retry dispatched for %s#%s head %s.\n' \
+            "$GITHUB_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
