@@ -221,7 +221,7 @@ jobs:
           )
       - name: Upload OSV SARIF to code scanning
         if: always() && hashFiles('results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: results.sarif
           # results.sarif is produced after checkout of the pull request head.
@@ -231,7 +231,7 @@ jobs:
           sha: ${{ github.event.pull_request.head.sha }}
       - name: Upload OSV debug artifacts
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: osv-scan-debug
           path: |
@@ -371,7 +371,7 @@ jobs:
               raise SystemExit(1)
       - name: Upload Trivy SARIF to code scanning
         if: always() && hashFiles('trivy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
@@ -437,7 +437,7 @@ jobs:
           )
           PY
       - name: Upload Scorecard SARIF to code scanning
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: results.sarif
           category: scorecard
