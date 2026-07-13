@@ -11,6 +11,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+try:
+    from adversarial_evidence import adversarial_evidence_rejection_reason
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
+
 STRUCTURAL_FAILURE_PHRASES = (
     "structural exploration was not possible",
     "structural exploration not possible",
@@ -519,12 +524,21 @@ def adversarial_validation_error(
             field_value = probe.get(field)
             if not isinstance(field_value, str) or not field_value.strip():
                 return f"adversarial probe {index} field {field} must be non-empty"
-        runtime_tool = unreceipted_runtime_tool_claim(str(probe.get("evidence") or ""))
+        probe_evidence = str(probe.get("evidence") or "")
+        receipt_backed_tools = claimed_runtime_tools(probe_evidence)
+        runtime_tool = unreceipted_runtime_tool_claim(probe_evidence)
         if runtime_tool:
             return (
                 f"adversarial probe {index} claims {runtime_tool} execution "
                 "without a trusted workflow receipt"
             )
+        if not receipt_backed_tools:
+            evidence_error = adversarial_evidence_rejection_reason(
+                probe_evidence,
+                path,
+            )
+            if evidence_error:
+                return f"adversarial probe {index} evidence {evidence_error}"
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
             return f"adversarial probe {index} outcome must be falsified or confirmed"

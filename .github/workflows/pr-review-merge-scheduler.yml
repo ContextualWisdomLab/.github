@@ -5,6 +5,8 @@ on:
     branches: [main, develop, master]
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, auto_merge_enabled, closed]
+  pull_request_review:
+    types: [submitted, dismissed]
   workflow_run:
     workflows: ["Required OpenCode Review", "Strix Security Scan"]
     types: [completed]
@@ -137,13 +139,14 @@ concurrency:
   group: >-
     central-pr-review-merge-scheduler-${{ github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event_name == 'pull_request_review' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
     github.event_name == 'workflow_dispatch' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.run_id ||
     github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'workflow_dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'workflow_dispatch' }}
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
 # the workflow level. The scan-pr-queue job that actually needs write access
@@ -343,7 +346,112 @@ jobs:
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
 
+      - name: Wait for approved OpenCode publication run to finish
+        id: review_followup
+        if: >-
+          github.event_name == 'pull_request_review'
+          && github.event.action == 'submitted'
+          && github.event.review.state == 'approved'
+          && (
+            github.event.review.user.login == 'opencode-agent'
+            || github.event.review.user.login == 'opencode-agent[bot]'
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_HEAD_SHA: ${{ github.event.review.commit_id }}
+          REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          echo "proceed=true" >>"$GITHUB_OUTPUT"
+
+          if [[ ! "${REVIEW_HEAD_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            printf '::warning::Post-approval direct-merge follow-up skipped because the OpenCode App review did not carry a 40-character commit SHA. value=%s.\n' "${REVIEW_HEAD_SHA:-missing}"
+            echo "proceed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pull_error_file="$(mktemp)"
+          if ! pull_json="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${REVIEW_PR_NUMBER}" \
+              2>"$pull_error_file"
+          )"; then
+            pull_reason="$(tail -n 1 "$pull_error_file" 2>/dev/null || true)"
+            [ -n "$pull_reason" ] || pull_reason="GitHub pull-request lookup failed without an error body"
+            rm -f "$pull_error_file"
+            printf '::warning::Post-approval direct-merge follow-up skipped because the live pull request snapshot could not be read. PR=%s review_head=%s reason=%s.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$pull_reason"
+            echo "proceed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          rm -f "$pull_error_file"
+          live_state="$(jq -r '.state // "unknown"' <<<"$pull_json")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$pull_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head" != "$REVIEW_HEAD_SHA" ]; then
+            printf '::notice::Post-approval direct-merge follow-up skipped because the pull request snapshot changed. PR=%s review_head=%s live_head=%s state=%s.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "${live_head:-missing}" "$live_state"
+            echo "proceed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          opencode_state="missing"
+          opencode_reason="no opencode-review check run was visible for the approved head"
+          for check_attempt in 1 2 3 4 5 6 7 8; do
+            check_error_file="$(mktemp)"
+            if checks_json="$(
+              gh api --paginate --slurp \
+                "repos/${GITHUB_REPOSITORY}/commits/${REVIEW_HEAD_SHA}/check-runs?per_page=100" \
+                2>"$check_error_file"
+            )"; then
+              opencode_state="$(
+                jq -r '
+                  [.[].check_runs[]
+                    | select(.name == "opencode-review")
+                    | select(.app.slug == "github-actions")] as $runs
+                  | if ($runs | length) == 0 then "missing"
+                    elif any($runs[]; .status != "completed") then "running"
+                    elif any($runs[]; .conclusion != "success") then
+                      "failed:" + ([$runs[] | (.conclusion // "missing")] | unique | join(","))
+                    else "success"
+                    end
+                ' <<<"$checks_json"
+              )"
+              case "$opencode_state" in
+                success)
+                  printf 'Approved OpenCode publication run completed successfully for PR %s at %s after check attempt %s.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$check_attempt"
+                  rm -f "$check_error_file"
+                  break
+                  ;;
+                failed:*)
+                  opencode_reason="opencode-review completed without success (${opencode_state#failed:})"
+                  rm -f "$check_error_file"
+                  break
+                  ;;
+                running)
+                  opencode_reason="opencode-review is still running for the approved head"
+                  ;;
+                *)
+                  opencode_reason="no opencode-review check run was visible for the approved head"
+                  ;;
+              esac
+            else
+              opencode_state="api-error"
+              opencode_reason="$(tail -n 1 "$check_error_file" 2>/dev/null || true)"
+              [ -n "$opencode_reason" ] || opencode_reason="GitHub check-runs lookup failed without an error body"
+            fi
+            rm -f "$check_error_file"
+
+            if [ "$check_attempt" -lt 8 ]; then
+              check_delay="$((check_attempt * 2))"
+              printf 'Approved OpenCode publication run is not complete for PR %s at %s after check attempt %s: %s. Retrying in %ss.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$check_attempt" "$opencode_reason" "$check_delay"
+              sleep "$check_delay"
+            fi
+          done
+
+          if [ "$opencode_state" != "success" ]; then
+            printf '::warning::Post-approval direct-merge follow-up skipped because the approved OpenCode publication run did not complete successfully. PR=%s head=%s state=%s reason=%s. The scheduled organization sweep remains authoritative.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$opencode_state" "$opencode_reason"
+            echo "proceed=false" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Inspect PR review and merge queue
+        if: steps.review_followup.outputs.proceed != 'false'
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}

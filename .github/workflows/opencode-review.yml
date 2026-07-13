@@ -5782,7 +5782,7 @@ jobs:
             local successful_names_file="$2"
             local output_file="$3"
 
-            awk '
+            awk -v successful_names_file="$successful_names_file" '
               BEGIN {
                 while ((getline name < successful_names_file) > 0) {
                   successful[name] = 1
@@ -5803,7 +5803,7 @@ jobs:
                 }
                 print
               }
-            ' successful_names_file="$successful_names_file" "$input_file" >"$output_file"
+            ' "$input_file" >"$output_file"
           }
 
           collect_current_head_commit_check_runs() {
@@ -6648,7 +6648,9 @@ jobs:
             rm -f "$lookup_error_file"
 
             printf '%s\n' "$reviews_json" |
-              python3 scripts/ci/opencode_existing_approval_gate.py --head "$HEAD_SHA"
+              python3 scripts/ci/opencode_existing_approval_gate.py \
+                --head "$HEAD_SHA" \
+                --require-opencode-app
           }
 
                     request_changes_for_merge_conflict_if_present() {
@@ -7172,10 +7174,58 @@ jobs:
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.inputs.pr_base_ref || '' }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha || '' }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::warning::Merge scheduler follow-up skipped after approval because no mutation credential was available. Required-workflow PR events and schedules remain authoritative."
+            exit 0
+          fi
+
+          if [ -z "${PR_NUMBER:-}" ] || [[ ! "${PR_HEAD_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            printf '::warning::Merge scheduler follow-up skipped because the exact pull request number or 40-character head SHA was unavailable. Repository=%s PR=%s head=%s.\n' "$GH_REPOSITORY" "${PR_NUMBER:-missing}" "${PR_HEAD_SHA:-missing}"
+            exit 0
+          fi
+
+          approval_read_token="${SCHEDULER_READ_TOKEN:-${GH_TOKEN:-}}"
+          approval_visible=0
+          approval_reason="current-head OpenCode App approval is not visible"
+          for approval_attempt in 1 2 3 4 5 6; do
+            approval_error_file="$(mktemp)"
+            gate_error_file="$(mktemp)"
+            if reviews_json="$(
+              GH_TOKEN="$approval_read_token" timeout 30s \
+                gh api --paginate --slurp \
+                "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+                2>"$approval_error_file"
+            )"; then
+              if printf '%s\n' "$reviews_json" |
+                python3 scripts/ci/opencode_existing_approval_gate.py \
+                  --head "$PR_HEAD_SHA" \
+                  --require-opencode-app \
+                  2>"$gate_error_file"; then
+                approval_visible=1
+                printf 'Current-head OpenCode App approval is visible for %s#%s at %s after publication attempt %s.\n' "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA" "$approval_attempt"
+                rm -f "$approval_error_file" "$gate_error_file"
+                break
+              fi
+              approval_reason="$(tail -n 1 "$gate_error_file" 2>/dev/null || true)"
+              [ -n "$approval_reason" ] || approval_reason="current-head OpenCode App approval failed validation"
+            else
+              approval_reason="$(tail -n 1 "$approval_error_file" 2>/dev/null || true)"
+              [ -n "$approval_reason" ] || approval_reason="GitHub review API lookup failed without an error body"
+            fi
+            rm -f "$approval_error_file" "$gate_error_file"
+
+            if [ "$approval_attempt" -lt 6 ]; then
+              approval_delay="$((approval_attempt * 2))"
+              printf 'Current-head OpenCode App approval for %s#%s at %s is not ready after publication attempt %s: %s. Retrying in %ss.\n' "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA" "$approval_attempt" "$approval_reason" "$approval_delay"
+              sleep "$approval_delay"
+            fi
+          done
+
+          if [ "$approval_visible" -ne 1 ]; then
+            printf '::warning::Merge scheduler follow-up skipped because current-head OpenCode App approval did not become visible after publication. Repository=%s PR=%s head=%s reason=%s. The review-event and scheduled scheduler paths remain authoritative.\n' "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA" "$approval_reason"
             exit 0
           fi
 

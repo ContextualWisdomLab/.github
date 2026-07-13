@@ -133,6 +133,10 @@ DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "merge requirements",
     "required status check",
 )
+SQUASH_MERGE_DISABLED_MARKERS = (
+    "squash merge is not allowed",
+    "squash merges are not allowed",
+)
 REST_MERGEABLE_STATE_MAP = {
     "behind": "BEHIND",
     "blocked": "BLOCKED",
@@ -1440,14 +1444,47 @@ def workflow_action_required_reason(checks: list[str]) -> str:
     )
 
 
+def run_head_guarded_merge(
+    repo: str,
+    number: str,
+    head: str,
+    *,
+    auto: bool,
+) -> None:
+    """Run a head-guarded merge using an allowed repository merge method."""
+    args = ["gh", "pr", "merge", number, "--repo", repo]
+    if auto:
+        args.append("--auto")
+    args.extend(["--squash", "--match-head-commit", head])
+    try:
+        run(args)
+        return
+    except RuntimeError as exc:
+        detail = str(exc).lower()
+        if not any(marker in detail for marker in SQUASH_MERGE_DISABLED_MARKERS):
+            raise
+        reason = str(exc).splitlines()[-1][:400]
+
+    mode = "auto-merge" if auto else "direct merge"
+    print(
+        f"PR #{number}: squash is disabled; retrying {mode} with a merge commit "
+        f"at guarded head {head}. GitHub reason: {reason}"
+    )
+    merge_args = ["gh", "pr", "merge", number, "--repo", repo]
+    if auto:
+        merge_args.append("--auto")
+    merge_args.extend(["--merge", "--match-head-commit", head])
+    run(merge_args)
+
+
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
-    """Enable squash auto-merge for a PR at its current head."""
+    """Enable auto-merge for a PR at its current head using an allowed method."""
     number = str(pr["number"])
     if dry_run:
         return
     require_github_actions_mutation_actor("enable-auto-merge")
     head = validate_git_sha(pr["headRefOid"])
-    run(["gh", "pr", "merge", number, "--repo", repo, "--auto", "--squash", "--match-head-commit", head])
+    run_head_guarded_merge(repo, number, head, auto=True)
 
 
 def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
@@ -1457,7 +1494,7 @@ def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
         return
     require_github_actions_mutation_actor("direct-merge")
     head = validate_git_sha(pr["headRefOid"])
-    run(["gh", "pr", "merge", number, "--repo", repo, "--squash", "--match-head-commit", head])
+    run_head_guarded_merge(repo, number, head, auto=False)
 
 
 def direct_merge_can_fallback_to_auto_merge(error: Exception) -> bool:
@@ -1887,20 +1924,42 @@ def active_opencode_run_ids(
     return current, stale
 
 
-def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> None:
-    """Force-cancel workflow runs by id."""
+def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, str]:
+    """Force-cancel workflow runs without blocking current-head decisions."""
     if not run_ids:
-        return
-    if len(run_ids) <= 1:  # pragma: no cover
-        for run_id in run_ids:  # pragma: no cover
-            run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"])  # pragma: no cover
+        return {}
+
+    def cancel_one(run_id: str) -> tuple[str, str | None]:
+        """Return one run id and its bounded GitHub cancellation error, if any."""
+        try:
+            run_github_actions(
+                [
+                    "gh",
+                    "api",
+                    "-X",
+                    "POST",
+                    f"repos/{repo}/actions/runs/{run_id}/force-cancel",
+                ]
+            )
+        except RuntimeError as exc:
+            return run_id, str(exc).replace("\n", "; ")[:600]
+        return run_id, None
+
+    if len(run_ids) == 1:
+        results = [cancel_one(str(run_ids[0]))]
     else:
         max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(run_ids))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            list(executor.map(
-                lambda run_id: run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/force-cancel"]),
-                run_ids
-            ))
+            results = list(executor.map(cancel_one, (str(run_id) for run_id in run_ids)))
+
+    failures = {run_id: reason for run_id, reason in results if reason is not None}
+    for run_id, reason in failures.items():
+        print(
+            "::warning::Could not force-cancel superseded workflow run "
+            f"{run_id}: {reason}. Continuing current-head processing; "
+            "the old-head run remains non-authoritative."
+        )
+    return failures
 
 
 def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:

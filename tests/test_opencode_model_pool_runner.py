@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
@@ -283,6 +285,17 @@ def test_central_fallback_emits_structured_adversarial_approval(tmp_path: Path) 
     assert {probe["outcome"] for probe in control["adversarial_validation"]["probes"]} == {
         "falsified"
     }
+    for probe in control["adversarial_validation"]["probes"]:
+        assert (
+            adversarial_evidence_rejection_reason(
+                probe["evidence"],
+                probe["path"],
+            )
+            is None
+        )
+    assert "bash scripts/ci/test_strix_quick_gate.sh" in control[
+        "adversarial_validation"
+    ]["probes"][2]["evidence"]
 
 
 def test_central_fallback_fails_closed_when_required_scope_is_missing(tmp_path: Path) -> None:

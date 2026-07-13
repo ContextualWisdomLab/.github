@@ -810,6 +810,44 @@ def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monk
     assert len(cancelled) == len(run_ids)
 
 
+def test_force_cancel_failure_logs_reason_and_does_not_raise(monkeypatch, capsys):
+    def fail_cancel(args):
+        raise RuntimeError(
+            "Command failed (1): gh api -X POST "
+            "repos/owner/repo/actions/runs/29263154177/force-cancel; "
+            "gh: Failed to cancel workflow run (HTTP 500)"
+        )
+
+    monkeypatch.setattr(sched, "run_github_actions", fail_cancel)
+
+    failures = sched.force_cancel_workflow_runs("owner/repo", ["29263154177"])
+
+    assert failures == {
+        "29263154177": (
+            "Command failed (1): gh api -X POST "
+            "repos/owner/repo/actions/runs/29263154177/force-cancel; "
+            "gh: Failed to cancel workflow run (HTTP 500)"
+        )
+    }
+    output = capsys.readouterr().out
+    assert "::warning::Could not force-cancel superseded workflow run 29263154177" in output
+    assert "HTTP 500" in output
+    assert "Continuing current-head processing" in output
+
+
+def test_force_cancel_multiple_runs_reports_only_failures(monkeypatch):
+    def maybe_fail(args):
+        if "runs/2/force-cancel" in " ".join(args):
+            raise RuntimeError("GitHub returned HTTP 500")
+        return ""
+
+    monkeypatch.setattr(sched, "run_github_actions", maybe_fail)
+
+    assert sched.force_cancel_workflow_runs("owner/repo", ["1", "2", "3"]) == {
+        "2": "GitHub returned HTTP 500"
+    }
+
+
 def test_cancel_stale_opencode_runs_dry_run_skips_lookup_and_mutation(monkeypatch):
     calls = []
     monkeypatch.setattr(sched, "stale_opencode_run_ids", lambda *args: calls.append(args) or ["1"])
@@ -1646,6 +1684,58 @@ def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
     stale = make_pr(number=7, headRefOid=head_sha, headRefName="feature")
     with pytest.raises(RuntimeError, match="PR head changed"):
         sched.restamp_pr_head_for_last_push_approval("owner/repo", stale, dry_run=False)
+
+
+@pytest.mark.parametrize("auto", [False, True])
+def test_head_guarded_merge_retries_merge_commit_when_squash_is_disabled(
+    monkeypatch, capsys, auto
+):
+    calls = []
+    head_sha = "a" * 40
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if "--squash" in args:
+            raise RuntimeError(
+                "GraphQL: Squash merges are not allowed on this repository."
+            )
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    sched.run_head_guarded_merge(
+        "owner/repo",
+        "7",
+        head_sha,
+        auto=auto,
+    )
+
+    assert len(calls) == 2
+    assert "--squash" in calls[0]
+    assert "--merge" in calls[1]
+    assert ("--auto" in calls[1]) is auto
+    assert calls[0][-2:] == ["--match-head-commit", head_sha]
+    assert calls[1][-2:] == ["--match-head-commit", head_sha]
+    assert "Squash merges are not allowed" in capsys.readouterr().out
+
+
+def test_head_guarded_merge_does_not_mask_unrelated_failure(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        raise RuntimeError("required status check is still pending")
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="required status check"):
+        sched.run_head_guarded_merge(
+            "owner/repo",
+            "7",
+            "a" * 40,
+            auto=False,
+        )
+    assert len(calls) == 1
 
 
 def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypatch):
