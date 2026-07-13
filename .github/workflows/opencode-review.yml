@@ -2848,7 +2848,6 @@ jobs:
                 "mode": "primary",
                 "prompt": "{file:./ci-review-prompt.md}",
                 "steps": 100,
-                "reasoningEffort": "high",
                 "permission": {
                   "edit": "deny",
                   "bash": "allow",
@@ -2868,7 +2867,6 @@ jobs:
                 "mode": "primary",
                 "prompt": "{file:./ci-review-prompt.md}",
                 "steps": 150,
-                "reasoningEffort": "high",
                 "permission": {
                   "edit": "deny",
                   "bash": "allow",
@@ -2889,7 +2887,6 @@ jobs:
                 "prompt": "{file:./code-reviewer-prompt.md}",
                 "steps": 100,
                 "color": "#7c3aed",
-                "reasoningEffort": "high",
                 "permission": {
                   "edit": "deny",
                   "read": "allow",
