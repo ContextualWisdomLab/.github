@@ -421,6 +421,33 @@ def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> Non
     assert "retry budget remaining." in result.stdout
 
 
+def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -> None:
+    """Large PR cadence logs queue caps instead of pinning review jobs for an hour."""
+    changed_files = [f"backend/changed_{index}.py" for index in range(21)]
+    result = run_failed_model(
+        tmp_path,
+        changed_files=changed_files,
+        extra_env={
+            "OPENCODE_DYNAMIC_REVIEW_CADENCE": "true",
+            "OPENCODE_DYNAMIC_MAX_CYCLES": "0",
+            "OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS": "3600",
+            "OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS": "7200",
+        },
+        model_candidates="github-models/deepseek/deepseek-v3-0324",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 600s, "
+        "total budget 7200s -> 1800s, max-cycles 0 -> 1"
+    ) in result.stdout
+    assert (
+        "OpenCode dynamic review cadence selected 600s per attempt and 1800s total budget "
+        "for 21 changed file(s); max-cycles=1."
+    ) in result.stdout
+    assert "OpenCode model pool reached configured max cycle count 1" in result.stdout
+
+
 def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     """Known constrained GitHub GPT-5 endpoints cannot consume a full cadence slot."""
     result = run_failed_model(
