@@ -1350,8 +1350,22 @@ jobs:
             append "- Failure count: ${failures}"
           fi
 
+          coverage_output_file="$(mktemp)"
+          awk '
+            /^## Coverage Decision$/ { emit = 1 }
+            emit { print }
+          ' "$summary_file" >"$coverage_output_file"
+          if [ ! -s "$coverage_output_file" ]; then
+            {
+              printf '## Coverage Decision\n\n'
+              printf -- '- Result: FAIL\n'
+              printf -- '- Reason: compact coverage decision could not be extracted from the full measurement log.\n'
+            } >"$coverage_output_file"
+            failures=$((failures + 1))
+          fi
+
           python3 "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py" \
-            "$summary_file" "$summary_output_file"
+            "$coverage_output_file" "$summary_output_file"
 
           coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
           while grep -Fqx "$coverage_output_delimiter" "$summary_output_file"; do
@@ -1362,6 +1376,8 @@ jobs:
             cat "$summary_output_file"
             printf '%s\n' "$coverage_output_delimiter"
           } >>"$GITHUB_OUTPUT"
+          printf 'Published compact coverage decision output after sanitization (%s bytes); full command logs remain in the job log and step summary.\n' \
+            "$(wc -c <"$summary_output_file" | tr -d ' ')"
 
           cat "$summary_file"
           if [ "$failures" -ne 0 ]; then

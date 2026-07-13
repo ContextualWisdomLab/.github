@@ -39,6 +39,7 @@ def sanitize_text(text: str) -> str:
 
 
 def main() -> int:
+    """Sanitize one coverage summary file into a GitHub-output-safe file."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
