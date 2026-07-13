@@ -353,6 +353,7 @@ jobs:
           cd "$COVERAGE_SOURCE_WORKDIR"
 
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
+          summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
           failures=0
 
           append() {
@@ -1349,13 +1350,16 @@ jobs:
             append "- Failure count: ${failures}"
           fi
 
+          python3 "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py" \
+            "$summary_file" "$summary_output_file"
+
           coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
-          while grep -Fqx "$coverage_output_delimiter" "$summary_file"; do
+          while grep -Fqx "$coverage_output_delimiter" "$summary_output_file"; do
             coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
           done
           {
             printf 'coverage_summary<<%s\n' "$coverage_output_delimiter"
-            cat "$summary_file"
+            cat "$summary_output_file"
             printf '%s\n' "$coverage_output_delimiter"
           } >>"$GITHUB_OUTPUT"
 

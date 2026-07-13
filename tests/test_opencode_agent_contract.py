@@ -1051,7 +1051,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert 'PYTHONPATH=. bash -lc "$2"' not in coverage_job
     assert "COVERAGE_EOF" not in coverage_job
     assert "os.urandom(24).hex()" in coverage_job
-    assert 'grep -Fqx "$coverage_output_delimiter" "$summary_file"' in coverage_job
+    assert 'scripts/ci/sanitize_github_output_summary.py" \\' in coverage_job
+    assert 'grep -Fqx "$coverage_output_delimiter" "$summary_output_file"' in coverage_job
+    assert 'cat "$summary_output_file"' in coverage_job
 
     assert (
         "github.event.pull_request.head.repo.full_name == "
