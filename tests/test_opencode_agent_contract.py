@@ -927,10 +927,14 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
-        "github.token }}"
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in status_step
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
+    assert "steps.opencode_app_token.outputs" not in status_step
+    assert (
+        "same-repository github.token is available for cross-repository target"
+        in status_step
+    )
     assert "using %s token" in status_step
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
     assert (
