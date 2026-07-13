@@ -129,6 +129,17 @@ required-workflow mechanism cannot cover that repository. Repo-specific security
 or product checks can stay local, but they are separate from the Strix
 governance contract.
 
+2026-07-13 KST provider migration: the Strix default PR-evidence model moved
+from `openai/gpt-5` (GitHub Models mode, where the 4000-token request cap and
+the organization GitHub Models budget cap made LLM-backed security evidence
+unreliable) to direct OpenAI `gpt-5.6-luna` through the existing
+`openai_direct` gate path, reusing the organization `OPENAI_API_KEY` secret
+when the dedicated `STRIX_OPENAI_API_KEY` secret is absent. GitHub Models
+`o3`/`gpt-5-chat` fallbacks remain wired for github_models mode only; direct
+mode keeps failing closed on provider signals instead of downgrading models.
+Recording the migration in this audit also routes its PR through the standard
+small-change review cadence instead of the central-scope fast path.
+
 ## Live Repository Inventory
 
 Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST. PR #58, #65, #66, #68, #71, #79, and #80 post-merge refreshes: 2026-06-25 to 2026-06-26 KST. The 2026-07-02 18:15 KST refresh found 17 public non-fork repositories, adding `kaefa` and `waf-ids-ai-soc` to the prior public non-fork inventory. The public fork inventory still contains 6 repositories. `VibeSec` was not in that target set, and `appguardrail` was.
