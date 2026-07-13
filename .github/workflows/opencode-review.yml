@@ -900,9 +900,7 @@ jobs:
 
           check_javascript_coverage_thresholds() {
             local summary_list
-            local checker
             summary_list="${RUNNER_TEMP}/javascript-coverage-summaries.txt"
-            checker="${RUNNER_TEMP}/check-javascript-coverage.py"
             find . \
               \( -path '*/coverage/coverage-summary.json' -o -path '*/coverage/coverage-final.json' \) \
               -type f \
@@ -919,106 +917,12 @@ jobs:
               return
             fi
 
-            cat >"$checker" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          def pct(covered: int, total: int) -> float:
-              return 100.0 if total == 0 else round((covered / total) * 100, 2)
-
-
-          def summarize_final(data: dict) -> dict[str, float]:
-              totals = {
-                  "statements": [0, 0],
-                  "branches": [0, 0],
-                  "functions": [0, 0],
-                  "lines": [0, 0],
-              }
-              for file_data in data.values():
-                  statements = file_data.get("s") or {}
-                  totals["statements"][1] += len(statements)
-                  totals["statements"][0] += sum(1 for count in statements.values() if count > 0)
-
-                  functions = file_data.get("f") or {}
-                  totals["functions"][1] += len(functions)
-                  totals["functions"][0] += sum(1 for count in functions.values() if count > 0)
-
-                  branches = file_data.get("b") or {}
-                  for counts in branches.values():
-                      totals["branches"][1] += len(counts)
-                      totals["branches"][0] += sum(1 for count in counts if count > 0)
-
-                  line_counts: dict[int, int] = {}
-                  statement_map = file_data.get("statementMap") or {}
-                  for statement_id, location in statement_map.items():
-                      start = (location.get("start") or {}).get("line")
-                      if start is None:
-                          continue
-                      line_counts[start] = max(line_counts.get(start, 0), statements.get(statement_id, 0))
-                  totals["lines"][1] += len(line_counts)
-                  totals["lines"][0] += sum(1 for count in line_counts.values() if count > 0)
-
-              return {
-                  metric: pct(values[0], values[1])
-                  for metric, values in totals.items()
-              }
-
-
-          summary_list = Path(sys.argv[1])
-          failures: list[str] = []
-          for raw_path in summary_list.read_text(encoding="utf-8").splitlines():
-              summary_path = Path(raw_path)
-              data = json.loads(summary_path.read_text(encoding="utf-8"))
-              if summary_path.name == "coverage-summary.json":
-                  metric_totals = {
-                      metric: (data.get("total") or {}).get(metric, {}).get("pct")
-                      for metric in ("statements", "branches", "functions", "lines")
-                  }
-              else:
-                  metric_totals = summarize_final(data)
-              print(f"{summary_path}:")
-              for metric in ("statements", "branches", "functions", "lines"):
-                  metric_pct = metric_totals.get(metric)
-                  print(f"  {metric}: {metric_pct}%")
-                  if metric_pct != 100:
-                      failures.append(f"{summary_path} {metric}={metric_pct}%")
-              if summary_path.name == "coverage-summary.json":
-                  for file_name, file_summary in sorted(data.items()):
-                      if file_name == "total":
-                          continue
-                      below = []
-                      for metric in ("statements", "branches", "functions", "lines"):
-                          metric_pct = (file_summary.get(metric) or {}).get("pct")
-                          if metric_pct != 100:
-                              below.append(f"{metric}={metric_pct}%")
-                      if below:
-                          print(f"  file below 100%: {file_name} ({', '.join(below)})")
-              else:
-                  for file_name, file_data in sorted(data.items()):
-                      statements = file_data.get("s") or {}
-                      statement_map = file_data.get("statementMap") or {}
-                      missing_lines = []
-                      for statement_id, count in statements.items():
-                          if count > 0:
-                              continue
-                          start = (statement_map.get(statement_id) or {}).get("start") or {}
-                          line = start.get("line")
-                          if line is not None:
-                              missing_lines.append(line)
-                      if missing_lines:
-                          line_list = ",".join(str(line) for line in sorted(set(missing_lines))[:60])
-                          suffix = "" if len(set(missing_lines)) <= 60 else ",..."
-                          print(f"  missing lines: {file_name}:{line_list}{suffix}")
-
-          if failures:
-              print("Coverage below 100%:")
-              for failure in failures:
-                  print(f"- {failure}")
-              raise SystemExit(1)
-          PY
-
-            run_and_capture "JavaScript/TypeScript coverage threshold" python3 "$checker" "$summary_list"
+            run_and_capture "JavaScript/TypeScript coverage threshold" \
+              python3 "$GITHUB_WORKSPACE/scripts/ci/javascript_coverage_gate.py" \
+              --repo-root . \
+              --base-sha "$PR_BASE_SHA" \
+              --head-sha "$PR_HEAD_SHA" \
+              --summary-list "$summary_list"
           }
 
           ensure_r_runtime() {
