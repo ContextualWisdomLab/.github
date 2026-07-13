@@ -3258,11 +3258,13 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Keep stale providers from pinning required review jobs for hours;
-          # deterministic current-head fallback remains the escape hatch.
+          # Keep stale providers from pinning required review jobs for hours.
+          # Adversarial validation needs enough room to read the evidence, but
+          # dynamic cadence and the outer watchdog still bound each current-head run.
           OPENCODE_RUN_TIMEOUT_SECONDS: "300"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "600"
+          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "1080"
           # Visit the high-sensitivity candidate catalog once. Per-provider
           # failures and timeouts are logged before the publish gate evaluates
           # the current-head result and fails closed when no verdict exists.
@@ -3281,8 +3283,8 @@ jobs:
           OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "300"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "420"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "120"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "180"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
@@ -3302,7 +3304,20 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
+          set +e
+          timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-1080}s" \
+            bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
+          pool_status=$?
+          set -e
+          if [ "$pool_status" -eq 124 ] || [ "$pool_status" -eq 137 ] || [ "$pool_status" -eq 143 ]; then
+            printf 'OpenCode model pool exceeded the outer %ss step budget; marking the pool exhausted so current-head evidence fallback can publish a bounded reason instead of blocking the org queue.\n' \
+              "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-1080}"
+            {
+              printf 'review_model=\n'
+              printf 'review_status=exhausted\n'
+            } >>"$GITHUB_OUTPUT"
+          fi
+          exit "$pool_status"
 
       - name: Exchange OpenCode app token for review writes
         id: opencode_app_token
@@ -3880,7 +3895,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
+          CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
+          CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           GH_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
@@ -3981,6 +3998,7 @@ jobs:
           fi
           overview_comment_token="$review_write_token"
           echo "check lookup token source=${check_lookup_token_source}"
+          echo "code-scanning lookup token source=${CODE_SCANNING_TOKEN_SOURCE:-configured}"
           echo "review write token source=${review_write_token_source}"
           echo "review write fallback token source=${review_write_fallback_token_source:-none}"
 
@@ -6068,12 +6086,24 @@ jobs:
 
           collect_open_code_scanning_alerts() {
             local output_file="$1"
-            local pr_json head_ref
-            pr_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json headRefName 2>/dev/null)" || return 1
+            local pr_json head_ref scan_token lookup_error_file
+            scan_token="${CODE_SCANNING_GH_TOKEN:-${GH_TOKEN:-}}"
+            if [ -z "$scan_token" ]; then
+              printf '::warning::Open code-scanning alert lookup skipped because no target-repository read token was configured.\n' >&2
+              return 1
+            fi
+            lookup_error_file="$(mktemp)"
+            if ! pr_json="$(GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json headRefName 2>"$lookup_error_file")"; then
+              sed 's/^/gh: /' "$lookup_error_file" >&2 || true
+              rm -f "$lookup_error_file"
+              return 1
+            fi
+            rm -f "$lookup_error_file"
             head_ref="$(printf '%s\n' "$pr_json" | jq -r '.headRefName // empty')"
             [ -n "$head_ref" ] || return 1
-            timeout "$(check_lookup_api_timeout_seconds)s" \
+            lookup_error_file="$(mktemp)"
+            if ! GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s" \
               gh api -X GET "repos/${GH_REPOSITORY}/code-scanning/alerts" \
                 -f "ref=refs/heads/${head_ref}" \
                 -f state=open \
@@ -6092,7 +6122,12 @@ jobs:
                   ]
                   | .[]
                   | "- " + .tool + "/" + .rule + ": " + .severity + " alert #" + (.number | tostring) + (if .url != "" then " (" + .url + ")" else "" end)
-                ' >"$output_file"
+                ' >"$output_file" 2>"$lookup_error_file"; then
+              sed 's/^/gh: /' "$lookup_error_file" >&2 || true
+              rm -f "$lookup_error_file"
+              return 1
+            fi
+            rm -f "$lookup_error_file"
           }
 
           publish_blockers_after_model_unavailable() {
@@ -6644,11 +6679,12 @@ jobs:
           && steps.opencode_review_model_pool.outputs.review_status != ''
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ github.event.inputs.target_repository }}
           PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
+          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
         run: |
           set -euo pipefail
           if [ -z "${PR_HEAD_SHA:-}" ]; then
@@ -6664,7 +6700,7 @@ jobs:
             description="OpenCode workflow_dispatch evidence did not produce approval evidence."
           fi
 
-          printf 'Publishing OpenCode workflow_dispatch status context opencode-review for %s at %s with state=%s.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state"
+          printf 'Publishing OpenCode workflow_dispatch status context opencode-review for %s at %s with state=%s using %s token.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state" "${OPENCODE_STATUS_TOKEN_SOURCE:-configured}"
           gh api -X POST "repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
             -f state="$state" \
             -f context="opencode-review" \

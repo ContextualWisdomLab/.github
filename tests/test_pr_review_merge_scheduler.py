@@ -941,6 +941,9 @@ def test_review_state_and_failed_checks():
     assert sched.current_head_review_state(pr, "APPROVED")
     assert sched.has_current_head_approval(pr)
     assert not sched.has_current_head_changes_requested(pr)
+    assert not sched.has_current_head_approval(
+        make_pr(headRefOid="", reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    )
     exact_head = "a" * 40
     stale_body_head = "b" * 40
     body_sha_mismatch = make_pr(
@@ -968,6 +971,42 @@ def test_review_state_and_failed_checks():
         },
     )
     assert sched.has_current_head_approval(body_sha_match)
+    body_sha_only_match = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", ""),
+                    "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
+                }
+            ]
+        },
+    )
+    assert sched.has_current_head_approval(body_sha_only_match)
+    body_sha_only_mismatch = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", ""),
+                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_body_head}`",
+                }
+            ]
+        },
+    )
+    assert not sched.has_current_head_approval(body_sha_only_mismatch)
+    body_sha_does_not_override_commit = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", stale_body_head),
+                    "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
+                }
+            ]
+        },
+    )
+    assert not sched.has_current_head_approval(body_sha_does_not_override_commit)
     deterministic_fallback = make_pr(
         headRefOid=exact_head,
         reviews={
@@ -989,7 +1028,19 @@ def test_review_state_and_failed_checks():
     assert not sched.is_deterministic_fallback_approval(
         opencode_review("CHANGES_REQUESTED", exact_head)
     )
+    assert sched.has_current_head_deterministic_fallback_approval(deterministic_fallback)
     assert not sched.has_current_head_approval(deterministic_fallback)
+    fallback_scan_without_current_opencode = make_pr(
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "old"),
+                opencode_review("APPROVED", "head", login="human"),
+            ]
+        }
+    )
+    assert not sched.has_current_head_deterministic_fallback_approval(
+        fallback_scan_without_current_opencode
+    )
     stale_review = make_pr(
         reviews={
             "nodes": [
@@ -1112,6 +1163,110 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
+
+
+def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
+    head = "a" * 40
+    fallback_review = {
+        **opencode_review("APPROVED", head),
+        "body": (
+            "OpenCode model providers were unavailable, so deterministic current-head evidence "
+            f"was used.\n\n- Head SHA: `{head}`"
+        ),
+    }
+    pr = make_pr(
+        headRefOid=head,
+        reviews={"nodes": [fallback_review]},
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    opencode_check(status="COMPLETED"),
+                ]
+            }
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, current_pr, dry_run: dispatched.append(
+            (repo, workflow, current_pr["headRefOid"], dry_run)
+        ),
+    )
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    followup = inspect(pr)
+
+    assert followup.action == "wait"
+    assert "next scheduler heartbeat" in followup.reason
+    assert dispatched == []
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    heartbeat = inspect(pr)
+
+    assert heartbeat.action == "review_dispatch"
+    assert dispatched == [("owner/repo", "OpenCode Review", head, True)]
+
+
+def test_body_head_sha_approval_prevents_same_run_opencode_rerun(monkeypatch):
+    head = "a" * 40
+    pr = make_pr(
+        headRefOid=head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", ""),
+                    "body": f"## Gate evidence\n\n- Head SHA: `{head}`",
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    opencode_check(status="COMPLETED"),
+                ]
+            }
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, current_pr, dry_run: dispatched.append(
+            (repo, workflow, current_pr["headRefOid"], dry_run)
+        ),
+    )
+
+    decision = inspect(pr)
+
+    assert decision.action == "auto_merge"
+    assert "current head is approved" in decision.reason
+    assert dispatched == []
+
+
+def test_deterministic_fallback_detection_ignores_unrelated_reviews():
+    head = "a" * 40
+    pr = make_pr(
+        headRefOid=head,
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", head),
+                opencode_review("APPROVED", "b" * 40),
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "human-reviewer"},
+                    "commit": {"oid": head},
+                },
+            ]
+        },
+    )
+
+    assert not sched.has_current_head_deterministic_fallback_approval(pr)
+    assert not sched.has_current_head_deterministic_fallback_approval(
+        make_pr(reviews={"nodes": []})
+    )
 
 
 def test_current_head_approval_cleans_previous_head_change_gate_before_merge():
