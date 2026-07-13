@@ -6461,7 +6461,7 @@ jobs:
             fi
 
             if same_head_opencode_approval_exists; then
-              printf '::notice::MODEL_OUTPUT_UNAVAILABLE: same-head OpenCode approval already exists for head %s, and current-head coverage, peer checks, code-scanning alerts, and review threads are clean; succeeding the required check without publishing a duplicate approval review.\n' "$HEAD_SHA"
+              printf '::notice::MODEL_OUTPUT_UNAVAILABLE: same-head real-model OpenCode approval with passed adversarial evidence already exists for head %s, and current-head coverage, peer checks, code-scanning alerts, and review threads are clean; succeeding the required check without publishing a duplicate approval review.\n' "$HEAD_SHA"
               if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                 {
                   printf '## OpenCode required check satisfied by existing same-head approval\n\n'
@@ -6470,7 +6470,7 @@ jobs:
                   printf -- '- Workflow run: %s\n' "$RUN_ID"
                   printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
                   printf -- '- Model-pool outcome: `%s`\n' "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
-                  printf -- '- Reason: a prior OpenCode APPROVED review already targets this exact head, and the fallback rechecked coverage, peer checks, code-scanning alerts, and unresolved review threads before accepting it.\n'
+                  printf -- '- Reason: a prior real-model OpenCode APPROVED review with passed structured adversarial probes already targets this exact head, and the fallback rechecked coverage, peer checks, code-scanning alerts, and unresolved review threads before accepting it.\n'
                   printf -- '- Review state: unchanged; no duplicate APPROVE review was posted from model-output-unavailable evidence.\n\n'
                 } >>"$GITHUB_STEP_SUMMARY"
               fi
@@ -6520,7 +6520,7 @@ jobs:
           }
 
           same_head_opencode_approval_exists() {
-            local review_lookup_token reviews_json approval_count lookup_error_file
+            local review_lookup_token reviews_json lookup_error_file
             review_lookup_token="${CHECK_LOOKUP_GH_TOKEN:-${GH_TOKEN:-}}"
             if [ -z "$review_lookup_token" ]; then
               printf '::notice::Existing same-head OpenCode approval lookup skipped because no review read token was configured.\n' >&2
@@ -6536,20 +6536,8 @@ jobs:
             fi
             rm -f "$lookup_error_file"
 
-            approval_count="$(
-              printf '%s\n' "$reviews_json" |
-                jq --arg head "$HEAD_SHA" '
-                  [
-                    .[][]
-                    | select(.state == "APPROVED")
-                    | select(.commit_id == $head)
-                    | select((.user.login // "") as $login | ["opencode-agent", "opencode-agent[bot]", "github-actions[bot]"] | index($login))
-                  ]
-                  | length
-                '
-            )"
-
-            [ "${approval_count:-0}" -gt 0 ]
+            printf '%s\n' "$reviews_json" |
+              python3 scripts/ci/opencode_existing_approval_gate.py --head "$HEAD_SHA"
           }
 
                     request_changes_for_merge_conflict_if_present() {
@@ -7143,6 +7131,12 @@ jobs:
           RETRY_DELAY_SECONDS: "300"
           CENTRAL_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
           CENTRAL_WORKFLOW_FILE: opencode-review.yml
+          # The trusted ref of the CENTRAL workflow repository, not the target
+          # repository's default branch; develop-default target repositories
+          # still dispatch the central workflow from its own default branch,
+          # the same way the merge scheduler's SCHEDULER_REQUIRED_WORKFLOW_REF
+          # does.
+          CENTRAL_WORKFLOW_REF: main
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -7172,7 +7166,7 @@ jobs:
 
           if ! GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh workflow run "$CENTRAL_WORKFLOW_FILE" \
             --repo "$CENTRAL_WORKFLOW_REPOSITORY" \
-            --ref main \
+            --ref "$CENTRAL_WORKFLOW_REF" \
             -f "target_repository=${GITHUB_REPOSITORY}" \
             -f "pr_number=${PR_NUMBER}" \
             -f "pr_base_ref=${PR_BASE_REF}" \
