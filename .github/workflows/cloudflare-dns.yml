@@ -10,23 +10,13 @@
 # push/dispatch runs. Pull requests run offline config validation only.
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
 #
-# Default is DRY-RUN. Set input mode=apply to actually write.
+# Default is DRY-RUN. Send a default-branch repository_dispatch with
+# client_payload.mode=apply to actually write.
 name: Cloudflare DNS
 
 on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "dry-run (default, no writes) or apply (create zones + records)"
-        type: choice
-        default: dry-run
-        options:
-          - dry-run
-          - apply
-      prune:
-        description: "Delete Cloudflare records not present in zones.json (destructive)"
-        type: boolean
-        default: false
+  repository_dispatch:
+    types: [cloudflare-dns]
   push:
     branches: [main]
     paths:
@@ -34,7 +24,7 @@ on:
       - "infra/cloudflare/reconcile.sh"
       - ".github/workflows/cloudflare-dns.yml"
   # PRs validate the declarative config without Cloudflare secrets. Push and
-  # workflow_dispatch runs perform the API-backed dry-run/apply.
+  # repository_dispatch runs perform the API-backed dry-run/apply from main.
   pull_request:
     paths:
       - "infra/cloudflare/zones.json"
@@ -42,7 +32,7 @@ on:
       - ".github/workflows/cloudflare-dns.yml"
 
 # push-triggered runs are always dry-run (safe by default);
-# only an explicit workflow_dispatch with mode=apply is allowed to write.
+# only an explicit repository_dispatch with mode=apply is allowed to write.
 concurrency:
   group: cloudflare-dns-${{ github.ref }}
   cancel-in-progress: false
@@ -52,7 +42,7 @@ permissions:
 
 jobs:
   reconcile:
-    name: Reconcile zones (${{ github.event.inputs.mode || 'dry-run' }})
+    name: Reconcile zones (${{ github.event.client_payload.mode || 'dry-run' }})
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -84,12 +74,20 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CF_MODE: ${{ github.event.inputs.mode || 'dry-run' }}
-          CF_PRUNE: ${{ github.event.inputs.prune || 'false' }}
+          CF_MODE: ${{ github.event.client_payload.mode || 'dry-run' }}
+          CF_PRUNE: ${{ github.event.client_payload.prune || 'false' }}
           CF_CONFIG: infra/cloudflare/zones.json
           CF_ALLOW_DRY_RUN_TOKEN_FAILURE: ${{ github.event_name == 'push' && 'true' || 'false' }}
         run: |
           set -euo pipefail
+          if [ "$CF_MODE" != "dry-run" ] && [ "$CF_MODE" != "apply" ]; then
+            echo "::error::Cloudflare mode must be exactly dry-run or apply."
+            exit 1
+          fi
+          if [ "$CF_PRUNE" != "true" ] && [ "$CF_PRUNE" != "false" ]; then
+            echo "::error::Cloudflare prune must be exactly true or false."
+            exit 1
+          fi
           if [ -z "${CF_API_TOKEN}" ] || [ -z "${CF_ACCOUNT_ID}" ]; then
             if [ "${CF_MODE}" = "dry-run" ] && [ "${CF_ALLOW_DRY_RUN_TOKEN_FAILURE}" = "true" ]; then
               echo "::warning::Cloudflare DNS dry-run skipped: CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets are unavailable to this push run. Rotate or re-scope the org secrets before manual apply."

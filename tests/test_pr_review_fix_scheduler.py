@@ -347,12 +347,16 @@ def test_context_parse_and_main(monkeypatch, tmp_path):
 def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     """Fix scheduler gh wrappers and mutation helpers use plain argv."""
     calls = []
-    monkeypatch.setattr(
-        fix,
-        "run",
-        lambda argv: calls.append(argv)
-        or ('[[{"id": 1}]]' if any("issues/7/comments" in item for item in argv) else '[{"id": 1}]'),
-    )
+
+    def fake_run(argv, *, stdin=None):
+        calls.append((argv, stdin))
+        return (
+            '[[{"id": 1}]]'
+            if any("issues/7/comments" in item for item in argv)
+            else '[{"id": 1}]'
+        )
+
+    monkeypatch.setattr(fix, "run", fake_run)
     assert fix.run_json(["api", "x"]) == [{"id": 1}]
     assert fix.issue_comments("owner/repo", 7) == [{"id": 1}]
 
@@ -361,7 +365,7 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     fix.dispatch_autofix(
         "owner/repo",
         pr,
-        workflow="fix.yml",
+        workflow="pr-review-autofix.yml",
         workflow_repository="ContextualWisdomLab/.github",
         dry_run=True,
     )
@@ -371,14 +375,29 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     fix.dispatch_autofix(
         "owner/repo",
         pr,
-        workflow="fix.yml",
+        workflow="pr-review-autofix.yml",
         workflow_repository="ContextualWisdomLab/.github",
         dry_run=False,
     )
-    assert calls[-2][:5] == ["gh", "api", "-X", "POST", "repos/owner/repo/issues/7/comments"]
-    assert calls[-1][:6] == ["gh", "workflow", "run", "fix.yml", "--repo", "ContextualWisdomLab/.github"]
-    assert "-f" in calls[-1]
-    assert "target_repository=owner/repo" in calls[-1]
+    assert calls[-2][0][:5] == [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/owner/repo/issues/7/comments",
+    ]
+    assert calls[-1][0] == [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/ContextualWisdomLab/.github/dispatches",
+        "--input",
+        "-",
+    ]
+    payload = json.loads(calls[-1][1])
+    assert payload["event_type"] == "pr-review-autofix"
+    assert payload["client_payload"]["target_repository"] == "owner/repo"
 
 
 def _approved_dirty_pr(**overrides):
@@ -425,7 +444,7 @@ def test_dispatch_autofix_passes_resolve_conflict_flag(capsys):
         dry_run=True,
         resolve_conflict=True,
     )
-    assert "resolve_conflict=true" in capsys.readouterr().out
+    assert '"resolve_conflict": "true"' in capsys.readouterr().out
     fix.dispatch_autofix(
         "owner/repo",
         pr,
@@ -433,7 +452,28 @@ def test_dispatch_autofix_passes_resolve_conflict_flag(capsys):
         workflow_repository="ContextualWisdomLab/.github",
         dry_run=True,
     )
-    assert "resolve_conflict=false" in capsys.readouterr().out
+    assert '"resolve_conflict": "false"' in capsys.readouterr().out
+
+
+def test_dispatch_autofix_rejects_selectable_workflow_and_invalid_repository():
+    """Autofix dispatch cannot select branch-loadable code or an invalid repo."""
+    pr = make_pr()
+    with pytest.raises(ValueError, match="autofix workflow must be"):
+        fix.dispatch_autofix(
+            "owner/repo",
+            pr,
+            workflow="attacker-workflow.yml",
+            workflow_repository="ContextualWisdomLab/.github",
+            dry_run=True,
+        )
+    with pytest.raises(ValueError, match="invalid autofix workflow repository"):
+        fix.dispatch_autofix(
+            "owner/repo",
+            pr,
+            workflow="pr-review-autofix.yml",
+            workflow_repository="bad repository",
+            dry_run=True,
+        )
 
 
 def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):

@@ -17,13 +17,8 @@ name: SBOM Inventory Scheduler
 on:
   schedule:
     - cron: "0 6 * * 1"
-  workflow_dispatch:
-    inputs:
-      org:
-        description: Organization login to inventory
-        required: false
-        default: ContextualWisdomLab
-        type: string
+  repository_dispatch:
+    types: [sbom-inventory]
 
 concurrency:
   group: sbom-inventory-scheduler-${{ github.repository }}
@@ -40,7 +35,7 @@ jobs:
       id-token: write
       pull-requests: write
     env:
-      ORG_LOGIN: ${{ inputs.org || vars.SBOM_INVENTORY_ORG || 'ContextualWisdomLab' }}
+      ORG_LOGIN: ${{ github.event.client_payload.org || vars.SBOM_INVENTORY_ORG || 'ContextualWisdomLab' }}
     steps:
       - name: Exchange OpenCode app token for cross-repo reads
         id: aggregator_app_token

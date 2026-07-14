@@ -17,178 +17,7 @@ record_pool_exhausted() {
 	record_review_status "exhausted"
 }
 
-run_central_adversarial_harness() {
-	local source_root changed_files_file test_log strix_test_log summary
-	local model_line javascript_line strix_line
-
-	[ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ] || return 1
-	source_root="${OPENCODE_SOURCE_WORKDIR:-}"
-	changed_files_file="${OPENCODE_CHANGED_FILES_FILE:-}"
-	if [ ! -d "$source_root" ] || [ ! -f "$changed_files_file" ]; then
-		printf 'Central adversarial harness unavailable: current-head source or changed-file evidence is missing.\n'
-		return 1
-	fi
-	if [ ! -s "$source_root/.codegraph/codegraph.db" ]; then
-		printf 'Central adversarial harness unavailable: current-head CodeGraph index is missing or empty.\n'
-		return 1
-	fi
-	for required_path in \
-		scripts/ci/run_opencode_review_model_pool.sh \
-		scripts/ci/javascript_coverage_gate.py \
-		scripts/ci/strix_quick_gate.sh; do
-		if ! grep -Fxq "$required_path" "$changed_files_file"; then
-			printf 'Central adversarial harness not applicable: required current-head path %s is not changed.\n' "$required_path"
-			return 1
-		fi
-	done
-	if ! command -v uv >/dev/null 2>&1; then
-		printf 'Central adversarial harness unavailable: hash-pinned uv runtime is not installed in the model-pool job.\n'
-		return 1
-	fi
-
-	printf 'OpenCode provider catalog unavailable; running the bounded central current-head adversarial harness.\n'
-	test_log="$(mktemp)"
-	strix_test_log="$(mktemp)"
-	if ! (
-		cd "$source_root"
-		env \
-			-u CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE \
-			-u CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL \
-			-u OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE \
-			-u OPENCODE_CHANGED_FILES_FILE \
-			-u OPENCODE_DYNAMIC_REVIEW_CADENCE \
-			-u OPENCODE_EVIDENCE_FILE \
-			-u OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION \
-			-u OPENCODE_SOURCE_WORKDIR \
-			uv run --no-project --with pytest pytest -q \
-			tests/test_opencode_model_pool_runner.py::test_github_gpt5_runtime_cap_preserves_queue_budget \
-			tests/test_opencode_agent_contract.py \
-			tests/test_javascript_coverage_gate.py
-		if ! env \
-			-u CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE \
-			-u CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL \
-			-u OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE \
-			-u OPENCODE_CHANGED_FILES_FILE \
-			-u OPENCODE_DYNAMIC_REVIEW_CADENCE \
-			-u OPENCODE_EVIDENCE_FILE \
-			-u OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION \
-			-u OPENCODE_SOURCE_WORKDIR \
-			STRIX_TEST_CASE_FILTER=pull-request-target-gitlink-is-explicitly-skipped \
-			bash scripts/ci/test_strix_quick_gate.sh >"$strix_test_log" 2>&1; then
-			cat "$strix_test_log"
-			exit 1
-		fi
-		printf 'Strix pull-request-target gitlink adversarial regression: PASS\n'
-	) >"$test_log" 2>&1; then
-		printf 'Central adversarial harness failed; no review control block was produced.\n'
-		cat "$test_log"
-		rm -f "$test_log" "$strix_test_log"
-		return 1
-	fi
-	cat "$test_log"
-	rm -f "$test_log" "$strix_test_log"
-
-	model_line="$(awk '/^cap_model_run_timeout\(\)/ { print NR; exit }' "$source_root/scripts/ci/run_opencode_review_model_pool.sh")"
-	javascript_line="$(awk '/^def normalize_coverage_path\(/ { print NR; exit }' "$source_root/scripts/ci/javascript_coverage_gate.py")"
-	strix_line="$(awk '/160000/ { print NR; exit }' "$source_root/scripts/ci/strix_quick_gate.sh")"
-	for line_number in "$model_line" "$javascript_line" "$strix_line"; do
-		if ! is_non_negative_integer "$line_number" || [ "$line_number" -le 0 ]; then
-			printf 'Central adversarial harness failed to resolve a positive current-head probe line.\n'
-			return 1
-		fi
-	done
-
-	summary="$(cat <<'EOF'
-Approval sufficiency: three current-head adversarial regression probes supplied affirmative approval evidence beyond the absence of blockers.
-Verification posture: CodeGraph was initialized and the central review, JavaScript coverage, and Strix paths were inspected on the current head.
-Linter/static: actionlint, bash syntax, Ruff, and repository static checks passed in required current-head evidence.
-TDD/regression: focused pytest and Strix shell regression targets passed in the isolated current-head source tree.
-Coverage: required coverage execution evidence proves 100% Python test coverage and the changed JavaScript coverage contract remains fail-closed.
-Docstring coverage: coverage execution evidence reports configured repository docstring gates passed or docstring coverage was advisory.
-DAG: CodeGraph connects the model-pool timeout cap, coverage path normalization, and gitlink classification to their workflow gates.
-PoC/execution: the central adversarial harness executed focused current-head commands and observed all probes pass.
-DDD/domain: review-governance invariants remain scoped to central self-repair and do not enable model-free approval for general repositories.
-CDD/context: current-head changed files, workflow evidence, focused tests, and CodeGraph context were reconciled.
-Similar issues: the observed provider budget, quota, 403, and 4k request-limit failure modes were reproduced from workflow logs and bounded by tests.
-Claim/concept check: runtime provider evidence and the configured high-sensitivity model contract were checked against current behavior.
-Standards search: GitHub workflow token, OIDC, and check-gating conventions were checked through repository contracts and current platform evidence.
-Compatibility/convention: existing OpenCode config, shell, workflow, and test conventions were preserved.
-Breaking-change/backcompat: the fallback is restricted to central review-process paths and leaves general repository fail-closed behavior unchanged.
-Performance: constrained GitHub GPT-5 endpoints are capped so they cannot consume a full dynamic cadence slot.
-Developer experience: model failure reasons, selected caps, and adversarial harness outcomes remain visible in logs.
-User experience: review identity, review evidence, status-check output, and merge-automation behavior remain explicit and current-head bound.
-Visual/DOM: no web UI surface changed; workflow-reader and review-comment interaction evidence was checked instead.
-Accessibility/i18n: human-readable workflow and review text remains explicit without changing product UI localization.
-Supply-chain/license: no new runtime dependency was added; the harness uses existing uv, pytest, and repository scripts.
-Packaging: OpenCode configuration, workflow YAML, shell scripts, and test contracts passed their package and syntax checks.
-Security/privacy: OIDC OpenCode review writes, stale-head guards, code-scanning sensitivity, and fail-closed non-central behavior remain enforced.
-EOF
-)"
-
-	jq -n \
-		--arg head_sha "$HEAD_SHA" \
-		--arg run_id "$RUN_ID" \
-		--arg run_attempt "$RUN_ATTEMPT" \
-		--arg reason "Focused current-head adversarial probes falsified regressions in scripts/ci/run_opencode_review_model_pool.sh, scripts/ci/javascript_coverage_gate.py, and scripts/ci/strix_quick_gate.sh." \
-		--arg summary "$summary" \
-		--argjson model_line "$model_line" \
-		--argjson javascript_line "$javascript_line" \
-		--argjson strix_line "$strix_line" \
-		'{
-			head_sha: $head_sha,
-			run_id: $run_id,
-			run_attempt: $run_attempt,
-			result: "APPROVE",
-			reason: $reason,
-			summary: $summary,
-			adversarial_validation: {
-				status: "passed",
-				probes: [
-					{
-						path: "scripts/ci/run_opencode_review_model_pool.sh",
-						line: $model_line,
-						hypothesis: "A constrained GitHub GPT-5 endpoint can consume the complete medium-change cadence and starve later candidates.",
-						attack_or_counterexample: "Run the real model-pool launcher with a 9-second candidate timeout and a 3-second constrained-endpoint cap.",
-						evidence: "pytest command tests/test_opencode_model_pool_runner.py::test_github_gpt5_runtime_cap_preserves_queue_budget passed and observed the 3-second cap in launcher output.",
-						outcome: "falsified"
-					},
-					{
-						path: "scripts/ci/javascript_coverage_gate.py",
-						line: $javascript_line,
-						hypothesis: "An absolute path outside the repository or an ambiguous suffix can be accepted as changed-file coverage.",
-						attack_or_counterexample: "Execute the coverage-path ambiguity and outside-root regression cases against the current normalizer.",
-						evidence: "tests/test_javascript_coverage_gate.py passed all focused path, statement, branch, function, and line cases.",
-						outcome: "falsified"
-					},
-					{
-						path: "scripts/ci/strix_quick_gate.sh",
-						line: $strix_line,
-						hypothesis: "A legitimate mode-160000 gitlink is treated as an unreadable irregular file and blocks the PR scope gate.",
-						attack_or_counterexample: "Run the pull-request-target gitlink fixture through the real Strix quick-gate shell harness.",
-						evidence: "command STRIX_TEST_CASE_FILTER=pull-request-target-gitlink-is-explicitly-skipped bash scripts/ci/test_strix_quick_gate.sh passed while non-gitlink irregular entries remain fail-closed.",
-						outcome: "falsified"
-					}
-				],
-				residual_risk: "External model-provider availability remains variable; general repository reviews still fail closed without a model-produced adversarial verdict."
-			},
-			findings: []
-		}' >"$OPENCODE_OUTPUT_FILE"
-
-	if ! normalize_opencode_output "$OPENCODE_OUTPUT_FILE"; then
-		printf 'Central adversarial harness produced a control block rejected by the normalizer or approval gate.\n'
-		: >"$OPENCODE_OUTPUT_FILE"
-		return 1
-	fi
-	printf 'Central adversarial harness produced a valid current-head APPROVE control block.\n'
-	record_review_model "central-current-head-adversarial-harness"
-	record_review_status "success"
-	return 0
-}
-
 finish_pool_without_model() {
-	if run_central_adversarial_harness; then
-		return 0
-	fi
 	record_pool_exhausted
 	return 1
 }
@@ -224,10 +53,17 @@ normalize_opencode_output() {
 
 backoff_sleep() {
 	local attempt="$1"
-	local initial="${OPENCODE_BACKOFF_INITIAL_SECONDS:-20}"
-	local max_sleep="${OPENCODE_BACKOFF_MAX_SECONDS:-300}"
+	local initial max_sleep attempt_value
 	local sleep_for
-	sleep_for=$((initial * (1 << (attempt - 1))))
+	if ! is_non_negative_integer "$attempt" || [ "$((10#$attempt))" -lt 1 ] || [ "$((10#$attempt))" -gt 30 ]; then
+		attempt="1"
+	fi
+	initial="$(env_integer_or_default OPENCODE_BACKOFF_INITIAL_SECONDS 20)"
+	max_sleep="$(env_integer_or_default OPENCODE_BACKOFF_MAX_SECONDS 300)"
+	attempt_value=$((10#$attempt))
+	initial=$((10#$initial))
+	max_sleep=$((10#$max_sleep))
+	sleep_for=$((initial * (1 << (attempt_value - 1))))
 	if [ "$sleep_for" -gt "$max_sleep" ]; then
 		sleep_for="$max_sleep"
 	fi
@@ -236,7 +72,7 @@ backoff_sleep() {
 
 is_non_negative_integer() {
 	case "${1:-}" in
-	"" | *[!0-9]*) return 1 ;;
+	"" | *[!0-9]* | ??????????*) return 1 ;;
 	*) return 0 ;;
 	esac
 }
@@ -349,10 +185,10 @@ write_prompt() {
 		fi
 		printf 'Do not request changes solely because your tool call, MCP call, or full-file read was not executed. Treat that as a review source limitation unless current-head evidence explicitly reports a materialization failure; any such finding must be tied to that evidence, not a generic model-exhaustion message. REQUEST_CHANGES findings must cite a positive source/evidence line; never use line 0.\n'
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
-		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome; generic source-inspection or coverage-verification claims are invalid.\n'
+		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome and exactly one source-line-sha256=<64 lowercase hex> digest computed from the cited current-head line bytes without its line ending; generic source-inspection or coverage-verification claims are invalid.\n'
 		printf 'Required control block shape:\n'
 		printf '```json\n'
-		printf '{"head_sha":"%s","run_id":"%s","run_attempt":"%s","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and all required labels","adversarial_validation":{"status":"passed or failed","probes":[{"path":"exact/current-head/changed-file","line":1,"hypothesis":"concrete failure hypothesis","attack_or_counterexample":"input, state, race, threat, or boundary used to challenge it","evidence":"executed command or source-backed trace and observed outcome","outcome":"falsified or confirmed"}],"residual_risk":"bounded residual risk after the probes"},"findings":[]}\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
+		printf '{"head_sha":"%s","run_id":"%s","run_attempt":"%s","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and all required labels","adversarial_validation":{"status":"passed or failed","probes":[{"path":"exact/current-head/changed-file","line":1,"hypothesis":"concrete failure hypothesis","attack_or_counterexample":"input, state, race, threat, or boundary used to challenge it","evidence":"executed command or source-backed trace, observed outcome, and source-line-sha256=<exact cited line digest>","outcome":"falsified or confirmed"}],"residual_risk":"bounded residual risk after the probes"},"findings":[]}\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
 		printf '```\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'
@@ -424,84 +260,48 @@ has_fatal_provider_error_event() {
 emit_sanitized_opencode_failure_detail() {
 	local opencode_json_file="$1"
 	local opencode_stderr_file="$2"
-	local detail_file json_bytes stderr_bytes
+	local json_bytes stderr_bytes failure_class
 
-	detail_file="$(mktemp)"
 	json_bytes=0
 	stderr_bytes=0
 	if [ -s "$opencode_json_file" ]; then
 		json_bytes="$(wc -c <"$opencode_json_file" | tr -d ' ')"
-		{
-			tail -n 200 "$opencode_json_file" |
-				python3 -c '
-import json
-import sys
-
-
-def strings_from_payload(payload):
-    error = payload.get("error") if isinstance(payload, dict) else None
-    if isinstance(error, str) and error:
-        yield error
-    elif isinstance(error, dict):
-        parts = []
-        for key in ("name", "message"):
-            value = error.get(key)
-            if isinstance(value, str) and value:
-                parts.append(value)
-        data = error.get("data")
-        if isinstance(data, dict):
-            for key in ("message", "responseBody"):
-                value = data.get(key)
-                if isinstance(value, str) and value:
-                    parts.append(value)
-        elif isinstance(data, str) and data:
-            parts.append(data)
-        if parts:
-            yield ": ".join(parts)
-    if isinstance(payload, dict):
-        for key in ("message",):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                yield value
-        data = payload.get("data")
-        if isinstance(data, dict):
-            value = data.get("message")
-            if isinstance(value, str) and value:
-                yield value
-
-
-for line in sys.stdin:
-    try:
-        parsed = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    for text in strings_from_payload(parsed):
-        print(text)
-' 2>/dev/null |
-				head -n 16 |
-				sed 's/^/json: /' >>"$detail_file"
-		} || true
 	fi
 	if [ -s "$opencode_stderr_file" ]; then
 		stderr_bytes="$(wc -c <"$opencode_stderr_file" | tr -d ' ')"
-		tail -n 40 "$opencode_stderr_file" | sed 's/^/stderr: /' >>"$detail_file"
 	fi
 
-	if [ -s "$detail_file" ]; then
-		perl -pe '
-			s/\bBearer\s+[A-Za-z0-9._~+\/=:-]+/Bearer [REDACTED]/ig;
-			s/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/[REDACTED]/g;
-			s/\bsk-[A-Za-z0-9_-]{6,}/[REDACTED]/g;
-			s/((?:api[_-]?key|authorization|token|secret|password)\s*[":=]\s*)[^,\s;]+/${1}[REDACTED]/ig;
-			s/\b[A-Za-z0-9_+\/=.-]{32,}\b/[REDACTED]/g;
-			s/[\x00-\x08\x0B-\x1F\x7F]/?/g;
-		' "$detail_file" |
-			awk 'NF && !seen[$0]++ { if (length($0) > 500) $0 = substr($0, 1, 500) "..."; print "OpenCode provider failure detail: " $0; if (++count >= 8) exit }'
+	failure_class="unclassified"
+	if grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="context-window"
+	elif grep -Eiq 'budget limit|insufficient_quota|quota exceeded' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="quota-or-budget"
+	elif grep -Eiq 'rate.?limit|too many requests|(^|[^0-9])429([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="rate-limit"
+	elif grep -Eiq 'permission denied|authentication|authorization|(^|[^0-9])(401|403)([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="authentication-or-permission"
+	elif grep -Eiq 'timed? ?out|timeout' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="timeout"
+	elif [ "$json_bytes" -gt 0 ] || [ "$stderr_bytes" -gt 0 ]; then
+		failure_class="provider-error"
 	else
-		printf 'OpenCode provider failure supplied no structured JSON or stderr reason (json-bytes=%s, stderr-bytes=%s).\n' \
-			"$json_bytes" "$stderr_bytes"
+		failure_class="no-provider-detail"
 	fi
-	rm -f "$detail_file"
+	printf 'OpenCode provider failure metadata: class=%s json-bytes=%s stderr-bytes=%s; provider-controlled content suppressed.\n' \
+		"$failure_class" "$json_bytes" "$stderr_bytes"
+}
+
+emit_rejected_opencode_artifact_metadata() {
+	local artifact_kind="$1"
+	local artifact_file="$2"
+	local artifact_bytes=0 artifact_lines=0
+
+	if [ -f "$artifact_file" ]; then
+		artifact_bytes="$(wc -c <"$artifact_file" | tr -d ' ')"
+		artifact_lines="$(wc -l <"$artifact_file" | tr -d ' ')"
+	fi
+	printf 'OpenCode rejected provider artifact metadata: kind=%s bytes=%s lines=%s; provider-controlled content suppressed.\n' \
+		"$artifact_kind" "$artifact_bytes" "$artifact_lines"
 }
 
 is_direct_openai_candidate() {
@@ -577,7 +377,10 @@ run_one_model_attempt() {
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	timeout --kill-after=30s "${run_timeout_seconds}s" opencode run "$(cat "$prompt_file")" \
+	timeout --kill-after=30s "${run_timeout_seconds}s" \
+		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		opencode run "$(cat "$prompt_file")" \
 		--pure \
 		--agent "$agent" \
 		--model "$model_candidate" \
@@ -622,26 +425,29 @@ run_one_model_attempt() {
 	session_id="$(jq -r 'select(.type == "step_start") | .sessionID' "$opencode_json_file" | tail -n 1)"
 	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
-		cat "$opencode_json_file"
+		emit_rejected_opencode_artifact_metadata "sessionless-json" "$opencode_json_file"
 		if is_fatal_provider_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
 	fi
-	if ! timeout --kill-after=15s "${export_timeout_seconds}s" opencode export "$session_id" --pure >"$opencode_export_file"; then
+	if ! timeout --kill-after=15s "${export_timeout_seconds}s" \
+		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		opencode export "$session_id" --pure >"$opencode_export_file"; then
 		printf 'OpenCode %s attempt %s/%s session export did not complete within %ss.\n' "$model_candidate" "$attempt" "$attempts" "$export_timeout_seconds"
 		return 1
 	fi
 	jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$candidate_output_file"
 	if [ ! -s "$candidate_output_file" ]; then
 		printf 'OpenCode %s attempt %s/%s session export did not include assistant text.\n' "$model_candidate" "$attempt" "$attempts"
-		cat "$opencode_export_file"
+		emit_rejected_opencode_artifact_metadata "assistant-empty-export" "$opencode_export_file"
 		return 1
 	fi
 	if ! normalize_opencode_output "$candidate_output_file"; then
 		printf 'OpenCode %s attempt %s/%s output did not include a valid control conclusion.\n' "$model_candidate" "$attempt" "$attempts"
-		cat "$candidate_output_file"
+		emit_rejected_opencode_artifact_metadata "invalid-control-output" "$candidate_output_file"
 		return 1
 	fi
 	return 0

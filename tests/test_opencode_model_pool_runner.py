@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -12,8 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
-
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
@@ -22,6 +22,7 @@ CENTRAL_FALLBACK_ENV = {
     "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE",
     "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL",
     "OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE",
+    "OPENCODE_ARTIFACT_MANIFEST_SHA256",
     "OPENCODE_DYNAMIC_REVIEW_CADENCE",
     "OPENCODE_EVIDENCE_FILE",
     "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION",
@@ -52,6 +53,40 @@ def bash_path(path: Path) -> str:
     return posix_path
 
 
+def seal_artifacts(
+    runner_temp: Path,
+    *,
+    head_sha: str,
+    run_id: str,
+    run_attempt: str,
+    paths: tuple[Path, ...],
+) -> str:
+    """Seal fixed runner artifacts with current-run identity and SHA-256 digests."""
+    artifacts = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in paths
+        if path.is_file()
+    }
+    manifest = runner_temp / "opencode-artifact-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "head_sha": head_sha,
+                "run_id": run_id,
+                "run_attempt": run_attempt,
+                "artifacts": artifacts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+    for path in paths:
+        if path.exists():
+            path.chmod(0o600)
+    return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
 def skip_if_windows_bash_is_unresponsive(command: str) -> None:
     """Skip with a visible reason when local Git Bash cannot start on Windows."""
     if os.name != "nt":
@@ -65,9 +100,13 @@ def skip_if_windows_bash_is_unresponsive(command: str) -> None:
             timeout=5,
         )
     except subprocess.TimeoutExpired:
-        pytest.skip("Git Bash did not respond to a smoke command within 5 seconds on Windows")
+        pytest.skip(
+            "Git Bash did not respond to a smoke command within 5 seconds on Windows"
+        )
     if result.returncode != 0:
-        pytest.skip(f"Git Bash smoke command failed on Windows: {result.stderr.strip()}")
+        pytest.skip(
+            f"Git Bash smoke command failed on Windows: {result.stderr.strip()}"
+        )
 
 
 def run_failed_model(
@@ -91,11 +130,18 @@ def run_failed_model(
     for path in (review_dir, source_dir, runner_temp, fake_bin):
         path.mkdir()
     shutil.copy2(ROOT / "opencode.jsonc", review_dir / "opencode.jsonc")
-    evidence_file = tmp_path / "evidence.md"
+    evidence_file = runner_temp / "opencode-review-evidence.md"
     evidence_file.write_text("bounded current-head evidence\n", encoding="utf-8")
-    changed_files_file = tmp_path / "changed-files.txt"
+    changed_files_file = runner_temp / "opencode-changed-files.txt"
     if changed_files is not None:
         changed_files_file.write_text("\n".join(changed_files) + "\n", encoding="utf-8")
+    manifest_digest = seal_artifacts(
+        runner_temp,
+        head_sha="1" * 40,
+        run_id="29189945378",
+        run_attempt="1",
+        paths=(evidence_file, changed_files_file),
+    )
     if evidence_excerpt:
         (review_dir / "bounded-review-evidence-excerpt.md").write_text(
             evidence_excerpt, encoding="utf-8"
@@ -106,12 +152,16 @@ def run_failed_model(
     fake_opencode = fake_bin / "opencode"
     fake_opencode.write_text(
         "#!/usr/bin/env bash\n"
-        "if [ \"${1:-}\" = run ]; then\n"
-        "  [ -z \"${FAKE_OPENCODE_PROMPT_CAPTURE:-}\" ] || printf '%s\\n' \"$2\" > \"$FAKE_OPENCODE_PROMPT_CAPTURE\"\n"
-        "  [ -z \"${FAKE_OPENCODE_JSON:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_JSON\"\n"
-        "  [ -z \"${FAKE_OPENCODE_STDERR:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_STDERR\" >&2\n"
-        "  sleep \"${FAKE_OPENCODE_HANG_SECONDS:-0}\"\n"
-        "  exit 1\n"
+        'if [ "${1:-}" = run ]; then\n'
+        '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$2" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
+        '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
+        '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
+        '  sleep "${FAKE_OPENCODE_HANG_SECONDS:-0}"\n'
+        '  exit "${FAKE_OPENCODE_RUN_EXIT:-1}"\n'
+        "fi\n"
+        'if [ "${1:-}" = export ]; then\n'
+        '  [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
+        '  exit "${FAKE_OPENCODE_EXPORT_EXIT:-0}"\n'
         "fi\n"
         "printf 'unexpected fake opencode command: %s\\n' \"$*\" >&2\n"
         "exit 2\n",
@@ -125,11 +175,14 @@ def run_failed_model(
     env.update(
         {
             "FAKE_OPENCODE_JSON": json_line,
-            "FAKE_OPENCODE_PROMPT_CAPTURE": bash_path(prompt_capture) if prompt_capture else "",
+            "FAKE_OPENCODE_PROMPT_CAPTURE": bash_path(prompt_capture)
+            if prompt_capture
+            else "",
             "FAKE_OPENCODE_STDERR": stderr_line,
             "GITHUB_OUTPUT": bash_path(github_output),
             "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "1" * 40,
+            "OPENCODE_ARTIFACT_MANIFEST_SHA256": manifest_digest,
             "OPENCODE_CHANGED_FILES_FILE": bash_path(changed_files_file),
             "OPENCODE_EVIDENCE_FILE": bash_path(evidence_file),
             "OPENCODE_FATAL_ERROR_POLL_SECONDS": "1",
@@ -200,7 +253,7 @@ def run_central_fallback(
     strix_test.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "test \"${STRIX_TEST_CASE_FILTER:-}\" = "
+        'test "${STRIX_TEST_CASE_FILTER:-}" = '
         "pull-request-target-gitlink-is-explicitly-skipped\n"
         "printf 'pull-request-target-gitlink-is-explicitly-skipped: PASS\\n'\n",
         encoding="utf-8",
@@ -212,7 +265,7 @@ def run_central_fallback(
     fake_uv.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "printf '%s\\n' \"$*\" > \"${FAKE_UV_LOG:?}\"\n"
+        'printf \'%s\\n\' "$*" > "${FAKE_UV_LOG:?}"\n'
         "printf 'focused pytest: PASS\\n'\n",
         encoding="utf-8",
     )
@@ -223,10 +276,17 @@ def run_central_fallback(
         "scripts/ci/javascript_coverage_gate.py",
         "scripts/ci/strix_quick_gate.sh",
     ]
-    changed_files_file = tmp_path / "changed-files.txt"
+    changed_files_file = runner_temp / "opencode-changed-files.txt"
     changed_files_file.write_text(
         "\n".join(required_paths if changed_files is None else changed_files) + "\n",
         encoding="utf-8",
+    )
+    manifest_digest = seal_artifacts(
+        runner_temp,
+        head_sha="2" * 40,
+        run_id="central-fallback-test",
+        run_attempt="1",
+        paths=(changed_files_file,),
     )
     output_file = tmp_path / "selected-output.json"
     github_output = tmp_path / "github-output.txt"
@@ -241,6 +301,7 @@ def run_central_fallback(
             "GITHUB_OUTPUT": bash_path(github_output),
             "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "2" * 40,
+            "OPENCODE_ARTIFACT_MANIFEST_SHA256": manifest_digest,
             "OPENCODE_CHANGED_FILES_FILE": bash_path(changed_files_file),
             "OPENCODE_MODEL_CANDIDATES": "",
             "OPENCODE_OUTPUT_FILE": bash_path(output_file),
@@ -265,40 +326,21 @@ def run_central_fallback(
     return result, output_file, github_output, uv_log
 
 
-def test_central_fallback_emits_structured_adversarial_approval(tmp_path: Path) -> None:
-    """Central self-repair can approve only after all bounded probes execute."""
+def test_central_fallback_cannot_approve_without_model_evidence(tmp_path: Path) -> None:
+    """Passing PR-controlled probes cannot become a synthetic approval."""
     result, output_file, github_output, uv_log = run_central_fallback(tmp_path)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "valid current-head APPROVE control block" in result.stdout
-    assert "review_model=central-current-head-adversarial-harness" in github_output.read_text(
-        encoding="utf-8"
-    )
-    assert "review_status=success" in github_output.read_text(encoding="utf-8")
-    assert "test_github_gpt5_runtime_cap_preserves_queue_budget" in uv_log.read_text(
-        encoding="utf-8"
-    )
-    control = json.loads(output_file.read_text(encoding="utf-8"))
-    assert control["result"] == "APPROVE"
-    assert control["adversarial_validation"]["status"] == "passed"
-    assert len(control["adversarial_validation"]["probes"]) == 3
-    assert {probe["outcome"] for probe in control["adversarial_validation"]["probes"]} == {
-        "falsified"
-    }
-    for probe in control["adversarial_validation"]["probes"]:
-        assert (
-            adversarial_evidence_rejection_reason(
-                probe["evidence"],
-                probe["path"],
-            )
-            is None
-        )
-    assert "bash scripts/ci/test_strix_quick_gate.sh" in control[
-        "adversarial_validation"
-    ]["probes"][2]["evidence"]
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "model pool exhausted" in result.stdout.casefold()
+    assert "review_status=exhausted" in github_output.read_text(encoding="utf-8")
+    assert "review_status=success" not in github_output.read_text(encoding="utf-8")
+    assert output_file.read_text(encoding="utf-8") == ""
+    assert not uv_log.exists()
 
 
-def test_central_fallback_fails_closed_when_required_scope_is_missing(tmp_path: Path) -> None:
+def test_central_fallback_fails_closed_when_required_scope_is_missing(
+    tmp_path: Path,
+) -> None:
     """A central-looking change cannot use the harness without every reviewed core path."""
     result, output_file, github_output, uv_log = run_central_fallback(
         tmp_path,
@@ -306,14 +348,16 @@ def test_central_fallback_fails_closed_when_required_scope_is_missing(tmp_path: 
     )
 
     assert result.returncode == 1
-    assert "required current-head path scripts/ci/javascript_coverage_gate.py is not changed" in result.stdout
+    assert "model pool exhausted" in result.stdout.casefold()
     assert "review_status=exhausted" in github_output.read_text(encoding="utf-8")
     assert output_file.read_text(encoding="utf-8") == ""
     assert not uv_log.exists()
 
 
-def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: Path) -> None:
-    """Provider JSON/stderr reasons remain useful without leaking credentials."""
+def test_failed_provider_logs_bounded_reason_and_redacts_credentials(
+    tmp_path: Path,
+) -> None:
+    """Provider failures expose only a fixed class and bounded byte counts."""
     fake_bearer_token = "secret" + "-value"
     fake_openai_token = "sk" + "-dangerous123456"
     fake_github_token = "github" + "_pat_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
@@ -331,9 +375,15 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: P
     )
 
     assert result.returncode == 1
-    assert "OpenCode provider failure detail: json: ProviderAuthError: HTTP 401" in result.stdout
-    assert "OpenCode provider failure detail: stderr: request failed" in result.stdout
-    assert result.stdout.count("[REDACTED]") >= 3
+    assert (
+        "OpenCode provider failure metadata: class=authentication-or-permission"
+        in result.stdout
+    )
+    assert "json-bytes=" in result.stdout
+    assert "stderr-bytes=" in result.stdout
+    assert "provider-controlled content suppressed" in result.stdout
+    assert "ProviderAuthError" not in result.stdout
+    assert "request failed" not in result.stdout
     assert fake_bearer_token not in result.stdout
     assert fake_openai_token not in result.stdout
     assert fake_github_token not in result.stdout
@@ -346,9 +396,133 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
 
     assert result.returncode == 1
     assert (
-        "OpenCode provider failure supplied no structured JSON or stderr reason "
-        "(json-bytes=0, stderr-bytes=0)."
+        "OpenCode provider failure metadata: class=no-provider-detail "
+        "json-bytes=0 stderr-bytes=0; provider-controlled content suppressed."
     ) in result.stdout
+
+
+def test_backoff_environment_rejects_recursive_arithmetic_injection(
+    tmp_path: Path,
+) -> None:
+    """Do not evaluate attacker-controlled backoff text as Bash arithmetic."""
+    marker = tmp_path / "arithmetic-injection-ran"
+    result = run_failed_model(
+        tmp_path,
+        stderr_line="provider unavailable",
+        extra_env={
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": f"SECONDS[$(touch {marker})]",
+            "OPENCODE_BACKOFF_MAX_SECONDS": "0",
+        },
+    )
+
+    assert result.returncode != 0
+    assert not marker.exists()
+
+
+def secret_payload() -> tuple[str, tuple[str, ...]]:
+    """Return a fake credential plus fragments used to detect partial disclosure."""
+    parts = ("github", "_pat_", "THISMUSTNEVERLEAK123456789")
+    return "".join(parts), parts
+
+
+def assert_secret_absent(result: subprocess.CompletedProcess[str], secret: str) -> None:
+    """Assert that raw, fragmented, and encoded credentials are absent from logs."""
+    combined = result.stdout + result.stderr
+    encoded = base64.b64encode(secret.encode()).decode()
+    assert secret not in combined
+    assert encoded not in combined
+    for part in ("github_pat_", "THISMUSTNEVERLEAK123456789"):
+        assert part not in combined
+
+
+def test_success_without_session_suppresses_provider_artifact_content(
+    tmp_path: Path,
+) -> None:
+    """A malformed successful run logs metadata without replaying its JSON stream."""
+    secret, parts = secret_payload()
+    encoded = base64.b64encode(secret.encode()).decode()
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {"type": "text", "text": f"{parts[0]}{parts[1]}{parts[2]} {encoded}"}
+        ),
+        extra_env={"FAKE_OPENCODE_RUN_EXIT": "0"},
+    )
+
+    assert result.returncode == 1
+    assert "JSON output did not include a session id" in result.stdout
+    assert "kind=sessionless-json" in result.stdout
+    assert "provider-controlled content suppressed" in result.stdout
+    assert_secret_absent(result, secret)
+
+
+def test_empty_assistant_export_suppresses_provider_artifact_content(
+    tmp_path: Path,
+) -> None:
+    """An empty assistant export cannot echo arbitrary provider-controlled fields."""
+    secret, _ = secret_payload()
+    encoded = base64.b64encode(secret.encode()).decode()
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {"messages": [], "provider_debug": f"{secret} {encoded}"}
+            ),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "session export did not include assistant text" in result.stdout
+    assert "kind=assistant-empty-export" in result.stdout
+    assert_secret_absent(result, secret)
+
+
+def test_invalid_control_output_suppresses_assistant_content(tmp_path: Path) -> None:
+    """Rejected assistant text is summarized without writing it to Actions logs."""
+    secret, _ = secret_payload()
+    encoded = base64.b64encode(secret.encode()).decode()
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": f"invalid control {secret} {encoded}",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "output did not include a valid control conclusion" in result.stdout
+    assert "kind=invalid-control-output" in result.stdout
+    assert_secret_absent(result, secret)
+
+
+def test_runner_never_cats_rejected_provider_artifacts() -> None:
+    """Provider-controlled rejection files are never replayed with direct cat calls."""
+    runner = RUNNER.read_text(encoding="utf-8")
+    for variable in (
+        "opencode_json_file",
+        "opencode_stderr_file",
+        "opencode_export_file",
+        "candidate_output_file",
+    ):
+        assert f'cat "${variable}"' not in runner
 
 
 @pytest.mark.parametrize(
@@ -461,7 +635,10 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
         "for 21 changed file(s); max-cycles=0."
     ) in result.stdout
     assert "OpenCode model pool reached configured max cycle count" not in result.stdout
-    assert "OpenCode model pool exhausted before producing a valid control conclusion." in result.stdout
+    assert (
+        "OpenCode model pool exhausted before producing a valid control conclusion."
+        in result.stdout
+    )
 
 
 def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
@@ -490,7 +667,9 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     assert run_timeout <= remaining_budget <= 30
 
 
-def test_github_models_openai_prompt_references_evidence_without_inlining(tmp_path: Path) -> None:
+def test_github_models_openai_prompt_references_evidence_without_inlining(
+    tmp_path: Path,
+) -> None:
     """Small-request GitHub Models OpenAI candidates keep evidence as files."""
     prompt_capture = tmp_path / "captured-prompt.md"
     evidence_excerpt = "UNIQUE_CURRENT_HEAD_EVIDENCE_PACKET"

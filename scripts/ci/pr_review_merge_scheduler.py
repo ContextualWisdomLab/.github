@@ -490,13 +490,12 @@ def run_github_actions(args: Sequence[str], *, stdin: str | None = None) -> str:
 
 
 def scheduler_dispatch_env() -> dict[str, str] | None:
-    """Return an env override for central-repository workflow dispatch when configured.
+    """Return an env override for central repository dispatch when configured.
 
     The OpenCode app installation has no Actions permission, so the mutation token
-    cannot dispatch `gh workflow run`. When the scheduler executes inside the
-    central repository the required workflows are dispatched on, the runner's own
-    github.token (actions: write) is a sufficient dispatch credential; the workflow
-    passes it through SCHEDULER_DISPATCH_TOKEN.
+    cannot create a repository dispatch. When the scheduler executes inside the
+    central repository receiving the event, the runner's own github.token is a
+    sufficient credential; the workflow passes it through SCHEDULER_DISPATCH_TOKEN.
     """
     dispatch_token = os.environ.get("SCHEDULER_DISPATCH_TOKEN")
     if not dispatch_token or dispatch_token == os.environ.get("GH_TOKEN"):
@@ -507,7 +506,7 @@ def scheduler_dispatch_env() -> dict[str, str] | None:
 
 
 def run_github_dispatch(args: Sequence[str], *, stdin: str | None = None) -> str:
-    """Run a workflow dispatch command with the dispatch token when configured."""
+    """Run a repository dispatch command with the dispatch token when configured."""
     env = scheduler_dispatch_env()
     if env is None:
         return run_github_actions(args, stdin=stdin)
@@ -567,24 +566,19 @@ def validated_pr_dispatch_fields(pr: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def workflow_dispatch_target(repo: str, base_ref: str) -> tuple[str, str, list[str]]:
-    """Return repository, ref, and extra inputs for workflow dispatch.
+def repository_dispatch_target(repo: str) -> str:
+    """Return the default-branch repository that receives review dispatch events.
 
     Organization required workflows are sourced from ContextualWisdomLab/.github,
     while most target repositories deliberately do not keep repo-local workflow
-    copies. When configured, dispatch the central workflow and pass the real
-    target repository as data.
+    copies. GitHub evaluates ``repository_dispatch`` only from the receiver's
+    default branch, so callers cannot select a privileged workflow ref.
     """
     target_repo = validate_github_repository(repo)
     dispatch_repo = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
     if not dispatch_repo:
-        return target_repo, base_ref, []
-    dispatch_repo = validate_github_repository(dispatch_repo)
-    dispatch_ref = validate_git_ref(
-        (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REF") or "main").strip() or "main"
-    )
-    extra_inputs = [] if dispatch_repo == target_repo else ["-f", f"target_repository={target_repo}"]
-    return dispatch_repo, dispatch_ref, extra_inputs
+        return target_repo
+    return validate_github_repository(dispatch_repo)
 
 
 def env_flag_enabled(name: str) -> bool:
@@ -592,14 +586,14 @@ def env_flag_enabled(name: str) -> bool:
     return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def workflow_dispatch_wait_reason(repo: str, workflow: str) -> str | None:
-    """Explain why cross-repository required workflow dispatch should wait."""
+def repository_dispatch_wait_reason(repo: str, workflow: str) -> str | None:
+    """Explain why cross-repository required repository dispatch should wait."""
     target_repo = validate_github_repository(repo)
     dispatch_repo = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
     if not dispatch_repo:
         return None
     dispatch_repo = validate_github_repository(dispatch_repo)
-    if dispatch_repo == target_repo or env_flag_enabled("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH"):
+    if dispatch_repo == target_repo or env_flag_enabled("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH"):
         return None
     execution_repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
     if os.environ.get("SCHEDULER_DISPATCH_TOKEN") and execution_repo == dispatch_repo:
@@ -610,7 +604,7 @@ def workflow_dispatch_wait_reason(repo: str, workflow: str) -> str | None:
     return (
         f"{workflow} dispatch waits for central required workflow materialization; "
         f"required workflow source is {dispatch_repo}, but this scheduler run has no "
-        "cross-repository workflow-dispatch credential. Wait for the organization required "
+        "cross-repository repository-dispatch credential. Wait for the organization required "
         "workflow to materialize, or rerun the same-head target-repository job after GitHub "
         "exposes it in the PR check rollup."
     )
@@ -1732,7 +1726,7 @@ def post_update_branch_followup(
 
     strix_state = strix_evidence_state(updated_pr)
     if strix_state == "missing":
-        wait_reason = workflow_dispatch_wait_reason(repo, security_workflow)
+        wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
         if wait_reason:
             return f"{head_note}; {wait_reason}"
         dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
@@ -1747,7 +1741,7 @@ def post_update_branch_followup(
     if opencode_state == "running":
         return f"{head_note}; same-head OpenCode review is already running"
 
-    wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+    wait_reason = repository_dispatch_wait_reason(repo, workflow)
     if wait_reason:
         return f"{head_note}; {wait_reason}"
     dispatch_result = dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
@@ -1886,6 +1880,82 @@ def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list
     return stale
 
 
+def active_review_run_refs(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    *,
+    run_title: str,
+    workflow_aliases: frozenset[str],
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Return repository-qualified current and stale review workflow runs."""
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = repository_dispatch_target(target_repo)
+    repositories = tuple(dict.fromkeys((target_repo, dispatch_repo)))
+    head = str(pr.get("headRefOid") or "").lower()
+    number = int(pr["number"])
+    dispatch_title_prefix = f"{run_title} {target_repo}#{number}@"
+    current: list[tuple[str, str]] = []
+    stale: list[tuple[str, str]] = []
+
+    for run_repo in repositories:
+        for run_data in active_workflow_runs(run_repo, statuses):
+            run_name = str(run_data.get("name") or "")
+            if run_name != workflow and run_name not in workflow_aliases:
+                continue
+            run_id = run_data.get("id")
+            if not run_id:
+                continue
+            run_ref = (run_repo, str(run_id))
+            display_title = str(run_data.get("display_title") or "")
+            if (
+                run_data.get("event") == "repository_dispatch"
+                and display_title.startswith(dispatch_title_prefix)
+            ):
+                dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
+                if not GIT_SHA_RE.fullmatch(dispatched_head):
+                    continue
+                (current if dispatched_head == head else stale).append(run_ref)
+                continue
+            if run_repo != target_repo:
+                continue
+            run_head = str(run_data.get("head_sha") or "").lower()
+            pull_requests = run_data.get("pull_requests") or []
+            if run_head == head:
+                if pull_requests and not workflow_run_mentions_pr(run_data, number):
+                    continue
+                current.append(run_ref)
+                continue
+            if workflow_run_mentions_pr(run_data, number):
+                stale.append(run_ref)
+    return current, stale
+
+
+def active_opencode_run_refs(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Return repository-qualified current and stale OpenCode run references.
+
+    A central ``repository_dispatch`` run executes at the receiver's default
+    branch SHA, not the target pull request SHA. Its protected workflow run-name
+    therefore carries the live-validated target repository, PR number, and head
+    SHA. Inspect both the target and central repositories so a scheduler pass can
+    suppress the same-head retry and cancel an older-head central run safely.
+    """
+    return active_review_run_refs(
+        repo,
+        workflow,
+        pr,
+        run_title="Required OpenCode Review",
+        workflow_aliases=frozenset(OPENCODE_WORKFLOW_NAMES),
+        statuses=statuses,
+    )
+
+
 def active_opencode_run_ids(
     repo: str,
     workflow: str,
@@ -1894,34 +1964,15 @@ def active_opencode_run_ids(
 ) -> tuple[list[str], list[str]]:
     """Return current-head and stale OpenCode run ids for one pull request.
 
-    A workflow-dispatch run can have an empty ``pull_requests`` array even
+    A repository-dispatch run can have an empty ``pull_requests`` array even
     though its validated inputs target a PR. Treat a matching OpenCode workflow
     name plus the exact current head SHA as sufficient current-head ownership;
     otherwise require an explicit PR association before classifying a run as
     stale. This prevents repeated scheduler passes from dispatching a new run
     that cancels the already queued or running same-head review.
     """
-    head = str(pr.get("headRefOid") or "").lower()
-    number = int(pr["number"])
-    current: list[str] = []
-    stale: list[str] = []
-    for run_data in active_workflow_runs(repo, statuses):
-        run_name = str(run_data.get("name") or "")
-        if run_name != workflow and run_name not in OPENCODE_WORKFLOW_NAMES:
-            continue
-        run_id = run_data.get("id")
-        if not run_id:
-            continue
-        run_head = str(run_data.get("head_sha") or "").lower()
-        pull_requests = run_data.get("pull_requests") or []
-        if run_head == head:
-            if pull_requests and not workflow_run_mentions_pr(run_data, number):
-                continue
-            current.append(str(run_id))
-            continue
-        if workflow_run_mentions_pr(run_data, number):
-            stale.append(str(run_id))
-    return current, stale
+    current, stale = active_opencode_run_refs(repo, workflow, pr, statuses)
+    return [run_id for _, run_id in current], [run_id for _, run_id in stale]
 
 
 def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, str]:
@@ -1962,6 +2013,15 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     return failures
 
 
+def force_cancel_workflow_run_refs(run_refs: Sequence[tuple[str, str]]) -> None:
+    """Force-cancel repository-qualified runs while retaining bounded batches."""
+    runs_by_repo: dict[str, list[str]] = {}
+    for run_repo, run_id in run_refs:
+        runs_by_repo.setdefault(run_repo, []).append(run_id)
+    for run_repo, run_ids in runs_by_repo.items():
+        force_cancel_workflow_runs(run_repo, run_ids)
+
+
 def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
     """Force-cancel queued or running workflows for older heads of the same PR."""
     if dry_run:
@@ -1977,21 +2037,23 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
     if dry_run:
         return []
     require_github_actions_control_actor("force-cancel-stale-opencode-review")
-    run_ids = stale_opencode_run_ids(repo, workflow, pr)
-    force_cancel_workflow_runs(repo, run_ids)
-    return run_ids
+    _, stale_refs = active_opencode_run_refs(repo, workflow, pr)
+    force_cancel_workflow_run_refs(stale_refs)
+    return [run_id for _, run_id in stale_refs]
 
 
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch OpenCode for the PR head, or report an active same-head run."""
     if not dry_run:
         require_github_actions_control_actor("inspect-active-opencode-review")
-        current_run_ids, stale_run_ids = active_opencode_run_ids(repo, workflow, pr)
-        force_cancel_workflow_runs(repo, stale_run_ids)
-        if current_run_ids:
+        current_run_refs, stale_run_refs = active_opencode_run_refs(repo, workflow, pr)
+        force_cancel_workflow_run_refs(stale_run_refs)
+        if current_run_refs:
             print(
                 "OpenCode review dispatch skipped: active same-head workflow run(s) "
-                + ", ".join(current_run_ids)
+                + ", ".join(
+                    f"{run_repo}@{run_id}" for run_repo, run_id in current_run_refs
+                )
             )
             return "already_running"
     job_id = matching_actions_job_id(pr, is_opencode_context)
@@ -2002,62 +2064,87 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         return "dry_run"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     head_ref = validate_git_ref(pr["headRefName"])
-    dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = repository_dispatch_target(target_repo)
     run_github_dispatch(
         [
             "gh",
-            "workflow",
-            "run",
-            workflow,
-            "--repo",
-            dispatch_repo,
-            "--ref",
-            dispatch_ref,
-            *extra_inputs,
-            "-f",
-            f"pr_number={pr['number']}",
-            "-f",
-            f"pr_base_ref={base_ref}",
-            "-f",
-            f"pr_base_sha={base_sha}",
-            "-f",
-            f"pr_head_ref={head_ref}",
-            "-f",
-            f"pr_head_sha={head_sha}",
-        ]
+            "api",
+            "-X",
+            "POST",
+            f"repos/{dispatch_repo}/dispatches",
+            "--input",
+            "-",
+        ],
+        stdin=json.dumps(
+            {
+                "event_type": "opencode-review",
+                "client_payload": {
+                    "target_repository": target_repo,
+                    "pr_number": int(pr["number"]),
+                    "pr_base_ref": base_ref,
+                    "pr_base_sha": base_sha,
+                    "pr_head_ref": head_ref,
+                    "pr_head_sha": head_sha,
+                },
+            }
+        ),
     )
     return "dispatched"
 
 
-def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> None:
+def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
     job_id = matching_actions_job_id(pr, is_strix_context)
     if job_id:
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
-        return
+        return "rerun" if not dry_run else "dry_run"
     if dry_run:
-        return
+        return "dry_run"
+    require_github_actions_control_actor("inspect-active-strix-evidence")
+    current_run_refs, stale_run_refs = active_review_run_refs(
+        repo,
+        workflow,
+        pr,
+        run_title="Strix Security Scan",
+        workflow_aliases=frozenset({"Strix Security Scan"}),
+    )
+    force_cancel_workflow_run_refs(stale_run_refs)
+    if current_run_refs:
+        print(
+            "Strix evidence dispatch skipped: active same-head workflow run(s) "
+            + ", ".join(
+                f"{run_repo}@{run_id}" for run_repo, run_id in current_run_refs
+            )
+        )
+        return "already_running"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
-    dispatch_repo, dispatch_ref, extra_inputs = workflow_dispatch_target(repo, base_ref)
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = repository_dispatch_target(target_repo)
     run_github_dispatch(
         [
             "gh",
-            "workflow",
-            "run",
-            workflow,
-            "--repo",
-            dispatch_repo,
-            "--ref",
-            dispatch_ref,
-            *extra_inputs,
-            "-f",
-            f"pr_number={pr['number']}",
-            "-f",
-            f"pr_base_sha={base_sha}",
-            "-f",
-            f"pr_head_sha={head_sha}",
-        ]
+            "api",
+            "-X",
+            "POST",
+            f"repos/{dispatch_repo}/dispatches",
+            "--input",
+            "-",
+        ],
+        stdin=json.dumps(
+            {
+                "event_type": "strix-scan",
+                "client_payload": {
+                    "target_repository": target_repo,
+                    "pr_number": int(pr["number"]),
+                    "pr_base_ref": base_ref,
+                    "pr_base_sha": base_sha,
+                    "pr_head_sha": head_sha,
+                },
+            }
+        ),
     )
+    return "dispatched"
 
 
 def merge_conflict_guidance(pr: dict[str, Any], merge_state: str) -> str:
@@ -2162,7 +2249,7 @@ def inspect_pr(
         # feature-branch merges.
         opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
         if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
-            wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+            wait_reason = repository_dispatch_wait_reason(repo, workflow)
             if wait_reason:
                 return Decision(number, "wait", f"stacked PR onto {base_ref}; {wait_reason}")
             dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
@@ -2580,7 +2667,7 @@ def inspect_pr(
                     "wait",
                     "current head has no completed Strix evidence; review dispatch limit reached",
                 )
-            wait_reason = workflow_dispatch_wait_reason(repo, security_workflow)
+            wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
             if wait_reason:
                 return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
             dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
@@ -2597,7 +2684,7 @@ def inspect_pr(
                 "wait",
                 "current head has completed Strix evidence; review dispatch limit reached",
             )
-        wait_reason = workflow_dispatch_wait_reason(repo, workflow)
+        wait_reason = repository_dispatch_wait_reason(repo, workflow)
         if wait_reason:
             return decide("wait", f"current head has completed Strix evidence; {wait_reason}")
         dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)

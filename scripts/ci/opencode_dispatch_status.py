@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decide the workflow-dispatch OpenCode status from validated live evidence."""
+"""Decide the repository-dispatch OpenCode status from validated live evidence."""
 
 from __future__ import annotations
 

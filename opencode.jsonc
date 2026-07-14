@@ -3,52 +3,20 @@
   "model": "github-models/deepseek/deepseek-r1-0528",
   "small_model": "github-models/deepseek/deepseek-v3-0324",
   "enabled_providers": ["github-models"],
-  "lsp": true,
-  "mcp": {
-    "codegraph": {
-      "type": "local",
-      "command": ["npx", "-y", "@colbymchenry/codegraph@0.9.9", "serve", "--mcp"],
-      "enabled": true
-    },
-    "deepwiki": {
-      "type": "remote",
-      "url": "https://mcp.deepwiki.com/mcp",
-      "enabled": true,
-      "timeout": 10000
-    },
-    "context7": {
-      "type": "local",
-      "command": ["npx", "-y", "@upstash/context7-mcp@3.1.0", "--transport", "stdio"],
-      "enabled": true,
-      "timeout": 10000,
-      "environment": {
-        "NPM_CONFIG_IGNORE_SCRIPTS": "true",
-        "NPM_CONFIG_LOGLEVEL": "error"
-      }
-    },
-    "web_search": {
-      "type": "local",
-      "command": ["npx", "-y", "@guhcostan/web-search-mcp@1.0.5"],
-      "enabled": true,
-      "timeout": 10000,
-      "environment": {
-        "NPM_CONFIG_IGNORE_SCRIPTS": "true",
-        "NPM_CONFIG_LOGLEVEL": "error"
-      }
-    }
-  },
+  "lsp": false,
+  "mcp": {},
   "permission": {
     "edit": "deny",
-    "bash": "allow",
+    "bash": "deny",
     "read": "allow",
     "grep": "allow",
     "glob": "allow",
     "list": "allow",
-    "task": "allow",
-    "webfetch": "allow",
-    "websearch": "allow",
-    "lsp": "allow",
-    "external_directory": "allow"
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "lsp": "deny",
+    "external_directory": "deny"
   },
   "agent": {
     "ci-review": {
@@ -58,16 +26,16 @@
       "steps": 4,
       "permission": {
         "edit": "deny",
-        "bash": "allow",
+        "bash": "deny",
         "read": "allow",
         "grep": "allow",
         "glob": "allow",
         "list": "allow",
-        "task": "allow",
-        "webfetch": "allow",
-        "websearch": "allow",
-        "lsp": "allow",
-        "external_directory": "allow"
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "lsp": "deny",
+        "external_directory": "deny"
       }
     },
     "ci-review-fallback": {
@@ -77,16 +45,16 @@
       "steps": 12,
       "permission": {
         "edit": "deny",
-        "bash": "allow",
+        "bash": "deny",
         "read": "allow",
         "grep": "allow",
         "glob": "allow",
         "list": "allow",
-        "task": "allow",
-        "webfetch": "allow",
-        "websearch": "allow",
-        "lsp": "allow",
-        "external_directory": "allow"
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "lsp": "deny",
+        "external_directory": "deny"
       }
     },
     "code-reviewer": {
@@ -100,7 +68,7 @@
         "read": "allow",
         "grep": "allow",
         "glob": "allow",
-        "bash": "allow",
+        "bash": "deny",
         "list": "allow",
         "task": "deny",
         "webfetch": "deny",

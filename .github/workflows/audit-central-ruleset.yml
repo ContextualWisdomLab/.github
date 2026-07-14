@@ -3,7 +3,8 @@ name: Central Required Workflow Ruleset Audit
 on:
   schedule:
     - cron: "11 2 * * *"
-  workflow_dispatch: {}
+  repository_dispatch:
+    types: [audit-central-ruleset]
   push:
     branches: [main]
     paths:

@@ -454,7 +454,7 @@ done < <(awk -F 'FAIL: ' 'NF > 1 { print $2 }' "$FAILED_CHECK_EVIDENCE_FILE" | s
 
 for evidence_marker in \
   "Self-test Strix gate script" \
-  "github.event.inputs.strix_llm" \
+  "github.event.client_payload.strix_llm" \
   "STRIX_LLM must select" \
   "MODEL: github-models/openai/gpt-5"
 do

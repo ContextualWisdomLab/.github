@@ -614,7 +614,7 @@ if target_workflow_available "strix.yml"; then
 		--json databaseId,workflowName,status,conclusion,url,event,headSha \
 		--jq '
 			.[]
-			| select((.event // "") == "workflow_dispatch")
+			| select((.event // "") == "repository_dispatch")
 			| select((.headSha // "") == env.HEAD_SHA)
 			| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
 			| select((.status // "") == "completed")
@@ -622,7 +622,7 @@ if target_workflow_available "strix.yml"; then
 			| [
 				"strix",
 				(.url // ""),
-				"Manual workflow_dispatch Strix evidence passed"
+				"Default-branch repository_dispatch Strix evidence passed"
 			]
 			| @tsv
 		' >>"$manual_success_check_runs" || true
@@ -637,19 +637,19 @@ fi
 			(. // []) as $runs
 			| ([
 				$runs[]
-				| select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+				| select((.event // "") == "pull_request_target" or (.event // "") == "repository_dispatch")
 				| select((.headSha // "") == env.HEAD_SHA)
 				| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
 				| select((.status // "") == "completed")
 				| select((.conclusion // "" | ascii_downcase) == "success")
 			] | length) as $successful_strix_runs
 			| $runs[]
-			| select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+			| select((.event // "") == "pull_request_target" or (.event // "") == "repository_dispatch")
 			| select((.headSha // "") == env.HEAD_SHA)
 			| select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
 			| select((.status // "") == "completed")
 			| select((.conclusion // "" | ascii_downcase) as $c | ["failure","timed_out","action_required","cancelled","startup_failure"] | index($c))
-			| select(((.event // "") == "workflow_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
+			| select(((.event // "") == "repository_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
 			| select(((.conclusion // "" | ascii_downcase) == "cancelled" and $successful_strix_runs > 0) | not)
 			| [
 			"workflow_run",
@@ -674,7 +674,7 @@ if ! gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
 		| map(last)
 		| map(
 			select((.state // "" | ascii_downcase) == "success")
-			| select((.description // "") | contains("Manual workflow_dispatch Strix evidence passed"))
+			| select((.description // "") | contains("Default-branch repository_dispatch Strix evidence passed"))
 			| select((.target_url // "") | test("/actions/runs/[0-9]+"))
 			| [
 				(.__context_key // ""),
@@ -732,7 +732,7 @@ done <"$failed_contexts"
 	if [ -s "$superseded_failed_contexts" ]; then
 		printf '## Superseded failed checks\n\n'
 		while IFS=$'\t' read -r kind label conclusion details_url run_id check_run_id success_context success_url success_description; do
-			printf -- '- `%s` `%s` was superseded by current-head manual workflow_dispatch status `%s`.' "$label" "$conclusion" "$success_context"
+			printf -- '- `%s` `%s` was superseded by current-head default-branch repository_dispatch status `%s`.' "$label" "$conclusion" "$success_context"
 			if [ -n "$success_url" ]; then
 				printf ' Evidence: %s.' "$success_url"
 			fi

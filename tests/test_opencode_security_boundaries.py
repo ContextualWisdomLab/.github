@@ -254,7 +254,7 @@ def approval_review(head_sha: str, **overrides: object) -> dict[str, object]:
 
 
 def test_dispatch_status_requires_live_current_head_approval_and_coverage() -> None:
-    """A workflow-dispatch status succeeds only for the validated approval boundary."""
+    """A repository-dispatch status succeeds only for the validated approval boundary."""
     head = "a" * 40
     decision = dispatch_status.decide_status(
         model_outcome="success",

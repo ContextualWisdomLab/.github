@@ -37,6 +37,8 @@ except ModuleNotFoundError:
 
 
 DEFAULT_AUTOFIX_REPOSITORY = "ContextualWisdomLab/.github"
+DEFAULT_AUTOFIX_WORKFLOW = "pr-review-autofix.yml"
+AUTOFIX_REPOSITORY_DISPATCH_TYPE = "pr-review-autofix"
 FIX_MARKER = "<!-- pr-review-fix-scheduler autofix-dispatch"
 FIX_MARKER_RE = re.compile(
     r"<!-- pr-review-fix-scheduler autofix-dispatch "
@@ -193,36 +195,37 @@ def dispatch_autofix(
     head and resolves conflict markers instead of applying review-feedback fixes.
     """
     dispatch_repo = workflow_repository or repo
+    if workflow != DEFAULT_AUTOFIX_WORKFLOW:
+        raise ValueError(
+            f"autofix workflow must be {DEFAULT_AUTOFIX_WORKFLOW!r}; got {workflow!r}"
+        )
+    if not REPO_RE.fullmatch(dispatch_repo):
+        raise ValueError(f"invalid autofix workflow repository: {dispatch_repo!r}")
+    payload = {
+        "event_type": AUTOFIX_REPOSITORY_DISPATCH_TYPE,
+        "client_payload": {
+            "target_repository": repo,
+            "pr_number": int(pr["number"]),
+            "pr_base_ref": pr["baseRefName"],
+            "pr_base_sha": pr["baseRefOid"],
+            "pr_head_ref": pr["headRefName"],
+            "pr_head_sha": pr["headRefOid"],
+            "resolve_conflict": "true" if resolve_conflict else "false",
+        },
+    }
     args = [
         "gh",
-        "workflow",
-        "run",
-        workflow,
-        "--repo",
-        dispatch_repo,
+        "api",
+        "-X",
+        "POST",
+        f"repos/{dispatch_repo}/dispatches",
+        "--input",
+        "-",
     ]
-    if dispatch_repo != repo:
-        args.extend(["-f", f"target_repository={repo}"])
-    args.extend(
-        [
-            "-f",
-            f"pr_number={pr['number']}",
-            "-f",
-            f"pr_base_ref={pr['baseRefName']}",
-            "-f",
-            f"pr_base_sha={pr['baseRefOid']}",
-            "-f",
-            f"pr_head_ref={pr['headRefName']}",
-            "-f",
-            f"pr_head_sha={pr['headRefOid']}",
-            "-f",
-            f"resolve_conflict={'true' if resolve_conflict else 'false'}",
-        ]
-    )
     if dry_run:
-        print("DRY-RUN:", " ".join(args))
+        print("DRY-RUN:", " ".join(args), json.dumps(payload, sort_keys=True))
         return
-    run(args)
+    run(args, stdin=json.dumps(payload))
 
 
 def inspect_pr(
