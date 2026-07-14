@@ -1349,23 +1349,15 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
             f"expected {expected_head}, observed {live_head or '<missing>'}"
         )
 
+    dismissed = 0
     for review_id in review_ids:
         message = (
             "Superseded automated OpenCode change request from a previous head; "
             f"exact current head {expected_head} has a later OpenCode approval."
         )
-        run(
-            [
-                "gh",
-                "api",
-                "-X",
-                "PUT",
-                f"repos/{repo}/pulls/{number}/reviews/{review_id}/dismissals",
-                "-f",
-                f"message={message}",
-            ]
-        )
-    return len(review_ids)
+        if dismiss_pull_request_review(repo, number, review_id, message=message):
+            dismissed += 1
+    return dismissed
 
 
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:

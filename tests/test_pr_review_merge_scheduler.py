@@ -2299,7 +2299,7 @@ def test_resolve_outdated_review_threads_uses_github_actions_actor(monkeypatch):
     assert all(query == sched.RESOLVE_REVIEW_THREAD_MUTATION for query, _ in calls)
 
 
-def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypatch):
+def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypatch, capsys):
     exact_head = "a" * 40
     unapproved = make_pr(
         headRefOid=exact_head,
@@ -2346,11 +2346,26 @@ def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypa
 
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    states = iter([exact_head, "DISMISSED", "DISMISSED"])
+    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or next(states))
     assert sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False) == 2
     assert calls[0] == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]
     assert calls[1][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/201/dismissals"]
-    assert calls[2][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/202/dismissals"]
-    assert all(call[-2] == "-f" and call[-1].startswith("message=") for call in calls[1:])
+    assert calls[2] == ["gh", "api", "repos/owner/repo/pulls/1/reviews/201", "--jq", ".state"]
+    assert calls[3][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/202/dismissals"]
+    assert calls[4] == ["gh", "api", "repos/owner/repo/pulls/1/reviews/202", "--jq", ".state"]
+    assert all(call[-2] == "-f" and call[-1].startswith("message=") for call in (calls[1], calls[3]))
+
+    calls.clear()
+    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or exact_head)
+
+    def reject_dismissal(args, stdin=None):
+        calls.append(args)
+        raise RuntimeError("Branch protections do not permit dismissing this review (HTTP 403)")
+
+    monkeypatch.setattr(sched, "run", reject_dismissal)
+    assert sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False) == 0
+    assert "Branch protections do not permit dismissing this review (HTTP 403)" in capsys.readouterr().out
 
     calls.clear()
     monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or ("d" * 40))
