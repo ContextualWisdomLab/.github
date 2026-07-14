@@ -67,6 +67,7 @@ def clear_caches(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", raising=False)
     seal_artifacts(tmp_path, changed_files)
     norm.current_changed_files.cache_clear()
+    norm.trusted_source_line_receipts.cache_clear()
     norm.trusted_execution_receipts.cache_clear()
 
 
@@ -434,6 +435,168 @@ def test_valid_control_repairs_only_verified_structured_probe_location_binding(
     assert repaired_probes[1]["evidence"].startswith("scripts/ci/example.py:8 ")
 
 
+def test_valid_control_rebinds_probe_location_from_unique_sealed_receipt(
+    tmp_path, monkeypatch
+):
+    """A unique trusted receipt may correct model path/line formatting drift."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    evidence_file = tmp_path / "opencode-review-evidence.md"
+    evidence_file.write_text(
+        "\n".join(
+            (
+                "## Trusted changed-line source receipts",
+                "",
+                "- `scripts/ci/example.py:7` `" + source_line_receipt("line 7") + "`",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence_file))
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    seal_artifacts(tmp_path, changed_files, evidence_file)
+    norm.current_changed_files.cache_clear()
+    norm.trusted_source_line_receipts.cache_clear()
+
+    validation = adversarial_validation()
+    drifted_probe = {
+        **validation["probes"][0],
+        "path": "not-a-current-head-file.py",
+        "line": 999,
+        "evidence": (
+            "Regression command observed the boundary test passed. "
+            + source_line_receipt("line 7")
+        ),
+    }
+    normalized = norm.valid_control(
+        control(
+            adversarial_validation={
+                **validation,
+                "probes": [drifted_probe, validation["probes"][1]],
+            }
+        ),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert normalized is not None
+    repaired = normalized["adversarial_validation"]["probes"][0]
+    assert repaired["path"] == "scripts/ci/example.py"
+    assert repaired["line"] == 7
+    assert repaired["evidence"].startswith("scripts/ci/example.py:7 ")
+
+
+def test_probe_location_rebinding_rejects_ambiguous_or_tampered_receipts(
+    tmp_path, monkeypatch
+):
+    """Receipt rebinding remains fail-closed for ambiguity and sealed-data drift."""
+    paths = ("scripts/ci/example.py", "scripts/ci/duplicate.py")
+    require_adversarial_validation(tmp_path, monkeypatch, *paths)
+    evidence_file = tmp_path / "opencode-review-evidence.md"
+    receipt = source_line_receipt("line 7")
+    evidence_file.write_text(
+        "\n".join(
+            (
+                "## Trusted changed-line source receipts",
+                "",
+                f"- `scripts/ci/example.py:7` `{receipt}`",
+                f"- `scripts/ci/duplicate.py:7` `{receipt}`",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence_file))
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    seal_artifacts(tmp_path, changed_files, evidence_file)
+    norm.current_changed_files.cache_clear()
+    norm.trusted_source_line_receipts.cache_clear()
+
+    validation = adversarial_validation()
+    ambiguous_probe = {
+        **validation["probes"][0],
+        "path": "not-a-current-head-file.py",
+        "line": 999,
+        "evidence": f"Regression command observed the test passed. {receipt}",
+    }
+    rejected = norm.valid_control(
+        control(
+            adversarial_validation={
+                **validation,
+                "probes": [ambiguous_probe, validation["probes"][1]],
+            }
+        ),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+    assert rejected is None
+
+    evidence_file.write_text(
+        "- `scripts/ci/example.py:7` `" + receipt + "`\n# tampered\n",
+        encoding="utf-8",
+    )
+    norm.trusted_source_line_receipts.cache_clear()
+    assert norm.trusted_source_line_receipts() == {}
+
+
+def test_trusted_receipt_index_skips_malformed_locations_and_digest_drift(
+    tmp_path, monkeypatch
+):
+    """Only sealed receipts matching a changed source line enter the index."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    evidence_file = tmp_path / "opencode-review-evidence.md"
+    zero_digest = "0" * 64
+    evidence_file.write_text(
+        "\n".join(
+            (
+                f"- `missing-colon` `source-line-sha256={zero_digest}`",
+                f"- `missing.py:7` `source-line-sha256={zero_digest}`",
+                f"- `scripts/ci/example.py:not-a-line` `source-line-sha256={zero_digest}`",
+                f"- `scripts/ci/example.py:0` `source-line-sha256={zero_digest}`",
+                f"- `scripts/ci/example.py:7` `source-line-sha256={zero_digest}`",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence_file))
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    seal_artifacts(tmp_path, changed_files, evidence_file)
+    norm.current_changed_files.cache_clear()
+    norm.trusted_source_line_receipts.cache_clear()
+
+    assert norm.trusted_source_line_receipts() == {}
+
+
+def test_trusted_receipt_index_fails_closed_when_sealed_text_read_fails(
+    tmp_path, monkeypatch
+):
+    """A post-verification evidence read error cannot authorize rebinding."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    evidence_file = tmp_path / "opencode-review-evidence.md"
+    evidence_file.write_text(
+        "- `scripts/ci/example.py:7` `" + source_line_receipt("line 7") + "`\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence_file))
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    seal_artifacts(tmp_path, changed_files, evidence_file)
+    original_read_text = Path.read_text
+
+    def fail_evidence_read(path, *args, **kwargs):
+        if path == evidence_file:
+            raise OSError("simulated sealed evidence read failure")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_evidence_read)
+    norm.current_changed_files.cache_clear()
+    norm.trusted_source_line_receipts.cache_clear()
+
+    assert norm.trusted_source_line_receipts() == {}
+
+
 def test_adversarial_probe_binding_repair_fails_closed_for_malformed_or_unobserved_input():
     """Malformed shapes and receipt-only prose remain unchanged and unpublishable."""
     assert norm.repair_adversarial_probe_evidence_bindings(None) is None
@@ -450,6 +613,7 @@ def test_adversarial_probe_binding_repair_fails_closed_for_malformed_or_unobserv
                     "line": 7,
                     "evidence": source_line_receipt("line 7"),
                 },
+                {"path": "scripts/ci/example.py", "line": 7, "evidence": ""},
             ]
         }
     }

@@ -246,6 +246,10 @@ TRUSTED_ARTIFACT_NAMES = {
     "OPENCODE_EXECUTION_RECEIPTS_FILE": "opencode-execution-receipts.txt",
 }
 TRUSTED_ARTIFACT_MANIFEST = "opencode-artifact-manifest.json"
+TRUSTED_SOURCE_LINE_RECEIPT_PATTERN = re.compile(
+    r"^- `(?P<location>[^`\r\n]+)` "
+    r"`source-line-sha256=(?P<digest>[0-9a-fA-F]{64})`$"
+)
 
 HANGUL_RE = re.compile(r"[가-힣]")
 PREFERRED_REVIEW_LANGUAGE_RE = re.compile(
@@ -500,6 +504,39 @@ def current_changed_files() -> frozenset[str]:
     )
 
 
+@lru_cache(maxsize=1)
+def trusted_source_line_receipts() -> dict[str, tuple[tuple[str, int], ...]]:
+    """Index unique sealed evidence receipts by exact source-line digest."""
+    evidence_path = trusted_artifact_path("OPENCODE_EVIDENCE_FILE")
+    if evidence_path is None:
+        return {}
+
+    locations_by_digest: dict[str, set[tuple[str, int]]] = {}
+    changed_files = current_changed_files()
+    try:
+        lines = evidence_path.read_text(encoding="utf-8", errors="strict").splitlines()
+    except (OSError, UnicodeError):
+        return {}
+    for evidence_line in lines:
+        match = TRUSTED_SOURCE_LINE_RECEIPT_PATTERN.fullmatch(evidence_line)
+        if match is None:
+            continue
+        path, separator, line_text = match.group("location").rpartition(":")
+        if not separator or path not in changed_files or not line_text.isdigit():
+            continue
+        line = int(line_text)
+        if line <= 0 or adversarial_probe_location_error(path, line):
+            continue
+        digest = match.group("digest").casefold()
+        if adversarial_probe_source_line_digest(path, line) != digest:
+            continue
+        locations_by_digest.setdefault(digest, set()).add((path, line))
+    return {
+        digest: tuple(sorted(locations))
+        for digest, locations in locations_by_digest.items()
+    }
+
+
 def runtime_tool_slug(tool_name: str) -> str:
     """Return the canonical receipt slug for a browser execution tool."""
     return re.sub(r"\s+", "-", tool_name.strip().casefold())
@@ -675,6 +712,7 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
         return value
 
     changed_files = current_changed_files()
+    trusted_receipts = trusted_source_line_receipts()
     repaired_probes: list[Any] = []
     changed = False
     for probe in probes:
@@ -684,19 +722,30 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
         path = probe.get("path")
         line = probe.get("line")
         evidence = probe.get("evidence")
-        if (
-            not isinstance(path, str)
-            or path not in changed_files
-            or isinstance(line, bool)
-            or not isinstance(line, int)
-            or line <= 0
-            or not isinstance(evidence, str)
-            or not evidence.strip()
-            or adversarial_probe_location_error(path, line)
-            or adversarial_probe_source_receipt_error(evidence, path, line)
-        ):
+        if not isinstance(evidence, str) or not evidence.strip():
             repaired_probes.append(probe)
             continue
+        receipt_digests = SOURCE_LINE_RECEIPT_RE.findall(evidence)
+        if len(receipt_digests) != 1:
+            repaired_probes.append(probe)
+            continue
+
+        structured_location_is_valid = (
+            isinstance(path, str)
+            and path in changed_files
+            and not isinstance(line, bool)
+            and isinstance(line, int)
+            and line > 0
+            and not adversarial_probe_location_error(path, line)
+            and not adversarial_probe_source_receipt_error(evidence, path, line)
+        )
+        if not structured_location_is_valid:
+            receipt_locations = trusted_receipts.get(receipt_digests[0].casefold(), ())
+            if len(receipt_locations) != 1:
+                repaired_probes.append(probe)
+                continue
+            path, line = receipt_locations[0]
+
         rejection = adversarial_evidence_rejection_reason(evidence, path, line)
         if rejection != "must cite the exact probe path and positive line":
             repaired_probes.append(probe)
@@ -705,7 +754,9 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
         if adversarial_evidence_rejection_reason(repaired_evidence, path, line):
             repaired_probes.append(probe)
             continue
-        repaired_probes.append({**probe, "evidence": repaired_evidence})
+        repaired_probes.append(
+            {**probe, "path": path, "line": line, "evidence": repaired_evidence}
+        )
         changed = True
 
     if not changed:
