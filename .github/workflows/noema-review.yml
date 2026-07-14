@@ -136,45 +136,77 @@ jobs:
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
 
-      - name: Exchange Noema app token
+      - name: Select fail-closed Noema reviewer credential
         if: env.PR_NUMBER != ''
-        id: noema_app_token
+        id: noema_credential
         env:
-          OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
           TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
           NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}
         run: |
           set -euo pipefail
 
-          fail_unavailable() {
-            local message="$1"
-            echo "available=false" >>"$GITHUB_OUTPUT"
-            echo "::error::$message"
+          if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Noema target repository must belong to ContextualWisdomLab; observed ${TARGET_REPOSITORY:-<empty>}."
             exit 1
-          }
+          fi
+          repository_name="${TARGET_REPOSITORY#*/}"
+          echo "repository=$repository_name" >>"$GITHUB_OUTPUT"
 
-          mark_unconfigured() {
-            local message="$1"
-            echo "available=false" >>"$GITHUB_OUTPUT"
-            echo "::notice::$message"
-            exit 0
-          }
-
-          # PAT fallback: when a NOEMA_REVIEW_TOKEN secret is present, use it as
-          # the reviewer identity directly and skip the OIDC app-token exchange.
-          # This lets the independent second reviewer satisfy the two-reviewer
-          # merge rule without deploying the Noema Worker. The secret value is
-          # never emitted as a step output; the review step reads it from secrets.
           if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then
-            echo "available=true" >>"$GITHUB_OUTPUT"
             echo "source=pat" >>"$GITHUB_OUTPUT"
             echo "::notice::Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity."
             exit 0
           fi
 
-          if [ -z "${TOKEN_EXCHANGE_URL:-}" ]; then
-            mark_unconfigured "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured; Noema review skipped until the exchange service is deployed."
+          if [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+            echo "::notice::Noema reviewer will mint a repository-scoped cwl-noema-review installation token."
+            exit 0
           fi
+
+          if [ -n "${TOKEN_EXCHANGE_URL:-}" ]; then
+            echo "source=oidc" >>"$GITHUB_OUTPUT"
+            echo "::notice::Noema reviewer will use the configured OIDC app-token exchange."
+            exit 0
+          fi
+
+          echo "::error::Noema reviewer credential is unconfigured: set NOEMA_GITHUB_APP_CLIENT_ID with NOEMA_GITHUB_APP_PRIVATE_KEY, NOEMA_REVIEW_TOKEN, or NOEMA_TOKEN_EXCHANGE_URL. Review cannot be skipped."
+          exit 1
+
+      - name: Mint repository-scoped Noema GitHub App token
+        if: env.PR_NUMBER != '' && steps.noema_credential.outputs.source == 'github-app'
+        id: noema_github_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_credential.outputs.repository }}
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: write
+          permission-security-events: read
+          permission-statuses: read
+          permission-vulnerability-alerts: read
+
+      - name: Exchange Noema app token through OIDC
+        if: env.PR_NUMBER != '' && steps.noema_credential.outputs.source == 'oidc'
+        id: noema_oidc_token
+        env:
+          OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
+          TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
+        run: |
+          set -euo pipefail
+
+          fail_unavailable() {
+            local message="$1"
+            echo "::error::$message"
+            exit 1
+          }
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             fail_unavailable "Noema app token exchange unavailable: OIDC request environment is missing."
@@ -217,32 +249,28 @@ jobs:
           fi
 
           echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
       - name: Run Noema LLM review and submit verdict
         if: env.PR_NUMBER != ''
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_app_token.outputs.token }}
-          NOEMA_APP_TOKEN_AVAILABLE: ${{ steps.noema_app_token.outputs.available }}
-          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_app_token.outputs.source == 'pat' && 'noema-review-pat' || 'noema-review-app-oidc' }}
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
-          NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || '' }}
+          NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "No pull request number was available for this event; skipping."
             exit 0
           fi
-          if [ "${NOEMA_APP_TOKEN_AVAILABLE:-}" != "true" ]; then
-            echo "::notice::Noema app token exchange is not configured; review skipped until Noema is deployed."
-            exit 0
-          fi
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Noema app token is unavailable; review cannot submit a verdict."
+            echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
+            exit 1
+          fi
+          if [ -z "${NOEMA_LLM_API_URL:-}" ] || [ -z "${NOEMA_LLM_MODEL:-}" ] || [ -z "${NOEMA_LLM_API_KEY:-}" ]; then
+            echo "::error::Noema LLM is unconfigured: NOEMA_LLM_API_URL, NOEMA_LLM_MODEL, and NOEMA_LLM_API_KEY (or OPENAI_API_KEY) are required."
             exit 1
           fi
           python3 scripts/ci/noema_review_gate.py \

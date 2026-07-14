@@ -111,26 +111,35 @@ Do not centralize the scheduler by running a `.github` scheduled job against oth
 ## Second-reviewer (Noema) posture
 
 The org's two-reviewer merge rule needs a second approving-review identity
-independent of OpenCode. That identity is the Noema reviewer, whose judgement
-plane is the PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
-(`reviewer/noema_reviewer`, noema#9) and whose GitHub identity comes from the
-Noema GitHub App (token-exchange Worker) *or* a `NOEMA_REVIEW_TOKEN` secret.
+independent of OpenCode. That identity is `cwl-noema-review[bot]`, supplied by
+the organization-owned `cwl-noema-review` GitHub App. The central workflow
+currently runs the centrally versioned `noema_review_gate.py` judgement path and
+mints a short-lived installation token restricted to the target repository; the
+App has read-only Actions/checks/contents/status/code-scanning/Dependabot access
+and write access only to pull-request reviews.
 
-- Token posture: `noema-review.yml` now prefers a `NOEMA_REVIEW_TOKEN` secret
-  as the reviewer identity when present, skipping the OIDC app-token exchange.
-  This lets the second reviewer submit real approving reviews without deploying
-  the Noema Worker. When neither the secret nor `NOEMA_TOKEN_EXCHANGE_URL` is
-  configured, the step still emits the unconfigured notice and skips rather than
-  failing the check.
+The PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
+(`reviewer/noema_reviewer`, noema#9) is the target standalone judgement plane,
+but this credential/fail-closed rollout does not yet install or invoke that
+package. Do not raise the org approval count to two on the strength of this
+document alone: first wire its full current-head logs/SARIF/dependency/comment/
+CodeGraph manifest into this required workflow and prove an App-authored live
+review on a target-repository PR.
+
+- Token posture: `noema-review.yml` prefers a `NOEMA_REVIEW_TOKEN` emergency
+  fallback when present, otherwise mints the repository-scoped App token with
+  `actions/create-github-app-token` pinned to an immutable SHA. The OIDC Worker
+  exchange remains a compatibility fallback. If none of these identities is
+  configured, the required check fails with the exact missing-credential reason;
+  an unconfigured reviewer can never pass by skipping.
 - Honesty posture: `noema_review_gate.py` refuses to review as a primary review
   actor (`opencode-agent`, `github-actions`), so a `NOEMA_REVIEW_TOKEN` that
   resolves to one of those identities cannot manufacture a fake second review —
   it must be a distinct write-access identity.
-- Minimal admin config to activate the second reviewer: set the org/repo
-  secrets `NOEMA_REVIEW_TOKEN` (a distinct write-access token) and the LLM
-  endpoint (`NOEMA_LLM_MODEL`, `NOEMA_LLM_API_URL`, `NOEMA_LLM_API_KEY`). Until
-  then the `noema-review` check stays green-by-skip and only OpenCode approves,
-  so the classic `.github` 2-review protection keeps `.github` PRs blocked.
+- Required admin config: install `cwl-noema-review` on the organization, set
+  `NOEMA_GITHUB_APP_CLIENT_ID` plus `NOEMA_GITHUB_APP_PRIVATE_KEY`, and configure
+  `NOEMA_LLM_MODEL`, `NOEMA_LLM_API_URL`, and either `NOEMA_LLM_API_KEY` or the
+  shared `OPENAI_API_KEY`. Every missing setting is a visible failed-check reason.
 
 ## Scope
 

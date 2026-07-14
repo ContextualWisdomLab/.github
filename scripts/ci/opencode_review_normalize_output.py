@@ -1065,26 +1065,34 @@ def valid_control(
     expected_head_sha: str,
     expected_run_id: str,
     expected_run_attempt: str,
+    rejection_reasons: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Return a normalized control block when it matches the current run."""
-    if not isinstance(value, dict):
+
+    def reject(reason: str) -> None:
+        """Record a bounded, non-secret reason for rejecting one candidate."""
+        if rejection_reasons is not None:
+            rejection_reasons.append(reason)
         return None
 
+    if not isinstance(value, dict):
+        return reject("candidate is not a JSON object")
+
     if value.get("head_sha") != expected_head_sha:
-        return None
+        return reject("head_sha does not match the current pull request head")
     if value.get("run_id") != expected_run_id:
-        return None
+        return reject("run_id does not match the current workflow run")
     if value.get("run_attempt") != expected_run_attempt:
-        return None
+        return reject("run_attempt does not match the current workflow attempt")
 
     result = value.get("result")
     if result not in {"APPROVE", "REQUEST_CHANGES"}:
-        return None
+        return reject("result must be APPROVE or REQUEST_CHANGES")
 
     if not isinstance(value.get("reason"), str) or not value["reason"].strip():
-        return None
+        return reject("reason must be a non-empty string")
     if not isinstance(value.get("summary"), str) or not value["summary"].strip():
-        return None
+        return reject("summary must be a non-empty string")
     reason = value["reason"].strip()
     summary = value["summary"].strip()
 
@@ -1092,44 +1100,55 @@ def valid_control(
     if findings is None and result == "APPROVE":
         findings = []
     if not isinstance(findings, list):
-        return None
+        return reject("findings must be an array")
     if result == "APPROVE" and findings:
-        return None
+        return reject("APPROVE cannot contain findings")
     if result == "REQUEST_CHANGES" and not findings:
-        return None
+        return reject("REQUEST_CHANGES requires at least one finding")
     adversarial_error = adversarial_validation_error(
         value.get("adversarial_validation"),
         result=result,
         findings=findings,
     )
     if adversarial_error:
-        return None
-    if unreceipted_runtime_tool_claim(control_review_text(value)):
-        return None
-    if contains_non_actionable_failed_check_review(value):
-        return None
+        return reject(adversarial_error)
+    runtime_tool = unreceipted_runtime_tool_claim(control_review_text(value))
+    if runtime_tool:
+        return reject(
+            f"review claims {runtime_tool} execution without a trusted workflow receipt"
+        )
+    failed_check_phrase = non_actionable_failed_check_review_phrase(value)
+    if failed_check_phrase:
+        return reject(
+            f"non-actionable failed-check deflection: {failed_check_phrase}"
+        )
     if result != "APPROVE" and violates_review_language_contract(value):
-        return None
+        return reject("review prose does not follow the preferred PR language")
     if result == "APPROVE":
         if admits_missing_structural_review(reason, summary):
-            return None
+            return reject("approval admits missing structural review")
         summary = repair_approval_summary(reason, summary)
         reason = repair_approval_reason(reason, summary)
         value = {**value, "reason": reason, "summary": summary}
         if violates_review_language_contract(value):
-            return None
+            return reject("review prose does not follow the preferred PR language")
         if not mentions_actual_changed_file(reason, summary):
-            return None
+            return reject("approval does not cite changed-file evidence")
         if not mentions_verification_posture(reason, summary):
-            return None
+            return reject("approval does not include the required verification posture")
         if not mentions_full_coverage(reason, summary):
-            return None
+            return reject(
+                "approval does not prove 100% coverage or an explicit no-source exception"
+            )
         if contradicts_changed_file_kinds(reason, summary):
-            return None
+            return reject("approval contradicts changed file kinds")
         if contradicts_material_changed_file_scope(reason, summary):
-            return None
-        if model_failure_approval_phrase(reason, summary):
-            return None
+            return reject("approval trivializes material changed files")
+        model_failure_phrase = model_failure_approval_phrase(reason, summary)
+        if model_failure_phrase:
+            return reject(
+                f"approval depends on failed model output: {model_failure_phrase}"
+            )
 
     required_finding_fields = (
         "path",
@@ -1142,16 +1161,18 @@ def valid_control(
         "suggested_diff",
     )
     normalized_findings = []
-    for finding in findings:
+    for finding_index, finding in enumerate(findings, start=1):
         if not isinstance(finding, dict):
-            return None
+            return reject(f"finding {finding_index} is not an object")
         line = finding.get("line")
         if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
-            return None
+            return reject(f"finding {finding_index} line must be a positive integer")
         finding = canonicalize_finding_fields(finding)
         for field in required_finding_fields:
             if not isinstance(finding.get(field), str) or not finding[field].strip():
-                return None
+                return reject(
+                    f"finding {finding_index} field {field} must be a non-empty string"
+                )
         normalized_findings.append(finding)
 
     normalized = {
@@ -1240,14 +1261,26 @@ def main(argv: list[str]) -> int:
         print(f"cannot read OpenCode output file: {exc}", file=sys.stderr)
         return 65
 
+    candidate_rejections: list[str] = []
     for value in iter_json_objects(output_text):
+        rejection_reasons: list[str] = []
         control = valid_control(
             value,
             expected_head_sha=expected_head_sha,
             expected_run_id=expected_run_id,
             expected_run_attempt=expected_run_attempt,
+            rejection_reasons=rejection_reasons,
         )
         if control is None:
+            if isinstance(value, dict) and all(
+                field in value
+                for field in ("head_sha", "run_id", "run_attempt", "result")
+            ):
+                candidate_rejections.append(
+                    rejection_reasons[0]
+                    if rejection_reasons
+                    else "candidate failed an unspecified control validation"
+                )
             continue
 
         normalized_json = (
@@ -1276,6 +1309,10 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
+    for index, reason in enumerate(candidate_rejections, start=1):
+        print(f"CONTROL_REJECTED candidate={index}: {reason}", file=sys.stderr)
+    if not candidate_rejections:
+        print("CONTROL_REJECTED: no current-run control JSON object was found", file=sys.stderr)
     print("NO_CONCLUSION", file=sys.stderr)
     return 4
 

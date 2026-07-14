@@ -20,7 +20,7 @@ INDEPENDENT_PROOF_RE = re.compile(
     re.IGNORECASE,
 )
 OBSERVED_RESULT_RE = re.compile(
-    r"\b(?:blocked|confirmed|contains?|disproved|exit code\s+[0-9]+|failed|matched|"
+    r"\b(?:blocked|confirm(?:ed|s)|contains?|disproved|exit code\s+[0-9]+|failed|matched|"
     r"observed|pass(?:ed)?|raised|rejected|rejects|reported|returned|showed)\b",
     re.IGNORECASE,
 )

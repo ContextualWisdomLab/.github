@@ -1222,6 +1222,82 @@ A\t.github/workflows/opencode-review.yml
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
+def test_valid_control_accepts_model_confirms_with_bounded_current_head_receipt(
+    tmp_path, monkeypatch
+):
+    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence.write_text(
+        """\
+# OpenCode bounded PR review evidence
+
+## CodeGraph evidence
+
+The workflow initialized CodeGraph before this evidence file was built.
+
+## Coverage execution evidence
+
+## Coverage Decision
+
+- Result: PASS
+- Test evidence: supported repository test suites passed
+- Docstring evidence: configured repository docstring gates passed or docstring coverage was advisory
+
+## Changed files
+
+M\tsrc/main/java/example/LogSanitizer.java
+M\tsrc/test/java/example/LogSanitizerTest.java
+""",
+        encoding="utf-8",
+    )
+    changed_files = tmp_path / "changed-files.txt"
+    changed_files.write_text(
+        "src/main/java/example/LogSanitizer.java\n"
+        "src/test/java/example/LogSanitizerTest.java\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    monkeypatch.setenv("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "true")
+    norm.current_changed_files.cache_clear()
+
+    candidate = control(
+        reason="LogSanitizer.java hardens log input and adds a regression test.",
+        summary="The current-head fix and test were reviewed.",
+        adversarial_validation={
+            "status": "passed",
+            "probes": [
+                {
+                    "path": "src/main/java/example/LogSanitizer.java",
+                    "line": 20,
+                    "hypothesis": "A line break bypasses sanitization.",
+                    "attack_or_counterexample": "Pass CR, LF, and Unicode separators.",
+                    "evidence": "Test LogSanitizerTest confirms every separator is replaced.",
+                    "outcome": "falsified",
+                },
+                {
+                    "path": "src/test/java/example/LogSanitizerTest.java",
+                    "line": 40,
+                    "hypothesis": "The regression test omits a control character.",
+                    "attack_or_counterexample": "Compare the test input with the sanitizer replacements.",
+                    "evidence": "Source trace at LogSanitizerTest.java:40 confirms all replacements are asserted.",
+                    "outcome": "falsified",
+                },
+            ],
+            "residual_risk": "Only characters outside the documented sanitizer contract remain.",
+        },
+    )
+
+    repaired = norm.valid_control(
+        candidate,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert repaired is not None
+    assert "supported repository test suites passed" in repaired["summary"]
+
+
 def test_valid_control_repairs_summary_from_invalid_utf8_evidence(
     tmp_path, monkeypatch
 ):
@@ -1933,3 +2009,41 @@ def test_main_normalizes_and_escapes_html_markers(tmp_path):
     assert json.loads(json_line)["summary"] == control_data["summary"]
     assert "-->" in inner
     assert "-->" not in inner.split("-->", 1)[0].strip()
+
+
+def test_main_logs_the_exact_control_rejection_reason(tmp_path, capsys):
+    output = tmp_path / "model-output.md"
+    output.write_text(
+        json.dumps(
+            control(
+                adversarial_validation={
+                    "status": "passed",
+                    "probes": [
+                        {
+                            "path": "scripts/ci/example.py",
+                            "line": 7,
+                            "hypothesis": "The stale head is accepted.",
+                            "attack_or_counterexample": "Submit a stale head.",
+                            "evidence": "Source inspection mentions the branch.",
+                            "outcome": "falsified",
+                        },
+                        {
+                            "path": "scripts/ci/example.py",
+                            "line": 8,
+                            "hypothesis": "The current head is rejected.",
+                            "attack_or_counterexample": "Submit the current head.",
+                            "evidence": "Focused pytest passed with exit code 0.",
+                            "outcome": "falsified",
+                        },
+                    ],
+                    "residual_risk": "External provider availability remains variable.",
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    stderr = capsys.readouterr().err
+    assert "CONTROL_REJECTED candidate=1" in stderr
+    assert "adversarial probe 1 evidence must state the observed proof result" in stderr

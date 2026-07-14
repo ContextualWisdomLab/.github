@@ -54,3 +54,10 @@ def test_accepts_source_or_test_evidence_with_an_observed_result():
         )
         is None
     )
+    assert (
+        evidence.adversarial_evidence_rejection_reason(
+            "Test test_review_race confirms the stale head is rejected.",
+            ".github/workflows/review.yml",
+        )
+        is None
+    )

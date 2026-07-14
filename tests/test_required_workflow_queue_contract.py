@@ -200,25 +200,27 @@ def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() ->
     assert "github.event_name == 'pull_request_target'" in concurrency_contract
 
 
-def test_noema_review_skips_until_exchange_url_is_configured_then_fails_closed() -> None:
+def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
     workflow = workflow_text("noema-review.yml")
 
     assert "fail_unavailable()" in workflow
-    assert "mark_unconfigured()" in workflow
     assert 'echo "::error::$message"' in workflow
-    assert 'echo "::notice::$message"' in workflow
     assert "vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || ''" in workflow
     assert (
-        "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or NOEMA_EXCHANGE_URL is not configured; "
-        "Noema review skipped until the exchange service is deployed."
+        "Noema reviewer credential is unconfigured: set NOEMA_GITHUB_APP_CLIENT_ID with "
+        "NOEMA_GITHUB_APP_PRIVATE_KEY, NOEMA_REVIEW_TOKEN, or NOEMA_TOKEN_EXCHANGE_URL. "
+        "Review cannot be skipped."
     ) in workflow
-    assert "Noema app token exchange is not configured; review skipped until Noema is deployed." in workflow
     assert "Noema app token exchange unavailable: OIDC request environment is missing." in workflow
     assert "Noema app token exchange unavailable: OIDC token request did not complete." in workflow
     assert "Noema app token exchange unavailable: OIDC token response was empty." in workflow
     assert "Noema app token exchange unavailable: app token request did not complete." in workflow
     assert "Noema app token exchange unavailable: app token response was empty." in workflow
-    assert "::error::Noema app token is unavailable; review cannot submit a verdict." in workflow
+    assert "Noema reviewer credential selection succeeded but no token was minted" in workflow
+    assert "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}" in workflow
+    assert "Noema LLM is unconfigured:" in workflow
+    assert "mark_unconfigured()" not in workflow
+    assert "review skipped until Noema is deployed" not in workflow
     assert "Noema app token is unavailable; review skipped." not in workflow
 
 
@@ -246,14 +248,35 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
     assert "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity." in workflow
     # The review step must prefer the PAT over the exchanged app token.
     assert (
-        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_app_token.outputs.token }}"
+        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
         in workflow
     )
-    # The unconfigured-exchange notice stays for the no-PAT, no-exchange-URL case.
+    assert "steps.noema_credential.outputs.source == 'github-app'" in workflow
+
+
+def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
+    """Guard the independent App identity and its repository-scoped permissions."""
+    workflow = workflow_text("noema-review.yml")
+
     assert (
-        "Noema app token exchange unconfigured: NOEMA_TOKEN_EXCHANGE_URL or "
-        "NOEMA_EXCHANGE_URL is not configured" in workflow
+        "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0"
+        in workflow
     )
+    assert "client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}" in workflow
+    assert "private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}" in workflow
+    assert "owner: ContextualWisdomLab" in workflow
+    assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in workflow
+    for permission in (
+        "permission-actions: read",
+        "permission-checks: read",
+        "permission-contents: read",
+        "permission-metadata: read",
+        "permission-pull-requests: write",
+        "permission-security-events: read",
+        "permission-statuses: read",
+        "permission-vulnerability-alerts: read",
+    ):
+        assert permission in workflow
 
 
 def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
