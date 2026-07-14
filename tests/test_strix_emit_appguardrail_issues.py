@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -68,6 +69,29 @@ NOT_A_FINDING = """\
 
 Some prose with no Title field.
 """
+
+CODE_SCANNING_ALERT = {
+    "number": 67,
+    "state": "open",
+    "rule": {
+        "id": "CIIBestPracticesID",
+        "name": "CII-Best-Practices",
+        "description": "CII-Best-Practices",
+        "severity": "error",
+        "security_severity_level": "low",
+        "full_description": "Determines whether the project has an OpenSSF badge.",
+        "help": "Enroll the project at bestpractices.dev.",
+    },
+    "tool": {"name": "Scorecard"},
+    "most_recent_instance": {
+        "message": {"text": "score is 0: no badge effort detected"},
+        "location": {
+            "path": "no file associated with this alert",
+            "start_line": 1,
+            "end_line": 1,
+        },
+    },
+}
 
 
 def write_run(tmp_path: Path, reports: dict[str, str], run_name: str = "run-1") -> Path:
@@ -227,6 +251,87 @@ def test_parse_run_dir_dedups_duplicate_model_reports(tmp_path):
     assert "SQL Injection in login handler" in titles
 
 
+def test_parses_low_code_scanning_governance_alert_with_stable_identity():
+    """Code Scanning governance alerts remain visible even below Medium."""
+    finding = emit.parse_code_scanning_alert(CODE_SCANNING_ALERT, SOURCE_REPO)
+
+    assert finding is not None
+    assert finding.source_kind == "code-scanning"
+    assert finding.severity == "LOW"
+    assert finding.code_location == ""
+    assert "Scorecard" in finding.title
+    assert "alert #67" in finding.title
+    assert finding.target.endswith("/security/code-scanning/67")
+    assert "OpenSSF badge" in finding.impact
+    original_hash = finding.finding_hash
+
+    relocated = json.loads(json.dumps(CODE_SCANNING_ALERT))
+    relocated["most_recent_instance"]["location"] = {
+        "path": "src/security.py",
+        "start_line": 4,
+        "end_line": 7,
+    }
+    moved = emit.parse_code_scanning_alert(relocated, SOURCE_REPO)
+    assert moved.code_location == "src/security.py:4-7"
+    assert moved.finding_hash == original_hash
+
+
+def test_code_scanning_parser_handles_closed_and_malformed_alerts():
+    """Closed alerts are ignored and malformed open alerts fail reconciliation."""
+    closed = dict(CODE_SCANNING_ALERT, state="closed")
+    assert emit.parse_code_scanning_alert(closed, SOURCE_REPO) is None
+    assert (
+        len(
+            emit.parse_code_scanning_alerts(
+                [closed, CODE_SCANNING_ALERT, CODE_SCANNING_ALERT], SOURCE_REPO
+            )
+        )
+        == 1
+    )
+
+    with pytest.raises(RuntimeError, match="without a number"):
+        emit.parse_code_scanning_alert({"state": "open"}, SOURCE_REPO)
+    with pytest.raises(RuntimeError, match="non-positive"):
+        emit.parse_code_scanning_alert({"number": 0, "state": "open"}, SOURCE_REPO)
+    with pytest.raises(RuntimeError, match="non-object"):
+        emit.parse_code_scanning_alerts([None], SOURCE_REPO)
+
+    malformed_location = json.loads(json.dumps(CODE_SCANNING_ALERT))
+    malformed_location["most_recent_instance"]["location"] = {
+        "path": "src/security.py",
+        "start_line": "not-a-line",
+        "end_line": [],
+    }
+    finding = emit.parse_code_scanning_alert(malformed_location, SOURCE_REPO)
+    assert finding.code_location == "src/security.py:1"
+
+
+def test_code_scanning_token_env_name_is_fixed():
+    """Callers cannot redirect source-token reads to arbitrary environment keys."""
+    assert (
+        emit.validated_code_scanning_token_env(emit.DEFAULT_CODE_SCANNING_TOKEN_ENV)
+        == emit.DEFAULT_CODE_SCANNING_TOKEN_ENV
+    )
+    with pytest.raises(argparse.ArgumentTypeError, match="must be exactly"):
+        emit.validated_code_scanning_token_env("OTHER_TOKEN")
+
+
+@pytest.mark.parametrize(
+    ("rule", "expected"),
+    [
+        ({"security_severity_level": "high"}, "HIGH"),
+        ({"severity": "error"}, "HIGH"),
+        ({"severity": "warning"}, "MEDIUM"),
+        ({"severity": "note"}, "LOW"),
+        ({"severity": "none"}, "INFO"),
+        ({}, "INFO"),
+    ],
+)
+def test_code_scanning_severity_mapping(rule, expected):
+    """GitHub security severity wins, with deterministic generic fallbacks."""
+    assert emit.code_scanning_severity({"rule": rule}) == expected
+
+
 # --------------------------------------------------------------------------- #
 # Hashing
 # --------------------------------------------------------------------------- #
@@ -293,6 +398,24 @@ def test_issue_body_carries_markers():
     )
     assert "pull/42" in body
     assert ("commit/" + "a" * 40) in body
+
+
+def test_code_scanning_issue_content_is_source_specific():
+    """Mirrored alerts use Code Scanning titles, labels, links, and markers."""
+    finding = emit.parse_code_scanning_alert(CODE_SCANNING_ALERT, SOURCE_REPO)
+    title = emit.build_issue_title(finding)
+    labels = emit.build_issue_labels(finding)
+    body = emit.build_issue_body(finding, make_context())
+
+    assert title.startswith("[code-scanning] example-service LOW:")
+    assert labels == [
+        "code-scanning",
+        "security",
+        "repo:example-service",
+        "severity:low",
+    ]
+    assert "security/code-scanning/67" in body
+    assert emit.marker_value(body, emit.SOURCE_MARKER_PREFIX) == "code-scanning"
 
 
 def test_sparse_issue_body_omits_absent_optional_sections():
@@ -889,7 +1012,11 @@ def test_client_list_scope_issues_filters_pull_requests(monkeypatch):
     ):
         calls["args"] = args
         calls["token"] = env["GH_TOKEN"]
-        page = [{"number": 1, "title": "issue"}, {"number": 2, "pull_request": {}}]
+        page = [
+            {"number": 1, "title": "issue", "labels": ["strix"]},
+            {"number": 2, "pull_request": {}, "labels": ["strix"]},
+            {"number": 3, "title": "unrelated", "labels": ["security"]},
+        ]
         return FakeCompleted(stdout=json.dumps([page]))
 
     monkeypatch.setattr(emit.subprocess, "run", fake_run)
@@ -899,7 +1026,47 @@ def test_client_list_scope_issues_filters_pull_requests(monkeypatch):
     issues = client.list_scope_issues("example-service")
     assert [i["number"] for i in issues] == [1]
     assert calls["token"].startswith("gho_")
-    assert "labels=strix,repo:example-service" in calls["args"]
+    assert "labels=repo:example-service" in calls["args"]
+
+
+def test_code_scanning_client_reads_all_paginated_alerts(monkeypatch):
+    """The source token performs a complete open-alert API read."""
+    calls = {}
+
+    def fake_run(args, **kwargs):
+        calls["args"] = args
+        calls["token"] = kwargs["env"]["GH_TOKEN"]
+        return FakeCompleted(stdout=json.dumps([[CODE_SCANNING_ALERT], []]))
+
+    monkeypatch.setattr(emit.subprocess, "run", fake_run)
+    client = emit.GitHubCodeScanningClient(SOURCE_REPO, "gho_" + "s" * 30)
+
+    assert client.list_open_alerts() == [CODE_SCANNING_ALERT]
+    assert calls["token"].startswith("gho_")
+    assert f"repos/{SOURCE_REPO}/code-scanning/alerts" in calls["args"]
+    assert "state=open" in calls["args"]
+
+
+def test_code_scanning_client_fails_closed_on_api_or_json_error(monkeypatch):
+    """API and response-integrity failures remain visible and token-scrubbed."""
+    token = "gho_" + "s" * 30
+
+    monkeypatch.setattr(
+        emit.subprocess,
+        "run",
+        lambda *args, **kwargs: FakeCompleted(returncode=1, stderr=token),
+    )
+    client = emit.GitHubCodeScanningClient(SOURCE_REPO, token)
+    with pytest.raises(RuntimeError, match=r"\*\*\*"):
+        client.list_open_alerts()
+
+    monkeypatch.setattr(
+        emit.subprocess,
+        "run",
+        lambda *args, **kwargs: FakeCompleted(stdout="not-json"),
+    )
+    with pytest.raises(RuntimeError, match="invalid JSON"):
+        client.list_open_alerts()
 
 
 def test_client_ensure_labels_creates_only_missing_labels(monkeypatch):
@@ -1006,10 +1173,13 @@ def test_client_error_defaults_message_when_stderr_empty(monkeypatch):
     ("label", "color"),
     [
         ("strix", "5319e7"),
+        ("code-scanning", "1d76db"),
         ("security", "d73a4a"),
         ("severity:critical", "b60205"),
         ("severity:high", "d93f0b"),
         ("severity:medium", "fbca04"),
+        ("severity:low", "fef2c0"),
+        ("severity:info", "d4c5f9"),
         ("repo:example-service", "0e8a16"),
         ("other", "cfd3d7"),
     ],
@@ -1040,6 +1210,92 @@ def test_run_live_applies_plan(tmp_path, monkeypatch, capsys):
     assert "security" in client.ensured_labels
     assert "create=1" in out
     assert "dry-run" not in out
+
+
+def test_run_includes_low_code_scanning_alerts(tmp_path, monkeypatch, capsys):
+    """Live reconciliation files Strix Medium+ and every open Code Scanning alert."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    monkeypatch.setenv(emit.DEFAULT_TOKEN_ENV, "gho_" + "t" * 30)
+    monkeypatch.setenv(emit.DEFAULT_CODE_SCANNING_TOKEN_ENV, "gho_" + "s" * 30)
+    issue_client = FakeClient(existing=[])
+
+    class SourceClient:
+        def __init__(self, repo, token):
+            assert repo == SOURCE_REPO
+            assert token.startswith("gho_")
+
+        def list_open_alerts(self):
+            return [CODE_SCANNING_ALERT]
+
+    monkeypatch.setattr(emit, "GitHubIssueClient", lambda repo, token: issue_client)
+    monkeypatch.setattr(emit, "GitHubCodeScanningClient", SourceClient)
+
+    code = emit.run(
+        [
+            "--run-dir",
+            str(runs),
+            "--source-repo",
+            SOURCE_REPO,
+            "--include-code-scanning",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert len(issue_client.created) == 2
+    assert any("code-scanning" in issue["labels"] for issue in issue_client.created)
+    assert "Read 1 open GitHub Code Scanning alert" in out
+    assert "including 1 Code Scanning alert" in out
+
+
+def test_run_code_scanning_requires_source_token(tmp_path, monkeypatch, capsys):
+    """Opting into alert mirroring cannot silently skip a missing read token."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    monkeypatch.delenv(emit.DEFAULT_CODE_SCANNING_TOKEN_ENV, raising=False)
+
+    code = emit.run(
+        [
+            "--run-dir",
+            str(runs),
+            "--source-repo",
+            SOURCE_REPO,
+            "--include-code-scanning",
+            "--dry-run",
+        ]
+    )
+
+    assert code == 2
+    assert emit.DEFAULT_CODE_SCANNING_TOKEN_ENV in capsys.readouterr().out
+
+
+def test_run_code_scanning_read_failure_is_visible(tmp_path, monkeypatch, capsys):
+    """A partial or denied source alert read blocks issue reconciliation."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    monkeypatch.setenv(emit.DEFAULT_CODE_SCANNING_TOKEN_ENV, "gho_" + "s" * 30)
+
+    class BadSourceClient:
+        def __init__(self, repo, token):
+            pass
+
+        def list_open_alerts(self):
+            raise RuntimeError("gho_" + "z" * 30 + " forbidden")
+
+    monkeypatch.setattr(emit, "GitHubCodeScanningClient", BadSourceClient)
+    code = emit.run(
+        [
+            "--run-dir",
+            str(runs),
+            "--source-repo",
+            SOURCE_REPO,
+            "--include-code-scanning",
+            "--dry-run",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "refusing an incomplete reconciliation" in out
+    assert "gho_" not in out
 
 
 def test_run_full_scope_closes_stale_issue(tmp_path, monkeypatch, capsys):

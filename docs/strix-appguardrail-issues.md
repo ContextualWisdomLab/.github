@@ -1,11 +1,14 @@
-# Source-side Strix → appguardrail issue emitter
+# Source-side security findings → appguardrail issue emitter
 
 The central Strix security workflow (`.github/workflows/strix.yml`) runs as a
 required org workflow across (nearly) all repositories. Each run writes one
 Markdown report per vulnerability under `strix_runs/<run>/vulnerabilities/*.md`.
-This system turns those reports into **per-finding GitHub issues** in the
-`ContextualWisdomLab/appguardrail` tracker, deduplicated and lifecycle-managed
-so the tracker always reflects the current state of each repository's findings.
+This system turns those reports and every open **GitHub Code Scanning alert**
+into per-finding GitHub issues in the `ContextualWisdomLab/appguardrail`
+tracker, deduplicated and lifecycle-managed so the tracker reflects both
+runtime Strix findings and SARIF-backed repository alerts. Code Scanning
+governance findings such as the Low-severity OpenSSF/CII badge alert stay
+visible; the Medium-or-higher cutoff applies only to Strix reports.
 
 It **replaces** the previous approach, where `appguardrail` polled failed runs
 and opened one coarse issue per failed run with no close-on-fix. That collector
@@ -15,7 +18,7 @@ also never worked because its GitHub App identity was never provisioned.
 
 | File | Role |
 | ---- | ---- |
-| `scripts/ci/strix_emit_appguardrail_issues.py` | Parses reports, plans and applies issue operations. Pure parsing/planning + a thin `gh api` client. |
+| `scripts/ci/strix_emit_appguardrail_issues.py` | Parses Strix reports and Code Scanning alerts, then plans and applies issue operations. Pure parsing/planning + thin `gh api` clients. |
 | `tests/test_strix_emit_appguardrail_issues.py` | Unit tests: parsing, dedup hashing, op planning, close-on-fix set difference, incomplete-scan guard, dry-run and live execution. |
 | `.github/workflows/strix.yml` (final steps) | Runs the emitter after the scan/gate with a repository-scoped Noema App token. Missing credentials or failed issue reads/writes fail visibly. |
 
@@ -32,6 +35,13 @@ locations are recovered from a `Code Locations` section, a labelled line, or a
 prose reference. `/workspace/<repo>/` and PR-scope sandbox prefixes are stripped
 so a file hashes identically across runs.
 
+When `--include-code-scanning` is set, the emitter also performs a complete,
+paginated read of the source repository's open Code Scanning alerts. It
+preserves the tool/rule, security severity, current location, message,
+description, remediation, and a direct alert URL. Generic `error`, `warning`,
+and `note` severities map to High, Medium, and Low only when GitHub does not
+provide a security severity.
+
 ### Deduplication
 
 The stable identity of a finding is:
@@ -46,10 +56,15 @@ looked up by this hash before anything is created. Because the location is part
 of the key, a finding that moves to a different line is a **new identity**: the
 new location gets a fresh issue and the stale one is closed on fix.
 
+Code Scanning findings instead use `source_repo + source_kind + alert_number`
+as their stable identity. A GitHub alert therefore stays attached to one
+AppGuardrail issue when its message, severity, or current location changes.
+
 ### Issue shape
 
-- **Title**: `[strix] <repo> <SEVERITY>: <title> (<path>:<line>)`
-- **Labels**: `strix`, `security`, `repo:<name>`, `severity:<level>`
+- **Title**: `[strix|code-scanning] <repo> <SEVERITY>: <title> (<path>:<line>)`
+- **Labels**: source label (`strix` or `code-scanning`), `security`,
+  `repo:<name>`, `severity:<level>`
 - **Body**: full finding details, source repo/PR/head/run links, and three
   hidden markers (`strix-finding`, `strix-severity`, `strix-location`) that drive
   reconciliation.
@@ -91,6 +106,12 @@ client ID and private key remain in the existing
 `NOEMA_GITHUB_APP_PRIVATE_KEY` organization secret. The short-lived token is
 passed only as `STRIX_ISSUE_APP_TOKEN` and token-like output is redacted.
 
+A second short-lived token is scoped to the source repository with
+`security-events: read` and passed only as `CODE_SCANNING_SOURCE_TOKEN`. The
+source repository name is validated against `ContextualWisdomLab/<safe-name>`
+before it is used as an App-token scope. Alert reads and issue writes therefore
+remain separately least-privileged.
+
 This path is intentionally fail-closed. Missing credentials, token-mint
 failure, issue-list failure, label bootstrap failure, and every rejected issue
 mutation produce `::error::` output and a nonzero step result. There is no
@@ -111,6 +132,9 @@ permission checks once before merging the workflow change:
    the **cwl-noema-review** installation → **Repository access** → confirm
    **appguardrail** is included → **Save**. Accept the pending permission change
    on the installation if GitHub requests it.
+3. **Grant cwl-noema-review `Code scanning alerts: Read-only`.** The App must be
+   installed organization-wide (or at least on every source repository) so the
+   source-scoped alert token can be minted without widening `github.token`.
 
 Until both hold, collection fails visibly with the exact configuration or API
 reason in the run log. The next scan after the permission is accepted emits and

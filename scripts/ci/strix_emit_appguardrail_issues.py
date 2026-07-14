@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Emit per-finding Strix security issues into the appguardrail tracker.
+"""Emit structured security findings into the appguardrail tracker.
 
 The central Strix workflow (``.github/workflows/strix.yml``) writes one Markdown
 report per vulnerability under ``strix_runs/<run>/vulnerabilities/*.md``. This
 module parses those reports into normalized finding records and reconciles them
 against issues in ``ContextualWisdomLab/appguardrail``:
+
+GitHub Code Scanning alerts can be included explicitly alongside Strix reports.
+The two sources share the same reconciliation path while retaining distinct
+labels and stable source identities.
 
 * one open issue per distinct finding (deduplicated by a stable content hash),
 * body refreshed on every run, a comment added only when severity or location
@@ -40,6 +44,7 @@ from typing import Any
 
 DEFAULT_ISSUES_REPO = "ContextualWisdomLab/appguardrail"
 DEFAULT_TOKEN_ENV = "STRIX_ISSUE_APP_TOKEN"
+DEFAULT_CODE_SCANNING_TOKEN_ENV = "CODE_SCANNING_SOURCE_TOKEN"
 MIN_ACTIONABLE_SEVERITY = "MEDIUM"
 MIN_ACTIONABLE_SEVERITY_RANK = 2
 MAX_REPORT_BYTES = 1024 * 1024
@@ -63,6 +68,7 @@ SCOPE_PR = "pr"
 FINDING_MARKER_PREFIX = "<!-- strix-finding:"
 SEVERITY_MARKER_PREFIX = "<!-- strix-severity:"
 LOCATION_MARKER_PREFIX = "<!-- strix-location:"
+SOURCE_MARKER_PREFIX = "<!-- security-source:"
 SHORT_HASH_LENGTH = 12
 
 SEVERITY_ORDER = {
@@ -113,7 +119,7 @@ LOCATION_RE = re.compile(
 
 @dataclass
 class Finding:
-    """A single normalized Strix vulnerability finding."""
+    """A single normalized security finding from Strix or Code Scanning."""
 
     source_repo: str
     title: str
@@ -129,6 +135,8 @@ class Finding:
     impact: str = ""
     remediation: str = ""
     source_file: str = ""
+    source_kind: str = "strix"
+    dedup_identity: str = ""
 
     @property
     def normalized_location(self) -> str:
@@ -138,6 +146,15 @@ class Finding:
     @property
     def finding_hash(self) -> str:
         """Return the stable dedup hash for this finding."""
+        if self.dedup_identity:
+            payload = "\n".join(
+                [
+                    self.source_repo.strip(),
+                    self.source_kind.strip().casefold(),
+                    self.dedup_identity.strip().casefold(),
+                ]
+            )
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return finding_dedup_hash(self.source_repo, self.title, self.code_location)
 
     @property
@@ -255,6 +272,16 @@ def validated_token_env(value: str) -> str:
     if value != DEFAULT_TOKEN_ENV:
         raise argparse.ArgumentTypeError(
             f"token environment variable must be exactly {DEFAULT_TOKEN_ENV}"
+        )
+    return value
+
+
+def validated_code_scanning_token_env(value: str) -> str:
+    """Restrict source alert reads to the designated App token variable."""
+    if value != DEFAULT_CODE_SCANNING_TOKEN_ENV:
+        raise argparse.ArgumentTypeError(
+            "Code Scanning token environment variable must be exactly "
+            f"{DEFAULT_CODE_SCANNING_TOKEN_ENV}"
         )
     return value
 
@@ -522,6 +549,103 @@ def parse_run_dir(run_dir: Path, source_repo: str) -> list[Finding]:
     return list(findings.values())
 
 
+def code_scanning_severity(alert: dict[str, Any]) -> str:
+    """Return an organization severity for one GitHub Code Scanning alert."""
+    rule = alert.get("rule") if isinstance(alert.get("rule"), dict) else {}
+    security_level = str(rule.get("security_severity_level") or "").upper()
+    if security_level in SEVERITY_ORDER and security_level not in {"NONE", "INFO"}:
+        return security_level
+    return {
+        "ERROR": "HIGH",
+        "WARNING": "MEDIUM",
+        "NOTE": "LOW",
+        "NONE": "INFO",
+    }.get(str(rule.get("severity") or "").upper(), "INFO")
+
+
+def parse_code_scanning_alert(
+    alert: dict[str, Any], source_repo: str
+) -> Finding | None:
+    """Convert one open GitHub Code Scanning alert into a normalized finding."""
+    if str(alert.get("state") or "").casefold() != "open":
+        return None
+    try:
+        alert_number = int(alert["number"])
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("Code Scanning returned an open alert without a number")
+    if alert_number <= 0:
+        raise RuntimeError("Code Scanning returned a non-positive alert number")
+
+    rule = alert.get("rule") if isinstance(alert.get("rule"), dict) else {}
+    tool = alert.get("tool") if isinstance(alert.get("tool"), dict) else {}
+    instance = (
+        alert.get("most_recent_instance")
+        if isinstance(alert.get("most_recent_instance"), dict)
+        else {}
+    )
+    location = (
+        instance.get("location") if isinstance(instance.get("location"), dict) else {}
+    )
+    message = (
+        instance.get("message") if isinstance(instance.get("message"), dict) else {}
+    )
+    path = str(location.get("path") or "").strip()
+    if path.casefold().startswith("no file associated"):
+        path = ""
+    code_location = ""
+    if path:
+        try:
+            start = max(1, int(location.get("start_line") or 1))
+            end = max(start, int(location.get("end_line") or start))
+        except (TypeError, ValueError):
+            start = end = 1
+        code_location = f"{path}:{start}" if start == end else f"{path}:{start}-{end}"
+
+    rule_id = str(rule.get("id") or rule.get("name") or "unknown-rule")
+    description = str(rule.get("description") or rule.get("name") or rule_id)
+    tool_name = str(tool.get("name") or "GitHub Code Scanning")
+    alert_url = (
+        f"https://github.com/{source_repo}/security/code-scanning/{alert_number}"
+    )
+    return Finding(
+        source_repo=source_repo,
+        title=sanitize_report_text(
+            f"{tool_name} {rule_id}: {description} (alert #{alert_number})",
+            limit=MAX_TITLE_CHARS,
+        ),
+        severity=code_scanning_severity(alert),
+        code_location=code_location,
+        target=alert_url,
+        model=sanitize_report_text(tool_name, limit=MAX_FIELD_CHARS),
+        description=sanitize_report_text(
+            str(message.get("text") or ""), limit=MAX_SECTION_CHARS
+        ),
+        impact=sanitize_report_text(
+            str(rule.get("full_description") or ""), limit=MAX_SECTION_CHARS
+        ),
+        remediation=sanitize_report_text(
+            str(rule.get("help") or ""), limit=MAX_SECTION_CHARS
+        ),
+        source_file=f"code-scanning-alert-{alert_number}",
+        source_kind="code-scanning",
+        dedup_identity=f"alert:{alert_number}",
+    )
+
+
+def parse_code_scanning_alerts(
+    alerts: Sequence[dict[str, Any]], source_repo: str
+) -> list[Finding]:
+    """Parse and deduplicate all open Code Scanning alerts from one API read."""
+    findings: dict[str, Finding] = {}
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            raise RuntimeError("Code Scanning returned a non-object alert")
+        finding = parse_code_scanning_alert(alert, source_repo)
+        if finding is not None:
+            findings[finding.finding_hash] = finding
+    return list(findings.values())
+
+
 def _source_links(context: "EmitContext") -> list[str]:
     """Return Markdown links back to the scanned source repo/PR/commit."""
     links: list[str] = [f"- Source repository: `{context.source_repo}`"]
@@ -531,7 +655,7 @@ def _source_links(context: "EmitContext") -> list[str]:
     if context.head_sha:
         links.append(f"- Head commit: {base}/commit/{context.head_sha}")
     if context.run_url:
-        links.append(f"- Strix run: {context.run_url}")
+        links.append(f"- Security workflow run: {context.run_url}")
     return links
 
 
@@ -540,7 +664,9 @@ def build_issue_title(finding: Finding) -> str:
     repo_short = finding.source_repo.split("/")[-1]
     location = finding.code_location or "no-location"
     severity = finding.severity or "UNKNOWN"
-    title = f"[strix] {repo_short} {severity}: {finding.title} ({location})"
+    title = (
+        f"[{finding.source_kind}] {repo_short} {severity}: {finding.title} ({location})"
+    )
     return sanitize_report_text(title, limit=MAX_TITLE_CHARS)
 
 
@@ -549,7 +675,7 @@ def build_issue_labels(finding: Finding) -> list[str]:
     repo_short = finding.source_repo.split("/")[-1]
     severity = (finding.severity or "unknown").lower()
     return [
-        "strix",
+        finding.source_kind,
         "security",
         f"repo:{repo_short}",
         f"severity:{severity}",
@@ -588,12 +714,13 @@ def build_issue_body(finding: Finding, context: "EmitContext") -> str:
     parts += [
         "",
         "---",
-        "_Filed automatically by the source-side Strix issue emitter. "
+        "_Filed automatically by the source-side security issue emitter. "
         "Do not edit the markers below; they drive deduplication and close-on-fix._",
         "",
         f"{FINDING_MARKER_PREFIX} {finding.finding_hash} -->",
         f"{SEVERITY_MARKER_PREFIX} {finding.severity or 'UNKNOWN'} -->",
         f"{LOCATION_MARKER_PREFIX} {finding.normalized_location} -->",
+        f"{SOURCE_MARKER_PREFIX} {finding.source_kind} -->",
     ]
     return "\n".join(parts)
 
@@ -700,9 +827,8 @@ def plan_operations(
         number = _issue_number(existing)
         old_body = str(existing.get("body") or "")
         old_severity = marker_value(old_body, SEVERITY_MARKER_PREFIX)
-        # The dedup key pins repo+title+location, so a hash match implies the same
-        # location; only severity (and refreshable body fields) can move here. A
-        # relocated finding forks a new hash -> a fresh create plus close-on-fix.
+        # Strix identities pin repo+title+location; Code Scanning identities pin
+        # repo+source+alert number so a moved alert refreshes the same issue.
         severity_changed = (
             bool(old_severity)
             and old_severity.upper() != (finding.severity or "UNKNOWN").upper()
@@ -732,7 +858,7 @@ def plan_operations(
                     title=build_issue_title(finding),
                     issue_number=number,
                     reason=change,
-                    comment=f"Strix finding changed: {change}.",
+                    comment=f"Security finding changed: {change}.",
                 )
             )
 
@@ -752,7 +878,7 @@ def plan_operations(
                     title=str(issue.get("title") or ""),
                     issue_number=_issue_number(issue),
                     reason="finding no longer present",
-                    comment=f"Resolved on {resolved_ref}: this Strix finding is no longer "
+                    comment=f"Resolved on {resolved_ref}: this security finding is no longer "
                     f"reported for `{context.source_repo}`. Closing automatically.",
                 )
             )
@@ -766,6 +892,48 @@ def _issue_number(issue: dict[str, Any]) -> int | None:
         return int(issue["number"])
     except (KeyError, TypeError, ValueError):
         return None
+
+
+class GitHubCodeScanningClient:
+    """Read open Code Scanning alerts with a source-repository App token."""
+
+    def __init__(self, repo: str, token: str) -> None:
+        """Store the source repository and its security-events read token."""
+        self.repo = repo
+        self._token = token
+
+    def list_open_alerts(self) -> list[dict[str, Any]]:
+        """Return every open Code Scanning alert after a complete paginated read."""
+        env = dict(os.environ)
+        env["GH_TOKEN"] = self._token
+        result = subprocess.run(  # noqa: S603 - fixed gh argv, no shell
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                "-X",
+                "GET",
+                f"repos/{self.repo}/code-scanning/alerts",
+                "-f",
+                "state=open",
+                "-f",
+                "per_page=100",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(_scrub(result.stderr.strip() or "gh command failed"))
+        try:
+            pages = json.loads(result.stdout or "[]")
+            return [
+                alert for page in pages for alert in page if isinstance(alert, dict)
+            ]
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Code Scanning API returned invalid JSON") from exc
 
 
 class GitHubIssueClient:
@@ -793,7 +961,7 @@ class GitHubIssueClient:
         return result.stdout
 
     def list_scope_issues(self, repo_short: str) -> list[dict[str, Any]]:
-        """Return every ``strix``+``repo:<name>`` issue (any state) in the tracker."""
+        """Return tracked security issues for one source repository (any state)."""
         raw = self._run(
             [
                 "api",
@@ -805,14 +973,19 @@ class GitHubIssueClient:
                 "-f",
                 "state=all",
                 "-f",
-                f"labels=strix,repo:{repo_short}",
+                f"labels=repo:{repo_short}",
                 "-f",
                 "per_page=100",
             ]
         )
         pages = json.loads(raw or "[]")
+        tracked_kinds = {"strix", "code-scanning"}
         return [
-            issue for page in pages for issue in page if "pull_request" not in issue
+            issue
+            for page in pages
+            for issue in page
+            if "pull_request" not in issue
+            and tracked_kinds.intersection(_issue_label_names(issue))
         ]
 
     def ensure_labels(self, labels: Sequence[str]) -> None:
@@ -924,6 +1097,8 @@ def label_style(label: str) -> tuple[str, str]:
     """Return a stable color and description for an emitter-owned label."""
     if label == "strix":
         return "5319e7", "Finding produced by the Strix security workflow"
+    if label == "code-scanning":
+        return "1d76db", "Finding mirrored from GitHub Code Scanning"
     if label == "security":
         return "d73a4a", "Security vulnerability or security-governance work"
     if label.startswith("severity:critical"):
@@ -932,9 +1107,13 @@ def label_style(label: str) -> tuple[str, str]:
         return "d93f0b", "High-severity security finding"
     if label.startswith("severity:medium"):
         return "fbca04", "Medium-severity security finding"
+    if label.startswith("severity:low"):
+        return "fef2c0", "Low-severity security or governance finding"
+    if label.startswith("severity:info"):
+        return "d4c5f9", "Informational security or governance finding"
     if label.startswith("repo:"):
         return "0e8a16", "Source repository for this organization security finding"
-    return "cfd3d7", "Strix security finding classification"
+    return "cfd3d7", "Security finding classification"
 
 
 def execute_plan(
@@ -1046,6 +1225,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Env var holding the GitHub App token.",
     )
     parser.add_argument(
+        "--include-code-scanning",
+        action="store_true",
+        help="Read and reconcile all open GitHub Code Scanning alerts.",
+    )
+    parser.add_argument(
+        "--code-scanning-token-env",
+        default=DEFAULT_CODE_SCANNING_TOKEN_ENV,
+        type=validated_code_scanning_token_env,
+        help="Env var holding the source-repository security-events read token.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Plan and log operations without mutating GitHub.",
@@ -1073,6 +1263,35 @@ def run(argv: Sequence[str] | None = None) -> int:
             f"::error::Strix issue emitter could not parse reports: {_scrub(str(exc))}"
         )
         return 1
+    strix_finding_count = len(parsed_findings)
+    code_scanning_findings: list[Finding] = []
+    if args.include_code_scanning:
+        source_token = os.environ.get(args.code_scanning_token_env, "").strip()
+        if not source_token:
+            print(
+                f"::error::{args.code_scanning_token_env} is not set; GitHub Code "
+                "Scanning alerts cannot be read or reconciled. Provision the Noema "
+                "GitHub App with security-events read permission."
+            )
+            return 2
+        try:
+            alerts = GitHubCodeScanningClient(
+                context.source_repo, source_token
+            ).list_open_alerts()
+            code_scanning_findings = parse_code_scanning_alerts(
+                alerts, context.source_repo
+            )
+        except RuntimeError as exc:
+            print(
+                "::error::Could not read GitHub Code Scanning alerts; refusing "
+                f"an incomplete reconciliation: {_scrub(str(exc))}"
+            )
+            return 1
+        parsed_findings.extend(code_scanning_findings)
+        print(
+            f"Read {len(alerts)} open GitHub Code Scanning alert(s); normalized "
+            f"{len(code_scanning_findings)} finding(s) for reconciliation."
+        )
     unknown_severity = [
         finding for finding in parsed_findings if severity_rank(finding.severity) < 0
     ]
@@ -1086,13 +1305,23 @@ def run(argv: Sequence[str] | None = None) -> int:
     findings = [
         finding
         for finding in parsed_findings
-        if is_actionable_severity(finding.severity)
+        if finding.source_kind == "code-scanning"
+        or is_actionable_severity(finding.severity)
     ]
-    skipped = len(parsed_findings) - len(findings)
+    skipped = len(
+        [
+            finding
+            for finding in parsed_findings
+            if finding.source_kind == "strix"
+            and not is_actionable_severity(finding.severity)
+        ]
+    )
     print(
-        f"Parsed {len(parsed_findings)} distinct Strix finding(s) from {args.run_dir}; "
-        f"{len(findings)} meet the {MIN_ACTIONABLE_SEVERITY}+ issue policy and "
-        f"{skipped} lower-severity finding(s) were not filed."
+        f"Parsed {strix_finding_count} distinct Strix finding(s) from {args.run_dir}; "
+        f"{strix_finding_count - skipped} meet the {MIN_ACTIONABLE_SEVERITY}+ "
+        f"issue policy; prepared {len(findings)} tracker finding(s), including "
+        f"{len(code_scanning_findings)} Code Scanning alert(s); {skipped} "
+        "lower-severity Strix finding(s) were not filed."
     )
     if not context.scan_complete:
         print("Scan not marked complete: close-on-fix is disabled for this run.")
@@ -1145,7 +1374,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             return 1
     counts = execute_plan(operations, client, dry_run=dry_run)
     print(
-        "Strix issue emit summary: "
+        "Security issue emit summary: "
         + ", ".join(
             f"{key}={counts.get(key, 0)}"
             for key in ("create", "update", "comment", "close", "error")

@@ -217,6 +217,11 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0" "strix workflow pins the Noema App token action"
 	assert_file_contains "$workflow_file" "repositories: appguardrail" "strix workflow scopes the Noema App token to AppGuardrail"
 	assert_file_contains "$workflow_file" "permission-issues: write" "strix workflow requests only the issue mutation permission needed by the emitter"
+	assert_file_contains "$workflow_file" "Resolve source repository for Code Scanning" "strix workflow validates the source repository before minting an alert-read token"
+	assert_file_contains "$workflow_file" "Mint source-scoped Noema GitHub App token for Code Scanning" "strix workflow mints a source-scoped Code Scanning token"
+	assert_file_contains "$workflow_file" "permission-security-events: read" "strix workflow grants the source token read-only Code Scanning access"
+	assert_file_contains "$workflow_file" "CODE_SCANNING_SOURCE_TOKEN:" "strix workflow passes the source-scoped token only to the trusted emitter"
+	assert_file_contains "$workflow_file" "--include-code-scanning" "strix workflow mirrors GitHub Code Scanning alerts into AppGuardrail"
 	assert_file_contains "$workflow_file" "steps.run_strix.outputs.scan_complete || 'false'" "strix workflow propagates explicit scan-completion evidence"
 	assert_file_contains "$workflow_file" "--issues-repo ContextualWisdomLab/appguardrail" "strix workflow fixes the issue sink to the central AppGuardrail tracker"
 	assert_file_contains "$workflow_file" 'python3 "$TRUSTED_STRIX_ISSUE_EMITTER"' "strix workflow executes only the trusted central issue emitter"
@@ -495,7 +500,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "actions: read" "opencode review workflow can read failed Actions logs without Actions write scope"
 	assert_file_contains "$workflow_file" "checks: read" "opencode review workflow can read failed check-run annotations for line-specific findings"
 	assert_file_contains "$workflow_file" "contents: read" "opencode review workflow uses read-only repository contents permission"
-	assert_file_not_contains "$workflow_file" "contents: write" "opencode review workflow does not need repository contents write scope"
+	if awk '/^  opencode-review-target:$/,/^  opencode-exhausted-retry:$/' "$workflow_file" | grep -q '^[[:space:]]*contents: write'; then
+		record_failure "opencode review job must not hold repository contents write scope"
+	fi
+	assert_file_contains "$workflow_file" "opencode-exhausted-retry:" "opencode review workflow isolates deferred retry dispatch permissions in a separate job"
 	assert_file_contains "$workflow_file" "pull-requests: write" "opencode review workflow may use github-actions[bot] for same-repository review-thread, update-branch, auto-merge, and merge follow-up"
 	assert_file_contains "$workflow_file" "issues: write" "opencode review workflow can publish or update overview comments through the job token"
 	assert_file_contains "$workflow_file" "statuses: write" "opencode review workflow can read status contexts and publish the repository_dispatch status evidence it owns"

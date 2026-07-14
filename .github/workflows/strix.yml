@@ -820,10 +820,42 @@ jobs:
           permission-issues: write
           permission-metadata: read
 
-      - name: Emit Medium-or-higher Strix findings to AppGuardrail
+      - name: Resolve source repository for Code Scanning
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' && steps.appguardrail_issue_credential.outcome == 'success' }}
+        id: code_scanning_source
+        env:
+          SOURCE_REPO: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+
+          source_repo = os.environ.get("SOURCE_REPO", "")
+          match = re.fullmatch(r"ContextualWisdomLab/([A-Za-z0-9_.-]+)", source_repo)
+          if match is None:
+              raise SystemExit(f"Invalid organization source repository: {source_repo!r}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"repository={match.group(1)}", file=output)
+          PY
+
+      - name: Mint source-scoped Noema GitHub App token for Code Scanning
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' && steps.code_scanning_source.outcome == 'success' }}
+        id: noema_code_scanning_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.code_scanning_source.outputs.repository }}
+          permission-security-events: read
+          permission-metadata: read
+
+      - name: Emit Strix and GitHub Code Scanning findings to AppGuardrail
         if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' }}
         env:
           STRIX_ISSUE_APP_TOKEN: ${{ steps.noema_issue_token.outputs.token || '' }}
+          CODE_SCANNING_SOURCE_TOKEN: ${{ steps.noema_code_scanning_token.outputs.token || '' }}
           STRIX_SOURCE_REPO: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
           STRIX_PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
           STRIX_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || github.sha }}
@@ -840,6 +872,7 @@ jobs:
             --head-sha "$STRIX_HEAD_SHA"
             --run-url "$STRIX_RUN_URL"
             --scope "$STRIX_SCAN_SCOPE"
+            --include-code-scanning
           )
           if [ "$STRIX_SCAN_COMPLETE" = "true" ]; then
             emitter_args+=(--scan-complete)

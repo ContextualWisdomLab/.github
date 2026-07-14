@@ -907,7 +907,7 @@ def test_strix_emits_actionable_findings_to_appguardrail_fail_closed() -> None:
         "- name: Collect Strix reports for artifact upload", 1
     )[0]
     emitter_step = workflow.split(
-        "- name: Emit Medium-or-higher Strix findings to AppGuardrail", 1
+        "- name: Emit Strix and GitHub Code Scanning findings to AppGuardrail", 1
     )[1].split("- name: Publish same-head manual Strix status", 1)[0]
 
     assert "TRUSTED_STRIX_ISSUE_EMITTER=" in workflow
@@ -922,11 +922,17 @@ def test_strix_emits_actionable_findings_to_appguardrail_fail_closed() -> None:
     ) in workflow
     assert "repositories: appguardrail" in workflow
     assert "permission-issues: write" in workflow
+    assert "Resolve source repository for Code Scanning" in workflow
+    assert "Mint source-scoped Noema GitHub App token for Code Scanning" in workflow
+    assert "permission-security-events: read" in workflow
     assert "STRIX_ISSUE_APP_TOKEN:" in emitter_step
     assert "steps.noema_issue_token.outputs.token || ''" in emitter_step
+    assert "CODE_SCANNING_SOURCE_TOKEN:" in emitter_step
+    assert "steps.noema_code_scanning_token.outputs.token || ''" in emitter_step
     assert "steps.run_strix.outputs.scan_complete || 'false'" in emitter_step
     assert "--issues-repo ContextualWisdomLab/appguardrail" in emitter_step
     assert '--scope "$STRIX_SCAN_SCOPE"' in emitter_step
+    assert "--include-code-scanning" in emitter_step
     assert 'python3 "$TRUSTED_STRIX_ISSUE_EMITTER"' in emitter_step
     assert "--dry-run" not in emitter_step
 
