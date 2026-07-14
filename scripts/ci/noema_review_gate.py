@@ -423,12 +423,23 @@ def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response."""
     stripped = text.strip()
     if stripped.startswith("{"):
-        return json.loads(stripped)
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+
     start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end < start:
+    if start < 0:
         raise RuntimeError("Noema LLM response did not contain a JSON object")
-    return json.loads(stripped[start : end + 1])
+
+    try:
+        # ⚡ Bolt: Use raw_decode to prevent O(N) memory copying overhead from string slicing
+        value, _ = json.JSONDecoder().raw_decode(stripped, start)
+        if not isinstance(value, dict):
+            raise RuntimeError("Noema LLM response did not contain a JSON object")
+        return value
+    except json.JSONDecodeError:
+        raise RuntimeError("Noema LLM response did not contain a JSON object")
 
 
 def call_llm(
