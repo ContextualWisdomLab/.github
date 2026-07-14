@@ -20,7 +20,7 @@ def valid_body(head: str = HEAD) -> str:
                 "line": 1,
                 "hypothesis": "A fallback approval could be reused.",
                 "attack_or_counterexample": "Supply a deterministic approval body.",
-                "evidence": "The gate rejected the fallback marker.",
+                "evidence": "Source trace at .github/workflows/opencode-review.yml:1 confirmed the gate rejected the fallback marker.",
                 "outcome": "falsified",
             }
         ],
@@ -86,19 +86,45 @@ def test_extract_adversarial_evidence_uses_last_parseable_block():
         (lambda value: value.update(commit_id="b" * 40), "commit"),
         (lambda value: value.update(user={"login": "unknown"}), "author"),
         (
-            lambda value: value.update(body=value["body"] + "\ndeterministic fallback approval"),
+            lambda value: value.update(
+                body=value["body"] + "\ndeterministic fallback approval"
+            ),
             "fallback",
         ),
         (
-            lambda value: value.update(body=value["body"].replace(gate.PRIMARY_APPROVAL_MARKER, "missing")),
+            lambda value: value.update(
+                body=value["body"].replace(gate.PRIMARY_APPROVAL_MARKER, "missing")
+            ),
             "real-model approval marker",
         ),
-        (lambda value: value.update(body=value["body"].replace("- Result: APPROVE", "")), "APPROVE result"),
-        (lambda value: value.update(body=value["body"].replace(f"- Head SHA: `{HEAD}`", "")), "current-head"),
-        (lambda value: value.update(body=value["body"].replace("- Workflow run: 123", "")), "workflow run"),
-        (lambda value: value.update(body=value["body"].replace("- Workflow attempt: 2", "")), "workflow attempt"),
         (
-            lambda value: value.update(body=value["body"].replace("```json", "```text")),
+            lambda value: value.update(
+                body=value["body"].replace("- Result: APPROVE", "")
+            ),
+            "APPROVE result",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace(f"- Head SHA: `{HEAD}`", "")
+            ),
+            "current-head",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace("- Workflow run: 123", "")
+            ),
+            "workflow run",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace("- Workflow attempt: 2", "")
+            ),
+            "workflow attempt",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace("```json", "```text")
+            ),
             "parseable adversarial",
         ),
     ],
@@ -113,8 +139,14 @@ def test_review_rejection_reason_rejects_non_model_evidence(mutate, reason):
     ("evidence", "reason"),
     [
         ({"status": "failed", "probes": [{}], "residual_risk": "risk"}, "status"),
-        ({"status": "passed", "probes": [], "residual_risk": "risk"}, "probes are empty"),
-        ({"status": "passed", "probes": ["bad"], "residual_risk": "risk"}, "not an object"),
+        (
+            {"status": "passed", "probes": [], "residual_risk": "risk"},
+            "probes are empty",
+        ),
+        (
+            {"status": "passed", "probes": ["bad"], "residual_risk": "risk"},
+            "not an object",
+        ),
         (
             {
                 "status": "passed",
@@ -269,7 +301,7 @@ def test_adversarial_validation_rejects_unobserved_source_and_test_claims():
                 "hypothesis": "Approval lookup misses a delayed review.",
                 "attack_or_counterexample": "Simulate delayed review propagation.",
                 "evidence": (
-                    "Source inspection and test coverage verify error branches are handled; "
+                    "Source inspection at .github/workflows/opencode-review.yml:6646 and test coverage describe the error branches; "
                     "full error debug output is preserved."
                 ),
                 "outcome": "falsified",

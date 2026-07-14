@@ -1,7 +1,7 @@
 name: Required OpenCode Review
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_dispatch:
     inputs:
@@ -33,14 +33,14 @@ on:
 
 concurrency:
   # Include the event name so same-head workflow_dispatch evidence can run
-  # without cancelling the required pull_request_target review context.
+  # without cancelling the required pull_request review context.
   # PR-number scope still keeps stale runs replaced within each event class.
   group: >-
     opencode-review-${{ github.event_name }}-${{
-    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
+    github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
     github.repository }}-${{
-    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
     github.run_id }}
@@ -61,7 +61,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
-        github.event_name == 'pull_request_target'
+        github.event_name == 'pull_request'
         && github.event.action != 'closed'
       )
     runs-on: ubuntu-latest
@@ -138,7 +138,7 @@ jobs:
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
   cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
@@ -151,7 +151,7 @@ jobs:
       && (
         github.event_name == 'workflow_dispatch'
         || (
-          github.event_name == 'pull_request_target'
+          github.event_name == 'pull_request'
           && github.event.action != 'closed'
           && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
         )
@@ -305,7 +305,7 @@ jobs:
       && (
         github.event_name == 'workflow_dispatch'
         || (
-          github.event_name == 'pull_request_target'
+          github.event_name == 'pull_request'
           && github.event.action != 'closed'
           && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
         )
@@ -1502,7 +1502,7 @@ jobs:
       && (
         github.event_name == 'workflow_dispatch'
         || (
-          github.event_name == 'pull_request_target'
+          github.event_name == 'pull_request'
           && github.event.action != 'closed'
           && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
         )
@@ -1874,14 +1874,6 @@ jobs:
           else
             printf 'Fallback ineligibility reasons: none\n'
           fi
-
-      - name: Install central adversarial harness runtime
-        if: >-
-          needs.coverage-evidence.result == 'success'
-          && steps.central_review_process_fallback_scope.outputs.eligible == 'true'
-        run: >-
-          python3 -m pip install --disable-pip-version-check --require-hashes
-          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
       - name: Initialize CodeGraph index for OpenCode
         env:
@@ -4098,7 +4090,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
-          LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: ${{ github.event_name == 'pull_request_target' && github.token || '' }}
+          LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: ${{ github.event_name == 'pull_request' && github.token || '' }}
           # The OpenCode app installation token is exchanged from api.opencode.ai
           # and never carries security-events read, so it cannot read the
           # code-scanning alerts API; github.token has security-events: read from
@@ -5365,7 +5357,7 @@ jobs:
               printf '### %s. HIGH %s:%s - Current-head Strix evidence is missing because the workflow run was cancelled before logs\n' "$finding_index" "$path" "$line"
               printf -- '- Problem: Strix Security Scan reported a current-head workflow_run conclusion of cancelled, but GitHub emitted no failed job log and no Strix Vulnerability Report window.\n'
               if pr_changes_trusted_strix_inputs; then
-                printf -- '- Root cause: The security gate has no usable Strix evidence for this head SHA. This PR changes trusted Strix workflow or gate inputs, but the cancelled pull_request_target run still used the base branch copies, so current-head edits cannot affect this run.\n'
+                printf -- '- Root cause: The security gate has no usable Strix evidence for this head SHA. This PR changes trusted Strix workflow or gate inputs, but the cancelled pull_request_target Strix run still used the base branch copies, so current-head edits cannot affect this run.\n'
                 printf -- '- Fix: Do not invent an application code fix from this cancelled run. Re-run Strix after the trusted base branch contains the workflow/gate change or capture equivalent temporary evidence tied to this head SHA; keep the workflow concurrency line at %s:%s aligned with the intended queue isolation.\n' "$path" "$line"
                 printf -- '- Regression test: Keep failed-check evidence collection explicit for cancelled workflow runs with no job log and cover self-modifying Strix workflow PRs so reviews explain trusted-base execution semantics.\n\n'
               else
@@ -6535,45 +6527,6 @@ jobs:
             stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"
           }
 
-          approve_central_review_process_after_model_unavailable() {
-            local body
-
-            if [ "${GH_REPOSITORY:-}" != "ContextualWisdomLab/.github" ]; then
-              return 1
-            fi
-            if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" != "true" ]; then
-              return 1
-            fi
-
-            body="$(printf '%s\n' \
-              "## Pull request overview" \
-              "" \
-              "OpenCode model output was unavailable, but deterministic current-head evidence is clean for this allowlisted central review-process self-repair." \
-              "" \
-              "## Findings" \
-              "" \
-              "No blocking findings." \
-              "" \
-              "## Evidence" \
-              "" \
-              "- Result: APPROVE" \
-              "- Reason: current-head deterministic central review-process evidence is clean after model-output unavailability." \
-              "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
-              "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
-              "- Coverage evidence: \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`" \
-              "- Peer GitHub Checks: complete and clean" \
-              "- Code scanning: no open medium-or-higher alerts for the PR branch" \
-              "- Reviewer threads: resolved or outdated" \
-              "- Head SHA: \`${HEAD_SHA}\`" \
-              "- Workflow run: ${RUN_ID}" \
-              "- Workflow attempt: ${RUN_ATTEMPT}" \
-              "" \
-              "This fallback is limited to \`ContextualWisdomLab/.github\` pull_request_target runs whose changed files match the central OpenCode/Strix review-process allowlist."
-            )"
-            create_pull_review "APPROVE" "$body"
-            return 0
-          }
-
           collect_open_code_scanning_alerts() {
             local output_file="$1"
             local pr_json head_ref scan_token lookup_error_file
@@ -6724,11 +6677,7 @@ jobs:
               return 0
             fi
 
-            if approve_central_review_process_after_model_unavailable; then
-              return 0
-            fi
-
-            printf '::notice::MODEL_OUTPUT_UNAVAILABLE: deterministic evidence fallback will not approve %s#%s because model-unavailable approvals are limited to existing same-head real-model approvals or allowlisted central review-process self-repair.\n' "${GH_REPOSITORY:-unknown}" "${PR_NUMBER:-unknown}"
+            printf '::notice::MODEL_OUTPUT_UNAVAILABLE: deterministic evidence will not approve %s#%s; only an existing real-model APPROVED review bound to this exact head may satisfy the required review after provider exhaustion.\n' "${GH_REPOSITORY:-unknown}" "${PR_NUMBER:-unknown}"
             return 1
           }
 
@@ -7271,7 +7220,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
-          SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || needs.validate-pr-metadata.outputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
+          SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request' || needs.validate-pr-metadata.outputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
@@ -7386,7 +7335,7 @@ jobs:
     # current head until a model produces a verdict.
     if: >-
       always()
-      && github.event_name == 'pull_request_target'
+      && github.event_name == 'pull_request'
       && github.event.action != 'closed'
       && needs.opencode-review-target.result == 'failure'
       && needs.opencode-review-target.outputs.model_pool_outcome == 'exhausted'

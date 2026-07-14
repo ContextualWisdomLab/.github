@@ -13,8 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
-
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
@@ -323,39 +321,16 @@ def run_central_fallback(
     return result, output_file, github_output, uv_log
 
 
-def test_central_fallback_emits_structured_adversarial_approval(tmp_path: Path) -> None:
-    """Central self-repair can approve only after all bounded probes execute."""
+def test_central_fallback_cannot_approve_without_model_evidence(tmp_path: Path) -> None:
+    """Passing PR-controlled probes cannot become a synthetic approval."""
     result, output_file, github_output, uv_log = run_central_fallback(tmp_path)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "valid current-head APPROVE control block" in result.stdout
-    assert (
-        "review_model=central-current-head-adversarial-harness"
-        in github_output.read_text(encoding="utf-8")
-    )
-    assert "review_status=success" in github_output.read_text(encoding="utf-8")
-    assert "test_github_gpt5_runtime_cap_preserves_queue_budget" in uv_log.read_text(
-        encoding="utf-8"
-    )
-    control = json.loads(output_file.read_text(encoding="utf-8"))
-    assert control["result"] == "APPROVE"
-    assert control["adversarial_validation"]["status"] == "passed"
-    assert len(control["adversarial_validation"]["probes"]) == 3
-    assert {
-        probe["outcome"] for probe in control["adversarial_validation"]["probes"]
-    } == {"falsified"}
-    for probe in control["adversarial_validation"]["probes"]:
-        assert (
-            adversarial_evidence_rejection_reason(
-                probe["evidence"],
-                probe["path"],
-            )
-            is None
-        )
-    assert (
-        "bash scripts/ci/test_strix_quick_gate.sh"
-        in control["adversarial_validation"]["probes"][2]["evidence"]
-    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "model pool exhausted" in result.stdout.casefold()
+    assert "review_status=exhausted" in github_output.read_text(encoding="utf-8")
+    assert "review_status=success" not in github_output.read_text(encoding="utf-8")
+    assert output_file.read_text(encoding="utf-8") == ""
+    assert not uv_log.exists()
 
 
 def test_central_fallback_fails_closed_when_required_scope_is_missing(
@@ -368,10 +343,7 @@ def test_central_fallback_fails_closed_when_required_scope_is_missing(
     )
 
     assert result.returncode == 1
-    assert (
-        "required current-head path scripts/ci/javascript_coverage_gate.py is not changed"
-        in result.stdout
-    )
+    assert "model pool exhausted" in result.stdout.casefold()
     assert "review_status=exhausted" in github_output.read_text(encoding="utf-8")
     assert output_file.read_text(encoding="utf-8") == ""
     assert not uv_log.exists()

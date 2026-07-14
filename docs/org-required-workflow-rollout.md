@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-13 21:10 KST
+Updated: 2026-07-14 13:35 KST
 
 ## Decision
 
@@ -21,7 +21,7 @@ Use an organization repository ruleset instead of copying workflow files into ea
   - `.github/workflows/sast-semgrep.yml`
 - Required workflow ref: `refs/heads/main`
 - Last verified workflow implementation base commit: `ef9950e6b55bf943c0295e1df3e34c94210d21cc` (`#283`)
-- Required workflow trigger support: `pull_request_target`, `push`, `workflow_run`
+- Required workflow trigger support: `pull_request`, `pull_request_target`, `push`, `workflow_run`
 
 `.github` PRs through `#283` are now in `main`. The required-workflow
 ruleset points at `.github@main`; if live organization ruleset inspection
@@ -34,16 +34,18 @@ This keeps Strix security evidence, OpenCode review evidence, and merge/update a
 
 The central `.github/workflows/opencode-review.yml` is now part of the active organization required workflow ruleset.
 
-- Required workflow trigger support: `pull_request_target`
+- Required workflow trigger support: `pull_request` (supported by GitHub ruleset workflows)
 - Stable required check job name: `opencode-review`
 - Trusted source: `ContextualWisdomLab/.github`
-- PR-head handling: checkout or fetch PR head as review data only; trusted scripts come from the central `.github` ref
+- PR-head handling: the ruleset-supported `pull_request` event executes PR coverage in the unprivileged PR context; trusted scripts still come from the central `.github` workflow source
 - Manual target support: OpenCode and Strix `workflow_dispatch` runs can still pass `target_repository` for targeted diagnostics, but required-workflow coverage comes from the organization ruleset rather than repo-local workflow copies
 - Model token posture: use the organization `STRIX_GITHUB_MODELS_TOKEN` secret for GitHub Models calls, with `github.token` as the fallback; live workflow evidence showed `github.token` alone can return 403 from `models.github.ai/inference`
-- Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; `github.token` remains the last fallback and publication failures are soft-failed
-- Coverage execution posture: privileged `pull_request_target` coverage runs only for same-repository PR heads; fork PR heads must be covered by an unprivileged PR-side check or manually trusted dispatch before approval
+- Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; the workflow token is limited to the same-repository PR context and publication failures remain visible
+- Coverage execution posture: PR-controlled package, test, build, R, Rust, and Docker inputs are never executed from `pull_request_target`; same-repository coverage runs in the ruleset-supported `pull_request` context, while cross-repository workflow dispatch remains metadata-bound and explicitly authenticated
 - Fork posture: PR heads are fetched through `refs/pull/<number>/head` when direct head-SHA fetch is not available, so review can inspect fork PR source as data without executing it in the trusted workflow context
 - Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate rechecks current-head peer checks and extends its bounded wait only while image-validation checks remain pending, logging the reason before approval
+- Model-exhaustion posture: command exit codes and deterministic checks cannot synthesize an approval. Exhaustion remains `MODEL_OUTPUT_UNAVAILABLE`; only a prior real-model approval bound to the exact current head can satisfy the review gate after all checks, alerts, and threads are revalidated.
+- Adversarial-evidence posture: every probe must cite its exact changed path and positive in-range line in the materialized current-head source tree. Unrelated paths, nonexistent lines, circular claims, and missing observed results fail closed with a concrete rejection reason.
 
 Keep the OpenCode required workflow active only while the central workflow keeps proving current-head coverage, CodeGraph initialization, bounded evidence, model review output, and approval-gate publication on the current head.
 

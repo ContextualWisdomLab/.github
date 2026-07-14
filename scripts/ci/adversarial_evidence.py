@@ -34,15 +34,35 @@ NEGATED_EVIDENCE_RE = re.compile(
 )
 
 
-def adversarial_evidence_rejection_reason(evidence: str, path: str) -> str | None:
-    """Return why probe evidence is circular or lacks a concrete proof anchor."""
+def adversarial_evidence_rejection_reason(
+    evidence: str,
+    path: str,
+    line: int | None = None,
+) -> str | None:
+    """Return why probe evidence is circular, unbound, or lacks proof."""
     cleaned = evidence.strip()
     lowered = cleaned.casefold()
     if NEGATED_EVIDENCE_RE.search(cleaned):
         return "explicitly denies execution or an observed result"
     if any(phrase in lowered for phrase in CIRCULAR_EVIDENCE_PHRASES):
         return "repeats the implementation claim instead of citing independent proof"
-    del path
+    escaped_path = rf"(?<![A-Za-z0-9_./-]){re.escape(path)}"
+    if line is None:
+        path_citation = re.search(
+            rf"{escaped_path}(?![A-Za-z0-9_./-])",
+            cleaned,
+            re.IGNORECASE,
+        )
+    else:
+        escaped_line = re.escape(str(line))
+        path_citation = re.search(
+            rf"{escaped_path}(?::|#L|\s+line\s+){escaped_line}\b",
+            cleaned,
+            re.IGNORECASE,
+        )
+    if path and path_citation is None:
+        suffix = " and positive line" if line is not None else ""
+        return f"must cite the exact probe path{suffix}"
     has_proof_anchor = INDEPENDENT_PROOF_RE.search(cleaned) is not None
     if not has_proof_anchor:
         return (

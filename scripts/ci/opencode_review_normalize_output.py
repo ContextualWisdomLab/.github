@@ -581,6 +581,36 @@ def required_adversarial_probe_count() -> int:
     return 1
 
 
+def adversarial_probe_location_error(path: str, line: int) -> str:
+    """Return why a probe path/line is not present in the bounded source tree."""
+    source_root_text = os.environ.get("OPENCODE_SOURCE_WORKDIR", "").strip()
+    if not source_root_text:
+        return "trusted current-head source root is unavailable"
+    try:
+        source_root = Path(source_root_text).resolve(strict=True)
+        source_path = source_root.joinpath(*PurePosixPath(path).parts).resolve(
+            strict=True
+        )
+    except OSError:
+        return "path does not exist in the trusted current-head source tree"
+    try:
+        source_path.relative_to(source_root)
+    except ValueError:
+        return "path resolves outside the trusted current-head source tree"
+    try:
+        source_stat = source_path.stat()
+        if not stat.S_ISREG(source_stat.st_mode):
+            return "path is not a regular current-head source file"
+        if source_stat.st_size > 2 * 1024 * 1024:
+            return "source file exceeds the bounded 2 MiB probe limit"
+        line_count = len(source_path.read_bytes().splitlines())
+    except OSError:
+        return "source file could not be read from the trusted current-head tree"
+    if line > line_count:
+        return f"line {line} exceeds the current-head file length {line_count}"
+    return ""
+
+
 def adversarial_validation_error(
     value: Any,
     *,
@@ -638,25 +668,27 @@ def adversarial_validation_error(
         line = probe.get("line")
         if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
             return f"adversarial probe {index} line must be a positive integer"
+        location_error = adversarial_probe_location_error(path, line)
+        if location_error:
+            return f"adversarial probe {index} {location_error}"
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             field_value = probe.get(field)
             if not isinstance(field_value, str) or not field_value.strip():
                 return f"adversarial probe {index} field {field} must be non-empty"
         probe_evidence = str(probe.get("evidence") or "")
-        receipt_backed_tools = claimed_runtime_tools(probe_evidence)
         runtime_tool = unreceipted_runtime_tool_claim(probe_evidence)
         if runtime_tool:
             return (
                 f"adversarial probe {index} claims {runtime_tool} execution "
                 "without a trusted workflow receipt"
             )
-        if not receipt_backed_tools:
-            evidence_error = adversarial_evidence_rejection_reason(
-                probe_evidence,
-                path,
-            )
-            if evidence_error:
-                return f"adversarial probe {index} evidence {evidence_error}"
+        evidence_error = adversarial_evidence_rejection_reason(
+            probe_evidence,
+            path,
+            line,
+        )
+        if evidence_error:
+            return f"adversarial probe {index} evidence {evidence_error}"
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
             return f"adversarial probe {index} outcome must be falsified or confirmed"

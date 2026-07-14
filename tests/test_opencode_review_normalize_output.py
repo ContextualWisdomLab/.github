@@ -48,7 +48,13 @@ def seal_artifacts(runner_temp: Path, *paths: Path) -> None:
 def clear_caches(tmp_path, monkeypatch):
     changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    default_source = tmp_path / "scripts" / "ci" / "example.py"
+    default_source.parent.mkdir(parents=True)
+    default_source.write_text(
+        "\n".join(f"line {line}" for line in range(1, 129)), encoding="utf-8"
+    )
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(tmp_path))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
     monkeypatch.delenv("OPENCODE_EVIDENCE_FILE", raising=False)
     monkeypatch.delenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", raising=False)
@@ -136,7 +142,7 @@ def adversarial_validation(
                 "hypothesis": f"The changed path fails under adversarial scenario {index + 1}.",
                 "attack_or_counterexample": f"Exercise boundary or failure input {index + 1}.",
                 "evidence": (
-                    f"Focused source trace and regression command {index + 1} "
+                    f"Focused source trace at {path}:{7 + index} and regression command {index + 1} "
                     "disproved or confirmed the hypothesis."
                 ),
                 "outcome": outcome,
@@ -151,9 +157,81 @@ def require_adversarial_validation(tmp_path, monkeypatch, *paths):
     changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text("\n".join(paths) + "\n", encoding="utf-8")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    for path in paths:
+        source_path = tmp_path / path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(
+            "\n".join(f"line {line}" for line in range(1, 129)),
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(tmp_path))
     monkeypatch.setenv("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "true")
     seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
+
+
+def test_adversarial_probe_location_requires_a_source_root(monkeypatch):
+    """Missing trusted source material fails closed with an explicit reason."""
+    monkeypatch.delenv("OPENCODE_SOURCE_WORKDIR")
+
+    assert (
+        norm.adversarial_probe_location_error("scripts/ci/example.py", 1)
+        == "trusted current-head source root is unavailable"
+    )
+
+
+def test_adversarial_probe_location_rejects_missing_and_escaping_paths(
+    tmp_path, monkeypatch
+):
+    """Nonexistent paths and symlink escapes cannot authorize evidence."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+
+    assert "does not exist" in norm.adversarial_probe_location_error("missing.py", 1)
+
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside\n", encoding="utf-8")
+    (source_root / "escape.py").symlink_to(outside)
+    assert "outside" in norm.adversarial_probe_location_error("escape.py", 1)
+
+
+def test_adversarial_probe_location_rejects_non_files_and_oversize_files(
+    tmp_path, monkeypatch
+):
+    """Only bounded regular source files are eligible for line evidence."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+
+    (source_root / "directory.py").mkdir()
+    assert "not a regular" in norm.adversarial_probe_location_error("directory.py", 1)
+
+    (source_root / "oversize.py").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+    assert "exceeds the bounded 2 MiB" in norm.adversarial_probe_location_error(
+        "oversize.py", 1
+    )
+
+
+def test_adversarial_probe_location_reports_read_failures(tmp_path, monkeypatch):
+    """A read error remains visible instead of accepting an unverified line."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source_file = source_root / "unreadable.py"
+    source_file.write_text("line\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+    original_read_bytes = Path.read_bytes
+
+    def fail_target_read(path):
+        if path == source_file:
+            raise OSError("simulated read failure")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_target_read)
+
+    assert "could not be read" in norm.adversarial_probe_location_error(
+        "unreadable.py", 1
+    )
 
 
 def test_adversarial_validation_requires_two_falsified_material_probes(
@@ -309,6 +387,12 @@ def test_adversarial_validation_rejects_each_malformed_contract_branch(
             "line must be a positive integer",
         ),
         (
+            {**valid, "probes": [{**first_probe, "line": 999}, second_probe]},
+            "APPROVE",
+            [],
+            "exceeds the current-head file length",
+        ),
+        (
             {**valid, "probes": [{**first_probe, "evidence": ""}, second_probe]},
             "APPROVE",
             [],
@@ -380,7 +464,7 @@ def test_runtime_tool_claim_requires_trusted_workflow_receipt(
     require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
     validation = adversarial_validation()
     validation["probes"][0]["evidence"] = (
-        "React DevTools confirmed the component did not re-render."
+        "Source trace at scripts/ci/example.py:7 and React DevTools confirmed the component did not re-render."
     )
     claimed = control(adversarial_validation=validation)
 
@@ -1560,6 +1644,16 @@ M\tsrc/test/java/example/LogSanitizerTest.java
         "src/test/java/example/LogSanitizerTest.java\n",
         encoding="utf-8",
     )
+    for path in (
+        "src/main/java/example/LogSanitizer.java",
+        "src/test/java/example/LogSanitizerTest.java",
+    ):
+        source_path = tmp_path / path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(
+            "\n".join(f"line {line}" for line in range(1, 65)),
+            encoding="utf-8",
+        )
     monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
     monkeypatch.setenv("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "true")
@@ -1583,7 +1677,7 @@ M\tsrc/test/java/example/LogSanitizerTest.java
                     "line": 20,
                     "hypothesis": "A line break bypasses sanitization.",
                     "attack_or_counterexample": "Pass CR, LF, and Unicode separators.",
-                    "evidence": "Test LogSanitizerTest confirms every separator is replaced.",
+                    "evidence": "Test at src/main/java/example/LogSanitizer.java:20 confirms every separator is replaced.",
                     "outcome": "falsified",
                 },
                 {
@@ -1591,7 +1685,7 @@ M\tsrc/test/java/example/LogSanitizerTest.java
                     "line": 40,
                     "hypothesis": "The regression test omits a control character.",
                     "attack_or_counterexample": "Compare the test input with the sanitizer replacements.",
-                    "evidence": "Source trace at LogSanitizerTest.java:40 confirms all replacements are asserted.",
+                    "evidence": "Source trace at src/test/java/example/LogSanitizerTest.java:40 confirms all replacements are asserted.",
                     "outcome": "falsified",
                 },
             ],
@@ -2113,7 +2207,9 @@ def test_valid_control_rechecks_every_approval_gate_after_repair(
     """Reject a repair that invalidates any already-checked approval invariant."""
     values = iter((first_value, second_value))
     monkeypatch.setattr(norm, gate_name, lambda *_args: next(values))
-    monkeypatch.setattr(norm, "repair_approval_summary", lambda _reason, summary: summary)
+    monkeypatch.setattr(
+        norm, "repair_approval_summary", lambda _reason, summary: summary
+    )
     monkeypatch.setattr(norm, "repair_approval_reason", lambda reason, _summary: reason)
 
     assert (
@@ -2449,7 +2545,7 @@ def test_main_logs_the_exact_control_rejection_reason(tmp_path, capsys):
                             "line": 7,
                             "hypothesis": "The stale head is accepted.",
                             "attack_or_counterexample": "Submit a stale head.",
-                            "evidence": "Source inspection mentions the branch.",
+                            "evidence": "Source inspection at scripts/ci/example.py:7 mentions the branch.",
                             "outcome": "falsified",
                         },
                         {
@@ -2457,7 +2553,7 @@ def test_main_logs_the_exact_control_rejection_reason(tmp_path, capsys):
                             "line": 8,
                             "hypothesis": "The current head is rejected.",
                             "attack_or_counterexample": "Submit the current head.",
-                            "evidence": "Focused pytest passed with exit code 0.",
+                            "evidence": "Focused pytest for scripts/ci/example.py:8 passed with exit code 0.",
                             "outcome": "falsified",
                         },
                     ],
