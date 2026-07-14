@@ -42,17 +42,37 @@ def object_value(value: object) -> Mapping[str, object]:
 def resolve_context(event: Mapping[str, object], default_repository: str) -> dict[str, str]:
     """Resolve and validate the OpenCode review context values."""
     inputs = object_value(event.get("inputs"))
+    client_payload = object_value(event.get("client_payload"))
     pull_request = object_value(event.get("pull_request"))
     base = object_value(pull_request.get("base"))
     head = object_value(pull_request.get("head"))
     base_repo = object_value(base.get("repo"))
     values = {
         "GH_REPOSITORY": str(
-            base_repo.get("full_name") or inputs.get("target_repository") or default_repository or ""
+            base_repo.get("full_name")
+            or inputs.get("target_repository")
+            or client_payload.get("target_repository")
+            or default_repository
+            or ""
         ).strip(),
-        "PR_NUMBER": str(pull_request.get("number") or inputs.get("pr_number") or "").strip(),
-        "PR_BASE_SHA": str(base.get("sha") or inputs.get("pr_base_sha") or "").strip(),
-        "PR_HEAD_SHA": str(head.get("sha") or inputs.get("pr_head_sha") or "").strip(),
+        "PR_NUMBER": str(
+            pull_request.get("number")
+            or inputs.get("pr_number")
+            or client_payload.get("pr_number")
+            or ""
+        ).strip(),
+        "PR_BASE_SHA": str(
+            base.get("sha")
+            or inputs.get("pr_base_sha")
+            or client_payload.get("pr_base_sha")
+            or ""
+        ).strip(),
+        "PR_HEAD_SHA": str(
+            head.get("sha")
+            or inputs.get("pr_head_sha")
+            or client_payload.get("pr_head_sha")
+            or ""
+        ).strip(),
     }
     values["HEAD_SHA"] = values["PR_HEAD_SHA"]
     for name, pattern in CONTEXT_VALIDATORS.items():
