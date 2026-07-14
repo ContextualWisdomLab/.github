@@ -96,7 +96,8 @@ concurrent state, dependency/runtime mismatch, error and rollback behavior,
 numerical extremes, or mobile and accessibility behavior as applicable. Trace
 or execute each probe and record the exact changed path, positive line,
 hypothesis, attack/counterexample, evidence with exactly one verified
-`source-line-sha256=<64 lowercase hex>` digest of that cited current-head line,
+`source-line-sha256=<64 lowercase hex>` receipt copied for the same `path:line`
+from Trusted changed-line source receipts without calculating, inferring, or inventing it,
 and falsified/confirmed outcome in
 the workflow's structured `adversarial_validation` control field. Green checks
 alone and absence of a known failure are not adversarial evidence.

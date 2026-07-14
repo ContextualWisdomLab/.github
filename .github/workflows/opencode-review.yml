@@ -2528,7 +2528,7 @@ jobs:
             fi
             printf -- "- Merge base SHA: \`%s\`\n\n" "$PR_MERGE_BASE"
             printf '## Current-head authority order\n\n'
-            printf 'Treat current-head sections in this file as authoritative for this run: Other unresolved review thread evidence, Failed GitHub Check evidence, Coverage execution evidence, Changed files, and Focused changed hunks.\n'
+            printf 'Treat current-head sections in this file as authoritative for this run: Other unresolved review thread evidence, Failed GitHub Check evidence, Coverage execution evidence, Changed files, Focused changed hunks, and Trusted changed-line source receipts.\n'
             printf 'All PR reviews and comments evidence is historical context only and may contain stale bot conclusions. Do not infer active failed checks, unresolved threads, or missing changed files from those comments unless current-head evidence corroborates the same claim for Head SHA `%s`.\n\n' "$PR_HEAD_SHA"
             if ! git -C "$OPENCODE_SOURCE_WORKDIR" diff --name-only --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA" |
               awk 'NF > 0 && $0 !~ /^\// && $0 !~ /(^|\/)\.\.($|\/)/ { print }' >"$OPENCODE_CHANGED_FILES_FILE"; then
@@ -2608,6 +2608,18 @@ jobs:
               printf 'No changed files were available for focused hunk extraction.\n'
             fi
             printf '\n```\n'
+
+            printf '\n## Trusted changed-line source receipts\n\n'
+            if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_source_line_receipts.py" \
+              --repo-root "$OPENCODE_SOURCE_WORKDIR" \
+              --diff-base "$PR_MERGE_BASE" \
+              --head-sha "$PR_HEAD_SHA" \
+              --changed-files "$OPENCODE_CHANGED_FILES_FILE"; then
+              printf '\n'
+            else
+              printf 'Trusted changed-line source receipt generation failed; approval evidence is incomplete.\n' >&2
+              exit 1
+            fi
 
             printf '\n## Review inspection contract\n\n'
             printf 'Use the local checkout for exact source and diff inspection.\n'
@@ -2719,6 +2731,7 @@ jobs:
               append_evidence_section "Coverage execution evidence" 7000
               append_evidence_section "Changed files" 7000
               append_evidence_section "Focused changed hunks" 14000
+              append_evidence_section "Trusted changed-line source receipts" 12000
               printf '\n\n[Full evidence is available in ./bounded-review-evidence.md inside the isolated review workspace.]\n'
             } >"$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
           fi

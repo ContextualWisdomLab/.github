@@ -1316,6 +1316,23 @@ def test_opencode_adversarial_prompt_requires_independent_proof():
     assert '"properly handles all cases"' in prompt
     assert "is circular and invalid" in prompt
     assert "source-line-sha256=<64 lowercase hex>" in prompt
+    assert "copy exactly one" in prompt
+    assert "same cited `path:line`" in prompt
+    assert "Never calculate, infer, or invent a digest" in prompt
+
+
+def test_opencode_trusted_changed_line_receipts_are_wired():
+    """Supply verifiable receipts without weakening current-head validation."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    model_pool = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "scripts/ci/opencode_source_line_receipts.py" in workflow
+    assert "## Trusted changed-line source receipts" in workflow
+    assert 'append_evidence_section "Trusted changed-line source receipts"' in workflow
+    assert "Trusted changed-line source receipts" in model_pool
+    assert "Never calculate, infer, or invent a digest" in model_pool
 
 
 def test_opencode_privileged_review_security_boundaries_are_fail_closed():

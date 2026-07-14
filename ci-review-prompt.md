@@ -103,8 +103,9 @@ tenant crossover, stale or concurrent state, dependency/runtime mismatch,
 error/rollback behavior, numerical extremes, or mobile/accessibility behavior
 as applicable. A green check or absence of a known bug is not a probe. Record
 the exact changed path, positive line, counterexample, executed or source-backed
-evidence, exactly one `source-line-sha256=<64 lowercase hex>` digest of the cited
-current-head line bytes without its line ending, and whether the hypothesis was falsified or confirmed in the
+evidence, exactly one `source-line-sha256=<64 lowercase hex>` receipt copied for
+the same `path:line` from Trusted changed-line source receipts without calculating,
+inferring, or inventing it, and whether the hypothesis was falsified or confirmed in the
 `adversarial_validation` control field. APPROVE needs two falsified probes for
 material code/workflow/config/package/test changes and one for non-code changes;
 REQUEST_CHANGES needs a confirmed probe anchored to a published finding.
