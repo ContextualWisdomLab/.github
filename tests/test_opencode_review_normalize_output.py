@@ -400,6 +400,33 @@ def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
     )
     assert "does not match the cited current-head line" in mismatch_reasons[-1]
 
+    unbound_mismatched = dict(validation["probes"][0])
+    unbound_mismatched["evidence"] = (
+        "Regression command observed the boundary test passed. "
+        + "source-line-sha256="
+        + "0" * 64
+    )
+    binding_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(
+                adversarial_validation={
+                    **validation,
+                    "probes": [unbound_mismatched, validation["probes"][1]],
+                }
+            ),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=binding_reasons,
+        )
+        is None
+    )
+    assert binding_reasons[-1].endswith(
+        "binding repair probe 1: structured_receipt_match=false "
+        "sealed_receipt_locations=0 exact_cited_locations=0"
+    )
+
 
 def test_valid_control_repairs_only_verified_structured_probe_location_binding(
     tmp_path, monkeypatch
@@ -533,6 +560,51 @@ def test_probe_location_rebinding_rejects_ambiguous_or_tampered_receipts(
     )
     assert rejected is None
 
+    cited_ambiguous_probe = {
+        **ambiguous_probe,
+        "evidence": (
+            "scripts/ci/duplicate.py:7 regression command observed the test passed. "
+            f"{receipt}"
+        ),
+    }
+    cited_reasons: list[str] = []
+    normalized = norm.valid_control(
+        control(
+            adversarial_validation={
+                **validation,
+                "probes": [cited_ambiguous_probe, validation["probes"][1]],
+            }
+        ),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+        rejection_reasons=cited_reasons,
+    )
+    assert normalized is not None, cited_reasons
+    repaired = normalized["adversarial_validation"]["probes"][0]
+    assert repaired["path"] == "scripts/ci/duplicate.py"
+    assert repaired["line"] == 7
+
+    multiply_cited_probe = {
+        **ambiguous_probe,
+        "evidence": (
+            "scripts/ci/example.py:7 and scripts/ci/duplicate.py:7 source trace "
+            f"observed the test passed. {receipt}"
+        ),
+    }
+    diagnostics: list[str] = []
+    unrepaired = norm.repair_adversarial_probe_evidence_bindings(
+        {
+            "adversarial_validation": {
+                **validation,
+                "probes": [multiply_cited_probe, validation["probes"][1]],
+            }
+        },
+        diagnostics=diagnostics,
+    )
+    assert unrepaired["adversarial_validation"]["probes"][0] == multiply_cited_probe
+    assert diagnostics[0].endswith("sealed_receipt_locations=2 exact_cited_locations=2")
+
     evidence_file.write_text(
         "- `scripts/ci/example.py:7` `" + receipt + "`\n# tampered\n",
         encoding="utf-8",
@@ -618,6 +690,18 @@ def test_adversarial_probe_binding_repair_fails_closed_for_malformed_or_unobserv
         }
     }
     assert norm.repair_adversarial_probe_evidence_bindings(receipt_only) is receipt_only
+
+    diagnostics: list[str] = []
+    assert (
+        norm.repair_adversarial_probe_evidence_bindings(
+            receipt_only,
+            diagnostics=diagnostics,
+        )
+        is receipt_only
+    )
+    assert diagnostics == [
+        "probe 2: prefixed_evidence_validation=rejected",
+    ]
 
 
 def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(

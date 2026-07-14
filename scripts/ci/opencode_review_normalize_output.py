@@ -690,16 +690,34 @@ def adversarial_probe_source_receipt_error(
     return ""
 
 
-def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | Any:
+def evidence_cites_exact_probe_location(evidence: str, path: str, line: int) -> bool:
+    """Return whether evidence names one exact path and positive line."""
+    escaped_path = rf"(?<![A-Za-z0-9_./-]){re.escape(path)}"
+    escaped_line = re.escape(str(line))
+    return (
+        re.search(
+            rf"{escaped_path}(?::|#L|\s+line\s+){escaped_line}\b",
+            evidence,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def repair_adversarial_probe_evidence_bindings(
+    value: Any,
+    *,
+    diagnostics: list[str] | None = None,
+) -> dict[str, Any] | Any:
     """Bind a verified structured probe location into otherwise valid evidence.
 
-    Models sometimes place the exact changed-file path and positive line in the
-    structured ``path``/``line`` fields and copy the correct trusted source-line
-    receipt, but omit the duplicate ``path:line`` text from ``evidence``. This
-    repair is deliberately narrower than the validator: it only prefixes that
-    structured location after the receipt matches the current-head source bytes
-    and the resulting evidence satisfies every independent-proof and observed-
-    result check. Invalid digests, unsafe paths, missing changed-file evidence,
+    Models sometimes omit the duplicate ``path:line`` text from ``evidence`` or
+    drift the structured ``path``/``line`` fields away from an exact location
+    already cited in that evidence. This repair is deliberately narrower than
+    the validator: it only binds a structured location after the receipt matches
+    current-head source bytes. A digest shared by multiple lines is usable only
+    when the evidence cites exactly one of those sealed locations. Invalid
+    digests, unsafe paths, ambiguous citations, missing changed-file evidence,
     and circular or unobserved claims remain unmodified and fail closed.
     """
     if not isinstance(value, dict):
@@ -715,7 +733,7 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
     trusted_receipts = trusted_source_line_receipts()
     repaired_probes: list[Any] = []
     changed = False
-    for probe in probes:
+    for probe_index, probe in enumerate(probes, start=1):
         if not isinstance(probe, dict):
             repaired_probes.append(probe)
             continue
@@ -727,9 +745,14 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
             continue
         receipt_digests = SOURCE_LINE_RECEIPT_RE.findall(evidence)
         if len(receipt_digests) != 1:
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"probe {probe_index}: receipt_count={min(len(receipt_digests), 2)}"
+                )
             repaired_probes.append(probe)
             continue
 
+        receipt_digest = receipt_digests[0].casefold()
         structured_location_is_valid = (
             isinstance(path, str)
             and path in changed_files
@@ -739,19 +762,52 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
             and not adversarial_probe_location_error(path, line)
             and not adversarial_probe_source_receipt_error(evidence, path, line)
         )
+        location_rebound = False
         if not structured_location_is_valid:
-            receipt_locations = trusted_receipts.get(receipt_digests[0].casefold(), ())
-            if len(receipt_locations) != 1:
+            receipt_locations = trusted_receipts.get(receipt_digest, ())
+            cited_receipt_locations = tuple(
+                location
+                for location in receipt_locations
+                if evidence_cites_exact_probe_location(evidence, *location)
+            )
+            if len(cited_receipt_locations) == 1:
+                path, line = cited_receipt_locations[0]
+                location_rebound = True
+            elif len(receipt_locations) == 1:
+                path, line = receipt_locations[0]
+                location_rebound = True
+            else:
+                if diagnostics is not None:
+                    diagnostics.append(
+                        f"probe {probe_index}: structured_receipt_match=false "
+                        f"sealed_receipt_locations={min(len(receipt_locations), 2)} "
+                        "exact_cited_locations="
+                        f"{min(len(cited_receipt_locations), 2)}"
+                    )
                 repaired_probes.append(probe)
                 continue
-            path, line = receipt_locations[0]
 
         rejection = adversarial_evidence_rejection_reason(evidence, path, line)
+        if location_rebound and rejection is None:
+            repaired_probes.append(
+                {**probe, "path": path, "line": line, "evidence": evidence.strip()}
+            )
+            changed = True
+            continue
         if rejection != "must cite the exact probe path and positive line":
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"probe {probe_index}: evidence_precondition="
+                    f"{'satisfied' if rejection is None else 'rejected'}"
+                )
             repaired_probes.append(probe)
             continue
         repaired_evidence = f"{path}:{line} {evidence.strip()}"
         if adversarial_evidence_rejection_reason(repaired_evidence, path, line):
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"probe {probe_index}: prefixed_evidence_validation=rejected"
+                )
             repaired_probes.append(probe)
             continue
         repaired_probes.append(
@@ -1381,13 +1437,23 @@ def valid_control(
         return reject("APPROVE cannot contain findings")
     if result == "REQUEST_CHANGES" and not findings:
         return reject("REQUEST_CHANGES requires at least one finding")
-    value = repair_adversarial_probe_evidence_bindings(value)
+    binding_diagnostics: list[str] = []
+    value = repair_adversarial_probe_evidence_bindings(
+        value,
+        diagnostics=binding_diagnostics,
+    )
     adversarial_error = adversarial_validation_error(
         value.get("adversarial_validation"),
         result=result,
         findings=findings,
     )
     if adversarial_error:
+        if (
+            "evidence must cite the exact probe path and positive line"
+            in adversarial_error
+            and binding_diagnostics
+        ):
+            adversarial_error += "; binding repair " + binding_diagnostics[0]
         return reject(adversarial_error)
     runtime_tool = unreceipted_runtime_tool_claim(control_review_text(value))
     if runtime_tool:
