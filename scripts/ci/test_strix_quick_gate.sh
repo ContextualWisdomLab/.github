@@ -208,6 +208,19 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "bash \"\$TRUSTED_STRIX_GATE\"" "strix workflow executes trusted temp gate script"
 	assert_file_contains "$workflow_file" "Collect Strix reports for artifact upload" "strix workflow preserves reports from trusted workspace"
 	assert_file_contains "$workflow_file" "scan-summary.txt" "strix workflow creates a fallback artifact when Strix emits no report files"
+	assert_file_contains "$workflow_file" "TRUSTED_STRIX_ISSUE_EMITTER=" "strix workflow exports the trusted AppGuardrail issue emitter path"
+	assert_file_contains "$workflow_file" "id: run_strix" "strix workflow gives the scanner step a stable output identity"
+	assert_file_contains "$workflow_file" 'echo "scan_complete=false" >> "$GITHUB_OUTPUT"' "strix workflow defaults close-on-fix evidence to incomplete"
+	assert_file_contains "$workflow_file" 'echo "scan_complete=true" >> "$GITHUB_OUTPUT"' "strix workflow marks only a completed scanner pass as complete"
+	assert_file_contains "$workflow_file" "Validate AppGuardrail issue emitter credential" "strix workflow validates issue collection credentials visibly"
+	assert_file_contains "$workflow_file" "Findings cannot be silently dropped" "strix workflow fails closed when AppGuardrail credentials are absent"
+	assert_file_contains "$workflow_file" "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0" "strix workflow pins the Noema App token action"
+	assert_file_contains "$workflow_file" "repositories: appguardrail" "strix workflow scopes the Noema App token to AppGuardrail"
+	assert_file_contains "$workflow_file" "permission-issues: write" "strix workflow requests only the issue mutation permission needed by the emitter"
+	assert_file_contains "$workflow_file" "steps.run_strix.outputs.scan_complete || 'false'" "strix workflow propagates explicit scan-completion evidence"
+	assert_file_contains "$workflow_file" "--issues-repo ContextualWisdomLab/appguardrail" "strix workflow fixes the issue sink to the central AppGuardrail tracker"
+	assert_file_contains "$workflow_file" 'python3 "$TRUSTED_STRIX_ISSUE_EMITTER"' "strix workflow executes only the trusted central issue emitter"
+	assert_file_not_contains "$workflow_file" 'python3 "$TRUSTED_STRIX_ISSUE_EMITTER" --dry-run' "strix workflow does not silently downgrade live issue collection to dry-run"
 	local checkout_count
 	checkout_count="$(grep -Fc "uses: actions/checkout@" "$workflow_file")"
 	assert_equals "1" "$checkout_count" "strix workflow uses actions/checkout exactly once for the central trusted source"
@@ -5827,6 +5840,17 @@ run_filtered_gate_case_if_requested() {
 	pull-request-target-gitlink-is-explicitly-skipped)
 		run_pull_request_target_gitlink_is_explicitly_skipped_case
 		;;
+	repository-dispatch-pr-scope-sentinel-uses-head-blob)
+		run_pull_request_target_head_scope_case \
+			"repository-dispatch-pr-scope-sentinel-uses-head-blob" \
+			"src/repository-dispatch.py" \
+			"BASE_REPOSITORY_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+			"HEAD_REPOSITORY_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+			"0" \
+			"0" \
+			"__PR_SCOPE__" \
+			"repository_dispatch"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -5848,6 +5872,7 @@ run_pull_request_target_head_scope_case() {
 	local disable_pr_scoping="${5-0}"
 	local make_head_executable="${6-0}"
 	local target_path="${7-.}"
+	local event_name="${8-pull_request_target}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -5965,7 +5990,8 @@ EOF
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
-			GITHUB_EVENT_NAME="pull_request_target" \
+			GITHUB_EVENT_NAME="$event_name" \
+			PR_NUMBER="252" \
 			PR_BASE_SHA="$base_sha" \
 			PR_HEAD_SHA="$head_sha" \
 			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
@@ -8340,6 +8366,16 @@ run_pull_request_target_head_scope_case \
 	"0" \
 	"0" \
 	"__PR_SCOPE__"
+
+run_pull_request_target_head_scope_case \
+	"repository-dispatch-pr-scope-sentinel-uses-head-blob" \
+	"src/repository-dispatch.py" \
+	"BASE_REPOSITORY_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_REPOSITORY_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+	"0" \
+	"0" \
+	"__PR_SCOPE__" \
+	"repository_dispatch"
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-added-file-uses-head-blob" \

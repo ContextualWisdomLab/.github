@@ -886,6 +886,36 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     )
 
 
+def test_strix_emits_actionable_findings_to_appguardrail_fail_closed() -> None:
+    workflow = workflow_text("strix.yml")
+    run_step = workflow.split("- name: Run Strix (quick)", 1)[1].split(
+        "- name: Collect Strix reports for artifact upload", 1
+    )[0]
+    emitter_step = workflow.split(
+        "- name: Emit Medium-or-higher Strix findings to AppGuardrail", 1
+    )[1].split("- name: Publish same-head manual Strix status", 1)[0]
+
+    assert "TRUSTED_STRIX_ISSUE_EMITTER=" in workflow
+    assert "id: run_strix" in run_step
+    assert 'echo "scan_complete=false" >> "$GITHUB_OUTPUT"' in run_step
+    assert 'echo "scan_complete=true" >> "$GITHUB_OUTPUT"' in run_step
+    assert "Validate AppGuardrail issue emitter credential" in workflow
+    assert "Findings cannot be silently dropped" in workflow
+    assert (
+        "uses: actions/create-github-app-token@"
+        "bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0"
+    ) in workflow
+    assert "repositories: appguardrail" in workflow
+    assert "permission-issues: write" in workflow
+    assert "STRIX_ISSUE_APP_TOKEN:" in emitter_step
+    assert "steps.noema_issue_token.outputs.token || ''" in emitter_step
+    assert "steps.run_strix.outputs.scan_complete || 'false'" in emitter_step
+    assert "--issues-repo ContextualWisdomLab/appguardrail" in emitter_step
+    assert '--scope "$STRIX_SCAN_SCOPE"' in emitter_step
+    assert 'python3 "$TRUSTED_STRIX_ISSUE_EMITTER"' in emitter_step
+    assert "--dry-run" not in emitter_step
+
+
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> (
     None
 ):

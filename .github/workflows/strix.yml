@@ -187,11 +187,13 @@ jobs:
           test -f "$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
           test -f "$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
           test -f "$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"
+          test -f "$trusted_strix_source/scripts/ci/strix_emit_appguardrail_issues.py"
           {
             echo "TRUSTED_STRIX_SOURCE=$trusted_strix_source"
             echo "TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
             echo "TRUSTED_STRIX_GATE_TEST=$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
             echo "TRUSTED_STRIX_REQUIRED_SMOKE=$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"
+            echo "TRUSTED_STRIX_ISSUE_EMITTER=$trusted_strix_source/scripts/ci/strix_emit_appguardrail_issues.py"
           } >> "$GITHUB_ENV"
 
       - name: Exchange OpenCode app token for target repository reads
@@ -652,6 +654,7 @@ jobs:
           echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
 
       - name: Run Strix (quick)
+        id: run_strix
         if: steps.gate.outputs.enabled == 'true'
         timeout-minutes: 30
         # Security invariant for pull_request_target: execute only from the
@@ -721,6 +724,7 @@ jobs:
           set -e
 
           if [ "$strix_rc" -eq 0 ]; then
+            echo "scan_complete=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -728,6 +732,7 @@ jobs:
           # code as hard failures — only the scan-failure code (1) can be an
           # infrastructure/backend-unavailability outcome.
           if [ "$strix_rc" -ne 1 ]; then
+            echo "scan_complete=false" >> "$GITHUB_OUTPUT"
             exit "$strix_rc"
           fi
 
@@ -746,9 +751,11 @@ jobs:
           if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
             echo "::warning title=Strix backend unavailable::Strix could not complete because its LLM backend was unavailable (rate limit / token cap / connection or warm-up failure) before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
+            echo "scan_complete=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "scan_complete=false" >> "$GITHUB_OUTPUT"
           echo "Strix reported security findings or failed for a non-backend reason; failing the required check (gate exit ${strix_rc})." >&2
           exit "$strix_rc"
 
@@ -786,6 +793,58 @@ jobs:
           path: strix_runs/
           if-no-files-found: error
           retention-days: 5
+
+      - name: Validate AppGuardrail issue emitter credential
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        id: appguardrail_issue_credential
+        env:
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] || [ -z "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "::error::AppGuardrail issue collection is unconfigured: NOEMA_GITHUB_APP_CLIENT_ID and NOEMA_GITHUB_APP_PRIVATE_KEY are both required. Findings cannot be silently dropped."
+            exit 1
+          fi
+          echo "::notice::AppGuardrail issue collection will use a repository-scoped cwl-noema-review installation token."
+
+      - name: Mint AppGuardrail-scoped Noema GitHub App token
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' && steps.appguardrail_issue_credential.outcome == 'success' }}
+        id: noema_issue_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: appguardrail
+          permission-issues: write
+          permission-metadata: read
+
+      - name: Emit Medium-or-higher Strix findings to AppGuardrail
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        env:
+          STRIX_ISSUE_APP_TOKEN: ${{ steps.noema_issue_token.outputs.token || '' }}
+          STRIX_SOURCE_REPO: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+          STRIX_PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
+          STRIX_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || github.sha }}
+          STRIX_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'pr' || 'full' }}
+          STRIX_SCAN_COMPLETE: ${{ steps.run_strix.outputs.scan_complete || 'false' }}
+        run: |
+          set -euo pipefail
+          emitter_args=(
+            --run-dir "$GITHUB_WORKSPACE/strix_runs"
+            --source-repo "$STRIX_SOURCE_REPO"
+            --issues-repo ContextualWisdomLab/appguardrail
+            --pr-number "$STRIX_PR_NUMBER"
+            --head-sha "$STRIX_HEAD_SHA"
+            --run-url "$STRIX_RUN_URL"
+            --scope "$STRIX_SCAN_SCOPE"
+          )
+          if [ "$STRIX_SCAN_COMPLETE" = "true" ]; then
+            emitter_args+=(--scan-complete)
+          fi
+          python3 "$TRUSTED_STRIX_ISSUE_EMITTER" "${emitter_args[@]}"
 
       - name: Publish same-head manual Strix status
         if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
