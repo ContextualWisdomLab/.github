@@ -233,6 +233,11 @@ def normalized_line(value: str) -> str:
     return " ".join(value.strip().split())
 
 
+# ⚡ Bolt: Pre-compile regex at the module level to prevent recompilation in loop-called functions
+# Impact: Reduces regex recompilation overhead when processing git diff hunk headers for every changed file
+HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
 # ⚡ Bolt: Memoize changed_new_lines to prevent N+1 git diff subprocess calls
 # Impact: Substantially reduces I/O wait overhead when multiple findings are on the same file path
 @functools.cache
@@ -265,9 +270,8 @@ def changed_new_lines(path_value: str) -> frozenset[int]:
         return frozenset()
 
     line_numbers: set[int] = set()
-    hunk_header = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
     for raw_line in completed.stdout.splitlines():
-        match = hunk_header.match(raw_line)
+        match = HUNK_HEADER_RE.match(raw_line)
         if not match:
             continue
         start = int(match.group(1))
