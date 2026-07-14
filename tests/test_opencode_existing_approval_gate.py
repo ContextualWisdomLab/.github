@@ -20,7 +20,12 @@ def valid_body(head: str = HEAD) -> str:
                 "line": 1,
                 "hypothesis": "A fallback approval could be reused.",
                 "attack_or_counterexample": "Supply a deterministic approval body.",
-                "evidence": "Source trace at .github/workflows/opencode-review.yml:1 confirmed the gate rejected the fallback marker.",
+                "evidence": (
+                    "Source trace at .github/workflows/opencode-review.yml:1 confirmed "
+                    "the gate rejected the fallback marker. source-line-sha256="
+                    + "a"
+                    * 64
+                ),
                 "outcome": "falsified",
             }
         ],

@@ -1,7 +1,10 @@
 name: Required OpenCode Review
 
 on:
-  pull_request:
+  # Privileged review logic must be loaded from the protected base branch. A
+  # pull_request workflow is evaluated from the PR merge ref and therefore lets
+  # an in-repository branch rewrite steps before repository secrets are bound.
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_dispatch:
     inputs:
@@ -33,14 +36,14 @@ on:
 
 concurrency:
   # Include the event name so same-head workflow_dispatch evidence can run
-  # without cancelling the required pull_request review context.
+  # without cancelling the required pull_request_target review context.
   # PR-number scope still keeps stale runs replaced within each event class.
   group: >-
     opencode-review-${{ github.event_name }}-${{
-    github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name ||
+    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
     github.repository }}-${{
-    github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
     github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
     github.run_id }}
@@ -61,7 +64,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
-        github.event_name == 'pull_request'
+        github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
       )
     runs-on: ubuntu-latest
@@ -138,7 +141,7 @@ jobs:
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
   cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
@@ -151,7 +154,7 @@ jobs:
       && (
         github.event_name == 'workflow_dispatch'
         || (
-          github.event_name == 'pull_request'
+          github.event_name == 'pull_request_target'
           && github.event.action != 'closed'
           && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
         )
@@ -305,14 +308,16 @@ jobs:
       && (
         github.event_name == 'workflow_dispatch'
         || (
-          github.event_name == 'pull_request'
+          github.event_name == 'pull_request_target'
           && github.event.action != 'closed'
           && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
         )
       )
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # The PR tree arrives through a same-run artifact. No repository-content,
+      # identity, secret, or write token is available to untrusted tests.
+      actions: read
     outputs:
       coverage_summary: ${{ steps.measure.outputs.coverage_summary }}
     env:
@@ -358,13 +363,17 @@ jobs:
           print(f"ref={trusted_ref}")
           PY
 
-      - name: Checkout trusted OpenCode coverage contract
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ContextualWisdomLab/.github
-          fetch-depth: 1
-          persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+      - name: Materialize trusted OpenCode coverage contract without a repository token
+        env:
+          TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add trusted-source https://github.com/ContextualWisdomLab/.github.git
+          git -C "$GITHUB_WORKSPACE" fetch --depth=1 --no-tags trusted-source "$TRUSTED_SOURCE_REF"
+          git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
+          printf 'Materialized trusted coverage contract at %s from validated ref %s.\n' \
+            "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" "$TRUSTED_SOURCE_REF"
 
       - name: Report coverage source materialization failure
         if: needs.coverage-source-tree.result != 'success'
@@ -394,6 +403,13 @@ jobs:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+          # Dependency resolution may consume wheels/packages, but PR-defined
+          # install/build hooks are never executed implicitly.
+          UV_NO_BUILD: "1"
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+          PNPM_CONFIG_IGNORE_SCRIPTS: "true"
+          YARN_ENABLE_SCRIPTS: "false"
+          GITHUB_TOKEN: ""
         run: |
           set -euo pipefail
           replay_report="${RUNNER_TEMP}/pr-head-replay-guard.txt"
@@ -428,6 +444,8 @@ jobs:
           COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
         run: |
           set -euo pipefail
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN
+          umask 077
           cd "$COVERAGE_SOURCE_WORKDIR"
 
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
@@ -586,7 +604,7 @@ jobs:
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
-                uv run --with-requirements requirements.txt python -c 'import sys; print("requirements resolved with", sys.executable)'
+                uv run --no-project --with-requirements requirements.txt python -c 'import sys; print("binary-only requirements resolved with", sys.executable)'
             fi
 
             while IFS= read -r project_dir; do
@@ -595,21 +613,21 @@ jobs:
                 run_python_uv_lock_check "$project_dir"
                 if pyproject_has_dev_dependency_group "$pyproject_file"; then
                   run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --group dev
+                    uv sync --project "$project_dir" --group dev --no-build --no-install-project
                 elif pyproject_has_dev_optional_extra "$pyproject_file"; then
                   run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --extra dev
+                    uv sync --project "$project_dir" --extra dev --no-build --no-install-project
                 else
                   run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir"
+                    uv sync --project "$project_dir" --no-build --no-install-project
                 fi
                 if [ -f "${project_dir}/requirements.txt" ]; then
                   run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
-                    bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
+                    bash -c 'cd "$1" && uv run --no-project --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
                 fi
               elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
                 run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && uv run --with-requirements requirements.txt python -c "import sys; print(\"requirements resolved with\", sys.executable)"' bash "$project_dir"
+                  bash -c 'cd "$1" && uv run --no-project --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
           }
@@ -719,23 +737,17 @@ jobs:
             local runner="$1"
             local spec="$2"
 
-            if command -v "$runner" >/dev/null 2>&1; then
-              return 0
+            if ! [[ "$spec" =~ ^${runner}@[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9._+-]+)?$ ]]; then
+              printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
+              return 1
             fi
             if ! command -v corepack >/dev/null 2>&1; then
-              printf 'Coverage package runner %s is required, but neither %s nor corepack is available; not falling back to npm.\n' "$runner" "$runner" >&2
+              printf 'Coverage package runner %s with specification %s is required, but corepack is unavailable; not falling back to a mutable runner.\n' "$runner" "$spec" >&2
               return 1
             fi
 
-            corepack enable >&2 || true
-            case "$spec" in
-              "$runner"@*)
-                corepack prepare "$spec" --activate >&2 || true
-                ;;
-              *)
-                corepack prepare "${runner}@latest" --activate >&2 || true
-                ;;
-            esac
+            corepack enable >&2
+            corepack prepare "$spec" --activate >&2
             if command -v "$runner" >/dev/null 2>&1; then
               return 0
             fi
@@ -805,16 +817,16 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-                  run_and_capture "JavaScript/TypeScript dependencies (npm ci)" npm ci
+                  run_and_capture "JavaScript/TypeScript dependencies (npm ci, lifecycle hooks disabled)" npm ci --ignore-scripts
                 else
-                  run_and_capture "JavaScript/TypeScript dependencies (npm install)" npm install
+                  run_and_capture "JavaScript/TypeScript dependencies (npm install, lifecycle hooks disabled)" npm install --ignore-scripts
                 fi
                 ;;
               pnpm)
-                run_and_capture "JavaScript/TypeScript dependencies (pnpm install)" pnpm install --frozen-lockfile
+                run_and_capture "JavaScript/TypeScript dependencies (pnpm install, lifecycle hooks disabled)" pnpm install --frozen-lockfile --ignore-scripts
                 ;;
               yarn)
-                run_and_capture "JavaScript/TypeScript dependencies (yarn install)" yarn install --immutable
+                run_and_capture "JavaScript/TypeScript dependencies (yarn install, lifecycle hooks disabled)" yarn install --immutable --mode=skip-builds
                 ;;
             esac
           }
@@ -980,8 +992,8 @@ jobs:
             if command -v Rscript >/dev/null 2>&1 && dpkg -s libcurl4-openssl-dev libssl-dev libxml2-dev >/dev/null 2>&1; then
               return 0
             fi
-            run_and_capture "R runtime install (r-base and package headers)" \
-              bash -c 'sudo apt-get update && sudo apt-get install -y r-base libcurl4-openssl-dev libssl-dev libxml2-dev'
+            run_and_capture "R runtime and signed distribution coverage packages" \
+              bash -c 'sudo apt-get update && sudo apt-get install -y r-base r-cran-covr r-cran-testthat libcurl4-openssl-dev libssl-dev libxml2-dev'
           }
 
           run_r_test_coverage() {
@@ -998,8 +1010,8 @@ jobs:
             fi
             export R_LIBS_USER="${RUNNER_TEMP}/R-library"
             mkdir -p "$R_LIBS_USER"
-            run_and_capture "R coverage tooling (covr/testthat)" \
-              bash -c 'timeout 780 Rscript -e '\''user_repo <- "https://cloud.r-project.org"; codename <- tryCatch({ os <- readLines("/etc/os-release", warn = FALSE); v <- grep("^VERSION_CODENAME=", os, value = TRUE); if (length(v)) sub("^VERSION_CODENAME=", "", v[1]) else "" }, error = function(e) ""); binary_repo <- if (nzchar(codename)) sprintf("https://packagemanager.posit.co/cran/__linux__/%s/latest", codename) else "https://packagemanager.posit.co/cran/latest"; repos <- c(binary_repo, user_repo); options(HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(), paste(getRversion(), R.version$platform, R.version$arch, R.version$os))); message("R package repositories: ", paste(repos, collapse = ", "), " (binary packages preferred via Posit Public Package Manager)"); lib <- Sys.getenv("R_LIBS_USER"); install_deps <- c("Depends", "Imports", "LinkingTo"); dir.create(lib, recursive = TRUE, showWarnings = FALSE); .libPaths(c(lib, .libPaths())); required <- c("covr", "testthat"); if (file.exists("DESCRIPTION")) { desc <- read.dcf("DESCRIPTION")[1, , drop = FALSE]; fields <- intersect(c("Depends", "Imports", "LinkingTo"), colnames(desc)); values <- as.character(desc[, fields, drop = TRUE]); values <- values[!is.na(values)]; package_deps <- trimws(gsub("\\s*\\([^)]*\\)", "", unlist(strsplit(paste(values, collapse = ","), ","), use.names = FALSE))); package_deps <- setdiff(package_deps[nzchar(package_deps)], "R"); required <- unique(c(required, package_deps)); }; for (pkg in required) if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, repos = repos, lib = lib, dependencies = install_deps); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("R coverage tooling packages unavailable after install from ", paste(repos, collapse = ", "), ": ", paste(missing, collapse = ", "))'\'' || { echo "R coverage tooling install did not complete or exceeded 780 seconds (see log above for repositories used and any install error); deferring to required peer R CMD check evidence."; exit 0; }'
+            run_and_capture "R coverage tooling availability (distribution packages only)" \
+              Rscript -e 'required <- c("covr", "testthat"); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("signed distribution coverage packages unavailable: ", paste(missing, collapse = ", "))'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
                 run_and_capture "R package testthat suite" \
@@ -1093,13 +1105,17 @@ jobs:
 
           ensure_rust_toolchain() {
             if ! command -v cargo >/dev/null 2>&1; then
-              run_and_capture "Rust toolchain install (rustup minimal)" \
-                bash -c 'curl --proto "=https" --tlsv1.2 -fsS https://sh.rustup.rs | sh -s -- -y --profile minimal'
-              # shellcheck disable=SC1090
-              [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+              append "### Rust coverage toolchain"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: cargo is unavailable; the coverage job refuses a mutable network installer."
+              append "- Fix: use a runner image with a pinned Rust toolchain, then rerun the current-head coverage job."
+              append ""
+              failures=$((failures + 1))
+              return 1
             fi
             if command -v cargo >/dev/null 2>&1 && ! cargo llvm-cov --version >/dev/null 2>&1; then
-              run_and_capture "Rust coverage tooling (cargo-llvm-cov)" cargo install cargo-llvm-cov --locked
+              run_and_capture "Rust coverage tooling (cargo-llvm-cov 0.8.7)" cargo install cargo-llvm-cov --version 0.8.7 --locked
             fi
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
@@ -1164,7 +1180,9 @@ jobs:
 
           run_rust_test_coverage() {
             local manifests
-            ensure_rust_toolchain
+            if ! ensure_rust_toolchain; then
+              return 0
+            fi
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust test coverage"
               append ""
@@ -1502,7 +1520,7 @@ jobs:
       && (
         github.event_name == 'workflow_dispatch'
         || (
-          github.event_name == 'pull_request'
+          github.event_name == 'pull_request_target'
           && github.event.action != 'closed'
           && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
         )
@@ -1578,7 +1596,7 @@ jobs:
           repository: ContextualWisdomLab/.github
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ steps.trusted_source.outputs.ref }}
 
       - name: Validate pull request head repository trust
         env:
@@ -4099,7 +4117,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
-          LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: ${{ github.event_name == 'pull_request' && github.token || '' }}
+          LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: ${{ github.event_name == 'pull_request_target' && github.token || '' }}
           # The OpenCode app installation token is exchanged from api.opencode.ai
           # and never carries security-events read, so it cannot read the
           # code-scanning alerts API; github.token has security-events: read from
@@ -7229,7 +7247,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
-          SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request' || needs.validate-pr-metadata.outputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
+          SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || needs.validate-pr-metadata.outputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
@@ -7344,7 +7362,7 @@ jobs:
     # current head until a model produces a verdict.
     if: >-
       always()
-      && github.event_name == 'pull_request'
+      && github.event_name == 'pull_request_target'
       && github.event.action != 'closed'
       && needs.opencode-review-target.result == 'failure'
       && needs.opencode-review-target.outputs.model_pool_outcome == 'exhausted'

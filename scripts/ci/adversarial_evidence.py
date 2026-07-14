@@ -32,6 +32,9 @@ NEGATED_EVIDENCE_RE = re.compile(
     r"(?:was\s+|were\s+)?(?:reported|observed|produced|recorded|available)\b",
     re.IGNORECASE,
 )
+SOURCE_LINE_RECEIPT_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])source-line-sha256=([0-9a-fA-F]{64})(?![A-Za-z0-9_-])"
+)
 
 
 def adversarial_evidence_rejection_reason(
@@ -63,15 +66,22 @@ def adversarial_evidence_rejection_reason(
     if path and path_citation is None:
         suffix = " and positive line" if line is not None else ""
         return f"must cite the exact probe path{suffix}"
-    has_proof_anchor = INDEPENDENT_PROOF_RE.search(cleaned) is not None
+    source_receipts = SOURCE_LINE_RECEIPT_RE.findall(cleaned)
+    lexical_evidence = SOURCE_LINE_RECEIPT_RE.sub("", cleaned)
+    has_proof_anchor = INDEPENDENT_PROOF_RE.search(lexical_evidence) is not None
     if not has_proof_anchor:
         return (
             "must cite an executed command, test/assertion, log/check/SARIF receipt, "
             "source trace, diff, or CodeGraph path"
         )
-    if not OBSERVED_RESULT_RE.search(cleaned):
+    if not OBSERVED_RESULT_RE.search(lexical_evidence):
         return (
             "must state the observed proof result, such as an exit code, passed or failed "
             "test/assertion, rejected input, log value, or source-trace outcome"
+        )
+    if len(source_receipts) != 1:
+        return (
+            "must include exactly one source-line-sha256 receipt bound to the "
+            "cited current-head line"
         )
     return None

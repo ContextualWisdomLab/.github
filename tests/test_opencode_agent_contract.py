@@ -174,14 +174,15 @@ def test_model_pool_cannot_synthesize_approval_after_provider_exhaustion():
 
 
 def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
-    """Check out trusted source directly from the workflow identity SHA."""
+    """Check out only the validated workflow-identity source ref output."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
 
     assert "canonical_ref:" not in workflow
     assert "INPUT_CANONICAL_REF" not in workflow
     assert "github.event.inputs.canonical_ref" not in workflow
-    assert "steps.trusted_source.outputs.ref" not in workflow
-    assert workflow.count("ref: ${{ github.workflow_sha }}") == 2
+    assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
+    assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
+    assert "ref: ${{ github.workflow_sha }}" not in workflow
     assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 2
     assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 2
     assert (
@@ -315,7 +316,8 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     )
     measure_end = workflow.index("\n      - name:", measure_start + 1)
     measure_step = workflow[measure_start:measure_end]
-    assert "GH_TOKEN" not in measure_step
+    assert "GH_TOKEN:" not in measure_step
+    assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
     assert "emit_captured_log()" in measure_step
     assert 'append_command "$@"' in measure_step
@@ -686,7 +688,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "github.event.inputs.pr_head_sha" not in concurrency_contract
     assert "opencode-review-${{ github.event_name }}-" in concurrency_contract
     assert (
-        "without cancelling the required pull_request review context"
+        "without cancelling the required pull_request_target review context"
         in concurrency_contract
     )
     assert (
@@ -1258,7 +1260,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "OpenCode live approval evidence validation failed." in workflow
     assert "python3 scripts/ci/pr_review_merge_scheduler.py" in workflow
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
-    assert "github.event_name == 'pull_request'" in workflow
+    assert "github.event_name == 'pull_request_target'" in workflow
     status_step = workflow.split(
         "      - name: Publish workflow_dispatch OpenCode status", 1
     )[1].split("      - name: Run merge scheduler after approval", 1)[0]
@@ -1281,7 +1283,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert '[ "${OPENCODE_MODEL_POOL_OUTCOME:-}" != "exhausted" ]' not in status_step
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
     assert (
-        "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request' || "
+        "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || "
         "needs.validate-pr-metadata.outputs.target_repository == github.repository) "
         "&& github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}"
@@ -1311,6 +1313,7 @@ def test_opencode_adversarial_prompt_requires_independent_proof():
     assert '"handles this case"' in prompt
     assert '"properly handles all cases"' in prompt
     assert "is circular and invalid" in prompt
+    assert "source-line-sha256=<64 lowercase hex>" in prompt
 
 
 def test_opencode_privileged_review_security_boundaries_are_fail_closed():
@@ -1336,11 +1339,31 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     )
     assert 'cat "$summary_output_file"' in coverage_job
     assert "Published compact coverage decision output" in coverage_job
+    assert "actions: read" in coverage_job
+    assert "contents: read" not in coverage_job
+    assert 'GITHUB_TOKEN: ""' in coverage_job
+    assert 'UV_NO_BUILD: "1"' in coverage_job
+    assert (
+        'uv sync --project "$project_dir" --group dev --no-build --no-install-project'
+        in coverage_job
+    )
+    assert "npm ci --ignore-scripts" in coverage_job
+    assert "pnpm install --frozen-lockfile --ignore-scripts" in coverage_job
+    assert "yarn install --immutable --mode=skip-builds" in coverage_job
+    assert 'corepack prepare "${runner}@latest"' not in coverage_job
+    assert "https://sh.rustup.rs" not in coverage_job
+    assert "cargo install cargo-llvm-cov --version 0.8.7 --locked" in coverage_job
+    assert "install.packages(" not in coverage_job
 
     assert (
         "github.event.pull_request.head.repo.full_name == "
         "github.event.pull_request.base.repo.full_name"
     ) in target_job
+    assert "pull_request_target:" in workflow.split("permissions:", 1)[0]
+    assert "\n  pull_request:\n" not in workflow.split("permissions:", 1)[0]
+    assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
+    assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
+    assert "ref: ${{ github.workflow_sha }}" not in workflow
     trust_step = target_job.split(
         "      - name: Validate pull request head repository trust", 1
     )[1].split("\n      - name:", 1)[0]
@@ -1370,7 +1393,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert 'cat "$codegraph_status" >&2' in codegraph_step
     assert 'cat "$codegraph_raw" >&2' in codegraph_step
     assert "CodeGraph status failed; approval evidence is incomplete." in codegraph_step
-    assert "CodeGraph changed-scope exploration failed; approval evidence is incomplete." in codegraph_step
+    assert (
+        "CodeGraph changed-scope exploration failed; approval evidence is incomplete."
+        in codegraph_step
+    )
     assert "npm install --ignore-scripts --no-save" not in codegraph_step
     assert 'npx -y "$CODEGRAPH_PACKAGE" init -i' not in codegraph_step
     isolated_step = target_job.split(

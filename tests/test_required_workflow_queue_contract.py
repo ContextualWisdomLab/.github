@@ -32,7 +32,10 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     assert workflow.count('default: "1"') >= 2
     assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
     assert "SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH" in workflow
-    assert "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''" in workflow
+    assert (
+        "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
+        in workflow
+    )
 
 
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
@@ -71,15 +74,22 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
         assert "cancel-in-progress: true" in workflow
-        if filename in {"close-empty-pr.yml", "opencode-review.yml", "security-scan.yml"}:
-            assert "github.event_name == 'pull_request_target'" in concurrency_contract or (
-                "github.event_name == 'pull_request'" in concurrency_contract
+        if filename in {
+            "close-empty-pr.yml",
+            "opencode-review.yml",
+            "security-scan.yml",
+        }:
+            assert (
+                "github.event_name == 'pull_request_target'" in concurrency_contract
+                or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
             else:
-                assert "github.event_name == 'pull_request_target'" in concurrency_contract
+                assert (
+                    "github.event_name == 'pull_request_target'" in concurrency_contract
+                )
         assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -93,7 +103,7 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     assert "SEMGREP_FINDING rule=" in workflow
     assert 'level=\\(.level // $levels[.ruleId] // "unknown")' in workflow
     assert 'path=\\($location.artifactLocation.uri // "unknown")' in workflow
-    assert 'line=\\($location.region.startLine // 0)' in workflow
+    assert "line=\\($location.region.startLine // 0)" in workflow
     assert "message=" in workflow
     assert "SEMGREP_ENGINE_FAILURE rc=" in workflow
     assert "semgrep_sarif.outputs.finding_count != '0'" in workflow
@@ -122,7 +132,10 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     assert "cancel-in-progress: true" in workflow
     assert "manual workflow_dispatch evidence cannot cancel" in workflow
     assert "PR-number scope keeps the queue on the current HEAD" in workflow
-    assert "refs/pull/<n>/head has already advanced before this queued run starts" in workflow
+    assert (
+        "refs/pull/<n>/head has already advanced before this queued run starts"
+        in workflow
+    )
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
@@ -144,7 +157,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "closed" in workflow
         assert "cancel-closed-pr-runs:" in workflow
         assert (
-            'PR closed; this run only cancels older runs through workflow concurrency.'
+            "PR closed; this run only cancels older runs through workflow concurrency."
             in workflow
         )
         assert "github.event.action != 'closed'" in workflow
@@ -165,7 +178,6 @@ def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
     assert "exit 0" in workflow
 
 
-
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
     for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
         workflow = workflow_text(filename)
@@ -174,7 +186,11 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
 
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
-    for filename in ("opencode-review.yml", "noema-review.yml", "pr-review-merge-scheduler.yml"):
+    for filename in (
+        "opencode-review.yml",
+        "noema-review.yml",
+        "pr-review-merge-scheduler.yml",
+    ):
         workflow = workflow_text(filename)
 
         assert "canonical_ref:" not in workflow
@@ -182,11 +198,15 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "github.event.inputs.canonical_ref" not in workflow
         assert "inputs.canonical_ref" not in workflow
         assert "workflow_sha" in workflow
-        assert "ref: ${{ steps.trusted_source.outputs.ref }}" not in workflow
-        assert (
-            "ref: ${{ github.workflow_sha }}" in workflow
-            or "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
-        )
+        if filename == "opencode-review.yml":
+            assert "ref: ${{ steps.trusted_source.outputs.ref }}" in workflow
+            assert "ref: ${{ github.workflow_sha }}" not in workflow
+        else:
+            assert (
+                "ref: ${{ github.workflow_sha }}" in workflow
+                or "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}"
+                in workflow
+            )
         assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in workflow
         assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
 
@@ -211,13 +231,34 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
         "NOEMA_GITHUB_APP_PRIVATE_KEY, NOEMA_REVIEW_TOKEN, or NOEMA_TOKEN_EXCHANGE_URL. "
         "Review cannot be skipped."
     ) in workflow
-    assert "Noema app token exchange unavailable: OIDC request environment is missing." in workflow
-    assert "Noema app token exchange unavailable: OIDC token request did not complete." in workflow
-    assert "Noema app token exchange unavailable: OIDC token response was empty." in workflow
-    assert "Noema app token exchange unavailable: app token request did not complete." in workflow
-    assert "Noema app token exchange unavailable: app token response was empty." in workflow
-    assert "Noema reviewer credential selection succeeded but no token was minted" in workflow
-    assert "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}" in workflow
+    assert (
+        "Noema app token exchange unavailable: OIDC request environment is missing."
+        in workflow
+    )
+    assert (
+        "Noema app token exchange unavailable: OIDC token request did not complete."
+        in workflow
+    )
+    assert (
+        "Noema app token exchange unavailable: OIDC token response was empty."
+        in workflow
+    )
+    assert (
+        "Noema app token exchange unavailable: app token request did not complete."
+        in workflow
+    )
+    assert (
+        "Noema app token exchange unavailable: app token response was empty."
+        in workflow
+    )
+    assert (
+        "Noema reviewer credential selection succeeded but no token was minted"
+        in workflow
+    )
+    assert (
+        "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
+        in workflow
+    )
     assert "Noema LLM is unconfigured:" in workflow
     assert "mark_unconfigured()" not in workflow
     assert "review skipped until Noema is deployed" not in workflow
@@ -227,7 +268,10 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
     workflow = workflow_text("noema-review.yml")
 
-    assert "Noema review skipped: no pull request number is associated with this event." in workflow
+    assert (
+        "Noema review skipped: no pull request number is associated with this event."
+        in workflow
+    )
     assert "if: env.PR_NUMBER == ''" in workflow
     assert workflow.count("if: env.PR_NUMBER != ''") >= 4
 
@@ -245,7 +289,10 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
 
     assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
     assert 'if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then' in workflow
-    assert "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity." in workflow
+    assert (
+        "Noema reviewer using the NOEMA_REVIEW_TOKEN secret fallback identity."
+        in workflow
+    )
     # The review step must prefer the PAT over the exchanged app token.
     assert (
         "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
@@ -289,10 +336,19 @@ def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
         assert "Trusted" in workflow or "trusted" in workflow
         assert "Materialize trusted" in workflow
         assert "uses: actions/checkout" not in workflow
-        assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in workflow
-        assert "Trusted" in workflow and "source ref must resolve to the immutable workflow commit SHA" in workflow
+        assert (
+            "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+            in workflow
+        )
+        assert (
+            "Trusted" in workflow
+            and "source ref must resolve to the immutable workflow commit SHA"
+            in workflow
+        )
         assert "repository: ContextualWisdomLab/.github" not in workflow
-        assert "repository: ${{ steps.trusted_source.outputs.repository }}" not in workflow
+        assert (
+            "repository: ${{ steps.trusted_source.outputs.repository }}" not in workflow
+        )
         assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
         assert "INPUT_CANONICAL_REF" not in workflow
 
@@ -318,7 +374,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert "- cron: \"*/15 * * * *\"" in workflow
+    assert '- cron: "*/15 * * * *"' in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
     assert "github.event.schedule == '*/15 * * * *'" in workflow
     assert "inputs.org_sweep == true" in workflow
@@ -413,12 +469,18 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     assert (
         "ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
     ) in workflow
-    assert "ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}" in workflow
+    assert (
+        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}" in workflow
+    )
     assert (
         "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ inputs.enable_auto_merge == true }}"
     ) in workflow
-    assert "ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}" in workflow
-    assert "ORG_SWEEP_UPDATE_BRANCHES: ${{ inputs.update_branches == true }}" in workflow
+    assert (
+        "ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}" in workflow
+    )
+    assert (
+        "ORG_SWEEP_UPDATE_BRANCHES: ${{ inputs.update_branches == true }}" in workflow
+    )
     assert 'if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then' in workflow
     assert 'if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then' in workflow
     assert '--merge-mode "$ORG_SWEEP_MERGE_MODE"' in workflow
@@ -438,7 +500,9 @@ def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> No
         if "done | jq -sc" in line and "workflow_runs" in line
     )
     jq_filter = shlex.split(aggregation_line)[4]
-    payload = '{"workflow_runs":[]}\n{"message":"Resource not accessible by integration"}\n'
+    payload = (
+        '{"workflow_runs":[]}\n{"message":"Resource not accessible by integration"}\n'
+    )
 
     result = subprocess.run(
         [jq, "-sc", jq_filter],
@@ -496,7 +560,9 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
-def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> None:
+def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> (
+    None
+):
     workflow = workflow_text("security-scan.yml")
 
     assert "id: dependency_review_support" in workflow
@@ -519,7 +585,7 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
 def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
     workflow = workflow_text("secret-scan.yml")
 
-    assert 'CURRENT_SHA: ${{ github.sha }}' in workflow
+    assert "CURRENT_SHA: ${{ github.sha }}" in workflow
     assert 'log_opts="${BASE_SHA}..${HEAD_SHA}"' in workflow
     assert 'log_opts="${CURRENT_SHA}"' in workflow
     assert '--log-opts="${log_opts}"' in workflow
@@ -530,19 +596,33 @@ def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
     workflow = workflow_text("osv-scanner-pr.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
-    assert "github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name" in concurrency_contract
-    assert "github.event_name == 'pull_request' && github.event.pull_request.number" in concurrency_contract
+    assert (
+        "github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name"
+        in concurrency_contract
+    )
+    assert (
+        "github.event_name == 'pull_request' && github.event.pull_request.number"
+        in concurrency_contract
+    )
     assert workflow.count("scan-args: |-") == 1
     assert "--no-resolve" in workflow
-    assert "--maven-registry=https://maven-central.storage-download.googleapis.com/maven2" in workflow
+    assert (
+        "--maven-registry=https://maven-central.storage-download.googleapis.com/maven2"
+        in workflow
+    )
 
 
-def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> None:
+def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> (
+    None
+):
     workflow = workflow_text("security-scan.yml")
 
     assert "timeout-minutes: 25" in workflow
     assert "Explain OSV scan mode and timeout budget" in workflow
-    assert "external transitive registry resolver stalls cannot hold the required-check queue indefinitely" in workflow
+    assert (
+        "external transitive registry resolver stalls cannot hold the required-check queue indefinitely"
+        in workflow
+    )
     assert "id: osv_base" in workflow
     assert "id: osv_head" in workflow
     assert "steps.osv_base.outcome == 'failure'" in workflow
@@ -553,17 +633,30 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert workflow.count("timeout-minutes: 4") == 2
     assert workflow.count("\n            --no-resolve\n") == 4
     assert workflow.count("failed or timed out before reporter output was trusted") == 2
-    assert "Direct manifest and lockfile vulnerability evidence remains enforced" in workflow
-    assert "external transitive registry resolution is intentionally avoided" in workflow
-    assert "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true" in workflow
-    assert "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true" in workflow
+    assert (
+        "Direct manifest and lockfile vulnerability evidence remains enforced"
+        in workflow
+    )
+    assert (
+        "external transitive registry resolution is intentionally avoided" in workflow
+    )
+    assert (
+        "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true"
+        in workflow
+    )
+    assert (
+        "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
+        in workflow
+    )
     assert "--output=old-results.json" in workflow
     assert "--output=new-results.json" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 
 
-def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(tmp_path: Path) -> None:
+def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(
+    tmp_path: Path,
+) -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Mark clean OSV SARIF as comprehensive\n"
     start = workflow.index(step)
@@ -681,7 +774,9 @@ def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
     assert "Upload OSV SARIF to code scanning" in central
 
 
-def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: Path) -> None:
+def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
+    tmp_path: Path,
+) -> None:
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Print OSV findings being compared\n"
     start = workflow.index(step)
@@ -708,9 +803,9 @@ def test_osv_findings_log_accepts_null_results_for_manifestless_repos(tmp_path: 
 
 def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> None:
     workflow = workflow_text("opencode-review.yml")
-    failed_check_evidence = (REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh").read_text(
-        encoding="utf-8"
-    )
+    failed_check_evidence = (
+        REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh"
+    ).read_text(encoding="utf-8")
 
     assert "skipping optional current-head Strix workflow-run lookup" in workflow
     assert "skipping optional manual Strix run lookup" in workflow
@@ -730,17 +825,24 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
     assert "before producing a vulnerability report" in workflow
     assert "genuine findings still fail the check" in workflow
-    assert '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+    assert (
+        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+    )
 
 
-def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> None:
+def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> (
+    None
+):
     """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
     for filename in ("scorecard-pr.yml", "security-scan.yml"):
         workflow = workflow_text(filename)
 
         assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
         assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
-        assert "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS" in workflow
+        assert (
+            "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS"
+            in workflow
+        )
         assert "Delegated " in workflow
         assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
         assert "default-branch governance tracking" in workflow
@@ -841,7 +943,9 @@ def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
                                 "locations": [
                                     {
                                         "physicalLocation": {
-                                            "artifactLocation": {"uri": "requirements.txt"},
+                                            "artifactLocation": {
+                                                "uri": "requirements.txt"
+                                            },
                                             "region": {"startLine": 7},
                                         }
                                     }

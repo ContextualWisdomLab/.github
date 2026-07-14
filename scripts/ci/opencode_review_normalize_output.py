@@ -14,9 +14,15 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 try:
-    from adversarial_evidence import adversarial_evidence_rejection_reason
+    from adversarial_evidence import (
+        SOURCE_LINE_RECEIPT_RE,
+        adversarial_evidence_rejection_reason,
+    )
 except ModuleNotFoundError:  # pragma: no cover - package import path
-    from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
+    from scripts.ci.adversarial_evidence import (
+        SOURCE_LINE_RECEIPT_RE,
+        adversarial_evidence_rejection_reason,
+    )
 
 STRUCTURAL_FAILURE_PHRASES = (
     "structural exploration was not possible",
@@ -611,6 +617,42 @@ def adversarial_probe_location_error(path: str, line: int) -> str:
     return ""
 
 
+def adversarial_probe_source_line_digest(path: str, line: int) -> str | None:
+    """Return the SHA-256 digest of the exact trusted current-head line bytes."""
+    source_root_text = os.environ.get("OPENCODE_SOURCE_WORKDIR", "").strip()
+    if not source_root_text:
+        return None
+    try:
+        source_root = Path(source_root_text).resolve(strict=True)
+        source_path = source_root.joinpath(*PurePosixPath(path).parts).resolve(
+            strict=True
+        )
+        source_path.relative_to(source_root)
+        source_lines = source_path.read_bytes().splitlines()
+    except (OSError, ValueError):
+        return None
+    if line > len(source_lines):
+        return None
+    return hashlib.sha256(source_lines[line - 1]).hexdigest()
+
+
+def adversarial_probe_source_receipt_error(
+    evidence: str,
+    path: str,
+    line: int,
+) -> str:
+    """Verify one model receipt against the exact trusted source-line bytes."""
+    receipts = SOURCE_LINE_RECEIPT_RE.findall(evidence)
+    if len(receipts) != 1:
+        return "must contain exactly one source-line-sha256 receipt"
+    expected_digest = adversarial_probe_source_line_digest(path, line)
+    if expected_digest is None:
+        return "source-line receipt could not be verified from the trusted tree"
+    if receipts[0].casefold() != expected_digest:
+        return "source-line-sha256 receipt does not match the cited current-head line"
+    return ""
+
+
 def adversarial_validation_error(
     value: Any,
     *,
@@ -690,6 +732,13 @@ def adversarial_validation_error(
         )
         if evidence_error:
             return f"adversarial probe {index} evidence {evidence_error}"
+        receipt_error = adversarial_probe_source_receipt_error(
+            probe_evidence,
+            path,
+            line,
+        )
+        if receipt_error:
+            return f"adversarial probe {index} evidence {receipt_error}"
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
             return f"adversarial probe {index} outcome must be falsified or confirmed"

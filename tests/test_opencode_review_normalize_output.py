@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -42,6 +43,12 @@ def seal_artifacts(runner_temp: Path, *paths: Path) -> None:
     for path in paths:
         if path.exists():
             path.chmod(0o600)
+
+
+def source_line_receipt(line_text: str) -> str:
+    """Return the exact source-line receipt expected by the trusted normalizer."""
+    digest = hashlib.sha256(line_text.encode()).hexdigest()
+    return f"source-line-sha256={digest}"
 
 
 @pytest.fixture(autouse=True)
@@ -143,7 +150,8 @@ def adversarial_validation(
                 "attack_or_counterexample": f"Exercise boundary or failure input {index + 1}.",
                 "evidence": (
                     f"Focused source trace at {path}:{7 + index} and regression command {index + 1} "
-                    "disproved or confirmed the hypothesis."
+                    "disproved or confirmed the hypothesis. "
+                    + source_line_receipt(f"line {7 + index}")
                 ),
                 "outcome": outcome,
             }
@@ -278,9 +286,7 @@ def test_adversarial_validation_requires_two_falsified_material_probes(
     )
 
 
-def test_adversarial_validation_rejects_duplicate_probe_evidence(
-    tmp_path, monkeypatch
-):
+def test_adversarial_validation_rejects_duplicate_probe_evidence(tmp_path, monkeypatch):
     """Repeated probes cannot satisfy the independent material-change minimum."""
     require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
     probe = adversarial_validation()["probes"][0]
@@ -338,6 +344,85 @@ def test_adversarial_validation_canonicalizes_case_and_whitespace_for_duplicates
         is None
     )
     assert "duplicates an earlier probe" in reasons[-1]
+
+
+def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
+    tmp_path, monkeypatch
+):
+    """Lexical proof prose cannot authorize approval without exact line binding."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    validation = adversarial_validation()
+
+    lexical_only = dict(validation["probes"][0])
+    lexical_only["evidence"] = "scripts/ci/example.py:7 source trace showed safe"
+    missing = control(
+        adversarial_validation={
+            **validation,
+            "probes": [lexical_only, validation["probes"][1]],
+        }
+    )
+    missing_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            missing,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=missing_reasons,
+        )
+        is None
+    )
+    assert "source-line-sha256 receipt" in missing_reasons[-1]
+
+    mismatched = dict(validation["probes"][0])
+    mismatched["evidence"] = re.sub(
+        r"source-line-sha256=[0-9a-f]{64}",
+        "source-line-sha256=" + "0" * 64,
+        mismatched["evidence"],
+    )
+    invalid = control(
+        adversarial_validation={
+            **validation,
+            "probes": [mismatched, validation["probes"][1]],
+        }
+    )
+    mismatch_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            invalid,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=mismatch_reasons,
+        )
+        is None
+    )
+    assert "does not match the cited current-head line" in mismatch_reasons[-1]
+
+
+def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(
+    tmp_path, monkeypatch
+):
+    """Receipt helpers reject missing roots, files, lines, and receipt counts."""
+    monkeypatch.delenv("OPENCODE_SOURCE_WORKDIR")
+    assert norm.adversarial_probe_source_line_digest("scripts/ci/example.py", 1) is None
+
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(tmp_path))
+    assert norm.adversarial_probe_source_line_digest("missing.py", 1) is None
+
+    one_line = tmp_path / "one_line.py"
+    one_line.write_text("trusted line\n", encoding="utf-8")
+    assert norm.adversarial_probe_source_line_digest("one_line.py", 2) is None
+
+    assert (
+        norm.adversarial_probe_source_receipt_error("no receipt", "one_line.py", 1)
+        == "must contain exactly one source-line-sha256 receipt"
+    )
+    receipt = "source-line-sha256=" + "0" * 64
+    assert (
+        norm.adversarial_probe_source_receipt_error(receipt, "missing.py", 1)
+        == "source-line receipt could not be verified from the trusted tree"
+    )
 
 
 def test_adversarial_request_changes_requires_confirmed_probe_at_finding(
@@ -526,7 +611,8 @@ def test_runtime_tool_claim_requires_trusted_workflow_receipt(
     require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
     validation = adversarial_validation()
     validation["probes"][0]["evidence"] = (
-        "Source trace at scripts/ci/example.py:7 and React DevTools confirmed the component did not re-render."
+        "Source trace at scripts/ci/example.py:7 and React DevTools confirmed the "
+        "component did not re-render. " + source_line_receipt("line 7")
     )
     claimed = control(adversarial_validation=validation)
 
@@ -1748,7 +1834,10 @@ M\tsrc/test/java/example/LogSanitizerTest.java
                     "line": 20,
                     "hypothesis": "A line break bypasses sanitization.",
                     "attack_or_counterexample": "Pass CR, LF, and Unicode separators.",
-                    "evidence": "Test at src/main/java/example/LogSanitizer.java:20 confirms every separator is replaced.",
+                    "evidence": (
+                        "Test at src/main/java/example/LogSanitizer.java:20 confirms "
+                        "every separator is replaced. " + source_line_receipt("line 20")
+                    ),
                     "outcome": "falsified",
                 },
                 {
@@ -1756,7 +1845,11 @@ M\tsrc/test/java/example/LogSanitizerTest.java
                     "line": 40,
                     "hypothesis": "The regression test omits a control character.",
                     "attack_or_counterexample": "Compare the test input with the sanitizer replacements.",
-                    "evidence": "Source trace at src/test/java/example/LogSanitizerTest.java:40 confirms all replacements are asserted.",
+                    "evidence": (
+                        "Source trace at src/test/java/example/LogSanitizerTest.java:40 "
+                        "confirms all replacements are asserted. "
+                        + source_line_receipt("line 40")
+                    ),
                     "outcome": "falsified",
                 },
             ],
