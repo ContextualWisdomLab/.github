@@ -13,3 +13,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # google-cloud-aiplatform 1.133.0 requires protobuf<7.0.0.
+      - dependency-name: "protobuf"
+        versions: [">=7.0.0"]
