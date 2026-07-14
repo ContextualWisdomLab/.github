@@ -302,3 +302,191 @@ def test_deletion_only_cli_fails_closed_with_visible_reason(
     assert "- Result: UNAVAILABLE" in captured.out
     assert "deleted.py: deleted paths have no current-head source line" in captured.out
     assert "produced no eligible current-head lines" in captured.err
+
+
+def test_git_and_sha_failures_are_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git stderr and malformed immutable identities fail with bounded reasons."""
+    completed = subprocess.CompletedProcess(
+        args=["git"], returncode=2, stdout=b"", stderr=b"bounded git failure"
+    )
+    monkeypatch.setattr(receipts.subprocess, "run", lambda *args, **kwargs: completed)
+
+    with pytest.raises(receipts.ReceiptError, match="bounded git failure"):
+        receipts.git_bytes(tmp_path, "status")
+    with pytest.raises(receipts.ReceiptError, match="40-character"):
+        receipts.validated_sha("not-a-sha", "head SHA")
+
+
+def test_repository_resolution_and_git_predicate_errors_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repository binding rejects missing, nested, mismatched, and indeterminate trees."""
+    missing = tmp_path / "missing"
+    with pytest.raises(receipts.ReceiptError, match="could not be resolved"):
+        receipts.validate_repository(missing, "a" * 40, "b" * 40)
+
+    regular_file = tmp_path / "regular.txt"
+    regular_file.write_text("not a repository\n", encoding="utf-8")
+    with pytest.raises(receipts.ReceiptError, match="must be a directory"):
+        receipts.validate_repository(regular_file, "a" * 40, "b" * 40)
+
+    repo = init_repo(tmp_path)
+    source = repo / "source.py"
+    source.write_text("base\n", encoding="utf-8")
+    base_sha = commit(repo, "base")
+    source.write_text("head\n", encoding="utf-8")
+    head_sha = commit(repo, "head")
+    nested = repo / "nested"
+    nested.mkdir()
+    with pytest.raises(receipts.ReceiptError, match="worktree top level"):
+        receipts.validate_repository(nested, base_sha, head_sha)
+
+    real_git_bytes = receipts.git_bytes
+
+    def mismatched_base(root: Path, *args: str) -> bytes:
+        if args[:2] == ("rev-parse", "--show-toplevel"):
+            return f"{repo}\n".encode()
+        if args[:3] == ("rev-parse", "--verify", "HEAD^{commit}"):
+            return f"{head_sha}\n".encode()
+        if args[:2] == ("rev-parse", "--verify"):
+            return f"{'c' * 40}\n".encode()
+        return real_git_bytes(root, *args)
+
+    monkeypatch.setattr(receipts, "git_bytes", mismatched_base)
+    with pytest.raises(receipts.ReceiptError, match="diff base did not resolve"):
+        receipts.validate_repository(repo, base_sha, head_sha)
+
+    monkeypatch.setattr(receipts, "git_bytes", real_git_bytes)
+    monkeypatch.setattr(
+        receipts, "git_returncode", lambda *args: (2, "predicate failed")
+    )
+    with pytest.raises(receipts.ReceiptError, match="verify diff-base ancestry"):
+        receipts.validate_repository(repo, base_sha, head_sha)
+
+    predicate_results = iter(((0, ""), (2, "cleanliness failed")))
+    monkeypatch.setattr(
+        receipts, "git_returncode", lambda *args: next(predicate_results)
+    )
+    with pytest.raises(receipts.ReceiptError, match="verify current-head worktree"):
+        receipts.validate_repository(repo, base_sha, head_sha)
+
+
+def test_manifest_boundaries_and_duplicates_fail_closed(tmp_path: Path) -> None:
+    """Manifest materialization rejects unsafe file types, bytes, size, and duplicates."""
+    with pytest.raises(receipts.ReceiptError, match="empty or oversized"):
+        receipts.safe_changed_path("")
+
+    target = tmp_path / "target.txt"
+    target.write_text("safe.py\n", encoding="utf-8")
+    symlink = tmp_path / "manifest-link.txt"
+    symlink.symlink_to(target)
+    with pytest.raises(receipts.ReceiptError, match="must not be a symlink"):
+        receipts.load_changed_paths(symlink)
+
+    with pytest.raises(receipts.ReceiptError, match="must be a regular file"):
+        receipts.load_changed_paths(tmp_path)
+
+    oversized = tmp_path / "oversized.txt"
+    oversized.write_bytes(b"a" * (receipts.MAX_MANIFEST_BYTES + 1))
+    with pytest.raises(receipts.ReceiptError, match="exceeds the bounded"):
+        receipts.load_changed_paths(oversized)
+
+    invalid_utf8 = tmp_path / "invalid-utf8.txt"
+    invalid_utf8.write_bytes(b"source.py\n\xff")
+    with pytest.raises(receipts.ReceiptError, match="could not be read"):
+        receipts.load_changed_paths(invalid_utf8)
+
+    duplicates = tmp_path / "duplicates.txt"
+    duplicates.write_text("source.py\nsource.py\n", encoding="utf-8")
+    with pytest.raises(receipts.ReceiptError, match="duplicate path"):
+        receipts.load_changed_paths(duplicates)
+
+
+def test_diff_and_source_edge_cases_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-UTF paths, zero-line hunks, and unsafe source material stay unreceipted."""
+    monkeypatch.setattr(receipts, "git_bytes", lambda *args: b"\xff\0")
+    with pytest.raises(receipts.ReceiptError, match="non-UTF-8"):
+        receipts.diff_paths(tmp_path, "a" * 40, "b" * 40, "ACMR")
+
+    monkeypatch.setattr(receipts, "git_bytes", lambda *args: b"@@ -1 +1,0 @@\n-old\n")
+    assert (
+        receipts.changed_line_numbers(
+            tmp_path, "a" * 40, "b" * 40, "source.py", limit=4
+        )
+        == ()
+    )
+
+    source_root = tmp_path / "source-root"
+    source_root.mkdir()
+    directory = source_root / "directory"
+    directory.mkdir()
+    with pytest.raises(receipts.SourceUnavailable, match="not a regular"):
+        receipts.source_lines(source_root, "directory")
+    with pytest.raises(receipts.SourceUnavailable, match="could not be read safely"):
+        receipts.source_lines(source_root, "missing.py")
+
+    empty = source_root / "empty.py"
+    empty.write_bytes(b"")
+    with pytest.raises(receipts.SourceUnavailable, match="no current-head lines"):
+        receipts.source_lines(source_root, "empty.py")
+
+    assert receipts.first_nonempty_line((b"", b"   ")) == 1
+    with pytest.raises(receipts.ReceiptError, match="outside current-head"):
+        receipts.source_line_receipt("source.py", 0, (b"line",))
+
+
+def test_collection_bounds_manifest_mismatch_and_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Collection caps, immutable scope, and mode-only fallback remain deterministic."""
+    repo = init_repo(tmp_path)
+    source = repo / "source.py"
+    source.write_text("first\nsecond\n", encoding="utf-8")
+    base_sha = commit(repo, "base")
+    source.write_text("first\nchanged\n", encoding="utf-8")
+    head_sha = commit(repo, "head")
+    manifest = write_manifest(repo, tmp_path, base_sha, head_sha)
+
+    with pytest.raises(receipts.ReceiptError, match="max_per_file"):
+        receipts.collect_receipts(repo, base_sha, head_sha, manifest, max_per_file=0)
+    with pytest.raises(receipts.ReceiptError, match="max_total"):
+        receipts.collect_receipts(repo, base_sha, head_sha, manifest, max_total=0)
+
+    mismatched_manifest = tmp_path / "mismatched.txt"
+    mismatched_manifest.write_text("ghost.py\n", encoding="utf-8")
+    with pytest.raises(receipts.ReceiptError, match="absent from the immutable diff"):
+        receipts.collect_receipts(repo, base_sha, head_sha, mismatched_manifest)
+
+    monkeypatch.setattr(receipts, "changed_line_numbers", lambda *args, **kwargs: ())
+    generated, notices = receipts.collect_receipts(repo, base_sha, head_sha, manifest)
+    assert [(value.path, value.line) for value in generated] == [("source.py", 1)]
+    assert notices == ()
+
+
+def test_cli_reports_trusted_generation_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI logs a bounded reason when immutable input validation fails."""
+    manifest = tmp_path / "manifest.txt"
+    manifest.write_text("source.py\n", encoding="utf-8")
+
+    result = receipts.main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--diff-base",
+            "a" * 40,
+            "--head-sha",
+            "invalid",
+            "--changed-files",
+            str(manifest),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "Trusted source-line receipt generation failed" in captured.err
