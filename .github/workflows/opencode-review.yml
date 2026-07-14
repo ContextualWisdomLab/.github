@@ -2440,6 +2440,61 @@ jobs:
           printf 'Prepared OpenCode evidence file: %s\n' "$OPENCODE_EVIDENCE_FILE"
           wc -c "$OPENCODE_EVIDENCE_FILE"
 
+      - name: Seal current-run OpenCode artifact provenance
+        id: seal_artifacts
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_FILE: ${{ runner.temp }}/opencode-artifact-manifest.json
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          artifact_paths = {
+              "opencode-review-evidence.md": Path(os.environ["OPENCODE_EVIDENCE_FILE"]),
+              "opencode-changed-files.txt": Path(os.environ["OPENCODE_CHANGED_FILES_FILE"]),
+          }
+          digests = {}
+          for name, path in artifact_paths.items():
+              resolved = path.resolve(strict=True)
+              if resolved != runner_temp / name or not resolved.is_file() or resolved.stat().st_size <= 0:
+                  raise SystemExit(f"trusted artifact is missing, empty, or outside runner temp: {name}")
+              resolved.chmod(0o600)
+              digests[name] = hashlib.sha256(resolved.read_bytes()).hexdigest()
+
+          manifest_path = Path(os.environ["OPENCODE_ARTIFACT_MANIFEST_FILE"])
+          manifest_path.write_text(
+              json.dumps(
+                  {
+                      "schema": 1,
+                      "head_sha": os.environ["HEAD_SHA"],
+                      "run_id": os.environ["RUN_ID"],
+                      "run_attempt": os.environ["RUN_ATTEMPT"],
+                      "artifacts": digests,
+                  },
+                  sort_keys=True,
+              ),
+              encoding="utf-8",
+          )
+          manifest_path.chmod(0o600)
+          manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"manifest_sha256={manifest_digest}\n")
+          print(
+              "Sealed trusted OpenCode artifacts for "
+              f"head={os.environ['HEAD_SHA']} run={os.environ['RUN_ID']} attempt={os.environ['RUN_ATTEMPT']}: "
+              + ", ".join(sorted(digests))
+          )
+          PY
+
       - name: Prepare isolated OpenCode review workspace
         env:
           CODEGRAPH_BIN: ${{ runner.temp }}/trusted-codegraph/node_modules/.bin/codegraph
@@ -3287,6 +3342,7 @@ jobs:
           OPENCODE_AGENT: ci-review-fallback
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-model-pool.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
@@ -3410,6 +3466,7 @@ jobs:
           # review instead of publishing it.
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
           # The publish gate re-runs source-backed validation against PR-head data.
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -3706,6 +3763,7 @@ jobs:
           OPENCODE_MODEL_POOL_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-model-pool.md
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
@@ -4020,6 +4078,7 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_FAILED_CHECK_DIAGNOSIS_FILE: ${{ runner.temp }}/opencode-failed-check-diagnosis.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || 'skipped' }}
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}

@@ -24,12 +24,22 @@ OBSERVED_RESULT_RE = re.compile(
     r"observed|pass(?:ed)?|raised|rejected|rejects|reported|returned|showed)\b",
     re.IGNORECASE,
 )
+NEGATED_EVIDENCE_RE = re.compile(
+    r"\b(?:no|without)\s+(?:command|test|assertion|check|probe)\s+"
+    r"(?:was\s+|were\s+)?(?:run|ran|executed|performed|invoked|passed|failed)\b|"
+    r"\b(?:not|never)\s+(?:run|executed|performed|invoked|observed|tested|checked)\b|"
+    r"\bno\s+(?:observed\s+)?(?:result|output|outcome|receipt)\s+"
+    r"(?:was\s+|were\s+)?(?:reported|observed|produced|recorded|available)\b",
+    re.IGNORECASE,
+)
 
 
 def adversarial_evidence_rejection_reason(evidence: str, path: str) -> str | None:
     """Return why probe evidence is circular or lacks a concrete proof anchor."""
     cleaned = evidence.strip()
     lowered = cleaned.casefold()
+    if NEGATED_EVIDENCE_RE.search(cleaned):
+        return "explicitly denies execution or an observed result"
     if any(phrase in lowered for phrase in CIRCULAR_EVIDENCE_PHRASES):
         return "repeats the implementation claim instead of citing independent proof"
     if path and path.casefold() in lowered:

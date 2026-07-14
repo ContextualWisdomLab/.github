@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,7 @@ CENTRAL_FALLBACK_ENV = {
     "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE",
     "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL",
     "OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE",
+    "OPENCODE_ARTIFACT_MANIFEST_SHA256",
     "OPENCODE_DYNAMIC_REVIEW_CADENCE",
     "OPENCODE_EVIDENCE_FILE",
     "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION",
@@ -52,6 +54,40 @@ def bash_path(path: Path) -> str:
     return posix_path
 
 
+def seal_artifacts(
+    runner_temp: Path,
+    *,
+    head_sha: str,
+    run_id: str,
+    run_attempt: str,
+    paths: tuple[Path, ...],
+) -> str:
+    """Seal fixed runner artifacts with current-run identity and SHA-256 digests."""
+    artifacts = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in paths
+        if path.is_file()
+    }
+    manifest = runner_temp / "opencode-artifact-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "head_sha": head_sha,
+                "run_id": run_id,
+                "run_attempt": run_attempt,
+                "artifacts": artifacts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+    for path in paths:
+        if path.exists():
+            path.chmod(0o600)
+    return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
 def skip_if_windows_bash_is_unresponsive(command: str) -> None:
     """Skip with a visible reason when local Git Bash cannot start on Windows."""
     if os.name != "nt":
@@ -65,9 +101,13 @@ def skip_if_windows_bash_is_unresponsive(command: str) -> None:
             timeout=5,
         )
     except subprocess.TimeoutExpired:
-        pytest.skip("Git Bash did not respond to a smoke command within 5 seconds on Windows")
+        pytest.skip(
+            "Git Bash did not respond to a smoke command within 5 seconds on Windows"
+        )
     if result.returncode != 0:
-        pytest.skip(f"Git Bash smoke command failed on Windows: {result.stderr.strip()}")
+        pytest.skip(
+            f"Git Bash smoke command failed on Windows: {result.stderr.strip()}"
+        )
 
 
 def run_failed_model(
@@ -91,11 +131,18 @@ def run_failed_model(
     for path in (review_dir, source_dir, runner_temp, fake_bin):
         path.mkdir()
     shutil.copy2(ROOT / "opencode.jsonc", review_dir / "opencode.jsonc")
-    evidence_file = tmp_path / "evidence.md"
+    evidence_file = runner_temp / "opencode-review-evidence.md"
     evidence_file.write_text("bounded current-head evidence\n", encoding="utf-8")
-    changed_files_file = tmp_path / "changed-files.txt"
+    changed_files_file = runner_temp / "opencode-changed-files.txt"
     if changed_files is not None:
         changed_files_file.write_text("\n".join(changed_files) + "\n", encoding="utf-8")
+    manifest_digest = seal_artifacts(
+        runner_temp,
+        head_sha="1" * 40,
+        run_id="29189945378",
+        run_attempt="1",
+        paths=(evidence_file, changed_files_file),
+    )
     if evidence_excerpt:
         (review_dir / "bounded-review-evidence-excerpt.md").write_text(
             evidence_excerpt, encoding="utf-8"
@@ -106,11 +153,11 @@ def run_failed_model(
     fake_opencode = fake_bin / "opencode"
     fake_opencode.write_text(
         "#!/usr/bin/env bash\n"
-        "if [ \"${1:-}\" = run ]; then\n"
-        "  [ -z \"${FAKE_OPENCODE_PROMPT_CAPTURE:-}\" ] || printf '%s\\n' \"$2\" > \"$FAKE_OPENCODE_PROMPT_CAPTURE\"\n"
-        "  [ -z \"${FAKE_OPENCODE_JSON:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_JSON\"\n"
-        "  [ -z \"${FAKE_OPENCODE_STDERR:-}\" ] || printf '%s\\n' \"$FAKE_OPENCODE_STDERR\" >&2\n"
-        "  sleep \"${FAKE_OPENCODE_HANG_SECONDS:-0}\"\n"
+        'if [ "${1:-}" = run ]; then\n'
+        '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$2" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
+        '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
+        '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
+        '  sleep "${FAKE_OPENCODE_HANG_SECONDS:-0}"\n'
         "  exit 1\n"
         "fi\n"
         "printf 'unexpected fake opencode command: %s\\n' \"$*\" >&2\n"
@@ -125,11 +172,14 @@ def run_failed_model(
     env.update(
         {
             "FAKE_OPENCODE_JSON": json_line,
-            "FAKE_OPENCODE_PROMPT_CAPTURE": bash_path(prompt_capture) if prompt_capture else "",
+            "FAKE_OPENCODE_PROMPT_CAPTURE": bash_path(prompt_capture)
+            if prompt_capture
+            else "",
             "FAKE_OPENCODE_STDERR": stderr_line,
             "GITHUB_OUTPUT": bash_path(github_output),
             "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "1" * 40,
+            "OPENCODE_ARTIFACT_MANIFEST_SHA256": manifest_digest,
             "OPENCODE_CHANGED_FILES_FILE": bash_path(changed_files_file),
             "OPENCODE_EVIDENCE_FILE": bash_path(evidence_file),
             "OPENCODE_FATAL_ERROR_POLL_SECONDS": "1",
@@ -200,7 +250,7 @@ def run_central_fallback(
     strix_test.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "test \"${STRIX_TEST_CASE_FILTER:-}\" = "
+        'test "${STRIX_TEST_CASE_FILTER:-}" = '
         "pull-request-target-gitlink-is-explicitly-skipped\n"
         "printf 'pull-request-target-gitlink-is-explicitly-skipped: PASS\\n'\n",
         encoding="utf-8",
@@ -212,7 +262,7 @@ def run_central_fallback(
     fake_uv.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "printf '%s\\n' \"$*\" > \"${FAKE_UV_LOG:?}\"\n"
+        'printf \'%s\\n\' "$*" > "${FAKE_UV_LOG:?}"\n'
         "printf 'focused pytest: PASS\\n'\n",
         encoding="utf-8",
     )
@@ -223,10 +273,17 @@ def run_central_fallback(
         "scripts/ci/javascript_coverage_gate.py",
         "scripts/ci/strix_quick_gate.sh",
     ]
-    changed_files_file = tmp_path / "changed-files.txt"
+    changed_files_file = runner_temp / "opencode-changed-files.txt"
     changed_files_file.write_text(
         "\n".join(required_paths if changed_files is None else changed_files) + "\n",
         encoding="utf-8",
+    )
+    manifest_digest = seal_artifacts(
+        runner_temp,
+        head_sha="2" * 40,
+        run_id="central-fallback-test",
+        run_attempt="1",
+        paths=(changed_files_file,),
     )
     output_file = tmp_path / "selected-output.json"
     github_output = tmp_path / "github-output.txt"
@@ -241,6 +298,7 @@ def run_central_fallback(
             "GITHUB_OUTPUT": bash_path(github_output),
             "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "2" * 40,
+            "OPENCODE_ARTIFACT_MANIFEST_SHA256": manifest_digest,
             "OPENCODE_CHANGED_FILES_FILE": bash_path(changed_files_file),
             "OPENCODE_MODEL_CANDIDATES": "",
             "OPENCODE_OUTPUT_FILE": bash_path(output_file),
@@ -271,8 +329,9 @@ def test_central_fallback_emits_structured_adversarial_approval(tmp_path: Path) 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "valid current-head APPROVE control block" in result.stdout
-    assert "review_model=central-current-head-adversarial-harness" in github_output.read_text(
-        encoding="utf-8"
+    assert (
+        "review_model=central-current-head-adversarial-harness"
+        in github_output.read_text(encoding="utf-8")
     )
     assert "review_status=success" in github_output.read_text(encoding="utf-8")
     assert "test_github_gpt5_runtime_cap_preserves_queue_budget" in uv_log.read_text(
@@ -282,9 +341,9 @@ def test_central_fallback_emits_structured_adversarial_approval(tmp_path: Path) 
     assert control["result"] == "APPROVE"
     assert control["adversarial_validation"]["status"] == "passed"
     assert len(control["adversarial_validation"]["probes"]) == 3
-    assert {probe["outcome"] for probe in control["adversarial_validation"]["probes"]} == {
-        "falsified"
-    }
+    assert {
+        probe["outcome"] for probe in control["adversarial_validation"]["probes"]
+    } == {"falsified"}
     for probe in control["adversarial_validation"]["probes"]:
         assert (
             adversarial_evidence_rejection_reason(
@@ -293,12 +352,15 @@ def test_central_fallback_emits_structured_adversarial_approval(tmp_path: Path) 
             )
             is None
         )
-    assert "bash scripts/ci/test_strix_quick_gate.sh" in control[
-        "adversarial_validation"
-    ]["probes"][2]["evidence"]
+    assert (
+        "bash scripts/ci/test_strix_quick_gate.sh"
+        in control["adversarial_validation"]["probes"][2]["evidence"]
+    )
 
 
-def test_central_fallback_fails_closed_when_required_scope_is_missing(tmp_path: Path) -> None:
+def test_central_fallback_fails_closed_when_required_scope_is_missing(
+    tmp_path: Path,
+) -> None:
     """A central-looking change cannot use the harness without every reviewed core path."""
     result, output_file, github_output, uv_log = run_central_fallback(
         tmp_path,
@@ -306,13 +368,18 @@ def test_central_fallback_fails_closed_when_required_scope_is_missing(tmp_path: 
     )
 
     assert result.returncode == 1
-    assert "required current-head path scripts/ci/javascript_coverage_gate.py is not changed" in result.stdout
+    assert (
+        "required current-head path scripts/ci/javascript_coverage_gate.py is not changed"
+        in result.stdout
+    )
     assert "review_status=exhausted" in github_output.read_text(encoding="utf-8")
     assert output_file.read_text(encoding="utf-8") == ""
     assert not uv_log.exists()
 
 
-def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: Path) -> None:
+def test_failed_provider_logs_bounded_reason_and_redacts_credentials(
+    tmp_path: Path,
+) -> None:
     """Provider JSON/stderr reasons remain useful without leaking credentials."""
     fake_bearer_token = "secret" + "-value"
     fake_openai_token = "sk" + "-dangerous123456"
@@ -331,7 +398,10 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(tmp_path: P
     )
 
     assert result.returncode == 1
-    assert "OpenCode provider failure detail: json: ProviderAuthError: HTTP 401" in result.stdout
+    assert (
+        "OpenCode provider failure detail: json: ProviderAuthError: HTTP 401"
+        in result.stdout
+    )
     assert "OpenCode provider failure detail: stderr: request failed" in result.stdout
     assert result.stdout.count("[REDACTED]") >= 3
     assert fake_bearer_token not in result.stdout
@@ -461,7 +531,10 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
         "for 21 changed file(s); max-cycles=0."
     ) in result.stdout
     assert "OpenCode model pool reached configured max cycle count" not in result.stdout
-    assert "OpenCode model pool exhausted before producing a valid control conclusion." in result.stdout
+    assert (
+        "OpenCode model pool exhausted before producing a valid control conclusion."
+        in result.stdout
+    )
 
 
 def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
@@ -490,7 +563,9 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     assert run_timeout <= remaining_budget <= 30
 
 
-def test_github_models_openai_prompt_references_evidence_without_inlining(tmp_path: Path) -> None:
+def test_github_models_openai_prompt_references_evidence_without_inlining(
+    tmp_path: Path,
+) -> None:
     """Small-request GitHub Models OpenAI candidates keep evidence as files."""
     prompt_capture = tmp_path / "captured-prompt.md"
     evidence_excerpt = "UNIQUE_CURRENT_HEAD_EVIDENCE_PACKET"

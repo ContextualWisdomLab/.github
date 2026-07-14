@@ -78,6 +78,51 @@ assert_file_not_contains() {
 	fi
 }
 
+seal_opencode_test_artifacts() {
+	local runner_temp="$1"
+	local head_sha="$2"
+	local run_id="$3"
+	local run_attempt="$4"
+	shift 4
+
+	OPENCODE_ARTIFACT_MANIFEST_SHA256="$(
+		python3 - "$runner_temp" "$head_sha" "$run_id" "$run_attempt" "$@" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+runner_temp = Path(sys.argv[1]).resolve(strict=True)
+artifact_paths = [Path(value) for value in sys.argv[5:]]
+digests = {}
+for path in artifact_paths:
+    resolved = path.resolve(strict=True)
+    if resolved.parent != runner_temp or not resolved.is_file() or resolved.stat().st_size <= 0:
+        raise SystemExit(f"unsafe OpenCode test artifact: {path.name}")
+    resolved.chmod(0o600)
+    digests[resolved.name] = hashlib.sha256(resolved.read_bytes()).hexdigest()
+
+manifest = runner_temp / "opencode-artifact-manifest.json"
+manifest.write_text(
+    json.dumps(
+        {
+            "schema": 1,
+            "head_sha": sys.argv[2],
+            "run_id": sys.argv[3],
+            "run_attempt": sys.argv[4],
+            "artifacts": digests,
+        },
+        sort_keys=True,
+    ),
+    encoding="utf-8",
+)
+manifest.chmod(0o600)
+print(hashlib.sha256(manifest.read_bytes()).hexdigest())
+PY
+	)"
+	export OPENCODE_ARTIFACT_MANIFEST_SHA256
+}
+
 assert_workflow_uses_are_sha_pinned() {
 	local workflow_file="$1"
 	local message="$2"
@@ -637,6 +682,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'git -C "$OPENCODE_SOURCE_WORKDIR" diff --unified=12 --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA"' "opencode review evidence includes focused hunks from the PR merge base"
 	assert_file_contains "$workflow_file" 'mapfile -t focused_hunk_paths <"$OPENCODE_CHANGED_FILES_FILE"' "opencode review evidence reuses the captured safe changed-file list for focused hunks"
 	assert_file_contains "$workflow_file" 'awk '\''NF > 0 && $0 !~ /^\// && $0 !~ /(^|\/)\.\.($|\/)/ { print }'\'' >"$OPENCODE_CHANGED_FILES_FILE"' "opencode review evidence stores only path-safe changed files"
+	assert_file_contains "$workflow_file" "id: seal_artifacts" "opencode workflow exposes the trusted artifact-manifest digest as an immutable prior-step output"
+	assert_file_contains "$workflow_file" 'output.write(f"manifest_sha256={manifest_digest}\n")' "opencode workflow publishes the exact artifact-manifest digest"
+	assert_file_contains "$workflow_file" 'OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}' "opencode normalizer and approval steps receive the trusted manifest digest"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" "OPENCODE_ARTIFACT_MANIFEST_SHA256" "opencode normalizer rejects same-runner manifest tampering"
 	assert_file_contains "$workflow_file" "inspect the PR head and available changed-file evidence directly" "opencode focused hunk fallback does not depend on changed-files.txt existing"
 	assert_file_contains "$workflow_file" '-- "${focused_hunk_paths[@]}"' "opencode review evidence passes dynamic changed paths to git diff"
 	assert_file_contains "$workflow_file" "do not return file-inaccessible findings" "opencode review prompt forbids placeholder inaccessible-file findings when hunks are present"
@@ -1361,13 +1410,14 @@ assert_opencode_review_normalizer_accepts_transcript_json() {
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
-	changed_files_file="$tmp_dir/changed-files.txt"
+	changed_files_file="$tmp_dir/opencode-changed-files.txt"
 
 	cat >"$changed_files_file" <<'EOF'
 .github/workflows/opencode-review.yml
 scripts/ci/opencode_review_normalize_output.py
 scripts/ci/test_strix_quick_gate.sh
 EOF
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
@@ -1376,7 +1426,7 @@ OpenCode transcript text before the review control block.
 EOF
 
 	set +e
-	OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
+	RUNNER_TEMP="$tmp_dir" OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
 		python3 "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" \
 		"abc123" "42" "1" "$output_file" >"$tmp_dir/normalize.out" 2>"$tmp_dir/normalize.err"
 	rc=$?
@@ -1388,7 +1438,7 @@ EOF
 
 	set +e
 	gate_result="$(
-		OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
+		RUNNER_TEMP="$tmp_dir" OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
 			bash "$REPO_ROOT/scripts/ci/opencode_review_approve_gate.sh" \
 			"abc123" "42" "1" "$output_file"
 	)"
@@ -1414,7 +1464,7 @@ assert_opencode_review_publish_body_discards_trailing_model_prose() {
 	output_file="$tmp_dir/opencode-output.md"
 	normalized_json="$tmp_dir/control.json"
 	comment_body_file="$tmp_dir/comment-body.md"
-	changed_files_file="$tmp_dir/changed-files.txt"
+	changed_files_file="$tmp_dir/opencode-changed-files.txt"
 	sentinel="<!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->"
 
 	cat >"$changed_files_file" <<'EOF'
@@ -1422,6 +1472,7 @@ assert_opencode_review_publish_body_discards_trailing_model_prose() {
 scripts/ci/opencode_review_normalize_output.py
 scripts/ci/test_strix_quick_gate.sh
 EOF
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	cat >"$output_file" <<'EOF'
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
@@ -1434,10 +1485,11 @@ But that is not meticulous.
 
 We should request changes.
 EOF
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	set +e
 	gate_result="$(
-		OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
+		RUNNER_TEMP="$tmp_dir" OPENCODE_CHANGED_FILES_FILE="$changed_files_file" \
 			bash "$REPO_ROOT/scripts/ci/opencode_review_approve_gate.sh" \
 			"abc123" "42" "1" "$output_file" "$normalized_json"
 	)"
@@ -1464,10 +1516,23 @@ EOF
 assert_opencode_review_gate_rejects_missing_structural_exploration_approval() {
 	local tmp_dir
 	local output_file
+	local changed_files_file
+	local RUNNER_TEMP
+	local OPENCODE_CHANGED_FILES_FILE
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
+	changed_files_file="$tmp_dir/opencode-changed-files.txt"
+	RUNNER_TEMP="$tmp_dir"
+	OPENCODE_CHANGED_FILES_FILE="$changed_files_file"
+	export RUNNER_TEMP OPENCODE_CHANGED_FILES_FILE
+	cat >"$changed_files_file" <<'EOF'
+.github/workflows/opencode-review.yml
+scripts/ci/opencode_review_normalize_output.py
+scripts/ci/test_strix_quick_gate.sh
+EOF
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
@@ -1537,10 +1602,19 @@ EOF
 assert_opencode_review_gate_rejects_unmeasured_coverage_approval() {
 	local tmp_dir
 	local output_file
+	local changed_files_file
+	local RUNNER_TEMP
+	local OPENCODE_CHANGED_FILES_FILE
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
+	changed_files_file="$tmp_dir/opencode-changed-files.txt"
+	RUNNER_TEMP="$tmp_dir"
+	OPENCODE_CHANGED_FILES_FILE="$changed_files_file"
+	export RUNNER_TEMP OPENCODE_CHANGED_FILES_FILE
+	printf '%s\n' '.github/workflows/opencode-review.yml' >"$changed_files_file"
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
@@ -1611,10 +1685,14 @@ EOF
 assert_opencode_review_gate_rejects_no_changes_approval() {
 	local tmp_dir
 	local output_file
+	local RUNNER_TEMP
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
+	RUNNER_TEMP="$tmp_dir"
+	export RUNNER_TEMP
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1"
 
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
@@ -1658,11 +1736,17 @@ assert_opencode_review_gate_rejects_approve_without_changed_file_evidence() {
 	local tmp_dir
 	local output_file
 	local changed_files_file
+	local RUNNER_TEMP
+	local OPENCODE_CHANGED_FILES_FILE
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
-	changed_files_file="$tmp_dir/changed-files.txt"
+	changed_files_file="$tmp_dir/opencode-changed-files.txt"
+	RUNNER_TEMP="$tmp_dir"
+	OPENCODE_CHANGED_FILES_FILE="$changed_files_file"
+	export RUNNER_TEMP OPENCODE_CHANGED_FILES_FILE
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1"
 
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
@@ -1719,6 +1803,7 @@ EOF
 scripts/ci/opencode_review_normalize_output.py
 scripts/ci/test_strix_quick_gate.sh
 EOF
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	cat >"$output_file" <<'EOF'
 OpenCode transcript text before the review control block.
@@ -1773,10 +1858,14 @@ EOF
 assert_opencode_review_gate_rejects_line_zero_findings() {
 	local tmp_dir
 	local output_file
+	local RUNNER_TEMP
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
+	RUNNER_TEMP="$tmp_dir"
+	export RUNNER_TEMP
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1"
 
 	cat >"$output_file" <<'EOF'
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
@@ -1827,10 +1916,14 @@ EOF
 assert_opencode_review_gate_rejects_placeholder_findings() {
 	local tmp_dir
 	local output_file
+	local RUNNER_TEMP
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
+	RUNNER_TEMP="$tmp_dir"
+	export RUNNER_TEMP
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1"
 
 	cat >"$output_file" <<'EOF'
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
@@ -1858,11 +1951,20 @@ assert_opencode_review_gate_rejects_non_source_backed_findings() {
 	local tmp_dir
 	local output_file
 	local stderr_file
+	local changed_files_file
+	local RUNNER_TEMP
+	local OPENCODE_CHANGED_FILES_FILE
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
 	stderr_file="$tmp_dir/gate.err"
+	changed_files_file="$tmp_dir/opencode-changed-files.txt"
+	RUNNER_TEMP="$tmp_dir"
+	OPENCODE_CHANGED_FILES_FILE="$changed_files_file"
+	export RUNNER_TEMP OPENCODE_CHANGED_FILES_FILE
+	printf '%s\n' 'scripts/ci/opencode_review_approve_gate.sh' >"$changed_files_file"
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1" "$changed_files_file"
 
 	cat >"$output_file" <<'EOF'
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
@@ -1890,10 +1992,14 @@ EOF
 assert_opencode_review_gate_rejects_generic_failed_check_deflection() {
 	local tmp_dir
 	local output_file
+	local RUNNER_TEMP
 	local rc
 	local gate_result
 	tmp_dir="$(mktemp -d)"
 	output_file="$tmp_dir/opencode-output.md"
+	RUNNER_TEMP="$tmp_dir"
+	export RUNNER_TEMP
+	seal_opencode_test_artifacts "$tmp_dir" "abc123" "42" "1"
 
 	cat >"$output_file" <<'EOF'
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->
