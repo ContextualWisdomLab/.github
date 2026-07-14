@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -156,7 +157,11 @@ def run_failed_model(
         '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
         '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
         '  sleep "${FAKE_OPENCODE_HANG_SECONDS:-0}"\n'
-        "  exit 1\n"
+        '  exit "${FAKE_OPENCODE_RUN_EXIT:-1}"\n'
+        "fi\n"
+        'if [ "${1:-}" = export ]; then\n'
+        '  [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
+        '  exit "${FAKE_OPENCODE_EXPORT_EXIT:-0}"\n'
         "fi\n"
         "printf 'unexpected fake opencode command: %s\\n' \"$*\" >&2\n"
         "exit 2\n",
@@ -352,7 +357,7 @@ def test_central_fallback_fails_closed_when_required_scope_is_missing(
 def test_failed_provider_logs_bounded_reason_and_redacts_credentials(
     tmp_path: Path,
 ) -> None:
-    """Provider JSON/stderr reasons remain useful without leaking credentials."""
+    """Provider failures expose only a fixed class and bounded byte counts."""
     fake_bearer_token = "secret" + "-value"
     fake_openai_token = "sk" + "-dangerous123456"
     fake_github_token = "github" + "_pat_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
@@ -371,11 +376,14 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(
 
     assert result.returncode == 1
     assert (
-        "OpenCode provider failure detail: json: ProviderAuthError: HTTP 401"
+        "OpenCode provider failure metadata: class=authentication-or-permission"
         in result.stdout
     )
-    assert "OpenCode provider failure detail: stderr: request failed" in result.stdout
-    assert result.stdout.count("[REDACTED]") >= 3
+    assert "json-bytes=" in result.stdout
+    assert "stderr-bytes=" in result.stdout
+    assert "provider-controlled content suppressed" in result.stdout
+    assert "ProviderAuthError" not in result.stdout
+    assert "request failed" not in result.stdout
     assert fake_bearer_token not in result.stdout
     assert fake_openai_token not in result.stdout
     assert fake_github_token not in result.stdout
@@ -388,9 +396,114 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
 
     assert result.returncode == 1
     assert (
-        "OpenCode provider failure supplied no structured JSON or stderr reason "
-        "(json-bytes=0, stderr-bytes=0)."
+        "OpenCode provider failure metadata: class=no-provider-detail "
+        "json-bytes=0 stderr-bytes=0; provider-controlled content suppressed."
     ) in result.stdout
+
+
+def secret_payload() -> tuple[str, tuple[str, ...]]:
+    """Return a fake credential plus fragments used to detect partial disclosure."""
+    parts = ("github", "_pat_", "THISMUSTNEVERLEAK123456789")
+    return "".join(parts), parts
+
+
+def assert_secret_absent(result: subprocess.CompletedProcess[str], secret: str) -> None:
+    """Assert that raw, fragmented, and encoded credentials are absent from logs."""
+    combined = result.stdout + result.stderr
+    encoded = base64.b64encode(secret.encode()).decode()
+    assert secret not in combined
+    assert encoded not in combined
+    for part in ("github_pat_", "THISMUSTNEVERLEAK123456789"):
+        assert part not in combined
+
+
+def test_success_without_session_suppresses_provider_artifact_content(
+    tmp_path: Path,
+) -> None:
+    """A malformed successful run logs metadata without replaying its JSON stream."""
+    secret, parts = secret_payload()
+    encoded = base64.b64encode(secret.encode()).decode()
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {"type": "text", "text": f"{parts[0]}{parts[1]}{parts[2]} {encoded}"}
+        ),
+        extra_env={"FAKE_OPENCODE_RUN_EXIT": "0"},
+    )
+
+    assert result.returncode == 1
+    assert "JSON output did not include a session id" in result.stdout
+    assert "kind=sessionless-json" in result.stdout
+    assert "provider-controlled content suppressed" in result.stdout
+    assert_secret_absent(result, secret)
+
+
+def test_empty_assistant_export_suppresses_provider_artifact_content(
+    tmp_path: Path,
+) -> None:
+    """An empty assistant export cannot echo arbitrary provider-controlled fields."""
+    secret, _ = secret_payload()
+    encoded = base64.b64encode(secret.encode()).decode()
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {"messages": [], "provider_debug": f"{secret} {encoded}"}
+            ),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "session export did not include assistant text" in result.stdout
+    assert "kind=assistant-empty-export" in result.stdout
+    assert_secret_absent(result, secret)
+
+
+def test_invalid_control_output_suppresses_assistant_content(tmp_path: Path) -> None:
+    """Rejected assistant text is summarized without writing it to Actions logs."""
+    secret, _ = secret_payload()
+    encoded = base64.b64encode(secret.encode()).decode()
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": f"invalid control {secret} {encoded}",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "output did not include a valid control conclusion" in result.stdout
+    assert "kind=invalid-control-output" in result.stdout
+    assert_secret_absent(result, secret)
+
+
+def test_runner_never_cats_rejected_provider_artifacts() -> None:
+    """Provider-controlled rejection files are never replayed with direct cat calls."""
+    runner = RUNNER.read_text(encoding="utf-8")
+    for variable in (
+        "opencode_json_file",
+        "opencode_stderr_file",
+        "opencode_export_file",
+        "candidate_output_file",
+    ):
+        assert f'cat "${variable}"' not in runner
 
 
 @pytest.mark.parametrize(

@@ -253,84 +253,48 @@ has_fatal_provider_error_event() {
 emit_sanitized_opencode_failure_detail() {
 	local opencode_json_file="$1"
 	local opencode_stderr_file="$2"
-	local detail_file json_bytes stderr_bytes
+	local json_bytes stderr_bytes failure_class
 
-	detail_file="$(mktemp)"
 	json_bytes=0
 	stderr_bytes=0
 	if [ -s "$opencode_json_file" ]; then
 		json_bytes="$(wc -c <"$opencode_json_file" | tr -d ' ')"
-		{
-			tail -n 200 "$opencode_json_file" |
-				python3 -c '
-import json
-import sys
-
-
-def strings_from_payload(payload):
-    error = payload.get("error") if isinstance(payload, dict) else None
-    if isinstance(error, str) and error:
-        yield error
-    elif isinstance(error, dict):
-        parts = []
-        for key in ("name", "message"):
-            value = error.get(key)
-            if isinstance(value, str) and value:
-                parts.append(value)
-        data = error.get("data")
-        if isinstance(data, dict):
-            for key in ("message", "responseBody"):
-                value = data.get(key)
-                if isinstance(value, str) and value:
-                    parts.append(value)
-        elif isinstance(data, str) and data:
-            parts.append(data)
-        if parts:
-            yield ": ".join(parts)
-    if isinstance(payload, dict):
-        for key in ("message",):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                yield value
-        data = payload.get("data")
-        if isinstance(data, dict):
-            value = data.get("message")
-            if isinstance(value, str) and value:
-                yield value
-
-
-for line in sys.stdin:
-    try:
-        parsed = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    for text in strings_from_payload(parsed):
-        print(text)
-' 2>/dev/null |
-				head -n 16 |
-				sed 's/^/json: /' >>"$detail_file"
-		} || true
 	fi
 	if [ -s "$opencode_stderr_file" ]; then
 		stderr_bytes="$(wc -c <"$opencode_stderr_file" | tr -d ' ')"
-		tail -n 40 "$opencode_stderr_file" | sed 's/^/stderr: /' >>"$detail_file"
 	fi
 
-	if [ -s "$detail_file" ]; then
-		perl -pe '
-			s/\bBearer\s+[A-Za-z0-9._~+\/=:-]+/Bearer [REDACTED]/ig;
-			s/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/[REDACTED]/g;
-			s/\bsk-[A-Za-z0-9_-]{6,}/[REDACTED]/g;
-			s/((?:api[_-]?key|authorization|token|secret|password)\s*[":=]\s*)[^,\s;]+/${1}[REDACTED]/ig;
-			s/\b[A-Za-z0-9_+\/=.-]{32,}\b/[REDACTED]/g;
-			s/[\x00-\x08\x0B-\x1F\x7F]/?/g;
-		' "$detail_file" |
-			awk 'NF && !seen[$0]++ { if (length($0) > 500) $0 = substr($0, 1, 500) "..."; print "OpenCode provider failure detail: " $0; if (++count >= 8) exit }'
+	failure_class="unclassified"
+	if grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="context-window"
+	elif grep -Eiq 'budget limit|insufficient_quota|quota exceeded' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="quota-or-budget"
+	elif grep -Eiq 'rate.?limit|too many requests|(^|[^0-9])429([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="rate-limit"
+	elif grep -Eiq 'permission denied|authentication|authorization|(^|[^0-9])(401|403)([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="authentication-or-permission"
+	elif grep -Eiq 'timed? ?out|timeout' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="timeout"
+	elif [ "$json_bytes" -gt 0 ] || [ "$stderr_bytes" -gt 0 ]; then
+		failure_class="provider-error"
 	else
-		printf 'OpenCode provider failure supplied no structured JSON or stderr reason (json-bytes=%s, stderr-bytes=%s).\n' \
-			"$json_bytes" "$stderr_bytes"
+		failure_class="no-provider-detail"
 	fi
-	rm -f "$detail_file"
+	printf 'OpenCode provider failure metadata: class=%s json-bytes=%s stderr-bytes=%s; provider-controlled content suppressed.\n' \
+		"$failure_class" "$json_bytes" "$stderr_bytes"
+}
+
+emit_rejected_opencode_artifact_metadata() {
+	local artifact_kind="$1"
+	local artifact_file="$2"
+	local artifact_bytes=0 artifact_lines=0
+
+	if [ -f "$artifact_file" ]; then
+		artifact_bytes="$(wc -c <"$artifact_file" | tr -d ' ')"
+		artifact_lines="$(wc -l <"$artifact_file" | tr -d ' ')"
+	fi
+	printf 'OpenCode rejected provider artifact metadata: kind=%s bytes=%s lines=%s; provider-controlled content suppressed.\n' \
+		"$artifact_kind" "$artifact_bytes" "$artifact_lines"
 }
 
 is_direct_openai_candidate() {
@@ -454,7 +418,7 @@ run_one_model_attempt() {
 	session_id="$(jq -r 'select(.type == "step_start") | .sessionID' "$opencode_json_file" | tail -n 1)"
 	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
-		cat "$opencode_json_file"
+		emit_rejected_opencode_artifact_metadata "sessionless-json" "$opencode_json_file"
 		if is_fatal_provider_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
@@ -471,12 +435,12 @@ run_one_model_attempt() {
 	jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$candidate_output_file"
 	if [ ! -s "$candidate_output_file" ]; then
 		printf 'OpenCode %s attempt %s/%s session export did not include assistant text.\n' "$model_candidate" "$attempt" "$attempts"
-		cat "$opencode_export_file"
+		emit_rejected_opencode_artifact_metadata "assistant-empty-export" "$opencode_export_file"
 		return 1
 	fi
 	if ! normalize_opencode_output "$candidate_output_file"; then
 		printf 'OpenCode %s attempt %s/%s output did not include a valid control conclusion.\n' "$model_candidate" "$attempt" "$attempts"
-		cat "$candidate_output_file"
+		emit_rejected_opencode_artifact_metadata "invalid-control-output" "$candidate_output_file"
 		return 1
 	fi
 	return 0

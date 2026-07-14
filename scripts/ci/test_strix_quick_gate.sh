@@ -549,12 +549,15 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "scripts/ci/codegraph-package/package-lock.json" "opencode review workflow installs CodeGraph from the committed lockfile"
 	if ! jq -e '
 		.packages["node_modules/@colbymchenry/codegraph"]
-		| .version == "0.9.9" and (.integrity | startswith("sha512-"))
+		| .version == "1.4.1" and (.integrity | startswith("sha512-"))
 	' "$REPO_ROOT/scripts/ci/codegraph-package/package-lock.json" >/dev/null; then
-		record_failure "opencode review CodeGraph lockfile pins version 0.9.9 with integrity"
+		record_failure "opencode review CodeGraph lockfile pins version 1.4.1 with integrity"
 	fi
 	assert_file_contains "$workflow_file" '"$CODEGRAPH_BIN" explore' "opencode review precomputes structural evidence outside the model process"
-	assert_file_not_contains "$workflow_file" "@colbymchenry/codegraph@0.9.9 serve --mcp" "opencode review must not fetch CodeGraph again for MCP"
+	assert_file_contains "$workflow_file" '"$CODEGRAPH_BIN" --version' "opencode review logs the exact trusted CodeGraph version"
+	assert_file_contains "$workflow_file" 'cat "$codegraph_status" >&2' "opencode review exposes CodeGraph status failures in the job log"
+	assert_file_contains "$workflow_file" 'cat "$codegraph_raw" >&2' "opencode review exposes CodeGraph exploration failures in the job log"
+	assert_file_not_contains "$workflow_file" "serve --mcp" "opencode review must not fetch or launch CodeGraph again for MCP"
 	assert_file_not_contains "$workflow_file" "https://mcp.deepwiki.com/mcp" "opencode review does not expose remote MCP to the model"
 	assert_file_not_contains "$workflow_file" "@upstash/context7-mcp@3.1.0" "opencode review does not install Context7 at runtime"
 	assert_file_not_contains "$workflow_file" "@guhcostan/web-search-mcp@1.0.5" "opencode review does not install web-search MCP at runtime"
@@ -654,8 +657,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" '"openai/o4-mini"' "opencode config declares OpenAI o4-mini fallback"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OpenCode %s attempt %s/%s failed with exit %s.' "opencode review logs per-model retry attempts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "emit_sanitized_opencode_failure_detail" "opencode review logs a bounded provider reason after each failed attempt"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode provider failure detail" "opencode review labels provider failure reasons in the check log"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "[REDACTED]" "opencode provider failure logging redacts credential-like values"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode provider failure metadata" "opencode review labels provider failure classes in the check log"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "provider-controlled content suppressed" "opencode provider failure logging suppresses credential-bearing content"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'cat "$opencode_json_file"' "opencode review never replays provider JSON to the check log"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'cat "$opencode_export_file"' "opencode review never replays provider exports to the check log"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'cat "$candidate_output_file"' "opencode review never replays rejected assistant output to the check log"
 	assert_file_not_contains "$workflow_file" 'case "$opencode_run_status" in' "opencode review retries timeout-class model failures instead of immediately abandoning that model"
 	assert_file_contains "$workflow_file" '"ci-review-fallback"' "opencode review workflow declares a dedicated fallback agent"
 	assert_file_contains "$workflow_file" '"steps": 150' "opencode review fallback agent has enough bounded steps to conclude after MCP inspection"
@@ -1649,7 +1655,8 @@ EOF
 	rc=$?
 	set -e
 
-	assert_equals "0" "$rc" "opencode normalizer accepts evidence-backed no-source coverage approvals"
+	assert_equals "4" "$rc" "opencode normalizer rejects no-source coverage claims for source-like changes"
+	assert_file_contains "$tmp_dir/normalize-no-source.err" "NO_CONCLUSION" "opencode normalizer exposes the contradictory no-source coverage rejection"
 
 	cat >"$output_file" <<'EOF'
 <!-- opencode-review-gate head_sha=abc123 run_id=42 run_attempt=1 -->

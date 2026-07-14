@@ -642,6 +642,7 @@ def adversarial_validation_error(
 
     changed_files = current_changed_files()
     confirmed_locations: set[tuple[str, int]] = set()
+    probe_identities: set[tuple[str, int, str, str, str, str]] = set()
     for index, probe in enumerate(probes, start=1):
         if not isinstance(probe, dict):
             return f"adversarial probe {index} must be an object"
@@ -692,6 +693,20 @@ def adversarial_validation_error(
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
             return f"adversarial probe {index} outcome must be falsified or confirmed"
+        probe_identity = (
+            path,
+            line,
+            " ".join(str(probe["hypothesis"]).split()).casefold(),
+            " ".join(str(probe["attack_or_counterexample"]).split()).casefold(),
+            " ".join(probe_evidence.split()).casefold(),
+            outcome,
+        )
+        if probe_identity in probe_identities:
+            return (
+                f"adversarial probe {index} duplicates an earlier probe after "
+                "canonical normalization"
+            )
+        probe_identities.add(probe_identity)
         if outcome == "confirmed":
             confirmed_locations.add((path, line))
 
@@ -757,13 +772,6 @@ def contradicts_changed_file_kinds(reason: str, summary: str) -> bool:
         return False
 
     combined = f"{reason}\n{summary}".casefold()
-    combined_for_kind_claims = combined.replace(
-        "no supported changed source files or package manifests",
-        "",
-    ).replace(
-        "no supported source files or package manifests",
-        "",
-    )
     has_source_like_change = any(
         changed_file_is_source_like(path) for path in changed_files
     )
@@ -771,11 +779,11 @@ def contradicts_changed_file_kinds(reason: str, summary: str) -> bool:
         changed_file_is_test_like(path) for path in changed_files
     )
     if has_source_like_change and any(
-        phrase in combined_for_kind_claims for phrase in SOURCE_KIND_FALSE_PHRASES
+        phrase in combined for phrase in SOURCE_KIND_FALSE_PHRASES
     ):
         return True
     if has_source_like_change and any(
-        phrase in combined_for_kind_claims for phrase in EXECUTABLE_KIND_FALSE_PHRASES
+        phrase in combined for phrase in EXECUTABLE_KIND_FALSE_PHRASES
     ):
         return True
     if has_test_like_change and any(
@@ -865,7 +873,9 @@ def coverage_section_is_valid(section: str) -> bool:
         "no supported source files or package manifests" in section
         or "no supported changed source files or package manifests" in section
     ):
-        return True
+        return not any(
+            changed_file_is_source_like(path) for path in current_changed_files()
+        )
     if any(phrase in section for phrase in COVERAGE_FAILURE_PHRASES):
         return False
     if "supported repository test suites passed" in section:
@@ -1307,28 +1317,14 @@ def valid_control(
     return normalized
 
 
-def extract_dicts(obj: Any) -> list[Any]:
-    """Iteratively extract all dictionaries from a JSON-like object."""
-    results = []
-    stack = [obj]
-    while stack:
-        current = stack.pop()
-        if isinstance(current, dict):
-            results.append(current)
-            stack.extend(reversed(current.values()))
-        elif isinstance(current, list):
-            stack.extend(reversed(current))
-    return results
-
-
 def iter_json_objects(text: str) -> list[Any]:
-    """Extract JSON objects from raw OpenCode output that may include prose."""
+    """Extract top-level JSON values without promoting nested control objects."""
     decoder = json.JSONDecoder()
     values: list[Any] = []
 
     try:
-        # Fast path for pure JSON payloads; avoid scanning and duplicate decodes.
-        return extract_dicts(json.loads(text))
+        # Fast path for pure JSON payloads; preserve the single top-level value.
+        return [json.loads(text)]
     except json.JSONDecodeError:
         # OpenCode exports may contain prose around the JSON control object.
         pass
@@ -1346,7 +1342,7 @@ def iter_json_objects(text: str) -> list[Any]:
             continue
         try:
             value, new_index = decoder.raw_decode(text, index)
-            values.extend(extract_dicts(value))
+            values.append(value)
             # ⚡ Bolt: Advance index to avoid O(N^2) redundant parsing of nested JSON blocks
             index = new_index
             continue
@@ -1355,6 +1351,21 @@ def iter_json_objects(text: str) -> list[Any]:
         index += 1
 
     return values
+
+
+def current_run_control_candidate(
+    value: Any,
+    expected_head_sha: str,
+    expected_run_id: str,
+    expected_run_attempt: str,
+) -> bool:
+    """Return whether a top-level value claims the exact current workflow run."""
+    return bool(
+        isinstance(value, dict)
+        and value.get("head_sha") == expected_head_sha
+        and value.get("run_id") == expected_run_id
+        and value.get("run_attempt") == expected_run_attempt
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -1385,63 +1396,75 @@ def main(argv: list[str]) -> int:
         print(f"cannot read OpenCode output file: {exc}", file=sys.stderr)
         return 65
 
-    candidate_rejections: list[str] = []
-    for value in iter_json_objects(output_text):
-        rejection_reasons: list[str] = []
-        control = valid_control(
+    values = iter_json_objects(output_text)
+    current_candidates = [
+        value
+        for value in values
+        if current_run_control_candidate(
             value,
-            expected_head_sha=expected_head_sha,
-            expected_run_id=expected_run_id,
-            expected_run_attempt=expected_run_attempt,
-            rejection_reasons=rejection_reasons,
+            expected_head_sha,
+            expected_run_id,
+            expected_run_attempt,
         )
-        if control is None:
-            if isinstance(value, dict) and all(
-                field in value
-                for field in ("head_sha", "run_id", "run_attempt", "result")
-            ):
-                candidate_rejections.append(
-                    rejection_reasons[0]
-                    if rejection_reasons
-                    else "candidate failed an unspecified control validation"
-                )
-            continue
+    ]
+    if len(current_candidates) != 1:
+        if current_candidates:
+            print(
+                "CONTROL_REJECTED: expected exactly one top-level current-run "
+                f"control candidate, found {len(current_candidates)}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "CONTROL_REJECTED: no top-level current-run control JSON object was found",
+                file=sys.stderr,
+            )
+        print("NO_CONCLUSION", file=sys.stderr)
+        return 4
 
-        normalized_json = (
-            json.dumps(control, separators=(",", ":"), ensure_ascii=False)
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("&", "\\u0026")
+    rejection_reasons: list[str] = []
+    control = valid_control(
+        current_candidates[0],
+        expected_head_sha=expected_head_sha,
+        expected_run_id=expected_run_id,
+        expected_run_attempt=expected_run_attempt,
+        rejection_reasons=rejection_reasons,
+    )
+    if control is None:
+        detail = (
+            rejection_reasons[0]
+            if rejection_reasons
+            else "candidate failed an unspecified control validation"
         )
-        output_file.write_text(
-            "\n".join(
-                [
-                    (
-                        "<!-- opencode-review-gate "
-                        f"head_sha={expected_head_sha} "
-                        f"run_id={expected_run_id} "
-                        f"run_attempt={expected_run_attempt} -->"
-                    ),
-                    "",
-                    "<!-- opencode-review-control-v1",
-                    normalized_json,
-                    "-->",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return 0
+        print(f"CONTROL_REJECTED candidate=1: {detail}", file=sys.stderr)
+        print("NO_CONCLUSION", file=sys.stderr)
+        return 4
 
-    for index, reason in enumerate(candidate_rejections, start=1):
-        print(f"CONTROL_REJECTED candidate={index}: {reason}", file=sys.stderr)
-    if not candidate_rejections:
-        print(
-            "CONTROL_REJECTED: no current-run control JSON object was found",
-            file=sys.stderr,
-        )
-    print("NO_CONCLUSION", file=sys.stderr)
-    return 4
+    normalized_json = (
+        json.dumps(control, separators=(",", ":"), ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    output_file.write_text(
+        "\n".join(
+            [
+                (
+                    "<!-- opencode-review-gate "
+                    f"head_sha={expected_head_sha} "
+                    f"run_id={expected_run_id} "
+                    f"run_attempt={expected_run_attempt} -->"
+                ),
+                "",
+                "<!-- opencode-review-control-v1",
+                normalized_json,
+                "-->",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

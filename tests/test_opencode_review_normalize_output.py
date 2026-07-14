@@ -278,6 +278,68 @@ def test_adversarial_validation_requires_two_falsified_material_probes(
     )
 
 
+def test_adversarial_validation_rejects_duplicate_probe_evidence(
+    tmp_path, monkeypatch
+):
+    """Repeated probes cannot satisfy the independent material-change minimum."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    probe = adversarial_validation()["probes"][0]
+    duplicate = control(
+        adversarial_validation={
+            "status": "passed",
+            "probes": [probe, dict(probe)],
+            "residual_risk": "External provider behavior remains monitored.",
+        }
+    )
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            duplicate,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert "duplicates an earlier probe" in reasons[-1]
+
+
+def test_adversarial_validation_canonicalizes_case_and_whitespace_for_duplicates(
+    tmp_path, monkeypatch
+):
+    """Cosmetic text drift cannot disguise reused adversarial evidence."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    probe = adversarial_validation()["probes"][0]
+    disguised = dict(probe)
+    disguised["hypothesis"] = f"  {probe['hypothesis'].upper()}  "
+    disguised["attack_or_counterexample"] = (
+        f"  {probe['attack_or_counterexample'].upper()}  "
+    )
+    disguised["evidence"] = "  " + probe["evidence"].replace(" ", "   ") + "  "
+    duplicate = control(
+        adversarial_validation={
+            "status": "passed",
+            "probes": [probe, disguised],
+            "residual_risk": "External provider behavior remains monitored.",
+        }
+    )
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            duplicate,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert "duplicates an earlier probe" in reasons[-1]
+
+
 def test_adversarial_request_changes_requires_confirmed_probe_at_finding(
     tmp_path, monkeypatch
 ):
@@ -1219,7 +1281,7 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     assert check_structural_approval(path) == 4
 
 
-def test_label_and_full_coverage_detection():
+def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
     assert norm.label_section(combined, "missing:") == ""
@@ -1235,7 +1297,16 @@ def test_label_and_full_coverage_detection():
         "coverage execution evidence proves 100% docstring coverage",
         "coverage execution evidence reports docstring coverage as not applicable because no supported changed source files or package manifests were found",
     )
+    assert not norm.mentions_full_coverage("", no_source_summary)
+    assert norm.contradicts_changed_file_kinds("", no_source_summary)
+
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text("README.md\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
     assert norm.mentions_full_coverage("", no_source_summary)
+    assert not norm.contradicts_changed_file_kinds("", no_source_summary)
     suite_passed_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
         "coverage execution evidence reports supported repository test suites passed",
@@ -2118,7 +2189,7 @@ M\tscripts/ci/example.py
     assert no_source_summary is not None
     assert "test coverage as not applicable" in no_source_summary
     assert "docstring coverage as not applicable" in no_source_summary
-    assert norm.mentions_full_coverage("", no_source_summary)
+    assert not norm.mentions_full_coverage("", no_source_summary)
 
     suite_passed_summary = norm.build_approval_repair_summary(
         "No blockers were found.",
@@ -2311,12 +2382,77 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects('prefix {"b": 2} suffix') == [{"b": 2}]
     assert norm.iter_json_objects('prefix {"wrapper": {"control": true}} suffix') == [
         {"wrapper": {"control": True}},
-        {"control": True},
     ]
     assert norm.iter_json_objects("prefix {  } suffix") == [{}]
     assert norm.iter_json_objects("prefix {not json}") == []
     assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
+
+
+@pytest.mark.parametrize("approve_first", [True, False])
+def test_main_rejects_conflicting_current_run_controls_without_rewriting(
+    tmp_path, capsys, approve_first
+):
+    """Control order cannot hide a contradictory current-run conclusion."""
+    approve = control()
+    request_changes = control(
+        result="REQUEST_CHANGES",
+        reason="A current-head defect requires a change.",
+        summary="A source-backed blocking defect was reproduced.",
+        findings=[finding()],
+    )
+    controls = [approve, request_changes]
+    if not approve_first:
+        controls.reverse()
+    original = "review prose\n" + "\n".join(json.dumps(item) for item in controls)
+    output = tmp_path / "conflicting-controls.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "expected exactly one top-level current-run control candidate" in (
+        capsys.readouterr().err
+    )
+
+
+def test_main_rejects_repeated_identical_current_run_controls(tmp_path, capsys):
+    """Repeating the same control cannot manufacture unambiguous evidence."""
+    encoded = json.dumps(control())
+    original = f"{encoded}\n{encoded}\n"
+    output = tmp_path / "duplicate-controls.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "found 2" in capsys.readouterr().err
+
+
+def test_main_rejects_nested_current_run_control_without_rewriting(tmp_path, capsys):
+    """A valid control nested in model prose is never promoted for publication."""
+    original = json.dumps({"review": "model prose", "control": control()})
+    output = tmp_path / "nested-control.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "no top-level current-run control" in capsys.readouterr().err
+
+
+def test_main_rejects_second_malformed_current_run_candidate(tmp_path, capsys):
+    """A malformed second current-run claim makes the provider stream ambiguous."""
+    malformed = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+        "result": "APPROVE",
+    }
+    original = f"{json.dumps(control())}\n{json.dumps(malformed)}\n"
+    output = tmp_path / "malformed-second-control.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "found 2" in capsys.readouterr().err
 
 
 def test_escapes_html_comment_breakout(tmp_path):

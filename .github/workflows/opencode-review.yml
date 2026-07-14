@@ -1897,24 +1897,33 @@ jobs:
           )
           CODEGRAPH_BIN="${CODEGRAPH_TRUSTED_ROOT}/node_modules/.bin/codegraph"
           test -x "$CODEGRAPH_BIN"
+          printf 'Using trusted CodeGraph CLI version %s.\n' "$("$CODEGRAPH_BIN" --version)"
           cd "$OPENCODE_SOURCE_WORKDIR"
           "$CODEGRAPH_BIN" init -i
+          codegraph_status="$(mktemp)"
           codegraph_raw="$(mktemp)"
           changed_scope="$(git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" | sed -n '1,80p' | tr '\n' ' ')"
+          if ! "$CODEGRAPH_BIN" status >"$codegraph_status" 2>&1; then
+            cat "$codegraph_status" >&2
+            echo "::error::CodeGraph status failed; approval evidence is incomplete."
+            rm -f "$codegraph_status" "$codegraph_raw"
+            exit 1
+          fi
+          if ! timeout 120s "$CODEGRAPH_BIN" explore \
+            "Review the blast radius, call paths, security boundaries, and focused tests for these current-head changed files: ${changed_scope}" \
+            >"$codegraph_raw" 2>&1; then
+            cat "$codegraph_raw" >&2
+            echo "::error::CodeGraph changed-scope exploration failed; approval evidence is incomplete."
+            rm -f "$codegraph_status" "$codegraph_raw"
+            exit 1
+          fi
           {
             printf '# Trusted CodeGraph current-head evidence\n\n'
-            "$CODEGRAPH_BIN" status
+            cat "$codegraph_status"
             printf '\n## Changed-scope exploration\n\n'
-            if ! timeout 120s "$CODEGRAPH_BIN" explore \
-              "Review the blast radius, call paths, security boundaries, and focused tests for these current-head changed files: ${changed_scope}" \
-              >"$codegraph_raw" 2>&1; then
-              cat "$codegraph_raw"
-              echo "::error::CodeGraph changed-scope exploration failed; approval evidence is incomplete."
-              exit 1
-            fi
             head -c 20000 "$codegraph_raw"
           } >"$CODEGRAPH_EVIDENCE_FILE"
-          rm -f "$codegraph_raw"
+          rm -f "$codegraph_status" "$codegraph_raw"
           test -s "$CODEGRAPH_EVIDENCE_FILE"
           cat "$CODEGRAPH_EVIDENCE_FILE"
 

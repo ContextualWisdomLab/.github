@@ -724,8 +724,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in model_pool_runner
     )
     assert "emit_sanitized_opencode_failure_detail" in model_pool_runner
-    assert "OpenCode provider failure detail" in model_pool_runner
-    assert "[REDACTED]" in model_pool_runner
+    assert "OpenCode provider failure metadata" in model_pool_runner
+    assert "provider-controlled content suppressed" in model_pool_runner
+    assert 'cat "$opencode_json_file"' not in model_pool_runner
+    assert 'cat "$opencode_export_file"' not in model_pool_runner
+    assert 'cat "$candidate_output_file"' not in model_pool_runner
     assert "approve_low_risk_review_fallback_after_model_exhaustion" not in workflow
     assert "changed_file_is_low_risk_review_fallback" not in workflow
     assert "approve_current_head_after_model_unavailable" not in workflow
@@ -1363,6 +1366,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert '--prefix "$CODEGRAPH_TRUSTED_ROOT"' not in codegraph_step
     assert '"$CODEGRAPH_BIN" init -i' in codegraph_step
     assert '"$CODEGRAPH_BIN" status' in codegraph_step
+    assert '"$CODEGRAPH_BIN" --version' in codegraph_step
+    assert 'cat "$codegraph_status" >&2' in codegraph_step
+    assert 'cat "$codegraph_raw" >&2' in codegraph_step
+    assert "CodeGraph status failed; approval evidence is incomplete." in codegraph_step
+    assert "CodeGraph changed-scope exploration failed; approval evidence is incomplete." in codegraph_step
     assert "npm install --ignore-scripts --no-save" not in codegraph_step
     assert 'npx -y "$CODEGRAPH_PACKAGE" init -i' not in codegraph_step
     isolated_step = target_job.split(
@@ -1370,14 +1378,14 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     )[1].split("\n      - name:", 1)[0]
     assert "CODEGRAPH_BIN:" not in isolated_step
     assert "CODEGRAPH_NO_DOWNLOAD=1 exec " not in isolated_step
-    assert "@colbymchenry/codegraph@0.9.9 serve --mcp" not in isolated_step
+    assert "serve --mcp" not in isolated_step
     package_lock = json.loads(
         Path("scripts/ci/codegraph-package/package-lock.json").read_text(
             encoding="utf-8"
         )
     )
     codegraph_package = package_lock["packages"]["node_modules/@colbymchenry/codegraph"]
-    assert codegraph_package["version"] == "0.9.9"
+    assert codegraph_package["version"] == "1.4.1"
     assert codegraph_package["integrity"].startswith("sha512-")
     assert (
         "Merge scheduler follow-up skipped after approval because no mutation credential was available"
