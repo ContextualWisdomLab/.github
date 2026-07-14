@@ -1,4 +1,9 @@
 name: Required OpenCode Review
+run-name: >-
+  Required OpenCode Review ${{ github.event.client_payload.target_repository ||
+  github.event.pull_request.base.repo.full_name || github.repository }}#${{
+  github.event.client_payload.pr_number || github.event.pull_request.number || 'event' }}@${{
+  github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.sha }}
 
 on:
   # Privileged review logic must be loaded from the protected base branch. A
@@ -6,46 +11,23 @@ on:
   # an in-repository branch rewrite steps before repository secrets are bound.
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request number to review
-        required: true
-        type: string
-      target_repository:
-        description: Repository that owns the pull request, in owner/name form
-        required: false
-        default: ""
-        type: string
-      pr_base_ref:
-        description: Pull request base branch
-        required: true
-        type: string
-      pr_base_sha:
-        description: Pull request base SHA
-        required: true
-        type: string
-      pr_head_ref:
-        description: Pull request head branch for current-head code-scanning verification
-        required: true
-        type: string
-      pr_head_sha:
-        description: Pull request head SHA
-        required: true
-        type: string
+  # repository_dispatch is evaluated only from the default branch. This keeps
+  # privileged retries from loading workflow code from a caller-selected ref.
+  repository_dispatch:
+    types: [opencode-review]
 
 concurrency:
-  # Include the event name so same-head workflow_dispatch evidence can run
+  # Include the event name so same-head repository_dispatch evidence can run
   # without cancelling the required pull_request_target review context.
   # PR-number scope still keeps stale runs replaced within each event class.
   group: >-
     opencode-review-${{ github.event_name }}-${{
     github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.target_repository ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository ||
     github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number) ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number ||
     github.run_id }}
   cancel-in-progress: true
 
@@ -62,7 +44,7 @@ jobs:
   validate-pr-metadata:
     name: validate-pr-metadata
     if: >-
-      github.event_name == 'workflow_dispatch'
+      github.event_name == 'repository_dispatch'
       || (
         github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
@@ -84,12 +66,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          SUPPLIED_BASE_REF: ${{ github.event.inputs.pr_base_ref || '' }}
-          SUPPLIED_BASE_SHA: ${{ github.event.inputs.pr_base_sha || '' }}
-          SUPPLIED_HEAD_REF: ${{ github.event.inputs.pr_head_ref || '' }}
-          SUPPLIED_HEAD_SHA: ${{ github.event.inputs.pr_head_sha || '' }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
+          SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
+          SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
+          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
         run: |
           set -euo pipefail
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
@@ -118,14 +100,14 @@ jobs:
             exit 1
           fi
 
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             mismatches=()
             [ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")
             [ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")
             [ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")
             [ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")
             if [ "${#mismatches[@]}" -gt 0 ]; then
-              printf '::error::workflow_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
+              printf '::error::repository_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
               exit 1
             fi
           fi
@@ -152,7 +134,7 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && (
-        github.event_name == 'workflow_dispatch'
+        github.event_name == 'repository_dispatch'
         || (
           github.event_name == 'pull_request_target'
           && github.event.action != 'closed'
@@ -169,7 +151,7 @@ jobs:
       - name: Exchange OpenCode app token for target repository coverage reads
         id: coverage_read_app_token
         if: >-
-          github.event_name == 'workflow_dispatch'
+          github.event_name == 'repository_dispatch'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.target_repository != github.repository
         env:
@@ -306,7 +288,7 @@ jobs:
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-source-tree.result != 'cancelled'
       && (
-        github.event_name == 'workflow_dispatch'
+        github.event_name == 'repository_dispatch'
         || (
           github.event_name == 'pull_request_target'
           && github.event.action != 'closed'
@@ -1518,7 +1500,7 @@ jobs:
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-evidence.result != 'cancelled'
       && (
-        github.event_name == 'workflow_dispatch'
+        github.event_name == 'repository_dispatch'
         || (
           github.event_name == 'pull_request_target'
           && github.event.action != 'closed'
@@ -1912,7 +1894,65 @@ jobs:
           (
             cd "$CODEGRAPH_TRUSTED_ROOT"
             npm ci --ignore-scripts --omit=dev --no-audit --no-fund
+            npm audit --package-lock-only --omit=dev --audit-level=moderate
           )
+          PATCHED_PICOMATCH_DIR="$CODEGRAPH_TRUSTED_ROOT/node_modules/picomatch"
+          patched_picomatch_version="$(
+            node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version)' \
+              "$PATCHED_PICOMATCH_DIR/package.json"
+          )"
+          if [ "$patched_picomatch_version" != "4.0.4" ]; then
+            echo "::error::Trusted CodeGraph hardening requires lock-pinned picomatch 4.0.4; found ${patched_picomatch_version:-missing}."
+            exit 1
+          fi
+
+          mapfile -t codegraph_platforms < <(
+            find "$CODEGRAPH_TRUSTED_ROOT/node_modules/@colbymchenry" \
+              -mindepth 1 -maxdepth 1 -type d -name 'codegraph-*' -print
+          )
+          hardened_bundle_count=0
+          for codegraph_platform in "${codegraph_platforms[@]}"; do
+            bundled_picomatch="$codegraph_platform/lib/node_modules/picomatch"
+            bundled_lock="$codegraph_platform/lib/node_modules/.package-lock.json"
+            [ -d "$bundled_picomatch" ] || continue
+            resolved_bundle="$(realpath "$bundled_picomatch")"
+            case "$resolved_bundle" in
+              "$CODEGRAPH_TRUSTED_ROOT"/node_modules/@colbymchenry/codegraph-*/lib/node_modules/picomatch) ;;
+              *)
+                echo "::error::Refusing to harden CodeGraph picomatch outside the trusted package root: $resolved_bundle"
+                exit 1
+                ;;
+            esac
+            if [ ! -f "$bundled_lock" ]; then
+              echo "::error::CodeGraph platform bundle is missing its nested dependency lock: $bundled_lock"
+              exit 1
+            fi
+
+            rm -rf "$bundled_picomatch"
+            mkdir -p "$bundled_picomatch"
+            cp -R "$PATCHED_PICOMATCH_DIR"/. "$bundled_picomatch"/
+            patched_lock="$(mktemp)"
+            jq --slurpfile trusted_lock "$CODEGRAPH_TRUSTED_ROOT/package-lock.json" \
+              '.packages["node_modules/picomatch"] = $trusted_lock[0].packages["node_modules/picomatch"]' \
+              "$bundled_lock" >"$patched_lock"
+            mv "$patched_lock" "$bundled_lock"
+
+            installed_version="$(
+              node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version)' \
+                "$bundled_picomatch/package.json"
+            )"
+            locked_version="$(jq -r '.packages["node_modules/picomatch"].version // empty' "$bundled_lock")"
+            if [ "$installed_version" != "4.0.4" ] || [ "$locked_version" != "4.0.4" ]; then
+              echo "::error::CodeGraph nested picomatch hardening failed for $codegraph_platform: installed=${installed_version:-missing} locked=${locked_version:-missing}."
+              exit 1
+            fi
+            hardened_bundle_count=$((hardened_bundle_count + 1))
+            printf 'Hardened CodeGraph platform bundle %s from vulnerable picomatch 4.0.3 to lock-pinned 4.0.4.\n' "$codegraph_platform"
+          done
+          if [ "$hardened_bundle_count" -lt 1 ]; then
+            echo "::error::No installed CodeGraph platform bundle exposed a nested picomatch package to harden."
+            exit 1
+          fi
           CODEGRAPH_BIN="${CODEGRAPH_TRUSTED_ROOT}/node_modules/.bin/codegraph"
           test -x "$CODEGRAPH_BIN"
           printf 'Using trusted CodeGraph CLI version %s.\n' "$("$CODEGRAPH_BIN" --version)"
@@ -2060,7 +2100,7 @@ jobs:
                     .[]
                     | select((.headSha // "") == env.HEAD_SHA)
                     | select((.workflowName // "") == "Strix Security Scan" or (.workflowName // "") == "Strix")
-                    | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+                    | select((.event // "") == "pull_request_target" or (.event // "") == "repository_dispatch")
                     | select((.status // "") != "completed")
                   ]
                   | length > 0
@@ -2158,7 +2198,7 @@ jobs:
               title="${PR_TITLE_FOR_LANGUAGE:-}"
               body="${PR_BODY_FOR_LANGUAGE:-}"
             else
-              # Fallback for cross-repository workflow_dispatch runs, where the
+              # Fallback for cross-repository repository_dispatch runs, where the
               # event payload has no pull_request: read title/body via the API,
               # retrying so a transient GitHub throttle does not drop the marker.
               attempt=1
@@ -2767,7 +2807,7 @@ jobs:
           test files. Never approve material workflow, script, source, config, package, or test changes with a
           reason or summary that says simple typo fix, string-only change, no verification needed, or no tests
           needed. If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker
-          until diagnosed. A successful same-head manual workflow_dispatch Strix run may supersede a stale failed
+          until diagnosed. A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed
           PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded
           failed checks with the exact target URL. Multiple Strix model reports must not be collapsed; preserve
           model name, report title, severity, endpoint, and Code Locations/path:line evidence. Full failed-check
@@ -2781,7 +2821,7 @@ jobs:
           Exact gate phrases: Coverage and Docstring coverage labels must cite Coverage execution evidence showing supported repository test suites passed.
           Exact gate phrases: or explicitly cite Coverage execution evidence as not applicable because no supported source files or package manifests were found.
           Exact gate phrases: If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker until diagnosed.
-          Exact gate phrases: A successful same-head manual workflow_dispatch Strix run may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
+          Exact gate phrases: A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
           Exact gate phrases: Full failed-check evidence, when collected, is available as failed-check-evidence.md.
           Exact gate phrases: Do not request changes with only a check URL, workflow name, or generic failure summary.
           Exact gate phrases: Failed-check findings must be line-specific and concrete.
@@ -2914,7 +2954,7 @@ jobs:
           test files. Never approve material workflow, script, source, config, package, or test changes with a
           reason or summary that says simple typo fix, string-only change, no verification needed, or no tests
           needed. If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker
-          until diagnosed. A successful same-head manual workflow_dispatch Strix run may supersede a stale failed
+          until diagnosed. A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed
           PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded
           failed checks with the exact target URL. Multiple Strix model reports must not be collapsed; preserve
           model name, report title, severity, endpoint, and Code Locations/path:line evidence. Full failed-check
@@ -2928,7 +2968,7 @@ jobs:
           Exact gate phrases: Coverage and Docstring coverage labels must cite Coverage execution evidence showing supported repository test suites passed.
           Exact gate phrases: or explicitly cite Coverage execution evidence as not applicable because no supported source files or package manifests were found.
           Exact gate phrases: If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker until diagnosed.
-          Exact gate phrases: A successful same-head manual workflow_dispatch Strix run may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
+          Exact gate phrases: A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
           Exact gate phrases: Full failed-check evidence, when collected, is available as failed-check-evidence.md.
           Exact gate phrases: Do not request changes with only a check URL, workflow name, or generic failure summary.
           Exact gate phrases: Failed-check findings must be line-specific and concrete.
@@ -4822,10 +4862,10 @@ jobs:
               } >>"$GITHUB_STEP_SUMMARY"
             fi
             printf '::error::%s: OpenCode did not change the pull request review state. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
-            if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
+            if [ "${GITHUB_EVENT_NAME:-}" = "repository_dispatch" ] &&
               [ -n "${GH_REPOSITORY:-}" ] &&
               [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
-              printf '::notice::Cross-repository workflow_dispatch review-tool failure for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
+              printf '::notice::Cross-repository repository_dispatch review-tool failure for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
               echo "::endgroup::"
               exit 0
             fi
@@ -4848,10 +4888,10 @@ jobs:
               } >>"$GITHUB_STEP_SUMMARY"
             fi
             printf '::error::%s: OpenCode review state unchanged; approval still pending. %s\n' "$result" "$(printf '%s' "$body" | head -n 1)"
-            if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
+            if [ "${GITHUB_EVENT_NAME:-}" = "repository_dispatch" ] &&
               [ -n "${GH_REPOSITORY:-}" ] &&
               [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
-              printf '::notice::Cross-repository workflow_dispatch approval hold for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
+              printf '::notice::Cross-repository repository_dispatch approval hold for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
               echo "::endgroup::"
               exit 0
             fi
@@ -5321,7 +5361,7 @@ jobs:
             }
 
             emit_known_missing_string_finding \
-              "github.event.inputs.strix_llm || 'openai/gpt-5'" \
+              "github.event.client_payload.strix_llm || 'openai/gpt-5'" \
               "Strix PR scans must default to GitHub Models GPT-5" \
               ".github/workflows/strix.yml" \
               "scripts/ci/test_strix_quick_gate.sh"
@@ -5618,7 +5658,7 @@ jobs:
               manual_strix_conclusion="$(printf '%s\n' "$manual_strix_run" | awk -F '\t' '{print $2}')"
               manual_strix_url="$(printf '%s\n' "$manual_strix_run" | awk -F '\t' '{print $3}')"
               if [ "$manual_strix_status" = "completed" ]; then
-                echo "Current-head manual workflow_dispatch Strix evidence completed with ${manual_strix_conclusion:-unknown}: ${manual_strix_url:-no-url}; not suppressing failed-check diagnosis."
+                echo "Current-head default-branch repository_dispatch Strix evidence completed with ${manual_strix_conclusion:-unknown}: ${manual_strix_url:-no-url}; not suppressing failed-check diagnosis."
                 return 1
               fi
 
@@ -5634,17 +5674,17 @@ jobs:
                 manual_strix_conclusion="$(printf '%s\n' "$manual_strix_run" | awk -F '\t' '{print $2}')"
                 manual_strix_url="$(printf '%s\n' "$manual_strix_run" | awk -F '\t' '{print $3}')"
                 if [ "$manual_strix_status" = "completed" ]; then
-                  echo "Current-head manual workflow_dispatch Strix evidence completed with ${manual_strix_conclusion:-unknown}: ${manual_strix_url:-no-url}; not suppressing failed-check diagnosis."
+                  echo "Current-head default-branch repository_dispatch Strix evidence completed with ${manual_strix_conclusion:-unknown}: ${manual_strix_url:-no-url}; not suppressing failed-check diagnosis."
                   return 1
                 fi
               fi
 
-              echo "::error::Strix failed in a trusted-base pull_request_target self-test, and same-head workflow_dispatch Strix evidence is still ${manual_strix_status:-pending} after waiting (wait status ${pending_wait_status}). Leaving the PR review unchanged until current-head Strix evidence completes."
+              echo "::error::Strix failed in a trusted-base pull_request_target self-test, and same-head repository_dispatch Strix evidence is still ${manual_strix_status:-pending} after waiting (wait status ${pending_wait_status}). Leaving the PR review unchanged until current-head Strix evidence completes."
               return 0
             fi
 
             # ponytail: self-modifying trusted workflows need same-head manual evidence until base catches up.
-            echo "::error::Strix failed in a trusted-base pull_request_target self-test that could not see this PR's OpenCode/Strix config changes. Leaving the PR review unchanged; rerun same-head workflow_dispatch Strix evidence or merge the trusted workflow update before approval."
+            echo "::error::Strix failed in a trusted-base pull_request_target self-test that could not see this PR's OpenCode/Strix config changes. Leaving the PR review unchanged; rerun same-head repository_dispatch Strix evidence or merge the trusted workflow update before approval."
             return 0
           }
 
@@ -5828,7 +5868,7 @@ jobs:
                   | ([
                       $runs[]
                       | select((.headSha // .head_sha // "") == $head_sha)
-                      | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+                      | select((.event // "") == "pull_request_target" or (.event // "") == "repository_dispatch")
                       | select((.status // "") == "completed")
                       | select((.conclusion // "" | ascii_downcase) == "success")
                       | (.databaseId // .id // 0)
@@ -5836,10 +5876,10 @@ jobs:
                   | $runs
                   | map(
                       select((.headSha // .head_sha // "") == $head_sha)
-                      | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+                      | select((.event // "") == "pull_request_target" or (.event // "") == "repository_dispatch")
                       | select((.status // "") == "completed")
                       | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
-                      | select(((.event // "") == "workflow_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
+                      | select(((.event // "") == "repository_dispatch" and (.conclusion // "" | ascii_downcase) == "cancelled") | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and $newest_success_run_id > 0) | not)
                       | select((.databaseId // .id // 0) > $newest_success_run_id)
                       | "- Strix Security Scan/strix workflow run: " + (.conclusion // "unknown") + (if (.url // .html_url // "") != "" then " (" + (.url // .html_url) + ")" else "" end)
@@ -5853,7 +5893,7 @@ jobs:
                   | ([
                       $runs[]
                       | select((.headSha // .head_sha // "") == $head_sha)
-                      | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+                      | select((.event // "") == "pull_request_target" or (.event // "") == "repository_dispatch")
                       | select((.status // "") == "completed")
                       | select((.conclusion // "" | ascii_downcase) == "success")
                       | (.databaseId // .id // 0)
@@ -5861,7 +5901,7 @@ jobs:
                   | $runs
                   | map(
                       select((.headSha // .head_sha // "") == $head_sha)
-                      | select((.event // "") == "pull_request_target" or (.event // "") == "workflow_dispatch")
+                      | select((.event // "") == "pull_request_target" or (.event // "") == "repository_dispatch")
                       | select((.status // "") != "completed")
                       | select((.databaseId // .id // 0) > $newest_success_run_id)
                       | "- Strix Security Scan/strix workflow run: " + (.status // "unknown") + (if (.url // .html_url // "") != "" then " (" + (.url // .html_url) + ")" else "" end)
@@ -5989,7 +6029,7 @@ jobs:
                 | sort_by(.created_at // "")
                 | last // empty
                 | select((.state // "" | ascii_downcase) == "success")
-                | select((.description // "") | contains("Manual workflow_dispatch Strix evidence passed"))
+                | select((.description // "") | contains("Default-branch repository_dispatch Strix evidence passed"))
                 | select((.target_url // "") | test("/actions/runs/[0-9]+"))
                 | .target_url
               '
@@ -6093,7 +6133,7 @@ jobs:
               [
                 .[]
                 | select((.headSha // .head_sha // "") == $head_sha)
-                | select((.event // "") == "workflow_dispatch")
+                | select((.event // "") == "repository_dispatch")
               ]
               | sort_by(.databaseId // .id // 0)
               | last // empty
@@ -7181,10 +7221,10 @@ jobs:
           esac
           echo "::endgroup::"
 
-      - name: Publish workflow_dispatch OpenCode status
+      - name: Publish repository_dispatch OpenCode status
         if: >-
           always()
-          && github.event_name == 'workflow_dispatch'
+          && github.event_name == 'repository_dispatch'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         continue-on-error: true
@@ -7200,12 +7240,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${PR_HEAD_SHA:-}" ]; then
-            echo "::warning::OpenCode workflow_dispatch status publication skipped because pr_head_sha was empty."
+            echo "::warning::OpenCode repository_dispatch status publication skipped because pr_head_sha was empty."
             exit 0
           fi
           if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
             [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ]; then
-            echo "::warning::OpenCode workflow_dispatch status publication skipped because only the same-repository github.token is available for cross-repository target ${GH_REPOSITORY}; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish this status."
+            echo "::warning::OpenCode repository_dispatch status publication skipped because only the same-repository github.token is available for cross-repository target ${GH_REPOSITORY}; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish this status."
             exit 0
           fi
 
@@ -7232,10 +7272,10 @@ jobs:
             state="$(jq -r '.state // "failure"' <<<"$decision_json")"
             description="$(jq -r '.description // "OpenCode live approval evidence validation failed."' <<<"$decision_json")"
           else
-            echo "::error::OpenCode workflow_dispatch status could not read the live pull request and complete review history; publishing failure."
+            echo "::error::OpenCode repository_dispatch status could not read the live pull request and complete review history; publishing failure."
           fi
 
-          printf 'Publishing OpenCode workflow_dispatch status context opencode-review for %s at %s with state=%s using %s token.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state" "${OPENCODE_STATUS_TOKEN_SOURCE:-configured}"
+          printf 'Publishing OpenCode repository_dispatch status context opencode-review for %s at %s with state=%s using %s token.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state" "${OPENCODE_STATUS_TOKEN_SOURCE:-configured}"
           gh api -X POST "repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
             -f state="$state" \
             -f context="opencode-review" \
@@ -7356,7 +7396,7 @@ jobs:
     # deferred same-head retry is safe and needs no human. GitHub Actions has no
     # delayed-dispatch primitive, so this job holds a small runner for one
     # backoff window and then re-dispatches the central same-head review through
-    # the same trusted workflow_dispatch path the merge scheduler uses. It
+    # the same trusted repository_dispatch path the merge scheduler uses. It
     # retries once; outages longer than the backoff window stay owned by the
     # merge scheduler org-sweep heartbeat, which keeps re-dispatching the same
     # current head until a model produces a verdict.
@@ -7389,13 +7429,6 @@ jobs:
           # sweep's job.
           RETRY_DELAY_SECONDS: "300"
           CENTRAL_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          CENTRAL_WORKFLOW_FILE: opencode-review.yml
-          # The trusted ref of the CENTRAL workflow repository, not the target
-          # repository's default branch; develop-default target repositories
-          # still dispatch the central workflow from its own default branch,
-          # the same way the merge scheduler's SCHEDULER_REQUIRED_WORKFLOW_REF
-          # does.
-          CENTRAL_WORKFLOW_REF: main
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -7423,15 +7456,26 @@ jobs:
             exit 0
           fi
 
-          if ! GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh workflow run "$CENTRAL_WORKFLOW_FILE" \
-            --repo "$CENTRAL_WORKFLOW_REPOSITORY" \
-            --ref "$CENTRAL_WORKFLOW_REF" \
-            -f "target_repository=${GITHUB_REPOSITORY}" \
-            -f "pr_number=${PR_NUMBER}" \
-            -f "pr_base_ref=${PR_BASE_REF}" \
-            -f "pr_base_sha=${PR_BASE_SHA}" \
-            -f "pr_head_ref=${PR_HEAD_REF}" \
-            -f "pr_head_sha=${PR_HEAD_SHA}"; then
+          dispatch_payload="$(
+            jq -n \
+              --arg target_repository "$GITHUB_REPOSITORY" \
+              --argjson pr_number "$PR_NUMBER" \
+              --arg pr_base_ref "$PR_BASE_REF" \
+              --arg pr_base_sha "$PR_BASE_SHA" \
+              --arg pr_head_ref "$PR_HEAD_REF" \
+              --arg pr_head_sha "$PR_HEAD_SHA" \
+              '{event_type: "opencode-review", client_payload: {
+                target_repository: $target_repository,
+                pr_number: $pr_number,
+                pr_base_ref: $pr_base_ref,
+                pr_base_sha: $pr_base_sha,
+                pr_head_ref: $pr_head_ref,
+                pr_head_sha: $pr_head_sha
+              }}'
+          )"
+          if ! GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh api -X POST \
+            "repos/${CENTRAL_WORKFLOW_REPOSITORY}/dispatches" \
+            --input - <<<"$dispatch_payload"; then
             echo "::warning::Deferred exhausted-pool retry dispatch failed; the merge scheduler org sweep remains the retry path."
             exit 0
           fi

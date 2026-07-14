@@ -401,6 +401,25 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
     ) in result.stdout
 
 
+def test_backoff_environment_rejects_recursive_arithmetic_injection(
+    tmp_path: Path,
+) -> None:
+    """Do not evaluate attacker-controlled backoff text as Bash arithmetic."""
+    marker = tmp_path / "arithmetic-injection-ran"
+    result = run_failed_model(
+        tmp_path,
+        stderr_line="provider unavailable",
+        extra_env={
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": f"SECONDS[$(touch {marker})]",
+            "OPENCODE_BACKOFF_MAX_SECONDS": "0",
+        },
+    )
+
+    assert result.returncode != 0
+    assert not marker.exists()
+
+
 def secret_payload() -> tuple[str, tuple[str, ...]]:
     """Return a fake credential plus fragments used to detect partial disclosure."""
     parts = ("github", "_pat_", "THISMUSTNEVERLEAK123456789")

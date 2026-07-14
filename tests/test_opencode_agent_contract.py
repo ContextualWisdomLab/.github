@@ -179,7 +179,7 @@ def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
 
     assert "canonical_ref:" not in workflow
     assert "INPUT_CANONICAL_REF" not in workflow
-    assert "github.event.inputs.canonical_ref" not in workflow
+    assert "github.event.client_payload.canonical_ref" not in workflow
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow
@@ -515,13 +515,13 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     """
     worker = Path(".github/workflows/pr-review-autofix.yml").read_text(encoding="utf-8")
 
-    assert "resolve_conflict:" in worker
-    assert "RESOLVE_CONFLICT: ${{ inputs.resolve_conflict }}" in worker
+    assert "types: [pr-review-autofix]" in worker
+    assert "RESOLVE_CONFLICT: ${{ github.event.client_payload.resolve_conflict || 'false' }}" in worker
     # The review-feedback fix steps do not run in conflict mode.
-    assert worker.count("if: inputs.resolve_conflict != 'true'") >= 3
+    assert worker.count("if: env.RESOLVE_CONFLICT != 'true'") >= 3
     # The dedicated conflict step exists and is fail-closed.
     assert "- name: Merge base branch and resolve conflicts with OpenCode" in worker
-    assert "if: inputs.resolve_conflict == 'true'" in worker
+    assert "if: env.RESOLVE_CONFLICT == 'true'" in worker
     assert 'git merge --no-commit --no-ff "$PR_BASE_SHA"' in worker
     assert re.search(
         r'grep -qi "conflict marker"[\s\S]{0,200}refusing to push[\s\S]{0,200}exit 1',
@@ -682,17 +682,19 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" not in workflow
     assert "publish stage performs no duplicate model-catalog pass" in workflow
-    concurrency_contract = workflow.split("permissions:", 1)[0]
+    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+        "permissions:", 1
+    )[0]
     assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
-    assert "github.event.inputs.pr_head_sha" not in concurrency_contract
+    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert "opencode-review-${{ github.event_name }}-" in concurrency_contract
     assert (
         "without cancelling the required pull_request_target review context"
         in concurrency_contract
     )
     assert (
-        "github.event.inputs.pr_number && format('pr-{0}', github.event.inputs.pr_number)"
+        "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)"
         in workflow
     )
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
@@ -989,7 +991,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "OpenCode model pool did not produce a successful current-head control block"
         in workflow
     )
-    assert "Cross-repository workflow_dispatch review-tool failure" in workflow
+    assert "Cross-repository repository_dispatch review-tool failure" in workflow
     assert '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' in workflow
     assert "Repeated current-head sections for models without file reads" in workflow
     assert "append_evidence_section" in workflow
@@ -1244,7 +1246,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "The scheduled organization sweep remains authoritative." in workflow
     assert (
         "github.event_name == 'pull_request_review' || "
-        "github.event_name == 'workflow_dispatch'" in workflow
+        "github.event_name == 'repository_dispatch'" in workflow
     )
 
 
@@ -1253,7 +1255,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
 
     assert "Run merge scheduler after approval" in workflow
-    assert "Publish workflow_dispatch OpenCode status" in workflow
+    assert "Publish repository_dispatch OpenCode status" in workflow
     assert "statuses: write" in workflow
     assert 'context="opencode-review"' in workflow
     assert "repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}" in workflow
@@ -1262,7 +1264,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "gh workflow run pr-review-merge-scheduler.yml" not in workflow
     assert "github.event_name == 'pull_request_target'" in workflow
     status_step = workflow.split(
-        "      - name: Publish workflow_dispatch OpenCode status", 1
+        "      - name: Publish repository_dispatch OpenCode status", 1
     )[1].split("      - name: Run merge scheduler after approval", 1)[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
@@ -1386,6 +1388,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "scripts/ci/codegraph-package/package-lock.json" in codegraph_step
     assert 'cd "$CODEGRAPH_TRUSTED_ROOT"' in codegraph_step
     assert "npm ci --ignore-scripts --omit=dev --no-audit --no-fund" in codegraph_step
+    assert "npm audit --package-lock-only --omit=dev --audit-level=moderate" in codegraph_step
+    assert 'patched_picomatch_version" != "4.0.4"' in codegraph_step
+    assert 'locked_version" != "4.0.4"' in codegraph_step
+    assert "Hardened CodeGraph platform bundle" in codegraph_step
     assert '--prefix "$CODEGRAPH_TRUSTED_ROOT"' not in codegraph_step
     assert '"$CODEGRAPH_BIN" init -i' in codegraph_step
     assert '"$CODEGRAPH_BIN" status' in codegraph_step
@@ -1413,6 +1419,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     codegraph_package = package_lock["packages"]["node_modules/@colbymchenry/codegraph"]
     assert codegraph_package["version"] == "1.4.1"
     assert codegraph_package["integrity"].startswith("sha512-")
+    picomatch_package = package_lock["packages"]["node_modules/picomatch"]
+    assert picomatch_package["version"] == "4.0.4"
+    assert picomatch_package["integrity"].startswith("sha512-")
     assert (
         "Merge scheduler follow-up skipped after approval because no mutation credential was available"
         in workflow
@@ -1433,7 +1442,7 @@ def test_opencode_pending_peer_checks_hold_blocks_required_workflow_until_approv
         "::error::%s: OpenCode review state unchanged; approval still pending."
         in hold_body
     )
-    assert "Cross-repository workflow_dispatch approval hold" in hold_body
+    assert "Cross-repository repository_dispatch approval hold" in hold_body
     assert "exit 1" in hold_body
     assert (
         'hold_approval_without_review "WAITING_FOR_CHECKS" "$(cat "$failed_check_review_body_file")"'
@@ -1455,7 +1464,7 @@ def test_opencode_strix_security_regressions_are_closed():
 
     assert "  validate-pr-metadata:\n" in workflow
     assert "^ContextualWisdomLab/[A-Za-z0-9_.-]+$" in workflow
-    assert "workflow_dispatch metadata does not match the live pull request" in workflow
+    assert "repository_dispatch metadata does not match the live pull request" in workflow
     assert "needs.validate-pr-metadata.outputs.base_sha" in workflow
     assert "needs.validate-pr-metadata.outputs.head_sha" in workflow
     assert "metadata changed before OIDC" in workflow
@@ -1652,7 +1661,7 @@ def test_opencode_review_language_signal_is_throttle_proof():
     assert '"PR_TITLE_FOR_LANGUAGE"' in context_script
     assert '"PR_BODY_FOR_LANGUAGE"' in context_script
 
-    # The gh pr view fallback (cross-repo workflow_dispatch) retries so a
+    # The gh pr view fallback (cross-repo repository_dispatch) retries so a
     # transient throttle does not drop the marker.
     assert re.search(
         r'while \[ "\$attempt" -le 3 \]; do[\s\S]{0,400}'

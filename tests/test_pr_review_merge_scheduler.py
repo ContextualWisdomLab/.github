@@ -796,8 +796,14 @@ def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monk
     monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
     monkeypatch.setattr(
         sched,
-        "stale_opencode_run_ids",
-        lambda repo, workflow, pr: [str(i) for i in range(sched.REST_MERGEABLE_STATE_WORKERS + 3)]
+        "active_opencode_run_refs",
+        lambda repo, workflow, pr: (
+            [],
+            [
+                ("owner/repo", str(i))
+                for i in range(sched.REST_MERGEABLE_STATE_WORKERS + 3)
+            ],
+        ),
     )
     cancelled = []
     monkeypatch.setattr(sched, "run_github_actions", cancelled.append)
@@ -1597,10 +1603,28 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[2] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
     assert calls[3][:4] == ["gh", "api", "-X", "PUT"]
     assert calls[3][-1] == f"expected_head_sha={head_sha}"
-    assert calls[4][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
+    assert calls[4][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[6][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[7][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+    assert calls[6] == [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/owner/repo/dispatches",
+        "--input",
+        "-",
+    ]
+    assert calls[7][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[8][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[9] == [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/owner/repo/dispatches",
+        "--input",
+        "-",
+    ]
     calls.clear()
 
     required_workflow_pr = make_pr(
@@ -1743,7 +1767,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
 
     def fake_run_with_env(args, *, stdin=None, env=None):
         calls.append((args, stdin, None if env is None else env.get("GH_TOKEN")))
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+        if "/actions/runs" in " ".join(args):
             return '{"workflow_runs": []}'
         return ""
 
@@ -1759,10 +1783,28 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
 
     assert [call[2] for call in calls] == ["workflow-actions-token"] * len(calls)
     assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
-    assert calls[1][0][:5] == ["gh", "workflow", "run", "Strix Security Scan", "--repo"]
+    assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[3][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[4][0][:5] == ["gh", "workflow", "run", "OpenCode Review", "--repo"]
+    assert calls[3][0] == [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/owner/repo/dispatches",
+        "--input",
+        "-",
+    ]
+    assert calls[4][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[6][0] == [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/owner/repo/dispatches",
+        "--input",
+        "-",
+    ]
 
 
 def test_missing_evidence_dispatch_uses_central_required_workflow_repository(monkeypatch):
@@ -1771,8 +1813,8 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     base_sha = "b" * 40
 
     def fake_run_with_env(args, *, stdin=None, env=None):
-        calls.append((args, None if env is None else env.get("GH_TOKEN")))
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+        calls.append((args, stdin, None if env is None else env.get("GH_TOKEN")))
+        if "/actions/runs" in " ".join(args):
             return '{"workflow_runs": []}'
         return ""
 
@@ -1787,46 +1829,57 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
-    strix_call = calls[0][0]
-    opencode_call = calls[-1][0]
+    dispatch_calls = [call for call in calls if call[0][-2:] == ["--input", "-"]]
+    strix_call = dispatch_calls[0][0]
+    opencode_call = dispatch_calls[1][0]
 
-    assert calls and all(call[1] == "workflow-actions-token" for call in calls)
-    assert strix_call[:7] == [
+    assert calls and all(call[2] == "workflow-actions-token" for call in calls)
+    assert strix_call == [
         "gh",
-        "workflow",
-        "run",
-        "Strix Security Scan",
-        "--repo",
-        "ContextualWisdomLab/.github",
-        "--ref",
+        "api",
+        "-X",
+        "POST",
+        "repos/ContextualWisdomLab/.github/dispatches",
+        "--input",
+        "-",
     ]
-    assert strix_call[7] == "main"
-    assert "-f" in strix_call
-    assert "target_repository=owner/repo" in strix_call
-    assert f"pr_base_sha={base_sha}" in strix_call
-    assert f"pr_head_sha={head_sha}" in strix_call
+    assert json.loads(dispatch_calls[0][1]) == {
+        "event_type": "strix-scan",
+        "client_payload": {
+            "target_repository": "owner/repo",
+            "pr_number": 1,
+            "pr_base_ref": "develop",
+            "pr_base_sha": base_sha,
+            "pr_head_sha": head_sha,
+        },
+    }
 
-    assert opencode_call[:7] == [
+    assert opencode_call == [
         "gh",
-        "workflow",
-        "run",
-        "OpenCode Review",
-        "--repo",
-        "ContextualWisdomLab/.github",
-        "--ref",
+        "api",
+        "-X",
+        "POST",
+        "repos/ContextualWisdomLab/.github/dispatches",
+        "--input",
+        "-",
     ]
-    assert opencode_call[7] == "main"
-    assert "target_repository=owner/repo" in opencode_call
-    assert "pr_base_ref=develop" in opencode_call
-    assert f"pr_base_sha={base_sha}" in opencode_call
-    assert "pr_head_ref=feature" in opencode_call
-    assert f"pr_head_sha={head_sha}" in opencode_call
+    assert json.loads(dispatch_calls[1][1]) == {
+        "event_type": "opencode-review",
+        "client_payload": {
+            "target_repository": "owner/repo",
+            "pr_number": 1,
+            "pr_base_ref": "develop",
+            "pr_base_sha": base_sha,
+            "pr_head_ref": "feature",
+            "pr_head_sha": head_sha,
+        },
+    }
 
 
 def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
 
     dispatched = []
     monkeypatch.setattr(
@@ -1843,7 +1896,7 @@ def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(
     missing_strix = inspect(make_pr())
     assert missing_strix.action == "wait"
     assert "current head has no completed Strix evidence" in missing_strix.reason
-    assert "no cross-repository workflow-dispatch credential" in missing_strix.reason
+    assert "no cross-repository repository-dispatch credential" in missing_strix.reason
 
     strix_complete = inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}))
     assert strix_complete.action == "wait"
@@ -1856,7 +1909,7 @@ def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(
 def test_stacked_pr_waits_for_central_required_workflow_without_dispatch_credential(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
 
     dispatched = []
     monkeypatch.setattr(
@@ -1870,7 +1923,7 @@ def test_stacked_pr_waits_for_central_required_workflow_without_dispatch_credent
     assert stacked.action == "wait"
     assert "stacked PR onto develop" in stacked.reason
     assert "OpenCode Review dispatch waits" in stacked.reason
-    assert "no cross-repository workflow-dispatch credential" in stacked.reason
+    assert "no cross-repository repository-dispatch credential" in stacked.reason
     assert dispatched == []
 
 
@@ -1889,15 +1942,15 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
 
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
     monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
-    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
 
-    monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", "true")
-    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
+    monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", "true")
+    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
 
 
-def test_same_repository_dispatch_token_unblocks_central_workflow_dispatch(monkeypatch):
+def test_same_repository_dispatch_token_unblocks_central_repository_dispatch(monkeypatch):
     """A runner token for the dispatch repository is a sufficient dispatch credential.
 
     The OpenCode app token has no Actions permission and no cross-repository PAT is
@@ -1905,20 +1958,20 @@ def test_same_repository_dispatch_token_unblocks_central_workflow_dispatch(monke
     needs current-head review evidence.
     """
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
     monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
 
-    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
+    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
 
     # A dispatch token for a DIFFERENT execution repository is not dispatch evidence.
     monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/naruon")
-    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
 
     # Same execution repository without a dispatch token still waits.
     monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
-    assert sched.workflow_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
 
 
 def test_scheduler_dispatch_env_prefers_distinct_dispatch_token(monkeypatch):
@@ -2018,28 +2071,41 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
 
 
-def test_dispatch_opencode_review_deduplicates_current_head_workflow_dispatch(monkeypatch, capsys):
+def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(monkeypatch, capsys):
     calls = []
     head_sha = "a" * 40
     current_dispatch = {
         "id": 9100,
         "name": "Required OpenCode Review",
-        "event": "workflow_dispatch",
-        "head_sha": head_sha,
+        "event": "repository_dispatch",
+        "head_sha": "default-branch-sha",
+        "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
         "pull_requests": [],
     }
 
     def fake_run(args, stdin=None):
         calls.append(args)
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+        if args[:5] == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/ContextualWisdomLab/.github/actions/runs",
+        ]:
             if "status=queued" in args:
                 return json.dumps({"workflow_runs": [current_dispatch]})
+            return json.dumps({"workflow_runs": []})
+        if "/actions/runs" in " ".join(args):
             return json.dumps({"workflow_runs": []})
         return ""
 
     monkeypatch.setattr(sched, "run", fake_run)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
 
     result = sched.dispatch_opencode_review(
         "owner/repo",
@@ -2049,8 +2115,119 @@ def test_dispatch_opencode_review_deduplicates_current_head_workflow_dispatch(mo
     )
 
     assert result == "already_running"
-    assert "active same-head workflow run(s) 9100" in capsys.readouterr().out
+    assert (
+        "active same-head workflow run(s) ContextualWisdomLab/.github@9100"
+        in capsys.readouterr().out
+    )
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
+
+
+def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
+    calls = []
+    head_sha = "a" * 40
+    stale_sha = "c" * 40
+    base_sha = "b" * 40
+    central_runs = [
+        {
+            "id": 9300,
+            "name": "Strix Security Scan",
+            "event": "repository_dispatch",
+            "head_sha": "default-branch-sha",
+            "display_title": f"Strix Security Scan owner/repo#1@{stale_sha}",
+            "pull_requests": [],
+        },
+        {
+            "id": 9301,
+            "name": "Strix Security Scan",
+            "event": "repository_dispatch",
+            "head_sha": "default-branch-sha",
+            "display_title": f"Strix Security Scan owner/repo#1@{head_sha}",
+            "pull_requests": [],
+        },
+    ]
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/ContextualWisdomLab/.github/actions/runs",
+        ]:
+            if "status=queued" in args:
+                return json.dumps({"workflow_runs": central_runs})
+            return json.dumps({"workflow_runs": []})
+        if "/actions/runs" in " ".join(args):
+            return json.dumps({"workflow_runs": []})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    result = sched.dispatch_strix_evidence(
+        "owner/repo",
+        "Strix Security Scan",
+        make_pr(baseRefOid=base_sha, headRefOid=head_sha),
+        dry_run=False,
+    )
+
+    assert result == "already_running"
+    assert [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/ContextualWisdomLab/.github/actions/runs/9300/force-cancel",
+    ] in calls
+    assert not any("9301/force-cancel" in " ".join(call) for call in calls)
+    assert not any(call[-2:] == ["--input", "-"] for call in calls)
+    assert (
+        "active same-head workflow run(s) ContextualWisdomLab/.github@9301"
+        in capsys.readouterr().out
+    )
+
+
+def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatch):
+    head_sha = "a" * 40
+    central_runs = [
+        {
+            "id": 9400,
+            "name": "Required OpenCode Review",
+            "event": "repository_dispatch",
+            "display_title": "Required OpenCode Review owner/repo#1@not-a-sha",
+            "pull_requests": [],
+        },
+        {
+            "id": 9401,
+            "name": "Required OpenCode Review",
+            "event": "pull_request_target",
+            "head_sha": head_sha,
+            "pull_requests": [{"number": 1}],
+        },
+    ]
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        return central_runs if repo == "ContextualWisdomLab/.github" else []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+    assert sched.force_cancel_workflow_runs("owner/repo", []) == {}
 
 
 def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
@@ -3427,7 +3604,7 @@ def test_post_update_branch_followup_dismisses_stale_approval_before_dispatch(mo
 def test_post_update_branch_followup_waits_for_central_strix_without_dispatch_credential(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
 
     dispatched = []
     original = make_pr(headRefOid="old-head")
@@ -3453,14 +3630,14 @@ def test_post_update_branch_followup_waits_for_central_strix_without_dispatch_cr
 
     assert "updated head new-head observed after update-branch" in note
     assert "Strix Security Scan dispatch waits" in note
-    assert "no cross-repository workflow-dispatch credential" in note
+    assert "no cross-repository repository-dispatch credential" in note
     assert dispatched == []
 
 
 def test_post_update_branch_followup_waits_for_central_opencode_without_dispatch_credential(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH", raising=False)
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
 
     dispatched = []
     original = make_pr(headRefOid="old-head")
@@ -3489,7 +3666,7 @@ def test_post_update_branch_followup_waits_for_central_opencode_without_dispatch
 
     assert "updated head new-head observed after update-branch" in note
     assert "OpenCode Review dispatch waits" in note
-    assert "no cross-repository workflow-dispatch credential" in note
+    assert "no cross-repository repository-dispatch credential" in note
     assert dispatched == []
 
 
@@ -3808,7 +3985,7 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
 
 
 def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch):
-    monkeypatch.setattr(sched, "workflow_dispatch_wait_reason", lambda repo, workflow: None)
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",

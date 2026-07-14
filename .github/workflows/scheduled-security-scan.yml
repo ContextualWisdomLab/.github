@@ -25,7 +25,8 @@ on:
     branches: [main, master, develop]
   schedule:
     - cron: "7 2 * * 1"
-  workflow_dispatch: {}
+  repository_dispatch:
+    types: [scheduled-security-scan]
 
 concurrency:
   group: scheduled-security-scan-${{ github.repository }}-${{ github.ref }}

@@ -956,8 +956,8 @@ extract_strix_failed_check_block "$EVIDENCE_FILE" "$strix_evidence_file"
 
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"github.event.inputs.strix_llm || 'openai/gpt-5'" \
-	"Strix PR scans must default to GitHub Models GPT-5" \
+	"github.event.client_payload.strix_llm || 'gpt-5.6-luna'" \
+	"Strix PR scans must default to direct OpenAI GPT-5.6 Luna" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"
 emit_known_missing_string_finding \

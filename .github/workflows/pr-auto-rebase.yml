@@ -50,33 +50,8 @@ on:
         required: false
         default: "main"
         type: string
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Print planned rebases without mutating branches
-        required: false
-        default: false
-        type: boolean
-      max_prs:
-        description: Maximum open PRs to inspect
-        required: false
-        default: "100"
-      max_per_run:
-        description: Maximum PRs to rebase per run (rate limit against CI re-run storms)
-        required: false
-        default: "10"
-      human_window_minutes:
-        description: Skip branches whose newest commit is a human commit within this many minutes
-        required: false
-        default: "30"
-      target_repository:
-        description: Repository to scan, in owner/name form; defaults to AUTO_REBASE_TARGET_REPOSITORY or this repository
-        required: false
-        default: ""
-      base_branch:
-        description: Base branch to scan; defaults to AUTO_REBASE_BASE_BRANCH or this repository default branch
-        required: false
-        default: ""
+  repository_dispatch:
+    types: [pr-auto-rebase]
   schedule:
     # Every 3 hours (offset off the hour). Deliberately NOT every few minutes:
     # each rebase re-triggers expensive required checks, so runs are bounded.
@@ -85,7 +60,7 @@ on:
 concurrency:
   # One auto-rebase pass per repository at a time. Do not cancel an in-flight
   # run: a cancelled run could interrupt a force-push mid-flight.
-  group: central-pr-auto-rebase-${{ inputs.target_repository || vars.AUTO_REBASE_TARGET_REPOSITORY || github.repository }}
+  group: central-pr-auto-rebase-${{ github.event.client_payload.target_repository || inputs.target_repository || vars.AUTO_REBASE_TARGET_REPOSITORY || github.repository }}
   cancel-in-progress: false
 
 permissions:
@@ -101,13 +76,13 @@ jobs:
       id-token: write        # exchange the OpenCode GitHub App token via OIDC
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      TARGET_REPOSITORY: ${{ inputs.target_repository || vars.AUTO_REBASE_TARGET_REPOSITORY || github.repository }}
-      DEFAULT_BRANCH: ${{ inputs.base_branch || vars.AUTO_REBASE_BASE_BRANCH || github.event.repository.default_branch }}
-      DRY_RUN: ${{ inputs.dry_run == true }}
-      MAX_PRS: ${{ inputs.max_prs || '100' }}
-      AUTO_REBASE_MAX_PER_RUN: ${{ inputs.max_per_run || vars.AUTO_REBASE_MAX_PER_RUN || '10' }}
-      AUTO_REBASE_HUMAN_WINDOW_MINUTES: ${{ inputs.human_window_minutes || vars.AUTO_REBASE_HUMAN_WINDOW_MINUTES || '30' }}
-      CANONICAL_REF: ${{ inputs.canonical_ref || 'main' }}
+      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || inputs.target_repository || vars.AUTO_REBASE_TARGET_REPOSITORY || github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.client_payload.base_branch || inputs.base_branch || vars.AUTO_REBASE_BASE_BRANCH || github.event.repository.default_branch }}
+      DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
+      MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
+      AUTO_REBASE_MAX_PER_RUN: ${{ github.event.client_payload.max_per_run || inputs.max_per_run || vars.AUTO_REBASE_MAX_PER_RUN || '10' }}
+      AUTO_REBASE_HUMAN_WINDOW_MINUTES: ${{ github.event.client_payload.human_window_minutes || inputs.human_window_minutes || vars.AUTO_REBASE_HUMAN_WINDOW_MINUTES || '30' }}
+      CANONICAL_REF: main
     steps:
       - name: Exchange OpenCode app token for cross-repo git writes
         id: scheduler_app_token

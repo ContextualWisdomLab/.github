@@ -32,7 +32,8 @@ on:
   # workflows ran on push + schedule).
   schedule:
     - cron: "17 3 * * 1"
-  workflow_dispatch: {}
+  repository_dispatch:
+    types: [python-security-scan]
 
 concurrency:
   group: python-security-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.ref }}

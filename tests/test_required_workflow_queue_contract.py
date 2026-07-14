@@ -31,7 +31,7 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
 
     assert workflow.count('default: "1"') >= 2
     assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
-    assert "SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH" in workflow
+    assert "SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH" in workflow
     assert (
         "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
         in workflow
@@ -44,7 +44,7 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     The OpenCode app installation has no Actions permission and no
     PR_REVIEW_MERGE_TOKEN / OPENCODE_APPROVE_TOKEN PAT is configured, so before
     this credential existed the org sweep deadlocked every PR needing current-head
-    review evidence with "no cross-repository workflow-dispatch credential". The
+    review evidence with "no cross-repository repository-dispatch credential". The
     scheduler and the sweep both run inside ContextualWisdomLab/.github — the same
     repository the required workflows are dispatched on — so the runner's own
     github.token (actions: write) must be passed through SCHEDULER_DISPATCH_TOKEN
@@ -54,6 +54,55 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 2
+
+
+def test_privileged_review_retries_use_default_branch_repository_dispatch() -> None:
+    """Privileged retries must never load workflow code from a selected ref."""
+    expected_types = {
+        "opencode-review.yml": "opencode-review",
+        "noema-review.yml": "noema-review",
+        "strix.yml": "strix-scan",
+        "pr-review-merge-scheduler.yml": "merge-scheduler",
+    }
+    for filename, event_type in expected_types.items():
+        workflow = workflow_text(filename)
+        trigger_contract = workflow.split("concurrency:", 1)[0]
+
+        assert "repository_dispatch:" in trigger_contract
+        assert f"types: [{event_type}]" in trigger_contract
+        assert "workflow_dispatch:" not in trigger_contract
+        assert "github.event.inputs" not in workflow
+        assert "github.event.client_payload" in workflow
+
+    scheduler = (
+        REPO_ROOT / "scripts" / "ci" / "pr_review_merge_scheduler.py"
+    ).read_text(encoding="utf-8")
+    assert 'f"repos/{dispatch_repo}/dispatches"' in scheduler
+    assert '"event_type": "opencode-review"' in scheduler
+    assert '"event_type": "strix-scan"' in scheduler
+
+    autofix_workflow = workflow_text("pr-review-autofix.yml")
+    assert "repository_dispatch:" in autofix_workflow
+    assert "types: [pr-review-autofix]" in autofix_workflow
+    assert "workflow_dispatch:" not in autofix_workflow
+    assert "github.event.client_payload" in autofix_workflow
+    autofix_scheduler = (
+        REPO_ROOT / "scripts" / "ci" / "pr_review_fix_scheduler.py"
+    ).read_text(encoding="utf-8")
+    assert 'f"repos/{dispatch_repo}/dispatches"' in autofix_scheduler
+    assert 'AUTOFIX_REPOSITORY_DISPATCH_TYPE = "pr-review-autofix"' in autofix_scheduler
+    assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
+
+
+def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
+    """Every central manual entrypoint must load code from the default branch."""
+    workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+    offenders = [
+        path.name
+        for path in workflow_files
+        if "workflow_dispatch:" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
 
 
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
@@ -67,7 +116,9 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         "scorecard-pr.yml",
     ):
         workflow = workflow_text(filename)
-        concurrency_contract = workflow.split("permissions:", 1)[0]
+        concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+            "permissions:", 1
+        )[0]
 
         assert "concurrency:" in workflow
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
@@ -114,23 +165,25 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
 
 def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     workflow = workflow_text("strix.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
+    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+        "permissions:", 1
+    )[0]
 
     assert "concurrency:" in workflow
-    assert "github.event.inputs.target_repository" in concurrency_contract
+    assert "github.event.client_payload.target_repository" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
     assert (
-        "strix-${{ github.event_name }}-${{ github.event.inputs.target_repository || "
+        "strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || "
         "github.event.pull_request.base.repo.full_name || github.repository }}"
     ) in concurrency_contract
     assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
-    assert "github.event.inputs.pr_number != '' && format('pr-{0}'," in workflow
+    assert "github.event.client_payload.pr_number != '' && format('pr-{0}'," in workflow
     assert "format('pr-{0}-{1}'" not in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
-    assert "github.event.inputs.pr_head_sha" not in concurrency_contract
+    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert "cancel-in-progress: true" in workflow
-    assert "manual workflow_dispatch evidence cannot cancel" in workflow
+    assert "default-branch repository_dispatch evidence cannot cancel" in workflow
     assert "PR-number scope keeps the queue on the current HEAD" in workflow
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"
@@ -195,7 +248,7 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 
         assert "canonical_ref:" not in workflow
         assert "INPUT_CANONICAL_REF" not in workflow
-        assert "github.event.inputs.canonical_ref" not in workflow
+        assert "github.event.client_payload.canonical_ref" not in workflow
         assert "inputs.canonical_ref" not in workflow
         assert "workflow_sha" in workflow
         if filename == "opencode-review.yml":
@@ -377,10 +430,10 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert '- cron: "*/15 * * * *"' in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
     assert "github.event.schedule == '*/15 * * * *'" in workflow
-    assert "inputs.org_sweep == true" in workflow
+    assert "github.event.client_payload.org_sweep == true" in workflow
     # The single-repository scan must not double-run on the sweep cron.
     assert "github.event.schedule != '*/15 * * * *'" in workflow
-    assert "inputs.org_sweep != true" in workflow
+    assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (
         "Organization queue sweep has no cross-repository mutation credential."
@@ -459,27 +512,30 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert (
-        "ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ inputs.review_dispatch_limit || "
+        "ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || "
         "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}"
     ) in workflow
     assert (
-        "STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || "
+        "STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || "
         "vars.STALE_OPENCODE_MINUTES || '90' }}"
     ) in workflow
     assert (
-        "ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
+        "ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
     ) in workflow
     assert (
-        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}" in workflow
+        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}"
+        in workflow
     )
     assert (
-        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ inputs.enable_auto_merge == true }}"
+        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}"
     ) in workflow
     assert (
-        "ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}" in workflow
+        "ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}"
+        in workflow
     )
     assert (
-        "ORG_SWEEP_UPDATE_BRANCHES: ${{ inputs.update_branches == true }}" in workflow
+        "ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}"
+        in workflow
     )
     assert 'if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then' in workflow
     assert 'if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then' in workflow

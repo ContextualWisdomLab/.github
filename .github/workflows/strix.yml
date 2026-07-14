@@ -1,4 +1,9 @@
 name: Strix Security Scan
+run-name: >-
+  Strix Security Scan ${{ github.event.client_payload.target_repository ||
+  github.event.pull_request.base.repo.full_name || github.repository }}#${{
+  github.event.client_payload.pr_number || github.event.pull_request.number || 'event' }}@${{
+  github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.sha }}
 
 on:
   push:
@@ -37,7 +42,7 @@ on:
     # cancel in progress because a pre-job cancellation leaves no scanner log to
     # review. Queue pressure should be handled by stale-run cleanup outside this
     # current-head evidence path. For PRs the merge scheduler manages, same-head
-    # Strix evidence is still forced at merge time via workflow_dispatch (which
+    # Strix evidence is still forced at merge time via repository_dispatch (which
     # paths-ignore does not affect), so merged code never loses evidence.
     paths-ignore:
       - '**/*.md'
@@ -57,39 +62,18 @@ on:
   schedule:
     # Weekly scan on protected branches (Mondays at 03:00 UTC).
     - cron: '0 3 * * 1'
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Optional pull request number for trusted PR-scope evidence
-        required: false
-        type: string
-      target_repository:
-        description: Optional repository that owns the pull request, in owner/name form
-        required: false
-        default: ""
-        type: string
-      pr_base_sha:
-        description: Optional pull request base SHA for trusted PR-scope evidence
-        required: false
-        type: string
-      pr_head_sha:
-        description: Optional pull request head SHA for trusted PR-scope evidence
-        required: false
-        type: string
-      strix_llm:
-        description: Optional Strix model override for manual evidence runs
-        required: false
-        default: gpt-5.6-luna
-        type: string
+  # Default-branch-only retry entrypoint; no caller-selected workflow ref.
+  repository_dispatch:
+    types: [strix-scan]
 
 concurrency:
-  # Include the event name so manual workflow_dispatch evidence cannot cancel
+  # Include the event name so default-branch repository_dispatch evidence cannot cancel
   # the required pull_request_target Strix context that branch protection reads.
   # PR-number scope keeps the queue on the current HEAD within each event class.
   group: >-
-    strix-${{ github.event_name }}-${{ github.event.inputs.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
-    github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '' && format('pr-{0}', github.event.inputs.pr_number) || github.ref }}
+    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) || github.ref }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
@@ -277,10 +261,11 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Materialize target workspace
+        if: github.event_name != 'repository_dispatch'
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.inputs.target_repository || github.repository }}
-          TARGET_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.inputs.pr_base_sha || github.sha }}
+          REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          TARGET_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
         run: |
           set -euo pipefail
           trusted_workspace="$RUNNER_TEMP/trusted-workspace"
@@ -291,17 +276,65 @@ jobs:
           git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$TARGET_WORKSPACE_SHA"
           git -C "$trusted_workspace" checkout --detach --quiet "$TARGET_WORKSPACE_SHA"
           git -C "$trusted_workspace" cat-file -e "$TARGET_WORKSPACE_SHA^{commit}"
-          {
-            echo "TRUSTED_WORKSPACE=$trusted_workspace"
-          } >> "$GITHUB_ENV"
+          echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
 
-      - name: Fetch pull request head for trusted scan
-        if: github.event_name == 'pull_request_target' || github.event.inputs.pr_number != ''
+      - name: Validate repository dispatch against live pull request metadata
+        if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.inputs.pr_number }}
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          REPOSITORY: ${{ github.event.client_payload.target_repository }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref }}
+          SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$SUPPLIED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$SUPPLIED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ -z "$SUPPLIED_BASE_REF" ]; then
+            echo "::error::repository_dispatch Strix metadata is incomplete or malformed."
+            exit 1
+          fi
+
+          pull_request_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_request_json")"
+          live_head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$pull_request_json")"
+          live_base_ref="$(jq -r '.base.ref // empty' <<<"$pull_request_json")"
+          live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          if [ "$live_state" != "open" ] ||
+            [ "$live_base_repository" != "$REPOSITORY" ] ||
+            [ "$live_head_repository" != "$REPOSITORY" ] ||
+            [ "$live_base_ref" != "$SUPPLIED_BASE_REF" ] ||
+            [ "$live_base_sha" != "$SUPPLIED_BASE_SHA" ] ||
+            [ "$live_head_sha" != "$SUPPLIED_HEAD_SHA" ]; then
+            printf '::error::repository_dispatch Strix metadata does not match live PR %s#%s. supplied base=%s/%s head=%s; live state=%s base_repo=%s base=%s/%s head_repo=%s head=%s.\n' \
+              "$REPOSITORY" "$PR_NUMBER" "$SUPPLIED_BASE_REF" "$SUPPLIED_BASE_SHA" "$SUPPLIED_HEAD_SHA" \
+              "${live_state:-missing}" "${live_base_repository:-missing}" "${live_base_ref:-missing}" "${live_base_sha:-missing}" \
+              "${live_head_repository:-missing}" "${live_head_sha:-missing}"
+            exit 1
+          fi
+
+          trusted_workspace="$RUNNER_TEMP/trusted-workspace"
+          mkdir -p "$trusted_workspace"
+          git init -q "$trusted_workspace"
+          gh auth setup-git
+          git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
+          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$live_base_sha"
+          git -C "$trusted_workspace" checkout --detach --quiet "$live_base_sha"
+          git -C "$trusted_workspace" cat-file -e "$live_base_sha^{commit}"
+          echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
+
+      - name: Fetch pull request head for trusted scan
+        if: github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != ''
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number }}
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
         run: |
           set -euo pipefail
           if [ -z "$PR_NUMBER" ] || [ -z "$PR_HEAD_SHA" ]; then
@@ -397,7 +430,7 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'gpt-5.6-luna' }}
+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'gpt-5.6-luna' }}
           STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_VERTEX_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -582,7 +615,7 @@ jobs:
       - name: Prepare Strix model input file
         if: steps.gate.outputs.enabled == 'true'
         env:
-          STRIX_MODEL: ${{ github.event.inputs.strix_llm || 'gpt-5.6-luna' }}
+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'gpt-5.6-luna' }}
         run: |
           umask 077
           strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
@@ -643,7 +676,7 @@ jobs:
           CLOUDSDK_PROJECT: ${{ env.CLOUDSDK_PROJECT }}
           VERTEXAI_LOCATION: ${{ secrets.VERTEX_LOCATION || 'us-central1' }}
           VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION || 'us-central1' }}
-          STRIX_TARGET_PATH: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && '__PR_SCOPE__' || './' }}
+          STRIX_TARGET_PATH: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '__PR_SCOPE__' || './' }}
           STRIX_SOURCE_DIRS: ". backend frontend"
           STRIX_REASONING_EFFORT: high
           STRIX_LLM_MAX_RETRIES: 1
@@ -659,12 +692,12 @@ jobs:
           YARN_ENABLE_SCRIPTS: "false"
           BUN_CONFIG_IGNORE_SCRIPTS: "true"
           STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
-          STRIX_DISABLE_PR_SCOPING: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && '0' || '1' }}
-          GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && github.token || '' }}
-          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.inputs.pr_number }}
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.inputs.pr_base_sha }}
-          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
-          IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.inputs.pr_number != '') && 'true' || 'false' }}
+          STRIX_DISABLE_PR_SCOPING: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '0' || '1' }}
+          GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && github.token || '' }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number }}
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
+          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
+          IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
         run: |
           budget_suffix="TIME""OUT"
           process_budget_seconds="600"
@@ -722,7 +755,7 @@ jobs:
       - name: Collect Strix reports for artifact upload
         if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
         env:
-          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.inputs.pr_head_sha }}
+          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/strix_runs"
@@ -755,14 +788,14 @@ jobs:
           retention-days: 5
 
       - name: Publish same-head manual Strix status
-        if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
+        if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
-          GITHUB_STATUS_TOKEN: ${{ (github.event.inputs.target_repository == '' || github.event.inputs.target_repository == github.repository) && github.token || '' }}
+          GITHUB_STATUS_TOKEN: ${{ (github.event.client_payload.target_repository == '' || github.event.client_payload.target_repository == github.repository) && github.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
-          PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
+          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}
+          PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
           STRIX_RESULT: ${{ job.status }}
         run: |
           set -euo pipefail
@@ -774,15 +807,15 @@ jobs:
           case "$STRIX_RESULT" in
             success)
               state="success"
-              description="Manual workflow_dispatch Strix evidence passed"
+              description="Default-branch repository_dispatch Strix evidence passed"
               ;;
             failure|cancelled|skipped)
               state="failure"
-              description="Manual workflow_dispatch Strix evidence failed"
+              description="Default-branch repository_dispatch Strix evidence failed"
               ;;
             *)
               state="error"
-              description="Manual workflow_dispatch Strix evidence inconclusive"
+              description="Default-branch repository_dispatch Strix evidence inconclusive"
               ;;
           esac
 
@@ -834,7 +867,7 @@ jobs:
   publish-manual-pr-evidence-status:
     name: publish-manual-pr-evidence-status
     needs: strix
-    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.pr_head_sha != '' }}
+    if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -911,8 +944,8 @@ jobs:
           GITHUB_STATUS_READ_TOKEN: ${{ github.token }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          TARGET_REPOSITORY: ${{ github.event.inputs.target_repository || github.repository }}
-          PR_HEAD_SHA: ${{ github.event.inputs.pr_head_sha }}
+          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}
+          PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
           STRIX_RESULT: ${{ needs.strix.result }}
         run: |
           set -euo pipefail
@@ -924,15 +957,15 @@ jobs:
           case "$STRIX_RESULT" in
             success)
               state="success"
-              description="Manual workflow_dispatch Strix evidence passed"
+              description="Default-branch repository_dispatch Strix evidence passed"
               ;;
             failure|cancelled|skipped)
               state="failure"
-              description="Manual workflow_dispatch Strix evidence failed"
+              description="Default-branch repository_dispatch Strix evidence failed"
               ;;
             *)
               state="error"
-              description="Manual workflow_dispatch Strix evidence inconclusive"
+              description="Default-branch repository_dispatch Strix evidence inconclusive"
               ;;
           esac
 

@@ -53,10 +53,17 @@ normalize_opencode_output() {
 
 backoff_sleep() {
 	local attempt="$1"
-	local initial="${OPENCODE_BACKOFF_INITIAL_SECONDS:-20}"
-	local max_sleep="${OPENCODE_BACKOFF_MAX_SECONDS:-300}"
+	local initial max_sleep attempt_value
 	local sleep_for
-	sleep_for=$((initial * (1 << (attempt - 1))))
+	if ! is_non_negative_integer "$attempt" || [ "$((10#$attempt))" -lt 1 ] || [ "$((10#$attempt))" -gt 30 ]; then
+		attempt="1"
+	fi
+	initial="$(env_integer_or_default OPENCODE_BACKOFF_INITIAL_SECONDS 20)"
+	max_sleep="$(env_integer_or_default OPENCODE_BACKOFF_MAX_SECONDS 300)"
+	attempt_value=$((10#$attempt))
+	initial=$((10#$initial))
+	max_sleep=$((10#$max_sleep))
+	sleep_for=$((initial * (1 << (attempt_value - 1))))
 	if [ "$sleep_for" -gt "$max_sleep" ]; then
 		sleep_for="$max_sleep"
 	fi
@@ -65,7 +72,7 @@ backoff_sleep() {
 
 is_non_negative_integer() {
 	case "${1:-}" in
-	"" | *[!0-9]*) return 1 ;;
+	"" | *[!0-9]* | ??????????*) return 1 ;;
 	*) return 0 ;;
 	esac
 }
