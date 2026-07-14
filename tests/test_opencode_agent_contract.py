@@ -1428,6 +1428,22 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     )
 
 
+def test_exhausted_model_pool_retry_can_dispatch_from_central_repository() -> None:
+    """The central retry must not silently depend on an absent cross-repo PAT."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    retry_job = workflow[workflow.index("  opencode-exhausted-retry:\n") :]
+
+    assert "contents: write" in retry_job
+    assert (
+        "github.repository == 'ContextualWisdomLab/.github' && github.token"
+        in retry_job
+    )
+    assert "current-repository-job-token" in retry_job
+    assert "secrets.PR_REVIEW_MERGE_TOKEN" in retry_job
+    assert "secrets.OPENCODE_APPROVE_TOKEN" in retry_job
+    assert 'GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh api -X POST' in retry_job
+
+
 def test_opencode_pending_peer_checks_hold_blocks_required_workflow_until_approval():
     """Pending peer checks cannot satisfy the required gate without a review."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")

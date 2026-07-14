@@ -238,6 +238,21 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
         assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
 
 
+def test_review_workflow_run_consumers_allowlist_upstream_workflow_paths() -> None:
+    """Noema and the scheduler must not recursively wake each other."""
+    for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
+        workflow = workflow_text(filename)
+
+        assert (
+            "github.event.workflow_run.path == '.github/workflows/opencode-review.yml'"
+            in workflow
+        )
+        assert (
+            "github.event.workflow_run.path == '.github/workflows/strix.yml'"
+            in workflow
+        )
+
+
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
     for filename in (
         "opencode-review.yml",

@@ -50,6 +50,10 @@ jobs:
       || (
         github.event_name == 'workflow_run'
         && github.event.workflow_run.conclusion != 'cancelled'
+        && (
+          github.event.workflow_run.path == '.github/workflows/opencode-review.yml'
+          || github.event.workflow_run.path == '.github/workflows/strix.yml'
+        )
       )
       || (
         github.event_name == 'pull_request_target'

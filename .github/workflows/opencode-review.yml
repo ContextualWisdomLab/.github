@@ -7409,7 +7409,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      # repository_dispatch requires Contents write. The job token is selected
+      # only when this run already executes in the central workflow repository;
+      # required-workflow runs in target repositories still need an explicitly
+      # configured cross-repository credential.
+      contents: write
       pull-requests: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -7417,12 +7421,12 @@ jobs:
       - name: Dispatch deferred same-head review retry after model-pool exhaustion
         env:
           GH_TOKEN: ${{ github.token }}
-          # Cross-repository dispatch of the central workflow needs a PAT; the
-          # target-repository runner token cannot dispatch workflows that live
-          # in the central .github repository, and the OpenCode app token has
-          # no Actions permission.
-          RETRY_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
-          RETRY_DISPATCH_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'none' }}
+          # A run already executing in the central repository can use its
+          # least-scoped job token. Cross-repository required-workflow runs
+          # still need a PAT because their target-repository job token cannot
+          # dispatch an event into ContextualWisdomLab/.github.
+          RETRY_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || (github.repository == 'ContextualWisdomLab/.github' && github.token) }}
+          RETRY_DISPATCH_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || github.repository == 'ContextualWisdomLab/.github' && 'current-repository-job-token' || 'none' }}
           # One fixed backoff window before the single deferred retry. GitHub
           # Models per-minute throttles recover well inside this window; daily
           # quota exhaustion outlives any in-workflow delay and is the org
@@ -7437,7 +7441,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${RETRY_DISPATCH_TOKEN:-}" ]; then
-            echo "::warning::Deferred exhausted-pool retry skipped because no cross-repository dispatch credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) is configured; the merge scheduler org sweep remains the retry path."
+            echo "::warning::Deferred exhausted-pool retry skipped because this is not the central workflow repository and no cross-repository dispatch credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) is configured; the merge scheduler org sweep remains the retry path."
             exit 0
           fi
 
