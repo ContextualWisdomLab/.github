@@ -653,6 +653,69 @@ def adversarial_probe_source_receipt_error(
     return ""
 
 
+def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | Any:
+    """Bind a verified structured probe location into otherwise valid evidence.
+
+    Models sometimes place the exact changed-file path and positive line in the
+    structured ``path``/``line`` fields and copy the correct trusted source-line
+    receipt, but omit the duplicate ``path:line`` text from ``evidence``. This
+    repair is deliberately narrower than the validator: it only prefixes that
+    structured location after the receipt matches the current-head source bytes
+    and the resulting evidence satisfies every independent-proof and observed-
+    result check. Invalid digests, unsafe paths, missing changed-file evidence,
+    and circular or unobserved claims remain unmodified and fail closed.
+    """
+    if not isinstance(value, dict):
+        return value
+    validation = value.get("adversarial_validation")
+    if not isinstance(validation, dict):
+        return value
+    probes = validation.get("probes")
+    if not isinstance(probes, list):
+        return value
+
+    changed_files = current_changed_files()
+    repaired_probes: list[Any] = []
+    changed = False
+    for probe in probes:
+        if not isinstance(probe, dict):
+            repaired_probes.append(probe)
+            continue
+        path = probe.get("path")
+        line = probe.get("line")
+        evidence = probe.get("evidence")
+        if (
+            not isinstance(path, str)
+            or path not in changed_files
+            or isinstance(line, bool)
+            or not isinstance(line, int)
+            or line <= 0
+            or not isinstance(evidence, str)
+            or not evidence.strip()
+            or adversarial_probe_location_error(path, line)
+            or adversarial_probe_source_receipt_error(evidence, path, line)
+        ):
+            repaired_probes.append(probe)
+            continue
+        rejection = adversarial_evidence_rejection_reason(evidence, path, line)
+        if rejection != "must cite the exact probe path and positive line":
+            repaired_probes.append(probe)
+            continue
+        repaired_evidence = f"{path}:{line} {evidence.strip()}"
+        if adversarial_evidence_rejection_reason(repaired_evidence, path, line):
+            repaired_probes.append(probe)
+            continue
+        repaired_probes.append({**probe, "evidence": repaired_evidence})
+        changed = True
+
+    if not changed:
+        return value
+    return {
+        **value,
+        "adversarial_validation": {**validation, "probes": repaired_probes},
+    }
+
+
 def adversarial_validation_error(
     value: Any,
     *,
@@ -1267,6 +1330,7 @@ def valid_control(
         return reject("APPROVE cannot contain findings")
     if result == "REQUEST_CHANGES" and not findings:
         return reject("REQUEST_CHANGES requires at least one finding")
+    value = repair_adversarial_probe_evidence_bindings(value)
     adversarial_error = adversarial_validation_error(
         value.get("adversarial_validation"),
         result=result,

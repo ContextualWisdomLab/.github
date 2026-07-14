@@ -400,6 +400,62 @@ def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
     assert "does not match the cited current-head line" in mismatch_reasons[-1]
 
 
+def test_valid_control_repairs_only_verified_structured_probe_location_binding(
+    tmp_path, monkeypatch
+):
+    """A verified receipt may restore missing path:line prose without weakening proof."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    validation = adversarial_validation()
+    unbound_probes = []
+    for probe in validation["probes"]:
+        unbound = dict(probe)
+        unbound["evidence"] = re.sub(
+            rf"Focused source trace at {re.escape(probe['path'])}:{probe['line']} and ",
+            "Regression command ",
+            probe["evidence"],
+        )
+        unbound_probes.append(unbound)
+
+    normalized = norm.valid_control(
+        control(
+            adversarial_validation={
+                **validation,
+                "probes": unbound_probes,
+            }
+        ),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert normalized is not None
+    repaired_probes = normalized["adversarial_validation"]["probes"]
+    assert repaired_probes[0]["evidence"].startswith("scripts/ci/example.py:7 ")
+    assert repaired_probes[1]["evidence"].startswith("scripts/ci/example.py:8 ")
+
+
+def test_adversarial_probe_binding_repair_fails_closed_for_malformed_or_unobserved_input():
+    """Malformed shapes and receipt-only prose remain unchanged and unpublishable."""
+    assert norm.repair_adversarial_probe_evidence_bindings(None) is None
+
+    malformed = {"adversarial_validation": {"probes": "not-an-array"}}
+    assert norm.repair_adversarial_probe_evidence_bindings(malformed) is malformed
+
+    receipt_only = {
+        "adversarial_validation": {
+            "probes": [
+                "not-an-object",
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "evidence": source_line_receipt("line 7"),
+                },
+            ]
+        }
+    }
+    assert norm.repair_adversarial_probe_evidence_bindings(receipt_only) is receipt_only
+
+
 def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(
     tmp_path, monkeypatch
 ):
