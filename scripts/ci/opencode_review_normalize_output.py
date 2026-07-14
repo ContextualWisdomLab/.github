@@ -336,11 +336,6 @@ def violates_review_language_contract(value: dict[str, Any]) -> bool:
     return not HANGUL_RE.search(control_review_text(value))
 
 
-def contains_non_actionable_failed_check_review(value: dict[str, Any]) -> bool:
-    """Return whether a review punts failed-check diagnosis back to the reader."""
-    return bool(non_actionable_failed_check_review_phrase(value))
-
-
 def non_actionable_failed_check_review_phrase(value: dict[str, Any]) -> str:
     """Return the failed-check deflection phrase found in the review, if any."""
     combined = control_review_text(value).casefold()
