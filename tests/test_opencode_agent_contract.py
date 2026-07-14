@@ -33,7 +33,7 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert permission["read"] == "allow"
     assert permission["grep"] == "allow"
     assert permission["glob"] == "allow"
-    assert permission["bash"] == "allow"
+    assert permission["bash"] == "deny"
     assert permission["list"] == "allow"
     assert permission["task"] == "deny"
     assert permission["webfetch"] == "deny"
@@ -46,11 +46,17 @@ def test_code_reviewer_subagent_contract_is_configured():
         # reasoning_effort argument. Reasoning models carry it per-model instead.
         assert "reasoningEffort" not in agents[primary_agent]
         permission = agents[primary_agent]["permission"]
-        assert permission["bash"] == "allow"
-        assert permission["task"] == "allow"
-        assert permission["webfetch"] == "allow"
-        assert permission["websearch"] == "allow"
-        assert permission["lsp"] == "allow"
+        assert permission["bash"] == "deny"
+        assert permission["task"] == "deny"
+        assert permission["webfetch"] == "deny"
+        assert permission["websearch"] == "deny"
+        assert permission["lsp"] == "deny"
+        assert permission["external_directory"] == "deny"
+
+    assert config["lsp"] is False
+    assert config["mcp"] == {}
+    assert config["permission"]["bash"] == "deny"
+    assert config["permission"]["task"] == "deny"
 
     models = config["provider"]["github-models"]["models"]
     high_reasoning_models = {
@@ -243,7 +249,7 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "required-workflow-bootstrap:" in workflow
     assert "Required OpenCode workflow run materialized for this PR event." in workflow
     bootstrap_start = workflow.index("  required-workflow-bootstrap:\n")
-    bootstrap_end = workflow.index("\n  cancel-closed-pr-runs:", bootstrap_start)
+    bootstrap_end = workflow.index("\n  validate-pr-metadata:", bootstrap_start)
     bootstrap_job = workflow[bootstrap_start:bootstrap_end]
     assert "\n    if:" not in bootstrap_job
     assert (
@@ -544,13 +550,12 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
 
     assert "senior staff-level code reviewer" in prompt
     assert "Do not edit files" in prompt
-    assert "git diff --stat" in prompt
-    assert "git add" in prompt
+    assert "workflow-supplied current-head manifest" in prompt
+    assert "Bash, task/subagents, webfetch" in prompt
     assert "P0" in prompt
     assert "P1" in prompt
-    assert "Execution evidence must be sandboxed" in prompt
-    assert "mktemp -d" in prompt
-    assert "Docker, Docker Compose, devcontainer, Nix" in prompt
+    assert "Execution evidence is authoritative only" in prompt
+    assert "do not execute or synthesize one" in prompt
     assert "single happy-path test is not sufficient" in prompt
     assert "object naming and reserved-word safety" in prompt
     assert "connected code" in prompt
@@ -562,16 +567,13 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "Distinguish `typing.Protocol`" in prompt
     assert "executable implementation gaps" in prompt
     assert "cannot be sandboxed safely" not in prompt
-    assert "scripts/ci/sandboxed_verify.py" in prompt
-    assert "--allow-env NAME" in prompt
-    assert "--network required" in prompt
     assert "Review execution contracts" in ci_prompt
     assert "unpackaged" in ci_prompt
     assert "No material issues found in the reviewed diff." in prompt
-    assert "code-reviewer" in ci_prompt
-    assert "Execution evidence must be sandboxed" in ci_prompt
-    assert "SANDBOXED_VERIFY_RESULT" in ci_prompt
-    assert "Docker, Docker Compose, devcontainer, Nix" in ci_prompt
+    assert "task/subagent dispatch is disabled" in ci_prompt
+    assert "model is intentionally isolated from execution" in ci_prompt
+    assert "task/subagents, webfetch, websearch" in ci_prompt
+    assert "MCP" in ci_prompt
     assert "single happy-path test is not sufficient" in ci_prompt
     assert "object naming and reserved-word safety" in ci_prompt
     assert "Implementation completeness is mandatory" in ci_prompt
@@ -615,19 +617,18 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
 
 
 def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
-    """Guard the runtime OpenCode workspace, not only repo-local config."""
+    """Guard the isolated runtime OpenCode workspace and reviewer agent."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
 
     assert "code-reviewer-prompt.md" in workflow
-    assert "sandboxed_verify.py" in workflow
-    assert "sandboxed_web_e2e.py" in workflow
     assert "review_execution_contracts.py" in workflow
-    assert "SANDBOXED_VERIFY_RESULT" in workflow
-    assert "SANDBOXED_WEB_E2E_RESULT" in workflow
-    assert (
-        "Docker Compose, devcontainer, Nix, or temporary package-install sandbox"
-        in workflow
-    )
+    assert '"mcp": {}' in workflow
+    assert '"bash": "deny"' in workflow
+    assert '"task": "deny"' in workflow
+    assert '"webfetch": "deny"' in workflow
+    assert '"websearch": "deny"' in workflow
+    assert '"external_directory": "deny"' in workflow
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN" in workflow
     assert "scientific, statistical, simulation" in workflow
     assert "skewed true" in workflow
     assert "object naming" in workflow
@@ -676,7 +677,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'gsub("`"; "&apos;")' in workflow
     assert '"code-reviewer"' in workflow
     assert workflow.count('"reasoningEffort": "high"') >= 10
-    assert '"task": "allow"' in workflow
+    assert '"task": "allow"' not in workflow
     assert 'cat >"$prompt_file" <<EOF' not in workflow
     assert "cat >\"$prompt_file\" <<'EOF'" not in workflow
     assert "Run OpenCode PR Review model pool" in workflow
@@ -711,10 +712,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "variants.high.reasoningEffort=high" in reasoning_effort_guard
     assert "deepseek/deepseek-r1" in reasoning_effort_guard
     assert '--config "$OPENCODE_REVIEW_WORKDIR/opencode.jsonc"' in workflow
-    assert (
-        'timeout --kill-after=15s "${export_timeout_seconds}s" opencode export'
-        in model_pool_runner
-    )
+    assert 'timeout --kill-after=15s "${export_timeout_seconds}s"' in model_pool_runner
+    assert "opencode export" in model_pool_runner
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN" in model_pool_runner
     assert "session export did not complete within %ss" in model_pool_runner
     assert "Follow the complete review contract" in model_pool_runner
     assert "packet-first entry point" in model_pool_runner
@@ -1293,10 +1293,9 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}" in workflow
     assert (
         "SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || "
-        "github.event.inputs.target_repository == '' || "
-        "github.event.inputs.target_repository == github.repository) && github.token || "
-        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
-        "steps.opencode_app_token.outputs.token }}"
+        "needs.validate-pr-metadata.outputs.target_repository == github.repository) "
+        "&& github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}"
     ) in workflow
     assert (
         "SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && "
@@ -1356,7 +1355,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     )[1].split("\n      - name:", 1)[0]
     assert ".head.repo.full_name // empty" in trust_step
     assert ".base.repo.full_name // empty" in trust_step
-    assert "refuses external pull request heads before OIDC" in trust_step
+    assert "metadata changed before OIDC" in trust_step
+    assert 'live_head_sha="$(jq -r' in trust_step
+    assert '[ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]' in trust_step
     assert target_job.index(
         "Validate pull request head repository trust"
     ) < target_job.index(
@@ -1379,11 +1380,8 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     isolated_step = target_job.split(
         "      - name: Prepare isolated OpenCode review workspace", 1
     )[1].split("\n      - name:", 1)[0]
-    assert (
-        "CODEGRAPH_BIN: ${{ runner.temp }}/trusted-codegraph/node_modules/.bin/codegraph"
-        in isolated_step
-    )
-    assert "CODEGRAPH_NO_DOWNLOAD=1 exec " in isolated_step
+    assert "CODEGRAPH_BIN:" not in isolated_step
+    assert "CODEGRAPH_NO_DOWNLOAD=1 exec " not in isolated_step
     assert "@colbymchenry/codegraph@0.9.9 serve --mcp" not in isolated_step
     package_lock = json.loads(
         Path("scripts/ci/codegraph-package/package-lock.json").read_text(
@@ -1426,6 +1424,46 @@ def test_opencode_pending_peer_checks_hold_blocks_required_workflow_until_approv
     assert 'map(sort_by(.checkedAt // "") | last)' in workflow
     assert "group_by(.label)" in workflow
     assert "build_waiting_for_checks_body" not in workflow
+
+
+def test_opencode_strix_security_regressions_are_closed():
+    """Bind the nine current-head Strix findings to fail-closed contracts."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
+
+    assert "  validate-pr-metadata:\n" in workflow
+    assert "^ContextualWisdomLab/[A-Za-z0-9_.-]+$" in workflow
+    assert "workflow_dispatch metadata does not match the live pull request" in workflow
+    assert "needs.validate-pr-metadata.outputs.base_sha" in workflow
+    assert "needs.validate-pr-metadata.outputs.head_sha" in workflow
+    assert "metadata changed before OIDC" in workflow
+    assert "actions/cache@" not in workflow
+
+    assert config["mcp"] == {}
+    assert config["lsp"] is False
+    for permission_name in (
+        "bash",
+        "task",
+        "webfetch",
+        "websearch",
+        "lsp",
+        "external_directory",
+    ):
+        assert config["permission"][permission_name] == "deny"
+    assert "@upstash/context7-mcp" not in workflow
+    assert "@guhcostan/web-search-mcp" not in workflow
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN" in workflow
+
+    assert 'encoded_head_ref="$(jq -rn --arg value "refs/heads/${HEAD_REF}"' in workflow
+    assert "code-scanning/alerts?ref=${encoded_head_ref}" in workflow
+    assert "code-scanning/alerts?ref=refs/heads/${HEAD_REF}" not in workflow
+
+    assert "The model is intentionally isolated" in workflow
+    assert "# Trusted CodeGraph current-head evidence" in workflow
+    assert '"$CODEGRAPH_BIN" explore' in workflow
+    assert "repair_approval_summary" in Path(
+        "scripts/ci/opencode_review_normalize_output.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_opencode_review_publication_prefers_app_token_for_review_writes():

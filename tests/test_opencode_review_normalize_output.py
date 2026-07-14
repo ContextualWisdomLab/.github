@@ -717,14 +717,11 @@ def test_adversarial_evidence_rejects_explicit_non_execution(evidence):
     )
 
 
-def test_adversarial_evidence_accepts_exact_changed_path_result():
-    """An exact changed path plus an affirmative observed result is valid evidence."""
-    assert (
-        norm.adversarial_evidence_rejection_reason(
-            "scripts/ci/example.py returned the rejected input result.",
-            "scripts/ci/example.py",
-        )
-        is None
+def test_adversarial_evidence_rejects_exact_changed_path_without_independent_proof():
+    """A changed path is location metadata, not an execution receipt."""
+    assert "must cite" in norm.adversarial_evidence_rejection_reason(
+        "scripts/ci/example.py passed.",
+        "scripts/ci/example.py",
     )
 
 
@@ -1485,7 +1482,7 @@ def test_approval_gate_rejects_prose_fix_direction_without_suggested_diff(tmp_pa
     )
 
 
-def test_valid_control_repairs_approval_summary_from_bounded_evidence(
+def test_valid_control_rejects_meaningless_approval_before_evidence_repair(
     tmp_path, monkeypatch
 ):
     evidence = tmp_path / "opencode-review-evidence.md"
@@ -1521,20 +1518,13 @@ A\t.github/workflows/opencode-review.yml
     seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
 
     repaired = norm.valid_control(
-        control(
-            reason="Current-head review completed.", summary="No blockers were found."
-        ),
+        control(reason="x", summary="y"),
         expected_head_sha="head",
         expected_run_id="run",
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert "scripts/ci/example.py" in repaired["summary"]
-    assert "CodeGraph" in repaired["summary"]
-    assert "No blockers were found" not in repaired["summary"]
-    assert norm.mentions_verification_posture(repaired["reason"], repaired["summary"])
-    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+    assert repaired is None
 
 
 def test_valid_control_accepts_model_confirms_with_bounded_current_head_receipt(
@@ -1577,8 +1567,14 @@ M\tsrc/test/java/example/LogSanitizerTest.java
     norm.current_changed_files.cache_clear()
 
     candidate = control(
-        reason="LogSanitizer.java hardens log input and adds a regression test.",
-        summary="The current-head fix and test were reviewed.",
+        reason=(
+            "src/main/java/example/LogSanitizer.java hardens log input and adds "
+            "a regression test."
+        ),
+        summary=FULL_SUMMARY.replace(
+            "scripts/ci/example.py",
+            "src/main/java/example/LogSanitizer.java",
+        ),
         adversarial_validation={
             "status": "passed",
             "probes": [
@@ -1641,7 +1637,14 @@ def test_valid_control_repairs_summary_from_invalid_utf8_evidence(
 
     repaired = norm.valid_control(
         control(
-            reason="Current-head review completed.", summary="No blockers were found."
+            reason=(
+                "Reviewed current-head changed-file evidence in "
+                "scripts/ci/opencode_review_normalize_output.py."
+            ),
+            summary=FULL_SUMMARY.replace(
+                "scripts/ci/example.py",
+                "scripts/ci/opencode_review_normalize_output.py",
+            ),
         ),
         expected_head_sha="head",
         expected_run_id="run",
@@ -1650,12 +1653,11 @@ def test_valid_control_repairs_summary_from_invalid_utf8_evidence(
 
     assert repaired is not None
     assert "scripts/ci/opencode_review_normalize_output.py" in repaired["summary"]
-    assert "No blockers were found" not in repaired["summary"]
     assert norm.mentions_verification_posture(repaired["reason"], repaired["summary"])
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_repairs_fragile_approval_reason_from_bounded_evidence(
+def test_valid_control_rejects_fragile_approval_reason_before_evidence_repair(
     tmp_path, monkeypatch
 ):
     evidence = tmp_path / "opencode-review-evidence.md"
@@ -1721,15 +1723,10 @@ M\t.github/workflows/r.yml
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert ".github/workflows/r.yml" in repaired["reason"]
-    assert "no source changes" not in repaired["reason"].casefold()
-    assert "no verification needed" not in repaired["summary"].casefold()
-    assert norm.mentions_actual_changed_file(repaired["reason"], repaired["summary"])
-    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+    assert repaired is None
 
 
-def test_valid_control_repair_overrides_earlier_invalid_coverage_labels(
+def test_valid_control_rejects_invalid_coverage_labels_before_evidence_repair(
     tmp_path, monkeypatch
 ):
     evidence = tmp_path / "opencode-review-evidence.md"
@@ -1794,13 +1791,10 @@ Security/privacy: Not applicable.
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert "scripts/ci/opencode_review_normalize_output.py" in repaired["summary"]
-    assert "Not applicable." not in repaired["summary"]
-    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+    assert repaired is None
 
 
-def test_valid_control_repair_drops_contradictory_changed_file_kind_claims(
+def test_valid_control_rejects_contradictory_changed_file_kind_claims(
     tmp_path, monkeypatch
 ):
     evidence = tmp_path / "opencode-review-evidence.md"
@@ -1866,16 +1860,10 @@ Security/privacy: Not applicable.
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert "apps/desktop/src/App.tsx" in repaired["summary"]
-    assert "no executable changes" not in repaired["summary"]
-    assert "no test changes" not in repaired["summary"]
-    assert not norm.contradicts_changed_file_kinds(
-        repaired["reason"], repaired["summary"]
-    )
+    assert repaired is None
 
 
-def test_valid_control_repair_drops_material_trivialization(tmp_path, monkeypatch):
+def test_valid_control_rejects_material_trivialization(tmp_path, monkeypatch):
     evidence = tmp_path / "opencode-review-evidence.md"
     changed_files = tmp_path / "opencode-changed-files.txt"
     evidence.write_text(
@@ -1922,14 +1910,7 @@ M\tscripts/ci/test_strix_quick_gate.sh
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert ".github/workflows/strix.yml" in repaired["summary"]
-    assert "simple typo fix" not in repaired["summary"]
-    assert "no tests are needed" not in repaired["summary"].casefold()
-    assert not norm.contradicts_material_changed_file_scope(
-        repaired["reason"],
-        repaired["summary"],
-    )
+    assert repaired is None
 
 
 def test_valid_control_does_not_repair_unsafe_or_unproven_approval(
@@ -2077,7 +2058,78 @@ M\tscripts/ci/example.py
     assert norm.repair_approval_summary("reason", "summary") == "summary"
 
 
-def test_approval_language_contract_runs_after_evidence_repair(tmp_path, monkeypatch):
+def test_approval_repair_summary_emits_korean_language_evidence(monkeypatch):
+    """Cover the trusted Korean-language repair text without model translation."""
+    monkeypatch.setattr(norm, "preferred_review_language", lambda: "korean")
+    repaired = norm.build_approval_repair_summary(
+        "scripts/ci/example.py를 검토했습니다.",
+        """\
+## Coverage execution evidence
+- Result: PASS
+- Test coverage: 100%
+- Docstring coverage: 100%
+## Changed files
+M\tscripts/ci/example.py
+""",
+    )
+    assert repaired is not None
+    assert "한국어 리뷰 언어 계약" in repaired
+
+
+def test_repair_approval_reason_fails_safe_when_evidence_is_unusable(
+    tmp_path, monkeypatch
+):
+    """Keep or conservatively repair reasons when bounded evidence degrades."""
+    evidence = tmp_path / "opencode-review-evidence.md"
+    evidence.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
+
+    monkeypatch.setattr(norm, "mentions_actual_changed_file", lambda *_args: False)
+    assert norm.repair_approval_reason("original", FULL_SUMMARY) == "original"
+
+    monkeypatch.setattr(norm, "mentions_actual_changed_file", lambda *_args: True)
+    monkeypatch.setattr(norm, "mentions_verification_posture", lambda *_args: True)
+    monkeypatch.setattr(norm, "mentions_full_coverage", lambda *_args: True)
+    monkeypatch.setattr(norm, "read_text_lossy", lambda _path: None)
+    repaired = norm.repair_approval_reason("No source changes", FULL_SUMMARY)
+    assert "the current changed files" in repaired
+
+
+@pytest.mark.parametrize(
+    ("gate_name", "first_value", "second_value"),
+    [
+        ("mentions_actual_changed_file", True, False),
+        ("mentions_verification_posture", True, False),
+        ("mentions_full_coverage", True, False),
+        ("contradicts_changed_file_kinds", False, True),
+        ("contradicts_material_changed_file_scope", False, True),
+        ("model_failure_approval_phrase", "", "model failed"),
+    ],
+)
+def test_valid_control_rechecks_every_approval_gate_after_repair(
+    monkeypatch, gate_name, first_value, second_value
+):
+    """Reject a repair that invalidates any already-checked approval invariant."""
+    values = iter((first_value, second_value))
+    monkeypatch.setattr(norm, gate_name, lambda *_args: next(values))
+    monkeypatch.setattr(norm, "repair_approval_summary", lambda _reason, summary: summary)
+    monkeypatch.setattr(norm, "repair_approval_reason", lambda reason, _summary: reason)
+
+    assert (
+        norm.valid_control(
+            control(),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
+
+
+def test_approval_language_contract_cannot_be_repaired_from_evidence(
+    tmp_path, monkeypatch
+):
     evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         """\
@@ -2126,9 +2178,7 @@ Preferred review language: `Korean`
         expected_run_attempt="attempt",
     )
 
-    assert reviewed is not None
-    assert "한국어 리뷰 언어 계약" in reviewed["summary"]
-    assert ".jules/sentinel.md" in reviewed["summary"]
+    assert reviewed is None
 
 
 def test_request_changes_still_enforces_korean_language_contract(tmp_path, monkeypatch):

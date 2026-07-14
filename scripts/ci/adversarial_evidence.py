@@ -42,14 +42,12 @@ def adversarial_evidence_rejection_reason(evidence: str, path: str) -> str | Non
         return "explicitly denies execution or an observed result"
     if any(phrase in lowered for phrase in CIRCULAR_EVIDENCE_PHRASES):
         return "repeats the implementation claim instead of citing independent proof"
-    if path and path.casefold() in lowered:
-        has_proof_anchor = True
-    else:
-        has_proof_anchor = INDEPENDENT_PROOF_RE.search(cleaned) is not None
+    del path
+    has_proof_anchor = INDEPENDENT_PROOF_RE.search(cleaned) is not None
     if not has_proof_anchor:
         return (
             "must cite an executed command, test/assertion, log/check/SARIF receipt, "
-            "source trace, diff, CodeGraph path, or exact changed file"
+            "source trace, diff, or CodeGraph path"
         )
     if not OBSERVED_RESULT_RE.search(cleaned):
         return (

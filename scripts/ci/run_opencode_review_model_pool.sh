@@ -577,7 +577,10 @@ run_one_model_attempt() {
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	timeout --kill-after=30s "${run_timeout_seconds}s" opencode run "$(cat "$prompt_file")" \
+	timeout --kill-after=30s "${run_timeout_seconds}s" \
+		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		opencode run "$(cat "$prompt_file")" \
 		--pure \
 		--agent "$agent" \
 		--model "$model_candidate" \
@@ -629,7 +632,10 @@ run_one_model_attempt() {
 		fi
 		return 1
 	fi
-	if ! timeout --kill-after=15s "${export_timeout_seconds}s" opencode export "$session_id" --pure >"$opencode_export_file"; then
+	if ! timeout --kill-after=15s "${export_timeout_seconds}s" \
+		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		opencode export "$session_id" --pure >"$opencode_export_file"; then
 		printf 'OpenCode %s attempt %s/%s session export did not complete within %ss.\n' "$model_candidate" "$attempt" "$attempts" "$export_timeout_seconds"
 		return 1
 	fi

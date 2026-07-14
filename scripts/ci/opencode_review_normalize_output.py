@@ -994,7 +994,7 @@ DDD/domain: workflow and repository-governance invariants were reviewed against 
 CDD/context: CodeGraph evidence, changed-file history, and focused hunks were reviewed from bounded-review-evidence.md.
 Similar issues: changed-file history evidence was reviewed for comparable local precedents.
 Claim/concept check: bounded evidence, repository source, current-head workflow evidence, and, where numeric, scientific, statistical, or literature-backed claims are affected, original-paper/formula evidence and parameter-recovery expectations were used for claims.
-Standards search: standards and external-source checks are delegated to configured OpenCode web_search/Context7/DeepWiki sources when applicable; no evidence-backed standards blocker is present in bounded evidence.
+Standards search: standards and external-source claims require trusted bounded source evidence prepared outside the isolated model process; no evidence-backed standards blocker is present in bounded evidence.
 Compatibility/convention: changed workflow/script conventions, object naming, and reserved-word safety for schema/API/config/code surfaces were checked in bounded evidence.
 Breaking-change/backcompat: deployment evidence and changed-file history were checked for backward-compatibility risk.
 Performance: changed surfaces were checked for performance risk in bounded evidence.
@@ -1015,7 +1015,7 @@ def repair_approval_summary(reason: str, summary: str) -> str:
     if evidence_file is not None:
         evidence_text = read_text_lossy(evidence_file)
         if evidence_text is not None:
-            repaired_summary = build_approval_repair_summary("", evidence_text)
+            repaired_summary = build_approval_repair_summary(summary, evidence_text)
             if repaired_summary:
                 return repaired_summary
 
@@ -1196,6 +1196,23 @@ def valid_control(
     if result == "APPROVE":
         if admits_missing_structural_review(reason, summary):
             return reject("approval admits missing structural review")
+        if not mentions_actual_changed_file(reason, summary):
+            return reject("approval does not cite changed-file evidence")
+        if not mentions_verification_posture(reason, summary):
+            return reject("approval does not include the required verification posture")
+        if not mentions_full_coverage(reason, summary):
+            return reject(
+                "approval does not prove 100% coverage or an explicit no-source exception"
+            )
+        if contradicts_changed_file_kinds(reason, summary):
+            return reject("approval contradicts changed file kinds")
+        if contradicts_material_changed_file_scope(reason, summary):
+            return reject("approval trivializes material changed files")
+        model_failure_phrase = model_failure_approval_phrase(reason, summary)
+        if model_failure_phrase:
+            return reject(
+                f"approval depends on failed model output: {model_failure_phrase}"
+            )
         summary = repair_approval_summary(reason, summary)
         reason = repair_approval_reason(reason, summary)
         value = {**value, "reason": reason, "summary": summary}
