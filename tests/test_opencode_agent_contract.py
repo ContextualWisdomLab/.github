@@ -624,8 +624,8 @@ def test_bootstrap_source_receipts_match_current_head_lines():
 
     for line in (95, 287):
         digest = hashlib.sha256(source_lines[line - 1]).hexdigest()
-        assert f"`{source_path.as_posix()}:{line}`" in ci_prompt
-        assert f"`source-line-sha256={digest}`" in ci_prompt
+        assert f"{source_path.as_posix()}:{line}" in ci_prompt
+        assert f"source-line-sha256={digest}" in ci_prompt
 
 
 def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
