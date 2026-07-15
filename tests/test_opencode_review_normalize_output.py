@@ -386,18 +386,71 @@ def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
             "probes": [mismatched, validation["probes"][1]],
         }
     )
-    mismatch_reasons: list[str] = []
-    assert (
-        norm.valid_control(
-            invalid,
-            expected_head_sha="head",
-            expected_run_id="run",
-            expected_run_attempt="attempt",
-            rejection_reasons=mismatch_reasons,
-        )
-        is None
+    normalized = norm.valid_control(
+        invalid,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
     )
-    assert "does not match the cited current-head line" in mismatch_reasons[-1]
+    assert normalized is not None
+    repaired_evidence = normalized["adversarial_validation"]["probes"][0]["evidence"]
+    assert source_line_receipt("line 7") in repaired_evidence
+    assert "source-line-sha256=" + "0" * 64 not in repaired_evidence
+
+
+def test_valid_control_repairs_only_verified_probe_binding(tmp_path, monkeypatch):
+    """Machine binding may restore path prose but never invent observed proof."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    validation = adversarial_validation()
+    unbound_probes = []
+    for probe in validation["probes"]:
+        unbound = dict(probe)
+        unbound["evidence"] = re.sub(
+            rf"Focused source trace at {re.escape(probe['path'])}:{probe['line']} and ",
+            "Regression command ",
+            probe["evidence"],
+        ).replace(source_line_receipt(f"line {probe['line']}"), "source-line-sha256=" + "0" * 64)
+        unbound_probes.append(unbound)
+
+    normalized = norm.valid_control(
+        control(
+            adversarial_validation={
+                **validation,
+                "probes": unbound_probes,
+            }
+        ),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert normalized is not None
+    repaired_probes = normalized["adversarial_validation"]["probes"]
+    assert repaired_probes[0]["evidence"].startswith("scripts/ci/example.py:7 ")
+    assert source_line_receipt("line 7") in repaired_probes[0]["evidence"]
+    assert repaired_probes[1]["evidence"].startswith("scripts/ci/example.py:8 ")
+    assert source_line_receipt("line 8") in repaired_probes[1]["evidence"]
+
+
+def test_adversarial_binding_repair_fails_closed_without_observed_proof():
+    """Receipt-only or malformed evidence cannot be upgraded into a review result."""
+    malformed = {"adversarial_validation": {"probes": "not-an-array"}}
+    assert norm.repair_adversarial_probe_evidence_bindings(None) is None
+    assert norm.repair_adversarial_probe_evidence_bindings(malformed) is malformed
+
+    receipt_only = {
+        "adversarial_validation": {
+            "probes": [
+                "not-an-object",
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "evidence": source_line_receipt("line 7"),
+                },
+            ]
+        }
+    }
+    assert norm.repair_adversarial_probe_evidence_bindings(receipt_only) is receipt_only
 
 
 def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(

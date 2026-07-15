@@ -576,6 +576,42 @@ def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -
     assert "logged a fatal provider error while still running" not in result.stdout
 
 
+def test_timed_out_session_exports_persisted_assistant_text_before_fallback(
+    tmp_path: Path,
+) -> None:
+    """A paid model timeout exports persisted text instead of discarding it unseen."""
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"paid-timeout-session"}',
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "5",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": "persisted but incomplete review",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "1",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "3",
+        },
+        model_candidates="github-models/deepseek/deepseek-v3-0324",
+    )
+
+    assert result.returncode == 1
+    assert "attempting to recover any assistant text already persisted" in result.stdout
+    assert "kind=invalid-control-output" in result.stdout
+    assert "timed-out session export did not contain a valid recoverable conclusion" in result.stdout
+
+
 def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> None:
     """Small PRs fail through hung/unavailable providers quickly with a visible budget reason."""
     result = run_failed_model(
@@ -627,11 +663,11 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
 
     assert result.returncode == 1
     assert (
-        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 600s, "
+        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 3600s, "
         "total budget 7200s -> 1s, max-cycles 0 -> 0"
     ) in result.stdout
     assert (
-        "OpenCode dynamic review cadence selected 600s per attempt and 1s total budget "
+        "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
         "for 21 changed file(s); max-cycles=0."
     ) in result.stdout
     assert "OpenCode model pool reached configured max cycle count" not in result.stdout

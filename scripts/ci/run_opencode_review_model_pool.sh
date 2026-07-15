@@ -92,8 +92,8 @@ env_integer_or_default() {
 cap_dynamic_cadence_for_queue() {
 	local timeout_cap budget_cap cycle_cap previous_run_timeout previous_budget_seconds previous_max_cycles
 
-	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 600)"
-	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 1800)"
+	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600)"
+	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 7800)"
 	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 0)"
 	previous_run_timeout="$original_run_timeout"
 	previous_budget_seconds="$budget_seconds"
@@ -359,6 +359,36 @@ cap_model_run_timeout() {
 	fi
 }
 
+export_and_validate_session_output() {
+	local session_id="$1"
+	local model_candidate="$2"
+	local attempt="$3"
+	local attempts="$4"
+	local opencode_export_file="$5"
+	local candidate_output_file="$6"
+	local export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
+
+	if ! timeout --kill-after=15s "${export_timeout_seconds}s" \
+		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		opencode export "$session_id" --pure >"$opencode_export_file"; then
+		printf 'OpenCode %s attempt %s/%s session export did not complete within %ss.\n' "$model_candidate" "$attempt" "$attempts" "$export_timeout_seconds"
+		return 1
+	fi
+	jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$candidate_output_file"
+	if [ ! -s "$candidate_output_file" ]; then
+		printf 'OpenCode %s attempt %s/%s session export did not include assistant text.\n' "$model_candidate" "$attempt" "$attempts"
+		emit_rejected_opencode_artifact_metadata "assistant-empty-export" "$opencode_export_file"
+		return 1
+	fi
+	if ! normalize_opencode_output "$candidate_output_file"; then
+		printf 'OpenCode %s attempt %s/%s output did not include a valid control conclusion.\n' "$model_candidate" "$attempt" "$attempts"
+		emit_rejected_opencode_artifact_metadata "invalid-control-output" "$candidate_output_file"
+		return 1
+	fi
+	return 0
+}
+
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -368,11 +398,10 @@ run_one_model_attempt() {
 	local candidate_output_file="$6"
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
-	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
+	local run_timeout_seconds opencode_status session_id opencode_stderr_file
 	local opencode_pid fatal_poll_seconds
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
-	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
@@ -410,11 +439,23 @@ run_one_model_attempt() {
 	wait "$opencode_pid"
 	opencode_status=$?
 	set -e
+	session_id="$(jq -r 'select(.type == "step_start") | .sessionID' "$opencode_json_file" 2>/dev/null | tail -n 1)"
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
 		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
-		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
-			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
+		if { [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ] || [ "$opencode_status" -eq 143 ]; } && \
+			! is_fatal_provider_failure "$opencode_json_file"; then
+			printf 'OpenCode %s attempt %s/%s timed out after %ss; attempting to recover any assistant text already persisted in session %s before falling through.\n' \
+				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds" "${session_id:-<missing>}"
+			if [ -n "$session_id" ] && [ "$session_id" != "null" ]; then
+				if export_and_validate_session_output "$session_id" "$model_candidate" "$attempt" "$attempts" "$opencode_export_file" "$candidate_output_file"; then
+					printf 'OpenCode %s attempt %s/%s recovered a valid control conclusion from the timed-out session; preserving paid review work.\n' \
+						"$model_candidate" "$attempt" "$attempts"
+					return 0
+				fi
+				printf 'OpenCode %s attempt %s/%s timed-out session export did not contain a valid recoverable conclusion; continuing within the remaining retry budget.\n' \
+					"$model_candidate" "$attempt" "$attempts"
+			fi
 		fi
 		if is_fatal_provider_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
@@ -423,7 +464,6 @@ run_one_model_attempt() {
 		return 1
 	fi
 
-	session_id="$(jq -r 'select(.type == "step_start") | .sessionID' "$opencode_json_file" | tail -n 1)"
 	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "sessionless-json" "$opencode_json_file"
@@ -433,25 +473,7 @@ run_one_model_attempt() {
 		fi
 		return 1
 	fi
-	if ! timeout --kill-after=15s "${export_timeout_seconds}s" \
-		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
-		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-		opencode export "$session_id" --pure >"$opencode_export_file"; then
-		printf 'OpenCode %s attempt %s/%s session export did not complete within %ss.\n' "$model_candidate" "$attempt" "$attempts" "$export_timeout_seconds"
-		return 1
-	fi
-	jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$candidate_output_file"
-	if [ ! -s "$candidate_output_file" ]; then
-		printf 'OpenCode %s attempt %s/%s session export did not include assistant text.\n' "$model_candidate" "$attempt" "$attempts"
-		emit_rejected_opencode_artifact_metadata "assistant-empty-export" "$opencode_export_file"
-		return 1
-	fi
-	if ! normalize_opencode_output "$candidate_output_file"; then
-		printf 'OpenCode %s attempt %s/%s output did not include a valid control conclusion.\n' "$model_candidate" "$attempt" "$attempts"
-		emit_rejected_opencode_artifact_metadata "invalid-control-output" "$candidate_output_file"
-		return 1
-	fi
-	return 0
+	export_and_validate_session_output "$session_id" "$model_candidate" "$attempt" "$attempts" "$opencode_export_file" "$candidate_output_file"
 }
 
 main() {
@@ -466,8 +488,8 @@ main() {
 	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ]; then
-		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-600}"
-		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-3600}"
+		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-3600}"
+		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-7800}"
 		max_cycles="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES:-1}"
 		printf 'Central review-process evidence fallback eligible for scope "%s"; limiting OpenCode model pool to %ss per attempt, %ss total budget, and %s cycle(s) so provider delay is logged before the publish fallback evaluates current-head peer evidence.\n' \
 			"${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unsupported}" "$original_run_timeout" "$budget_seconds" "$max_cycles"
@@ -476,22 +498,22 @@ main() {
 		medium_file_threshold="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD 20)"
 		if changed_file_count="$(count_changed_files_for_cadence)"; then
 			if [ "$changed_file_count" -le "$small_file_threshold" ]; then
-				original_run_timeout="$(env_integer_or_default OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS 900)"
-				budget_seconds="$(env_integer_or_default OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS 2100)"
+				original_run_timeout="$(env_integer_or_default OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
+				budget_seconds="$(env_integer_or_default OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS 4200)"
 			elif [ "$changed_file_count" -le "$medium_file_threshold" ]; then
-				original_run_timeout="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
-				budget_seconds="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
+				original_run_timeout="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
+				budget_seconds="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS 7800)"
 			else
 				original_run_timeout="$(env_integer_or_default OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
-				budget_seconds="$(env_integer_or_default OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS 7200)"
+				budget_seconds="$(env_integer_or_default OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS 7800)"
 			fi
 			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
 			cap_dynamic_cadence_for_queue
 			printf 'OpenCode dynamic review cadence selected %ss per attempt and %ss total budget for %s changed file(s); max-cycles=%s.\n' \
 				"$original_run_timeout" "$budget_seconds" "$changed_file_count" "$max_cycles"
 		else
-			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
-			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
+			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
+			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 7800)"
 			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
 			cap_dynamic_cadence_for_queue
 			printf 'OpenCode dynamic review cadence could not read OPENCODE_CHANGED_FILES_FILE; using %ss per attempt and %ss total budget; max-cycles=%s.\n' \

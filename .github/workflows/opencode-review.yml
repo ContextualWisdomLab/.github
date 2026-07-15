@@ -3368,7 +3368,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 65
+        timeout-minutes: 140
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3395,13 +3395,15 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Keep stale providers from pinning required review jobs for hours.
-          # Adversarial validation needs enough room to read the evidence, but
-          # dynamic cadence and the outer watchdog still bound each current-head run.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "2100"
+          # Preserve reviews that legitimately need tens of minutes to inspect a
+          # large repository. Small changes get 30 minutes per model; medium,
+          # large, unknown, and central-governance changes can use a full hour.
+          # The 130-minute pool budget leaves room for a second substantial
+          # candidate, and timed-out sessions are exported before falling through.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "3600"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "7800"
+          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "8100"
           # Keep cycling through the high-sensitivity candidate catalog until
           # the retry budget or step timeout is exhausted; a single invalid
           # cycle can be all provider formatting noise rather than review
@@ -3410,16 +3412,16 @@ jobs:
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "600"
-          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "1800"
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "4200"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "3600"
+          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "7800"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "3600"
+          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "7800"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "3600"
+          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "7800"
+          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "3600"
+          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "7800"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
@@ -3429,8 +3431,8 @@ jobs:
           OPENCODE_DYNAMIC_MAX_CYCLES: "0"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "3600"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "7800"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
