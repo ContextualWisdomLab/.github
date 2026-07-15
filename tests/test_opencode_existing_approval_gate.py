@@ -85,8 +85,7 @@ def valid_body(head: str = HEAD) -> str:
                 "evidence": (
                     f"Source trace at .github/workflows/opencode-review.yml:{line} "
                     "confirmed the gate rejected the forged evidence. "
-                    "source-line-sha256="
-                    + hashlib.sha256(source_line).hexdigest()
+                    "source-line-sha256=" + hashlib.sha256(source_line).hexdigest()
                 ),
                 "outcome": "falsified",
             }
