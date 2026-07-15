@@ -453,6 +453,43 @@ def test_adversarial_probe_binding_repair_fails_closed_for_malformed_or_unobserv
     }
     assert norm.repair_adversarial_probe_evidence_bindings(receipt_only) is receipt_only
 
+    unchanged_location = {
+        "adversarial_validation": {
+            "probes": [
+                {
+                    "path": "scripts/ci/not-changed.py",
+                    "line": 7,
+                    "evidence": (
+                        "Focused source trace at scripts/ci/not-changed.py:7 confirmed "
+                        f"the guard; {source_line_receipt('line 7')}"
+                    ),
+                }
+            ]
+        }
+    }
+    assert (
+        norm.repair_adversarial_probe_evidence_bindings(unchanged_location)
+        is unchanged_location
+    )
+
+    unproved_binding = {
+        "adversarial_validation": {
+            "probes": [
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "evidence": (
+                        f"scripts/ci/example.py:7 {source_line_receipt('line 7')}"
+                    ),
+                }
+            ]
+        }
+    }
+    assert (
+        norm.repair_adversarial_probe_evidence_bindings(unproved_binding)
+        is unproved_binding
+    )
+
     duplicate_receipt = {
         "adversarial_validation": {
             "probes": [
@@ -497,6 +534,31 @@ def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(
     assert (
         norm.adversarial_probe_source_receipt_error(receipt, "missing.py", 1)
         == "source-line receipt could not be verified from the trusted tree"
+    )
+    assert (
+        norm.adversarial_probe_source_receipt_error(receipt, "one_line.py", 1)
+        == "source-line-sha256 receipt does not match the cited current-head line"
+    )
+
+
+def test_adversarial_validation_still_rejects_unrepaired_receipt_mismatch():
+    """The terminal validator rejects a bad digest when no trusted repair occurred."""
+    validation = adversarial_validation()
+    mismatched = dict(validation["probes"][0])
+    mismatched["evidence"] = re.sub(
+        r"source-line-sha256=[0-9a-f]{64}",
+        "source-line-sha256=" + "0" * 64,
+        mismatched["evidence"],
+    )
+    validation["probes"][0] = mismatched
+
+    assert norm.adversarial_validation_error(
+        validation,
+        result="APPROVE",
+        findings=[],
+    ) == (
+        "adversarial probe 1 evidence source-line-sha256 receipt does not match "
+        "the cited current-head line"
     )
 
 
