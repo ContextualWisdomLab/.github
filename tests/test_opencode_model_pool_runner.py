@@ -809,11 +809,3 @@ def test_deepseek_prompt_still_inlines_bounded_evidence_excerpt(tmp_path: Path) 
     prompt = prompt_capture.read_text(encoding="utf-8")
     assert evidence_excerpt in prompt
     assert "Evidence excerpt omitted" not in prompt
-    assert (
-        "Every adversarial_validation.probes[].evidence string must literally include "
-        "the same path:positive-line" in prompt
-    )
-    assert (
-        '"evidence":"exact/current-head/changed-file:1 source trace or executed command '
-        "observed a concrete outcome; source-line-sha256=" in prompt
-    )

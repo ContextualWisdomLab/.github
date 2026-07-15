@@ -706,18 +706,15 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
             evidence.strip(),
             count=1,
         )
-        rejection = adversarial_evidence_rejection_reason(
-            repaired_evidence, path, line
-        )
+        rejection = adversarial_evidence_rejection_reason(repaired_evidence, path, line)
         if rejection == "must cite the exact probe path and positive line":
             repaired_evidence = f"{path}:{line} {repaired_evidence}"
         elif rejection:
             repaired_probes.append(probe)
             continue
-        if (
-            adversarial_probe_source_receipt_error(repaired_evidence, path, line)
-            or adversarial_evidence_rejection_reason(repaired_evidence, path, line)
-        ):
+        if adversarial_probe_source_receipt_error(
+            repaired_evidence, path, line
+        ) or adversarial_evidence_rejection_reason(repaired_evidence, path, line):
             repaired_probes.append(probe)
             continue
         if repaired_evidence == evidence:
