@@ -657,12 +657,11 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
     """Bind trusted source receipts and locations into otherwise valid evidence.
 
     Models sometimes place the exact changed-file path and positive line in the
-    structured ``path``/``line`` fields but either miscompute the receipt or omit
-    the duplicate ``path:line`` text from ``evidence``. The receipt is a trusted
-    binding rather than independent proof, so derive it from the sealed current-
-    head tree only after validating the changed path and positive line. Missing
-    or duplicate receipts, unsafe paths, missing changed-file evidence, and
-    circular or unobserved claims remain unmodified and fail closed.
+    structured ``path``/``line`` fields but omit the duplicate ``path:line`` text
+    from ``evidence``. Restore only that redundant location after the existing
+    single receipt already matches the sealed current-head line. Missing,
+    duplicate, or mismatched receipts, unsafe paths, missing changed-file
+    evidence, and circular or unobserved claims remain unmodified and fail closed.
     """
     if not isinstance(value, dict):
         return value
@@ -697,15 +696,12 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
             continue
 
         receipts = SOURCE_LINE_RECEIPT_RE.findall(evidence)
-        expected_digest = adversarial_probe_source_line_digest(path, line)
-        if len(receipts) != 1 or expected_digest is None:
+        if len(receipts) != 1 or adversarial_probe_source_receipt_error(
+            evidence, path, line
+        ):
             repaired_probes.append(probe)
             continue
-        repaired_evidence = SOURCE_LINE_RECEIPT_RE.sub(
-            f"source-line-sha256={expected_digest}",
-            evidence.strip(),
-            count=1,
-        )
+        repaired_evidence = evidence
         rejection = adversarial_evidence_rejection_reason(repaired_evidence, path, line)
         if rejection == "must cite the exact probe path and positive line":
             repaired_evidence = f"{path}:{line} {repaired_evidence}"

@@ -68,8 +68,6 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         "OPENCODE_ARTIFACT_MANIFEST_SHA256",
         hashlib.sha256(manifest.read_bytes()).hexdigest(),
     )
-    opencode_review_normalize_output.current_changed_files.cache_clear()
-    opencode_review_normalize_output.trusted_execution_receipts.cache_clear()
 
 
 def valid_body(head: str = HEAD) -> str:
@@ -85,7 +83,8 @@ def valid_body(head: str = HEAD) -> str:
                 "evidence": (
                     f"Source trace at .github/workflows/opencode-review.yml:{line} "
                     "confirmed the gate rejected the forged evidence. "
-                    "source-line-sha256=" + hashlib.sha256(source_line).hexdigest()
+                    "source-line-sha256="
+                    + hashlib.sha256(source_line).hexdigest()
                 ),
                 "outcome": "falsified",
             }
