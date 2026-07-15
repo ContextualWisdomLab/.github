@@ -724,9 +724,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "skipping remaining attempts for this model" in model_pool_runner
     assert "using %ss run timeout with %ss retry budget remaining" in model_pool_runner
     assert (
-        "timed out after %ss; falling through within the remaining retry budget"
+        "timed out after %ss; attempting to recover any assistant text already persisted"
         in model_pool_runner
     )
+    assert "recovered a valid control conclusion from the timed-out session" in model_pool_runner
     assert "emit_sanitized_opencode_failure_detail" in model_pool_runner
     assert "OpenCode provider failure metadata" in model_pool_runner
     assert "provider-controlled content suppressed" in model_pool_runner
@@ -1018,7 +1019,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         "OpenCode model pool has no configured model candidates." in model_pool_runner
     )
-    assert "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500" in model_pool_runner
+    assert "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-11700" in model_pool_runner
     assert (
         "completed a full model-candidate cycle without a valid control conclusion"
         in model_pool_runner
