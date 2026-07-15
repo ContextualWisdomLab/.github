@@ -686,6 +686,13 @@ def test_github_models_openai_prompt_references_evidence_without_inlining(
     assert "Evidence excerpt omitted for `github-models/openai/gpt-5`" in prompt
     assert "bounded-review-evidence.md" in prompt
     assert "bounded-review-evidence-excerpt.md" in prompt
+    assert "literally cite its declared path and positive line as path:line" in prompt
+    assert "include an independent proof anchor such as source trace" in prompt
+    assert "include an observed-result word such as confirmed" in prompt
+    assert (
+        "Source trace at exact/current-head/changed-file:1 confirmed the concrete "
+        "current-head outcome; source-line-sha256=<exact cited line digest>"
+    ) in prompt
 
 
 def test_deepseek_prompt_still_inlines_bounded_evidence_excerpt(tmp_path: Path) -> None:
