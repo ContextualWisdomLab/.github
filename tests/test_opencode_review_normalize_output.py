@@ -242,6 +242,108 @@ def test_adversarial_probe_location_reports_read_failures(tmp_path, monkeypatch)
     )
 
 
+def test_valid_control_repairs_only_redundant_verified_probe_locations(
+    tmp_path, monkeypatch
+):
+    """A sealed receipt may restore path:line text omitted by the model."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    value = control(adversarial_validation=adversarial_validation())
+    for probe in value["adversarial_validation"]["probes"]:
+        probe["evidence"] = (
+            "Regression command rejected malformed input with exit code 1; "
+            + source_line_receipt(f"line {probe['line']}")
+        )
+
+    normalized = norm.valid_control(
+        value,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert normalized is not None
+    assert all(
+        probe["evidence"].startswith(f"{probe['path']}:{probe['line']} ")
+        for probe in normalized["adversarial_validation"]["probes"]
+    )
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        "Regression command rejected malformed input with exit code 1; "
+        + "source-line-sha256="
+        + "0" * 64,
+        "Regression command rejected malformed input with exit code 1; {receipt} {receipt}",
+        "Source inspection properly handles all cases; {receipt}",
+        "No command was run; {receipt}",
+    ],
+)
+def test_probe_binding_repair_keeps_unverified_evidence_fail_closed(
+    tmp_path, monkeypatch, evidence
+):
+    """Mismatched, duplicate, circular, or unobserved evidence is not repaired."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    receipt = source_line_receipt("line 7")
+    probe_evidence = evidence.format(receipt=receipt)
+    value = control(
+        adversarial_validation=adversarial_validation(outcomes=("falsified",))
+    )
+    value["adversarial_validation"]["probes"][0]["evidence"] = probe_evidence
+
+    repaired = norm.repair_adversarial_probe_evidence_bindings(value)
+
+    assert repaired is value
+
+
+def test_probe_binding_repair_rejects_malformed_structures(tmp_path, monkeypatch):
+    """Unstructured probes and invalid structured locations are never rewritten."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    assert norm.repair_adversarial_probe_evidence_bindings(None) is None
+
+    malformed = {"adversarial_validation": {"probes": "not-a-list"}}
+    assert norm.repair_adversarial_probe_evidence_bindings(malformed) is malformed
+
+    mixed = {
+        "adversarial_validation": {
+            "probes": [
+                "not-an-object",
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 0,
+                    "evidence": source_line_receipt("line 7"),
+                },
+            ]
+        }
+    }
+    assert norm.repair_adversarial_probe_evidence_bindings(mixed) is mixed
+
+
+def test_probe_binding_repair_rechecks_the_completed_binding(
+    tmp_path, monkeypatch
+):
+    """A repaired value is discarded if the final independent check rejects it."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    value = control(adversarial_validation=adversarial_validation())
+    probe = value["adversarial_validation"]["probes"][0]
+    probe["evidence"] = (
+        "Regression command rejected malformed input with exit code 1; "
+        + source_line_receipt(f"line {probe['line']}")
+    )
+    original_check = norm.adversarial_evidence_rejection_reason
+
+    def reject_completed_binding(evidence, path, line):
+        if evidence.startswith(f"{path}:{line} "):
+            return "simulated final binding rejection"
+        return original_check(evidence, path, line)
+
+    monkeypatch.setattr(
+        norm, "adversarial_evidence_rejection_reason", reject_completed_binding
+    )
+
+    assert norm.repair_adversarial_probe_evidence_bindings(value) is value
+
+
 def test_adversarial_validation_requires_two_falsified_material_probes(
     tmp_path, monkeypatch
 ):

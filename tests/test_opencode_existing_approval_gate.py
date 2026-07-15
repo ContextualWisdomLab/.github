@@ -35,6 +35,8 @@ def test_standalone_import_path_loads_both_top_level_helpers(monkeypatch):
 @pytest.fixture(autouse=True)
 def trusted_adversarial_artifacts(tmp_path, monkeypatch):
     """Provide sealed current-head source and changed-file evidence to the gate."""
+    opencode_review_normalize_output.current_changed_files.cache_clear()
+    opencode_review_normalize_output.trusted_execution_receipts.cache_clear()
     runner_temp = tmp_path / "runner-temp"
     source_root = tmp_path / "source"
     source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
@@ -68,6 +70,9 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         "OPENCODE_ARTIFACT_MANIFEST_SHA256",
         hashlib.sha256(manifest.read_bytes()).hexdigest(),
     )
+    yield
+    opencode_review_normalize_output.current_changed_files.cache_clear()
+    opencode_review_normalize_output.trusted_execution_receipts.cache_clear()
 
 
 def valid_body(head: str = HEAD) -> str:
