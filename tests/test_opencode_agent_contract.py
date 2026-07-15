@@ -590,6 +590,8 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "Perform an explicit adversarial phase before every verdict" in ci_prompt
     assert "Run a dedicated adversarial phase before the verdict" in prompt
     assert "`adversarial_validation` control field" in ci_prompt
+    assert "The `evidence` string itself must literally repeat" in ci_prompt
+    assert "the separate `path` and `line` fields do not satisfy" in ci_prompt
     assert (
         "Green checks alone and absence of a known failure are not adversarial evidence"
         in prompt_normalized

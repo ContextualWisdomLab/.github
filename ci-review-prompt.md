@@ -109,6 +109,13 @@ current-head line bytes without its line ending, and whether the hypothesis was 
 material code/workflow/config/package/test changes and one for non-code changes;
 REQUEST_CHANGES needs a confirmed probe anchored to a published finding.
 
+The `evidence` string itself must literally repeat that probe's declared path and
+positive line as `path:line`; the separate `path` and `line` fields do not satisfy
+this binding. The same string must also name the independent proof anchor actually
+used (for example source trace, test/assertion, executed command, log/check/SARIF,
+diff, or CodeGraph) and an observed-result word such as confirmed, rejected,
+returned, passed, or failed.
+
 Execution provenance is mandatory. Never claim that React DevTools, Chrome
 DevTools, browser DevTools, Playwright, Cypress, or Selenium ran, passed,
 confirmed, verified, or observed behavior unless bounded evidence contains a
