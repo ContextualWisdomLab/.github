@@ -346,10 +346,10 @@ def test_adversarial_validation_canonicalizes_case_and_whitespace_for_duplicates
     assert "duplicates an earlier probe" in reasons[-1]
 
 
-def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
+def test_adversarial_validation_rejects_missing_and_repairs_mismatched_receipts(
     tmp_path, monkeypatch
 ):
-    """Lexical proof prose cannot authorize approval without exact line binding."""
+    """Missing receipts fail closed while trusted source bytes repair one mismatch."""
     require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
     validation = adversarial_validation()
 
@@ -386,18 +386,16 @@ def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
             "probes": [mismatched, validation["probes"][1]],
         }
     )
-    mismatch_reasons: list[str] = []
-    assert (
-        norm.valid_control(
-            invalid,
-            expected_head_sha="head",
-            expected_run_id="run",
-            expected_run_attempt="attempt",
-            rejection_reasons=mismatch_reasons,
-        )
-        is None
+    normalized = norm.valid_control(
+        invalid,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
     )
-    assert "does not match the cited current-head line" in mismatch_reasons[-1]
+    assert normalized is not None
+    repaired_evidence = normalized["adversarial_validation"]["probes"][0]["evidence"]
+    assert "source-line-sha256=" + "0" * 64 not in repaired_evidence
+    assert source_line_receipt("line 7") in repaired_evidence
 
 
 def test_valid_control_repairs_only_verified_structured_probe_location_binding(
@@ -454,6 +452,27 @@ def test_adversarial_probe_binding_repair_fails_closed_for_malformed_or_unobserv
         }
     }
     assert norm.repair_adversarial_probe_evidence_bindings(receipt_only) is receipt_only
+
+    duplicate_receipt = {
+        "adversarial_validation": {
+            "probes": [
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "evidence": (
+                        "Focused source trace at scripts/ci/example.py:7 confirmed "
+                        "the guard; "
+                        f"{source_line_receipt('line 7')} "
+                        f"{source_line_receipt('line 7')}"
+                    ),
+                }
+            ]
+        }
+    }
+    assert (
+        norm.repair_adversarial_probe_evidence_bindings(duplicate_receipt)
+        is duplicate_receipt
+    )
 
 
 def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(

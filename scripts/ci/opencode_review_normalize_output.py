@@ -654,16 +654,15 @@ def adversarial_probe_source_receipt_error(
 
 
 def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | Any:
-    """Bind a verified structured probe location into otherwise valid evidence.
+    """Bind trusted source receipts and locations into otherwise valid evidence.
 
     Models sometimes place the exact changed-file path and positive line in the
-    structured ``path``/``line`` fields and copy the correct trusted source-line
-    receipt, but omit the duplicate ``path:line`` text from ``evidence``. This
-    repair is deliberately narrower than the validator: it only prefixes that
-    structured location after the receipt matches the current-head source bytes
-    and the resulting evidence satisfies every independent-proof and observed-
-    result check. Invalid digests, unsafe paths, missing changed-file evidence,
-    and circular or unobserved claims remain unmodified and fail closed.
+    structured ``path``/``line`` fields but either miscompute the receipt or omit
+    the duplicate ``path:line`` text from ``evidence``. The receipt is a trusted
+    binding rather than independent proof, so derive it from the sealed current-
+    head tree only after validating the changed path and positive line. Missing
+    or duplicate receipts, unsafe paths, missing changed-file evidence, and
+    circular or unobserved claims remain unmodified and fail closed.
     """
     if not isinstance(value, dict):
         return value
@@ -693,20 +692,39 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
             or not isinstance(evidence, str)
             or not evidence.strip()
             or adversarial_probe_location_error(path, line)
-            or adversarial_probe_source_receipt_error(evidence, path, line)
         ):
             repaired_probes.append(probe)
             continue
-        rejection = adversarial_evidence_rejection_reason(evidence, path, line)
-        if rejection != "must cite the exact probe path and positive line":
+
+        receipts = SOURCE_LINE_RECEIPT_RE.findall(evidence)
+        expected_digest = adversarial_probe_source_line_digest(path, line)
+        if len(receipts) != 1 or expected_digest is None:
             repaired_probes.append(probe)
             continue
-        repaired_evidence = f"{path}:{line} {evidence.strip()}"
-        if adversarial_evidence_rejection_reason(repaired_evidence, path, line):
+        repaired_evidence = SOURCE_LINE_RECEIPT_RE.sub(
+            f"source-line-sha256={expected_digest}",
+            evidence.strip(),
+            count=1,
+        )
+        rejection = adversarial_evidence_rejection_reason(
+            repaired_evidence, path, line
+        )
+        if rejection == "must cite the exact probe path and positive line":
+            repaired_evidence = f"{path}:{line} {repaired_evidence}"
+        elif rejection:
             repaired_probes.append(probe)
             continue
-        repaired_probes.append({**probe, "evidence": repaired_evidence})
-        changed = True
+        if (
+            adversarial_probe_source_receipt_error(repaired_evidence, path, line)
+            or adversarial_evidence_rejection_reason(repaired_evidence, path, line)
+        ):
+            repaired_probes.append(probe)
+            continue
+        if repaired_evidence == evidence:
+            repaired_probes.append(probe)
+        else:
+            repaired_probes.append({**probe, "evidence": repaired_evidence})
+            changed = True
 
     if not changed:
         return value

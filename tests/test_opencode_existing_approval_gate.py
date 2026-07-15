@@ -68,6 +68,8 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         "OPENCODE_ARTIFACT_MANIFEST_SHA256",
         hashlib.sha256(manifest.read_bytes()).hexdigest(),
     )
+    opencode_review_normalize_output.current_changed_files.cache_clear()
+    opencode_review_normalize_output.trusted_execution_receipts.cache_clear()
 
 
 def valid_body(head: str = HEAD) -> str:
