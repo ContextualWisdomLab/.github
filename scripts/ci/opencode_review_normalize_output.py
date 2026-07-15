@@ -657,15 +657,16 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
     """Bind otherwise valid probe evidence to trusted current-head source bytes.
 
     A model may cite the real changed-file path and positive line, report an
-    independently observed result, yet duplicate the location incompletely or
-    calculate the line digest incorrectly. Treat ``source-line-sha256`` as a
-    machine-owned binding: replace its single well-formed value with the digest
-    read from the sealed current-head source tree, and restore a missing literal
-    ``path:line`` prefix. The model's hypothesis, observation, outcome, result,
-    findings, and conclusion are never synthesized or changed. Unsafe paths,
-    non-changed files, missing or duplicate receipts, circular claims, negated
-    execution, and evidence without an independent proof/result remain untouched
-    and fail closed in the normal validator.
+    independently observed result, yet duplicate the location incompletely.
+    Restore only a missing literal ``path:line`` prefix after the model-supplied
+    ``source-line-sha256`` already matches the sealed current-head source tree.
+    Never replace a wrong digest: doing so would manufacture the receipt that is
+    meant to prove the model bound its observation to that exact line. The
+    model's hypothesis, observation, outcome, result, findings, and conclusion
+    are never synthesized or changed. Unsafe paths, non-changed files, missing,
+    duplicate, or mismatched receipts, circular claims, negated execution, and
+    evidence without an independent proof/result remain untouched and fail
+    closed in the normal validator.
     """
     if not isinstance(value, dict):
         return value
@@ -704,11 +705,10 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
             repaired_probes.append(probe)
             continue
 
-        repaired_evidence = SOURCE_LINE_RECEIPT_RE.sub(
-            f"source-line-sha256={expected_digest}",
-            evidence.strip(),
-            count=1,
-        )
+        if receipts[0].casefold() != expected_digest:
+            repaired_probes.append(probe)
+            continue
+        repaired_evidence = evidence.strip()
         rejection = adversarial_evidence_rejection_reason(
             repaired_evidence,
             path,

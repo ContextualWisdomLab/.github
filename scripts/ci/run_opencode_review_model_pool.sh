@@ -92,8 +92,8 @@ env_integer_or_default() {
 cap_dynamic_cadence_for_queue() {
 	local timeout_cap budget_cap cycle_cap previous_run_timeout previous_budget_seconds previous_max_cycles
 
-	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600)"
-	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 7800)"
+	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 5400)"
+	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 11700)"
 	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 0)"
 	previous_run_timeout="$original_run_timeout"
 	previous_budget_seconds="$budget_seconds"
@@ -239,23 +239,33 @@ is_context_overflow_failure() {
 
 is_fatal_provider_failure() {
 	local opencode_json_file="$1"
+	local opencode_stderr_file="${2:-/dev/null}"
 
 	if is_context_overflow_failure "$opencode_json_file"; then
 		return 0
 	fi
-	[ -s "$opencode_json_file" ] || return 1
-	grep -Eiq 'budget limit|insufficient_quota' "$opencode_json_file"
+	grep -Eiq 'budget limit|insufficient_quota|statusCode"[[:space:]]*:[[:space:]]*5[0-9][0-9]|Model service is unavailable' \
+		"$opencode_json_file" "$opencode_stderr_file" 2>/dev/null
 }
 
 has_fatal_provider_error_event() {
 	local opencode_json_file="$1"
+	local opencode_stderr_file="${2:-/dev/null}"
 
-	[ -s "$opencode_json_file" ] || return 1
 	# Only structured "type":"error" events count while the process is still
 	# running: model prose or tool output quoting these signatures is
 	# JSON-escaped inside event strings, so a healthy streaming run is never
 	# killed for merely discussing context windows or quota errors.
-	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
+	if [ -s "$opencode_json_file" ] && \
+		awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota/ { found = 1; exit } END { exit !found }' "$opencode_json_file"; then
+		return 0
+	fi
+	# OpenCode retries provider HTTP 5xx responses internally without emitting a
+	# JSON event. --print-logs writes the structured LLM error to the captured
+	# stderr artifact; fail over after the first service-unavailable response
+	# instead of paying for an hour-long exponential retry loop.
+	[ -s "$opencode_stderr_file" ] && \
+		grep -Eiq 'service=llm.*statusCode"[[:space:]]*:[[:space:]]*5[0-9][0-9]|responseBody":"Model service is unavailable' "$opencode_stderr_file"
 }
 
 emit_sanitized_opencode_failure_detail() {
@@ -273,7 +283,9 @@ emit_sanitized_opencode_failure_detail() {
 	fi
 
 	failure_class="unclassified"
-	if grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+	if grep -Eiq 'statusCode"[[:space:]]*:[[:space:]]*5[0-9][0-9]|Model service is unavailable' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="service-unavailable"
+	elif grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="context-window"
 	elif grep -Eiq 'budget limit|insufficient_quota|quota exceeded' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="quota-or-budget"
@@ -389,6 +401,27 @@ export_and_validate_session_output() {
 	return 0
 }
 
+lookup_session_id_by_exact_title() {
+	local session_title="$1"
+	local session_list_file="$2"
+	local list_timeout_seconds="${OPENCODE_SESSION_LIST_TIMEOUT_SECONDS:-30}"
+	local session_id
+
+	if ! timeout --kill-after=10s "${list_timeout_seconds}s" \
+		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		opencode session list --pure --format json -n 100 >"$session_list_file"; then
+		printf 'OpenCode exact-title session lookup did not complete within %ss; timed-out work cannot be exported by fallback lookup.\n' "$list_timeout_seconds" >&2
+		return 1
+	fi
+	session_id="$(jq -r --arg title "$session_title" '[.[] | select(.title == $title) | .id] | last // empty' "$session_list_file" 2>/dev/null)"
+	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
+		printf 'OpenCode exact-title session lookup found no session for the current run title.\n' >&2
+		return 1
+	fi
+	printf '%s\n' "$session_id"
+}
+
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -399,13 +432,16 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local run_timeout_seconds opencode_status session_id opencode_stderr_file
+	local session_title session_list_file
 	local opencode_pid fatal_poll_seconds
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
+	session_list_file="${opencode_json_file}.sessions.json"
+	session_title="PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} run ${RUN_ID:-local}/${RUN_ATTEMPT:-1} attempt ${attempt}/${attempts} nonce $$-${RANDOM}"
 
-	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
+	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file" "$session_list_file"
 	set +e
 	timeout --kill-after=30s "${run_timeout_seconds}s" \
 		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
@@ -415,7 +451,9 @@ run_one_model_attempt() {
 		--agent "$agent" \
 		--model "$model_candidate" \
 		--format json \
-		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+		--print-logs \
+		--log-level ERROR \
+		--title "$session_title" \
 		>"$opencode_json_file" 2>"$opencode_stderr_file" &
 	opencode_pid=$!
 	# Some providers (github-models ContextOverflowError) log a fatal error and
@@ -423,7 +461,7 @@ run_one_model_attempt() {
 	# log while opencode runs and kill the process early so the pool falls
 	# through to the next candidate within seconds instead of minutes.
 	while kill -0 "$opencode_pid" 2>/dev/null; do
-		if has_fatal_provider_error_event "$opencode_json_file"; then
+		if has_fatal_provider_error_event "$opencode_json_file" "$opencode_stderr_file"; then
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
 			kill "$opencode_pid" 2>/dev/null
@@ -440,11 +478,21 @@ run_one_model_attempt() {
 	opencode_status=$?
 	set -e
 	session_id="$(jq -r 'select(.type == "step_start") | .sessionID' "$opencode_json_file" 2>/dev/null | tail -n 1)"
+	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
+		printf 'OpenCode %s attempt %s/%s JSON output did not expose a session id; attempting exact-title session-list recovery for the current run.\n' \
+			"$model_candidate" "$attempt" "$attempts"
+		if session_id="$(lookup_session_id_by_exact_title "$session_title" "$session_list_file")"; then
+			printf 'OpenCode %s attempt %s/%s recovered session %s from the exact current-run title.\n' \
+				"$model_candidate" "$attempt" "$attempts" "$session_id"
+		else
+			session_id=""
+		fi
+	fi
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
 		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
 		if { [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ] || [ "$opencode_status" -eq 143 ]; } && \
-			! is_fatal_provider_failure "$opencode_json_file"; then
+			! is_fatal_provider_failure "$opencode_json_file" "$opencode_stderr_file"; then
 			printf 'OpenCode %s attempt %s/%s timed out after %ss; attempting to recover any assistant text already persisted in session %s before falling through.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds" "${session_id:-<missing>}"
 			if [ -n "$session_id" ] && [ "$session_id" != "null" ]; then
@@ -457,8 +505,8 @@ run_one_model_attempt() {
 					"$model_candidate" "$attempt" "$attempts"
 			fi
 		fi
-		if is_fatal_provider_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+		if is_fatal_provider_failure "$opencode_json_file" "$opencode_stderr_file"; then
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (service unavailable, context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
@@ -467,8 +515,8 @@ run_one_model_attempt() {
 	if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "sessionless-json" "$opencode_json_file"
-		if is_fatal_provider_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+		if is_fatal_provider_failure "$opencode_json_file" "$opencode_stderr_file"; then
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (service unavailable, context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
@@ -488,8 +536,8 @@ main() {
 	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ]; then
-		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-3600}"
-		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-7800}"
+		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-5400}"
+		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-11700}"
 		max_cycles="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES:-1}"
 		printf 'Central review-process evidence fallback eligible for scope "%s"; limiting OpenCode model pool to %ss per attempt, %ss total budget, and %s cycle(s) so provider delay is logged before the publish fallback evaluates current-head peer evidence.\n' \
 			"${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unsupported}" "$original_run_timeout" "$budget_seconds" "$max_cycles"
@@ -504,16 +552,16 @@ main() {
 				original_run_timeout="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
 				budget_seconds="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS 7800)"
 			else
-				original_run_timeout="$(env_integer_or_default OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
-				budget_seconds="$(env_integer_or_default OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS 7800)"
+				original_run_timeout="$(env_integer_or_default OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS 5400)"
+				budget_seconds="$(env_integer_or_default OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS 11700)"
 			fi
 			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
 			cap_dynamic_cadence_for_queue
 			printf 'OpenCode dynamic review cadence selected %ss per attempt and %ss total budget for %s changed file(s); max-cycles=%s.\n' \
 				"$original_run_timeout" "$budget_seconds" "$changed_file_count" "$max_cycles"
 		else
-			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
-			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 7800)"
+			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 5400)"
+			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 11700)"
 			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
 			cap_dynamic_cadence_for_queue
 			printf 'OpenCode dynamic review cadence could not read OPENCODE_CHANGED_FILES_FILE; using %ss per attempt and %ss total budget; max-cycles=%s.\n' \

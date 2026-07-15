@@ -649,11 +649,14 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 150' "opencode review target releases stalled review runners within the bounded queue budget"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 65' "opencode model pool gives multiple candidates a bounded review window while capping stalled model attempts"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool gives two long-review candidates a bounded review window"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 34' "opencode fast approval publication is bounded around the dynamic image and package/GPU check wait"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' "opencode primary review advances after a bounded stalled provider attempt"
-	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review preserves repositories that require more than one hour"
+	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' "opencode model pool leaves enough budget for a second long-review candidate"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '--print-logs' "opencode captures structured provider errors without replaying their content"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'failure_class="service-unavailable"' "opencode identifies provider 5xx outages instead of waiting out the long review timeout"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'lookup_session_id_by_exact_title' "opencode recovers paid sessions even when JSON output is empty"
 	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "0"' "opencode model pool keeps cycling until the bounded retry budget or step timeout is exhausted"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model pool only runs after coverage evidence passed"
 	assert_file_contains "$workflow_file" "id: opencode_review_model_pool" "opencode DeepSeek V3 fallback still runs after a primary model timeout or step failure when coverage evidence passed"
@@ -805,7 +808,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary and fallback paths avoid multi-attempt stalls on one model"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode catalog fallback tries each model once before moving on"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' "opencode catalog fallback advances after a bounded stalled provider attempt"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog allows a 90-minute long-repository review"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries DeepSeek V3 before OpenAI fallbacks"
@@ -1118,7 +1121,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "collect_failed_check_evidence.sh" "opencode review workflow collects failed check logs and annotations"
 	assert_file_contains "$workflow_file" 'HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}' "opencode evidence step passes the live validated HEAD_SHA to failed-check evidence collection"
 	assert_file_contains "$workflow_file" "FAILED_CHECK_EVIDENCE_ATTEMPTS" "opencode review workflow bounds waiting for peer check failures before model review"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 65' "opencode model stage has a bounded multi-provider timeout"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model stage has a bounded multi-provider timeout"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation has a bounded peer-check wait timeout"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"' "opencode review workflow keeps pre-model peer-check waiting bounded for required workflow DX"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "5"' "opencode review workflow retries peer-check evidence without stalling the model stage for Strix-scale durations"
@@ -5613,7 +5616,7 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"" \
 			"" \
-			"2" \
+			"3" \
 			"0" \
 			"pull_request" \
 			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
@@ -9184,7 +9187,7 @@ run_gate_case_allow_provider_signal "zero-findings-with-low-report-timeout" \
 	"0" \
 	"" \
 	"" \
-	"2" \
+	"3" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"

@@ -153,11 +153,21 @@ def run_failed_model(
     fake_opencode.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "${1:-}" = run ]; then\n'
+        '  previous=""\n'
+        '  for argument in "$@"; do\n'
+        '    if [ "$previous" = "--title" ] && [ -n "${FAKE_OPENCODE_TITLE_FILE:-}" ]; then printf \'%s\n\' "$argument" > "$FAKE_OPENCODE_TITLE_FILE"; fi\n'
+        '    previous="$argument"\n'
+        '  done\n'
         '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$2" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
         '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
         '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
         '  sleep "${FAKE_OPENCODE_HANG_SECONDS:-0}"\n'
         '  exit "${FAKE_OPENCODE_RUN_EXIT:-1}"\n'
+        "fi\n"
+        'if [ "${1:-}" = session ] && [ "${2:-}" = list ]; then\n'
+        '  title="$(cat "${FAKE_OPENCODE_TITLE_FILE:-/dev/null}" 2>/dev/null || true)"\n'
+        '  if [ -n "${FAKE_OPENCODE_SESSION_ID:-}" ] && [ -n "$title" ]; then printf \'[{"id":"%s","title":"%s"}]\n\' "$FAKE_OPENCODE_SESSION_ID" "$title"; else printf \'[]\n\'; fi\n'
+        '  exit "${FAKE_OPENCODE_SESSION_LIST_EXIT:-0}"\n'
         "fi\n"
         'if [ "${1:-}" = export ]; then\n'
         '  [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
@@ -179,6 +189,7 @@ def run_failed_model(
             if prompt_capture
             else "",
             "FAKE_OPENCODE_STDERR": stderr_line,
+            "FAKE_OPENCODE_TITLE_FILE": bash_path(tmp_path / "opencode-title.txt"),
             "GITHUB_OUTPUT": bash_path(github_output),
             "GITHUB_WORKSPACE": bash_path(ROOT),
             "HEAD_SHA": "1" * 40,
@@ -561,6 +572,30 @@ def test_fatal_provider_error_kills_hung_opencode_run_early(
     assert elapsed < 25
 
 
+def test_service_unavailable_log_kills_internal_retry_loop_early(
+    tmp_path: Path,
+) -> None:
+    """A captured provider HTTP 5xx fails over instead of retrying for an hour."""
+    result = run_failed_model(
+        tmp_path,
+        stderr_line=(
+            'ERROR service=llm error={"statusCode":500,'
+            '"responseBody":"Model service is unavailable."}'
+        ),
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "120",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "5400",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "11700",
+        },
+        model_candidates="github-models/deepseek/deepseek-v3-0324",
+    )
+
+    assert result.returncode == 1
+    assert "logged a fatal provider error while still running" in result.stdout
+    assert "class=service-unavailable" in result.stdout
+    assert "skipping remaining attempts for this model" in result.stdout
+
+
 def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:
     """Model prose mentioning fatal signatures never kills a healthy streaming run."""
     result = run_failed_model(
@@ -610,6 +645,39 @@ def test_timed_out_session_exports_persisted_assistant_text_before_fallback(
     assert "attempting to recover any assistant text already persisted" in result.stdout
     assert "kind=invalid-control-output" in result.stdout
     assert "timed-out session export did not contain a valid recoverable conclusion" in result.stdout
+
+
+def test_timed_out_session_recovers_id_from_exact_current_run_title(
+    tmp_path: Path,
+) -> None:
+    """Zero-byte JSON still locates and exports the uniquely titled paid session."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "5",
+            "FAKE_OPENCODE_SESSION_ID": "session-list-paid-timeout",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {"type": "text", "text": "persisted incomplete review"}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "1",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "3",
+        },
+        model_candidates="github-models/deepseek/deepseek-v3-0324",
+    )
+
+    assert result.returncode == 1
+    assert "attempting exact-title session-list recovery" in result.stdout
+    assert "recovered session session-list-paid-timeout" in result.stdout
+    assert "kind=invalid-control-output" in result.stdout
 
 
 def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> None:

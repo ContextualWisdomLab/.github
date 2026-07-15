@@ -386,16 +386,18 @@ def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
             "probes": [mismatched, validation["probes"][1]],
         }
     )
-    normalized = norm.valid_control(
-        invalid,
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
+    mismatch_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            invalid,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=mismatch_reasons,
+        )
+        is None
     )
-    assert normalized is not None
-    repaired_evidence = normalized["adversarial_validation"]["probes"][0]["evidence"]
-    assert source_line_receipt("line 7") in repaired_evidence
-    assert "source-line-sha256=" + "0" * 64 not in repaired_evidence
+    assert "does not match the cited current-head line" in mismatch_reasons[-1]
 
 
 def test_valid_control_repairs_only_verified_probe_binding(tmp_path, monkeypatch):
@@ -410,10 +412,7 @@ def test_valid_control_repairs_only_verified_probe_binding(tmp_path, monkeypatch
             "Regression command ",
             probe["evidence"],
         )
-        unbound["evidence"] = unbound_evidence.replace(
-            source_line_receipt(f"line {probe['line']}"),
-            "source-line-sha256=" + "0" * 64,
-        )
+        unbound["evidence"] = unbound_evidence
         unbound_probes.append(unbound)
 
     normalized = norm.valid_control(

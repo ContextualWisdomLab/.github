@@ -798,11 +798,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "3600"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"'
         in workflow
     )
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "7800"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"'
         in workflow
     )
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
@@ -874,15 +874,15 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 150", workflow)
     assert "timeout-minutes: 12" in workflow
     assert re.search(
-        r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 140", workflow
+        r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
     )
     assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "4200"' in workflow
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "8100"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert (
         'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s"'
         in workflow
@@ -925,10 +925,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/deepseek/deepseek-r1"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "8100"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert (
@@ -939,12 +939,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "4200"' in workflow
     assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "7800"' in workflow
-    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "7800"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
