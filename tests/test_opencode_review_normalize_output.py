@@ -400,70 +400,6 @@ def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
     assert "does not match the cited current-head line" in mismatch_reasons[-1]
 
 
-def test_valid_control_repairs_only_verified_probe_binding(tmp_path, monkeypatch):
-    """Machine binding may restore path prose but never invent observed proof."""
-    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
-    validation = adversarial_validation()
-    unbound_probes = []
-    for probe in validation["probes"]:
-        unbound = dict(probe)
-        unbound_evidence = re.sub(
-            rf"Focused source trace at {re.escape(probe['path'])}:{probe['line']} and ",
-            "Regression command ",
-            probe["evidence"],
-        )
-        unbound["evidence"] = unbound_evidence
-        unbound_probes.append(unbound)
-
-    normalized = norm.valid_control(
-        control(
-            adversarial_validation={
-                **validation,
-                "probes": unbound_probes,
-            }
-        ),
-        expected_head_sha="head",
-        expected_run_id="run",
-        expected_run_attempt="attempt",
-    )
-
-    assert normalized is not None
-    repaired_probes = normalized["adversarial_validation"]["probes"]
-    assert repaired_probes[0]["evidence"].startswith("scripts/ci/example.py:7 ")
-    assert source_line_receipt("line 7") in repaired_probes[0]["evidence"]
-    assert repaired_probes[1]["evidence"].startswith("scripts/ci/example.py:8 ")
-    assert source_line_receipt("line 8") in repaired_probes[1]["evidence"]
-
-
-def test_adversarial_binding_repair_fails_closed_without_observed_proof():
-    """Receipt-only or malformed evidence cannot be upgraded into a review result."""
-    malformed = {"adversarial_validation": {"probes": "not-an-array"}}
-    assert norm.repair_adversarial_probe_evidence_bindings(None) is None
-    assert norm.repair_adversarial_probe_evidence_bindings(malformed) is malformed
-
-    receipt_only = {
-        "adversarial_validation": {
-            "probes": [
-                "not-an-object",
-                {
-                    "path": "scripts/ci/example.py",
-                    "line": 7,
-                    "evidence": source_line_receipt("line 7"),
-                },
-                {
-                    "path": "not-a-current-head-change.py",
-                    "line": 1,
-                    "evidence": (
-                        "Source trace at not-a-current-head-change.py:1 confirmed a result; "
-                        + source_line_receipt("untrusted")
-                    ),
-                },
-            ]
-        }
-    }
-    assert norm.repair_adversarial_probe_evidence_bindings(receipt_only) is receipt_only
-
-
 def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(
     tmp_path, monkeypatch
 ):
@@ -487,35 +423,6 @@ def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(
         norm.adversarial_probe_source_receipt_error(receipt, "missing.py", 1)
         == "source-line receipt could not be verified from the trusted tree"
     )
-    assert (
-        norm.adversarial_probe_source_receipt_error(receipt, "one_line.py", 1)
-        == "source-line-sha256 receipt does not match the cited current-head line"
-    )
-
-
-def test_valid_control_fails_closed_if_trusted_digest_disappears(
-    tmp_path, monkeypatch
-):
-    """A source read race after location validation cannot publish a model result."""
-    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
-    monkeypatch.setattr(
-        norm,
-        "adversarial_probe_source_line_digest",
-        lambda _path, _line: None,
-    )
-    reasons: list[str] = []
-
-    assert (
-        norm.valid_control(
-            control(adversarial_validation=adversarial_validation()),
-            expected_head_sha="head",
-            expected_run_id="run",
-            expected_run_attempt="attempt",
-            rejection_reasons=reasons,
-        )
-        is None
-    )
-    assert "source-line receipt could not be verified" in reasons[-1]
 
 
 def test_adversarial_request_changes_requires_confirmed_probe_at_finding(

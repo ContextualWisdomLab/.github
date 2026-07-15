@@ -653,93 +653,6 @@ def adversarial_probe_source_receipt_error(
     return ""
 
 
-def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | Any:
-    """Bind otherwise valid probe evidence to trusted current-head source bytes.
-
-    A model may cite the real changed-file path and positive line, report an
-    independently observed result, yet duplicate the location incompletely.
-    Restore only a missing literal ``path:line`` prefix after the model-supplied
-    ``source-line-sha256`` already matches the sealed current-head source tree.
-    Never replace a wrong digest: doing so would manufacture the receipt that is
-    meant to prove the model bound its observation to that exact line. The
-    model's hypothesis, observation, outcome, result, findings, and conclusion
-    are never synthesized or changed. Unsafe paths, non-changed files, missing,
-    duplicate, or mismatched receipts, circular claims, negated execution, and
-    evidence without an independent proof/result remain untouched and fail
-    closed in the normal validator.
-    """
-    if not isinstance(value, dict):
-        return value
-    validation = value.get("adversarial_validation")
-    if not isinstance(validation, dict):
-        return value
-    probes = validation.get("probes")
-    if not isinstance(probes, list):
-        return value
-
-    changed_files = current_changed_files()
-    repaired_probes: list[Any] = []
-    changed = False
-    for probe in probes:
-        if not isinstance(probe, dict):
-            repaired_probes.append(probe)
-            continue
-        path = probe.get("path")
-        line = probe.get("line")
-        evidence = probe.get("evidence")
-        if (
-            not isinstance(path, str)
-            or path not in changed_files
-            or isinstance(line, bool)
-            or not isinstance(line, int)
-            or line <= 0
-            or not isinstance(evidence, str)
-            or not evidence.strip()
-            or adversarial_probe_location_error(path, line)
-        ):
-            repaired_probes.append(probe)
-            continue
-        receipts = SOURCE_LINE_RECEIPT_RE.findall(evidence)
-        expected_digest = adversarial_probe_source_line_digest(path, line)
-        if len(receipts) != 1 or expected_digest is None:
-            repaired_probes.append(probe)
-            continue
-
-        if receipts[0].casefold() != expected_digest:
-            repaired_probes.append(probe)
-            continue
-        repaired_evidence = evidence.strip()
-        rejection = adversarial_evidence_rejection_reason(
-            repaired_evidence,
-            path,
-            line,
-        )
-        if rejection == "must cite the exact probe path and positive line":
-            repaired_evidence = f"{path}:{line} {repaired_evidence}"
-        if (
-            adversarial_evidence_rejection_reason(repaired_evidence, path, line)
-            or adversarial_probe_source_receipt_error(
-                repaired_evidence,
-                path,
-                line,
-            )
-        ):
-            repaired_probes.append(probe)
-            continue
-        if repaired_evidence == evidence:
-            repaired_probes.append(probe)
-            continue
-        repaired_probes.append({**probe, "evidence": repaired_evidence})
-        changed = True
-
-    if not changed:
-        return value
-    return {
-        **value,
-        "adversarial_validation": {**validation, "probes": repaired_probes},
-    }
-
-
 def adversarial_validation_error(
     value: Any,
     *,
@@ -1354,7 +1267,6 @@ def valid_control(
         return reject("APPROVE cannot contain findings")
     if result == "REQUEST_CHANGES" and not findings:
         return reject("REQUEST_CHANGES requires at least one finding")
-    value = repair_adversarial_probe_evidence_bindings(value)
     adversarial_error = adversarial_validation_error(
         value.get("adversarial_validation"),
         result=result,
