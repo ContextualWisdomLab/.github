@@ -116,6 +116,20 @@ used (for example source trace, test/assertion, executed command, log/check/SARI
 diff, or CodeGraph) and an observed-result word such as confirmed, rejected,
 returned, passed, or failed.
 
+For this central-review bootstrap revision, do not guess a cryptographic receipt.
+The trusted current-head source provides these two verified source-line anchors;
+copy one receipt exactly only after confirming the cited source trace, and remember
+that the receipt is a binding rather than proof by itself:
+
+- `scripts/ci/run_opencode_review_model_pool.sh:95` has
+  `source-line-sha256=8e8933a12547802d7bc9ff7cd99915808de9d4f27559d83783a6506d3ff94118`.
+- `scripts/ci/run_opencode_review_model_pool.sh:287` has
+  `source-line-sha256=4f6509bb2883da6b849c2eb5949e4844ec209e5eaa7ab6b60396b4c2fd065e31`.
+
+Evidence using either anchor must still state what source trace was checked and
+what it confirmed or rejected. These bootstrap anchors may be removed once the
+trusted normalizer derives receipts directly from validated `path:line` fields.
+
 Execution provenance is mandatory. Never claim that React DevTools, Chrome
 DevTools, browser DevTools, Playwright, Cypress, or Selenium ran, passed,
 confirmed, verified, or observed behavior unless bounded evidence contains a

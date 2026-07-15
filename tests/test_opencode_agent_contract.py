@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -613,6 +614,18 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "production API behavior" in ci_prompt
     assert "prefers-reduced-motion: reduce" in prompt
     assert "prefers-reduced-motion: reduce" in ci_prompt_normalized
+
+
+def test_bootstrap_source_receipts_match_current_head_lines():
+    """Keep temporary bootstrap receipts bound to the cited source bytes."""
+    ci_prompt = Path("ci-review-prompt.md").read_text(encoding="utf-8")
+    source_path = Path("scripts/ci/run_opencode_review_model_pool.sh")
+    source_lines = source_path.read_bytes().splitlines()
+
+    for line in (95, 287):
+        digest = hashlib.sha256(source_lines[line - 1]).hexdigest()
+        assert f"`{source_path.as_posix()}:{line}`" in ci_prompt
+        assert f"`source-line-sha256={digest}`" in ci_prompt
 
 
 def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
