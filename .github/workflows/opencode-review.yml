@@ -143,8 +143,13 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       id-token: write
+    outputs:
+      r_package_peer_result: ${{ steps.r_package_peer.outputs.result }}
+      r_package_peer_conclusion: ${{ steps.r_package_peer.outputs.conclusion }}
+      r_package_peer_url: ${{ steps.r_package_peer.outputs.run_url }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -272,6 +277,99 @@ jobs:
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
 
+      - name: Await current-head R CMD check package evidence
+        id: r_package_peer
+        env:
+          GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
+        run: |
+          set -euo pipefail
+
+          write_result() {
+            local result="$1"
+            local conclusion="${2:-}"
+            local run_url="${3:-}"
+            {
+              printf 'result=%s\n' "$result"
+              printf 'conclusion=%s\n' "$conclusion"
+              printf 'run_url=%s\n' "$run_url"
+            } >>"$GITHUB_OUTPUT"
+          }
+
+          if [ ! -f "${COVERAGE_SOURCE_WORKDIR}/DESCRIPTION" ]; then
+            echo "No root R package DESCRIPTION exists; peer R CMD check evidence is not applicable."
+            write_result "not_applicable"
+            exit 0
+          fi
+
+          changed_paths="$(git -C "$COVERAGE_SOURCE_WORKDIR" diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA")"
+          if ! rg -q '(^DESCRIPTION$|^NAMESPACE$|^R/.*[.]R$|^tests/testthat/.*[.]R$)' <<<"$changed_paths"; then
+            echo "The current head does not change the root R package or its testthat suite; peer R CMD check evidence is not applicable."
+            write_result "not_applicable"
+            exit 0
+          fi
+
+          mapfile -t workflow_paths < <(
+            rg -l \
+              --glob '*.yml' \
+              --glob '*.yaml' \
+              'r-lib/actions/check-r-package@' \
+              "${COVERAGE_SOURCE_WORKDIR}/.github/workflows" 2>/dev/null \
+              | while IFS= read -r path; do
+                  printf '%s\n' "${path#${COVERAGE_SOURCE_WORKDIR}/}"
+                done
+          )
+          if [ "${#workflow_paths[@]}" -eq 0 ]; then
+            echo "::error::Root R package changes require a repository R CMD check workflow using the pinned r-lib check action."
+            write_result "missing"
+            exit 0
+          fi
+
+          workflow_paths_json="$(printf '%s\n' "${workflow_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          deadline=$((SECONDS + 5400))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            runs_json="$(
+              gh api --method GET "repos/${TARGET_REPOSITORY}/actions/runs" \
+                -f "head_sha=${PR_HEAD_SHA}" \
+                -f event=pull_request \
+                -F per_page=100
+            )"
+            current_run="$(
+              jq -c \
+                --arg head_sha "$PR_HEAD_SHA" \
+                --argjson workflow_paths "$workflow_paths_json" \
+                '[.workflow_runs[]
+                  | select(.head_sha == $head_sha)
+                  | select(.path as $path | $workflow_paths | index($path))]
+                 | sort_by(.run_number, .run_attempt)
+                 | last // empty' <<<"$runs_json"
+            )"
+            if [ -n "$current_run" ]; then
+              status="$(jq -r '.status // empty' <<<"$current_run")"
+              conclusion="$(jq -r '.conclusion // empty' <<<"$current_run")"
+              run_url="$(jq -r '.html_url // empty' <<<"$current_run")"
+              run_id="$(jq -r '.id // empty' <<<"$current_run")"
+              printf 'Current-head R CMD check run %s is %s/%s for %s.\n' "$run_id" "${status:-unknown}" "${conclusion:-pending}" "$PR_HEAD_SHA"
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" = "success" ]; then
+                  write_result "success" "$conclusion" "$run_url"
+                else
+                  write_result "failure" "${conclusion:-unknown}" "$run_url"
+                fi
+                exit 0
+              fi
+            else
+              printf 'Waiting for a current-head R CMD check run for %s.\n' "$PR_HEAD_SHA"
+            fi
+            sleep 30
+          done
+
+          echo "::error::Current-head R CMD check did not complete within 90 minutes. The package check may still be running; its result was not discarded or mislabeled as a code failure."
+          write_result "timed_out"
+
       - name: Upload materialized pull request merge tree
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -385,6 +483,9 @@ jobs:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+          R_PACKAGE_PEER_RESULT: ${{ needs.coverage-source-tree.outputs.r_package_peer_result }}
+          R_PACKAGE_PEER_CONCLUSION: ${{ needs.coverage-source-tree.outputs.r_package_peer_conclusion }}
+          R_PACKAGE_PEER_URL: ${{ needs.coverage-source-tree.outputs.r_package_peer_url }}
           # Dependency resolution may consume wheels/packages, but PR-defined
           # install/build hooks are never executed implicitly.
           UV_NO_BUILD: "1"
@@ -996,8 +1097,34 @@ jobs:
               Rscript -e 'required <- c("covr", "testthat"); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("signed distribution coverage packages unavailable: ", paste(missing, collapse = ", "))'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
-                run_and_capture "R package testthat suite" \
-                  Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); if (!requireNamespace("testthat", quietly = TRUE)) { message("testthat unavailable in coverage runner; deferring to required peer R CMD check evidence."); quit(status = 0) }; testthat::test_dir("tests/testthat")'
+                case "${R_PACKAGE_PEER_RESULT:-not_applicable}" in
+                  success)
+                    append "### R package testthat suite"
+                    append ""
+                    append "- Result: PASS"
+                    append "- Reason: the repository's current-head R CMD check completed successfully and provides package-aware installation plus testthat evidence."
+                    if [ -n "${R_PACKAGE_PEER_URL:-}" ]; then
+                      append "- Peer run: ${R_PACKAGE_PEER_URL}"
+                    fi
+                    append ""
+                    ;;
+                  missing|failure|timed_out)
+                    append "### R package testthat suite"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: current-head package-aware R CMD check evidence is ${R_PACKAGE_PEER_RESULT} (conclusion: ${R_PACKAGE_PEER_CONCLUSION:-unavailable})."
+                    if [ -n "${R_PACKAGE_PEER_URL:-}" ]; then
+                      append "- Peer run: ${R_PACKAGE_PEER_URL}"
+                    fi
+                    append "- Fix: keep the pinned repository R CMD check workflow enabled and fix its exact installation or test failure before review approval."
+                    append ""
+                    failures=$((failures + 1))
+                    ;;
+                  *)
+                    run_and_capture "R package testthat suite" \
+                      Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); if (!requireNamespace("testthat", quietly = TRUE)) { message("testthat unavailable in coverage runner; no package-aware peer evidence exists."); quit(status = 1) }; testthat::test_dir("tests/testthat")'
+                    ;;
+                esac
               else
                 append "### R package testthat suite"
                 append ""
