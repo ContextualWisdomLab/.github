@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci import opencode_review_normalize_output as normalizer
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
@@ -27,6 +29,16 @@ CENTRAL_FALLBACK_ENV = {
     "OPENCODE_EVIDENCE_FILE",
     "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION",
 }
+
+
+@pytest.fixture(autouse=True)
+def clear_normalizer_artifact_caches():
+    """Keep trusted artifact caches isolated from later review-gate tests."""
+    normalizer.current_changed_files.cache_clear()
+    normalizer.trusted_execution_receipts.cache_clear()
+    yield
+    normalizer.current_changed_files.cache_clear()
+    normalizer.trusted_execution_receipts.cache_clear()
 
 
 def bash_command() -> str:
@@ -85,6 +97,170 @@ def seal_artifacts(
         if path.exists():
             path.chmod(0o600)
     return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
+def prepare_probe_binding_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, int, str]:
+    """Create one sealed changed source line for normalizer binding tests."""
+    runner_temp = tmp_path / "binding-runner-temp"
+    source_root = tmp_path / "binding-source"
+    source_path = source_root / "scripts" / "ci" / "example.py"
+    runner_temp.mkdir()
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("return False\n", encoding="utf-8")
+    changed_files = runner_temp / "opencode-changed-files.txt"
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    manifest_digest = seal_artifacts(
+        runner_temp,
+        head_sha="binding-head",
+        run_id="binding-run",
+        run_attempt="1",
+        paths=(changed_files,),
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    monkeypatch.setenv("OPENCODE_ARTIFACT_MANIFEST_SHA256", manifest_digest)
+    normalizer.current_changed_files.cache_clear()
+    normalizer.trusted_execution_receipts.cache_clear()
+    digest = hashlib.sha256(b"return False").hexdigest()
+    return "scripts/ci/example.py", 1, f"source-line-sha256={digest}"
+
+
+def test_normalizer_binds_only_a_verified_structured_probe_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A matching receipt may restore only redundant path:line evidence text."""
+    path, line, receipt = prepare_probe_binding_artifacts(tmp_path, monkeypatch)
+    evidence = (
+        f"Regression command rejected malformed input with exit code 1; {receipt}"
+    )
+    value = {
+        "adversarial_validation": {
+            "probes": [
+                {
+                    "path": path,
+                    "line": line,
+                    "evidence": evidence,
+                }
+            ]
+        }
+    }
+
+    repaired = normalizer.repair_adversarial_probe_evidence_bindings(value)
+
+    assert repaired is not value
+    assert repaired["adversarial_validation"]["probes"][0]["evidence"] == (
+        f"{path}:{line} {evidence}"
+    )
+
+
+def test_normalizer_probe_binding_repair_remains_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Malformed, untrusted, circular, and already-bound probes are not rewritten."""
+    path, line, receipt = prepare_probe_binding_artifacts(tmp_path, monkeypatch)
+    assert normalizer.repair_adversarial_probe_evidence_bindings(None) is None
+
+    missing_validation: dict[str, object] = {}
+    assert (
+        normalizer.repair_adversarial_probe_evidence_bindings(missing_validation)
+        is missing_validation
+    )
+    malformed = {"adversarial_validation": {"probes": "not-a-list"}}
+    assert normalizer.repair_adversarial_probe_evidence_bindings(malformed) is malformed
+
+    invalid_values = [
+        {
+            "adversarial_validation": {
+                "probes": [
+                    "not-an-object",
+                    {"path": path, "line": 0, "evidence": receipt},
+                ]
+            }
+        },
+        {
+            "adversarial_validation": {
+                "probes": [
+                    {
+                        "path": path,
+                        "line": line,
+                        "evidence": (
+                            "Regression command rejected malformed input with exit code 1; "
+                            "source-line-sha256=" + "0" * 64
+                        ),
+                    }
+                ]
+            }
+        },
+        {
+            "adversarial_validation": {
+                "probes": [
+                    {
+                        "path": path,
+                        "line": line,
+                        "evidence": (
+                            "Regression command rejected malformed input with exit code 1; "
+                            f"{receipt} {receipt}"
+                        ),
+                    }
+                ]
+            }
+        },
+        {
+            "adversarial_validation": {
+                "probes": [
+                    {
+                        "path": "scripts/ci/not-changed.py",
+                        "line": line,
+                        "evidence": (
+                            "Regression command rejected malformed input with exit code 1; "
+                            f"{receipt}"
+                        ),
+                    }
+                ]
+            }
+        },
+        {
+            "adversarial_validation": {
+                "probes": [
+                    {
+                        "path": path,
+                        "line": line,
+                        "evidence": receipt,
+                    }
+                ]
+            }
+        },
+        {
+            "adversarial_validation": {
+                "probes": [
+                    {
+                        "path": path,
+                        "line": line,
+                        "evidence": f"Source inspection properly handles all cases; {receipt}",
+                    }
+                ]
+            }
+        },
+        {
+            "adversarial_validation": {
+                "probes": [
+                    {
+                        "path": path,
+                        "line": line,
+                        "evidence": (
+                            f"Regression command at {path}:{line} rejected malformed input "
+                            f"with exit code 1; {receipt}"
+                        ),
+                    }
+                ]
+            }
+        },
+    ]
+    for invalid in invalid_values:
+        assert normalizer.repair_adversarial_probe_evidence_bindings(invalid) is invalid
 
 
 def skip_if_windows_bash_is_unresponsive(command: str) -> None:
