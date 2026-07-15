@@ -1514,10 +1514,9 @@ jobs:
       # continue-on-error, so it survives the job failing.
       model_pool_outcome: ${{ steps.opencode_review_model_pool.outputs.review_status }}
     # Coverage and current-head evidence are prepared before the model pool.
-    # The model pool has a 60-minute retry budget and its publish gate can wait
-    # for long same-head package/GPU checks, so 150 minutes releases genuinely
-    # hung runners without truncating the bounded multi-provider review path.
-    timeout-minutes: 150
+    # A single legitimate review may need a full hour. Keep enough room for the
+    # bounded 195-minute provider pool plus final current-head publication gates.
+    timeout-minutes: 240
     permissions:
       actions: read
       checks: read
@@ -3368,7 +3367,7 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 65
+        timeout-minutes: 205
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
@@ -3395,13 +3394,14 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Keep stale providers from pinning required review jobs for hours.
-          # Adversarial validation needs enough room to read the evidence, but
-          # dynamic cadence and the outer watchdog still bound each current-head run.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "2100"
+          # Preserve reviews that legitimately need tens of minutes to inspect a
+          # large repository. Changed-file count is not a repository-complexity
+          # proxy, so every cadence class gets 90 minutes per candidate while the
+          # bounded provider-pool watchdog remains the outer guard.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"
+          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"
           # Keep cycling through the high-sensitivity candidate catalog until
           # the retry budget or step timeout is exhausted; a single invalid
           # cycle can be all provider formatting noise rather than review
@@ -3410,16 +3410,16 @@ jobs:
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
-          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "600"
-          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "1800"
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
+          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
+          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
@@ -3429,8 +3429,8 @@ jobs:
           OPENCODE_DYNAMIC_MAX_CYCLES: "0"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "600"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
