@@ -330,6 +330,8 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert 'ensure_tauri_frontend_dist "$manifest"' in measure_step
     assert "rust_coverage_fail_under_lines()" in measure_step
     assert "package.metadata.opencode.coverage.minimum_lines" in measure_step
+    assert "workspace.metadata.opencode.coverage.minimum_lines" in measure_step
+    assert "scripts/ci/rust_coverage_threshold.py" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
     assert "run_python_uv_lock_check()" in measure_step
     assert "Python uv lockfile consistency (${project_dir})" in measure_step
