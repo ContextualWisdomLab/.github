@@ -270,6 +270,23 @@ is_gemini_model() {
 	esac
 }
 
+# Establish the explicitly configured provider before the first normalization.
+# The early normalization decides which credential file is mandatory, so
+# deferring this assignment would let provider routing and auth validation
+# disagree for resource-style model names.
+if DEFAULT_PROVIDER_SANITIZED="$(sanitize_provider_name "$DEFAULT_PROVIDER_RAW")"; then
+	DEFAULT_PROVIDER="$DEFAULT_PROVIDER_SANITIZED"
+else
+	case $? in
+	1)
+		DEFAULT_PROVIDER=""
+		;;
+	*)
+		exit 2
+		;;
+	esac
+fi
+
 NORMALIZED_STRIX_LLM="$(normalize_model "$STRIX_LLM")"
 
 LLM_API_KEY_FILE="${LLM_API_KEY_FILE:-}"
@@ -700,20 +717,6 @@ is_github_models_api_base() {
 		;;
 	esac
 }
-
-# shellcheck disable=SC2034  # consumed indirectly by sourced model helper functions
-if DEFAULT_PROVIDER_SANITIZED="$(sanitize_provider_name "$DEFAULT_PROVIDER_RAW")"; then
-	DEFAULT_PROVIDER="$DEFAULT_PROVIDER_SANITIZED"
-else
-	case $? in
-	1)
-		DEFAULT_PROVIDER=""
-		;;
-	*)
-		exit 2
-		;;
-	esac
-fi
 
 PRIMARY_MODEL="$(normalize_model "$STRIX_LLM")"
 if [ "$PRIMARY_MODEL" != "$STRIX_LLM" ]; then
