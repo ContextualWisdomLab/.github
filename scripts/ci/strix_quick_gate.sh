@@ -39,6 +39,8 @@ LLM_API_BASE_FILE="${LLM_API_BASE_FILE:-}"
 STRIX_GITHUB_MODELS_API_BASE_FILE="${STRIX_GITHUB_MODELS_API_BASE_FILE:-}"
 STRIX_INPUT_FILE_ROOT="${STRIX_INPUT_FILE_ROOT:-${RUNNER_TEMP:-}}"
 STRIX_EXECUTABLE_PATH="${STRIX_EXECUTABLE_PATH:-}"
+STRIX_EXECUTABLE_ROOT="${STRIX_EXECUTABLE_ROOT:-}"
+STRIX_EXECUTABLE_SHA256="${STRIX_EXECUTABLE_SHA256:-}"
 STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
@@ -2339,10 +2341,16 @@ run_strix_once() {
 	STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
 	STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
 	STRIX_CHILD_EXECUTABLE_PATH="$STRIX_EXECUTABLE_PATH" \
+	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
+	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
+	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
 	python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" <<'PY'
+import hashlib
+import hmac
 import os
 import pathlib
 import signal
+import stat
 import subprocess
 import sys
 
@@ -2438,6 +2446,36 @@ if not resolved_strix_path.is_file() or not os.access(resolved_strix_path, os.X_
 if resolved_strix_path.stat().st_uid != os.geteuid():
     sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be owned by the current runner identity.\n")
     raise SystemExit(127)
+if resolved_strix_path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must not be group/world writable.\n")
+    raise SystemExit(127)
+
+require_integrity = os.environ.get("STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY", "").lower() in {
+    "1", "true", "yes", "on"
+}
+if require_integrity:
+    configured_root = os.environ.get("STRIX_CHILD_EXECUTABLE_ROOT", "")
+    configured_digest = os.environ.get("STRIX_CHILD_EXECUTABLE_SHA256", "").lower()
+    if not configured_root or len(configured_digest) != 64 or any(
+        char not in "0123456789abcdef" for char in configured_digest
+    ):
+        sys.stderr.write(
+            "ERROR: trusted PR evidence requires a pinned Strix executable root and SHA-256 digest.\n"
+        )
+        raise SystemExit(127)
+    try:
+        resolved_root = pathlib.Path(configured_root).resolve(strict=True)
+        resolved_strix_path.relative_to(resolved_root)
+    except (OSError, ValueError):
+        sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be inside the pinned installation root.\n")
+        raise SystemExit(127)
+    if not resolved_root.is_dir() or resolved_root.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        sys.stderr.write("ERROR: the pinned Strix installation root must not be group/world writable.\n")
+        raise SystemExit(127)
+    actual_digest = hashlib.sha256(resolved_strix_path.read_bytes()).hexdigest()
+    if not hmac.compare_digest(actual_digest, configured_digest):
+        sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH did not match the pinned SHA-256 digest.\n")
+        raise SystemExit(127)
 resolved_strix_bin = str(resolved_strix_path)
 
 try:
@@ -2530,6 +2568,10 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
+		if has_blocking_vulnerability_reports; then
+			echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
+			return 1
+		fi
 		printf "Strix run succeeded for model '%s' in %ds.\n" "$model" "$elapsed" >&2
 		return 0
 	fi

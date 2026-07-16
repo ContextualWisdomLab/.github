@@ -356,9 +356,6 @@ jobs:
           # refs/pull/<n>/head has already advanced before this queued run starts.
           if git -C "$TRUSTED_WORKSPACE" fetch --no-tags --depth=1 origin "$PR_HEAD_SHA"; then
             git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
-            if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
-              git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
-            fi
             if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
               mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
@@ -376,9 +373,6 @@ jobs:
             fetched_head_sha="$(git -C "$TRUSTED_WORKSPACE" rev-parse "refs/remotes/pull/${PR_NUMBER}/head")"
             if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
               git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
-              if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
-                git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
-              fi
               if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
                 mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
                 git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
@@ -505,7 +499,18 @@ jobs:
               exit 1
               ;;
           esac
+          strix_scripts_root="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+          strix_executable_sha256="$(python3 - "$strix_executable" <<'PY'
+          import hashlib
+          from pathlib import Path
+          import sys
+
+          print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+          PY
+          )"
           printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable" >> "$GITHUB_ENV"
+          printf 'STRIX_EXECUTABLE_ROOT=%s\n' "$strix_scripts_root" >> "$GITHUB_ENV"
+          printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256" >> "$GITHUB_ENV"
 
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'

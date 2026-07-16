@@ -231,8 +231,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" '[[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' "strix workflow validates PR head SHA before trusted fetch"
 	assert_file_contains "$workflow_file" '[[ "$PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' "strix workflow validates PR base SHA before trusted fetch"
 	assert_file_contains "$workflow_file" 'fetch --no-tags --depth=1 origin "$PR_BASE_SHA"' "strix workflow fetches manual PR-scope base commit for diffing"
-	assert_file_contains "$workflow_file" 'cat-file -e "$PR_HEAD_SHA:opencode.jsonc"' "strix workflow checks for PR-head OpenCode config without executing it"
-	assert_file_contains "$workflow_file" 'show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"' "strix workflow materializes PR-head OpenCode config as data for self-test assertions"
+	assert_file_not_contains "$workflow_file" 'show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"' "strix workflow never materializes PR-controlled agent configuration into the privileged scan workspace"
 	assert_file_contains "$workflow_file" 'cat-file -e "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py"' "strix workflow checks for PR-head scheduler policy without executing it"
 	assert_file_contains "$workflow_file" 'show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"' "strix workflow materializes PR-head scheduler policy as data for self-test assertions"
 	assert_file_contains "$workflow_file" "refs/remotes/pull" "strix workflow verifies fetched PR head ref"
@@ -251,7 +250,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 		record_failure "strix workflow configures git credentials in PR head fetch step"
 	fi
 	case "$pr_head_fetch_block" in
-		*'fetch --no-tags --depth=1 origin "$PR_HEAD_SHA"'*'show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"'*'show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"'*) ;;
+		*'fetch --no-tags --depth=1 origin "$PR_HEAD_SHA"'*'show "$PR_HEAD_SHA:scripts/ci/pr_review_merge_scheduler.py" > "$TRUSTED_WORKSPACE/scripts/ci/pr_review_merge_scheduler.py"'*) ;;
 		*) record_failure "strix workflow materializes PR-head review policy files only after fetching the PR head commit" ;;
 	esac
 	assert_file_contains "$workflow_file" "for pr_head_fetch_attempt in 1 2 3 4 5 6" "strix workflow retries stale PR head ref propagation"
@@ -888,7 +887,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "yarn install --immutable --mode=skip-builds" "coverage dependency installation suppresses Yarn build hooks"
 	assert_file_contains "$workflow_file" "--no-build --no-install-project" "coverage dependency installation refuses PR-controlled Python build backends"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_PATH=%s' "Strix workflow captures the pinned installation executable before scanning"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_SHA256=%s' "Strix workflow pins the installed executable digest before scanning"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_ROOT=%s' "Strix workflow pins the installed executable root before scanning"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must name the trusted installed Strix executable' "Strix gate requires an explicit trusted executable path"
+	assert_file_contains "$GATE_SCRIPT" 'did not match the pinned SHA-256 digest' "Strix gate rejects executable substitution after trusted installation"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must be outside the untrusted scan target' "Strix executable cannot come from the scan target"
 	assert_file_not_contains "$GATE_SCRIPT" 'shutil.which("strix")' "Strix gate never resolves its credential-bearing executable through inherited PATH"
 	assert_file_not_contains "$workflow_file" "https://sh.rustup.rs" "coverage refuses a mutable Rust network installer"
@@ -3180,8 +3182,19 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
 case "${FAKE_STRIX_SCENARIO:?}" in
-	success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base)
+	success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch)
 		echo "scan ok"
+		exit 0
+		;;
+	success-with-critical-report)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-success/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: CRITICAL
+- Title: Successful process still emitted a blocking vulnerability
+REPORT
+		echo "Vulnerabilities 1"
 		exit 0
 		;;
 	slow-timeout)
@@ -5335,6 +5348,13 @@ PY
 			UNRELATED_SECRET="should-not-forward"
 		)
 	fi
+	if [ "$scenario" = "pr-executable-integrity-mismatch" ]; then
+		env_cmd+=(
+			IS_PR_EVIDENCE_RUN="true"
+			STRIX_EXECUTABLE_ROOT="$bin_dir"
+			STRIX_EXECUTABLE_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
+		)
+	fi
 	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
 		env_cmd+=(
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
@@ -5595,6 +5615,26 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
+		;;
+	success-with-critical-report)
+		run_gate_case "success-with-critical-report" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"Strix exited successfully but emitted a vulnerability at or above 'CRITICAL'" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	pr-executable-integrity-mismatch)
+		run_gate_case "pr-executable-integrity-mismatch" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"did not match the pinned SHA-256 digest" \
+			"0" \
+			"" \
+			""
 		;;
 	vertex-primary-hallucinated-endpoint-fallback-success)
 		run_gate_case "vertex-primary-hallucinated-endpoint-fallback-success" \
@@ -8692,6 +8732,24 @@ run_gate_case "success" \
 	"vertex_ai/ready-primary" \
 	"<unset>"
 
+run_gate_case "success-with-critical-report" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"Strix exited successfully but emitted a vulnerability at or above 'CRITICAL'" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "pr-executable-integrity-mismatch" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"did not match the pinned SHA-256 digest" \
+	"0" \
+	"" \
+	""
+
 run_gate_case "runtime-env-forwarding" \
 	"gemini/gemini-pro-3.1-preview" \
 	"" \
@@ -11245,6 +11303,24 @@ assert_normalized_model() {
 	fi
 }
 
+assert_normalize_model_rejected() {
+	local label="$1" model="$2" default_provider="$3"
+	local rc old_default_provider="${DEFAULT_PROVIDER-__UNSET__}"
+	DEFAULT_PROVIDER="$default_provider"
+	set +e
+	normalize_model "$model" >/dev/null 2>&1
+	rc=$?
+	set -e
+	if [ "$old_default_provider" = "__UNSET__" ]; then
+		unset DEFAULT_PROVIDER
+	else
+		DEFAULT_PROVIDER="$old_default_provider"
+	fi
+	if [ "$rc" -eq 0 ]; then
+		record_failure "normalize_model($label) accepted a Vertex resource without explicit Vertex provider context"
+	fi
+}
+
 assert_model_requires_vertex_auth() {
 	local label="$1" model="$2" default_provider="$3" expected_rc="$4"
 	local rc old_default_provider="${DEFAULT_PROVIDER-__UNSET__}"
@@ -11296,19 +11372,20 @@ assert_vertex_extract "projects/…/publishers/…/models/<id>" "projects/my-pro
 assert_vertex_extract "non-vertex-passthrough" "deepseek/models/deepseek-r1" "deepseek/models/deepseek-r1"
 assert_vertex_extract "plain-model-passthrough" "gemini-2.5-pro" "gemini-2.5-pro"
 
-# Explicit Vertex resource paths must remain Vertex models even when the default
-# provider points at a non-Vertex provider.
+# Explicit Vertex resource paths require an explicit Vertex provider context.
 assert_normalized_model \
 	"vertex-resource-ignores-nonvertex-default-provider" \
 	"projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
-	"anthropic" \
+	"vertex_ai" \
 	"vertex_ai/gemini-2.5-pro"
 
 assert_model_requires_vertex_auth "explicit-vertex" "vertex_ai/gemini-2.5-pro" "gemini" "0"
 assert_model_requires_vertex_auth "explicit-vertex-beta" "vertex_ai_beta/gemini-2.5-pro" "gemini" "0"
-assert_model_requires_vertex_auth "vertex-resource-path" "projects/my-proj/locations/us-central1/models/gemini-2.5-pro" "anthropic" "0"
+assert_model_requires_vertex_auth "vertex-resource-path" "projects/my-proj/locations/us-central1/models/gemini-2.5-pro" "vertex_ai" "0"
 assert_model_requires_vertex_auth "implicit-vertex-default" "gemini-2.5-pro" "vertex_ai" "0"
 assert_model_requires_vertex_auth "nonvertex-provider" "gemini/gemini-2.5-pro" "gemini" "1"
+assert_normalize_model_rejected "bare-models-openai-context" "models/attacker-selected" "openai"
+assert_normalize_model_rejected "bare-models-empty-context" "models/attacker-selected" ""
 
 # Whitespace in paths — must be rejected (SAST word-splitting guard)
 assert_vertex_path "space-in-project" "projects/my proj/locations/us/models/foo" 1

@@ -35,7 +35,8 @@ is_vertex_resource_path() {
 	IFS='/' read -r -a parts <<<"$path"
 	local part
 	for part in "${parts[@]}"; do
-		if [ -z "$part" ]; then
+		if [ -z "$part" ] || [ "$part" = "." ] || [ "$part" = ".." ] ||
+			[[ ! "$part" =~ ^[A-Za-z0-9._-]+$ ]]; then
 			return 1
 		fi
 	done
@@ -78,7 +79,17 @@ normalize_model() {
 
 	if is_vertex_resource_path "$model"; then
 		local provider
-		provider="$(sanitize_provider_name "vertex_ai")" || return $?
+		provider="$(sanitize_provider_name "${DEFAULT_PROVIDER:-}")" || {
+			echo "ERROR: Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." >&2
+			return 2
+		}
+		case "$provider" in
+		vertex_ai | vertex_ai_beta) ;;
+		*)
+			echo "ERROR: Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." >&2
+			return 2
+			;;
+		esac
 		printf '%s/%s\n' "$provider" "$(extract_vertex_model_id "$model")"
 		return 0
 	fi
