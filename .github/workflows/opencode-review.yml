@@ -1428,32 +1428,7 @@ jobs:
 
           rust_coverage_fail_under_lines() {
             local manifest="$1"
-            python3 -I - "$manifest" <<'PY'
-          import sys
-          import tomllib
-          from pathlib import Path
-
-          manifest = Path(sys.argv[1])
-          metadata = (
-              tomllib.loads(manifest.read_text(encoding="utf-8"))
-              .get("package", {})
-              .get("metadata", {})
-              .get("opencode", {})
-              .get("coverage", {})
-          )
-          value = metadata.get("minimum_lines")
-          if value is None:
-              sys.exit(0)
-          if isinstance(value, bool) or not isinstance(value, (int, float)):
-              raise SystemExit(
-                  "package.metadata.opencode.coverage.minimum_lines must be a number from 0 to 100"
-              )
-          if not 0 <= float(value) <= 100:
-              raise SystemExit(
-                  "package.metadata.opencode.coverage.minimum_lines must be between 0 and 100"
-              )
-          print(f"{float(value):g}")
-          PY
+            python3 "${GITHUB_WORKSPACE}/scripts/ci/rust_coverage_threshold.py" "$manifest"
           }
 
           run_rust_test_coverage() {
@@ -1478,8 +1453,8 @@ jobs:
                     append "### Rust coverage threshold (${manifest})"
                     append ""
                     append "- Result: FAIL"
-                    append "- Reason: ${manifest} defines an invalid package.metadata.opencode.coverage.minimum_lines value."
-                    append "- Fix: set package.metadata.opencode.coverage.minimum_lines to a numeric line-coverage percentage from 0 to 100."
+                    append "- Reason: ${manifest} defines an invalid package.metadata.opencode.coverage.minimum_lines or workspace.metadata.opencode.coverage.minimum_lines value."
+                    append "- Fix: set the matching package or workspace metadata key to a numeric line-coverage percentage from 0 to 100."
                     append ""
                     failures=$((failures + 1))
                     continue
@@ -1490,7 +1465,7 @@ jobs:
                     append "### Rust coverage threshold (${manifest})"
                     append ""
                     append "- Result: PASS"
-                    append "- Reason: ${manifest} sets package.metadata.opencode.coverage.minimum_lines to ${threshold}%, so Rust coverage enforces the repository-owned baseline instead of the central default."
+                    append "- Reason: ${manifest} sets a package/workspace opencode coverage minimum_lines value to ${threshold}%, so Rust coverage enforces the repository-owned baseline instead of the central default."
                     append ""
                   fi
                   if ! ensure_tauri_frontend_dist "$manifest"; then

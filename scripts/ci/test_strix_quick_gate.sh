@@ -939,6 +939,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'ensure_tauri_frontend_dist "$manifest"' "opencode coverage evidence checks each Rust manifest for Tauri frontendDist requirements"
 	assert_file_contains "$workflow_file" "rust_coverage_fail_under_lines()" "opencode coverage evidence reads repo-owned Rust coverage baselines"
 	assert_file_contains "$workflow_file" "package.metadata.opencode.coverage.minimum_lines" "opencode coverage evidence documents the Rust coverage baseline metadata key"
+	assert_file_contains "$workflow_file" "workspace.metadata.opencode.coverage.minimum_lines" "opencode coverage evidence supports virtual-workspace Rust coverage baselines"
+	assert_file_contains "$workflow_file" "scripts/ci/rust_coverage_threshold.py" "opencode coverage evidence uses the tested trusted Rust threshold parser"
 	assert_file_contains "$workflow_file" '--fail-under-lines "$threshold"' "opencode coverage evidence enforces the resolved Rust line coverage threshold"
 	assert_file_contains "$workflow_file" "Python project dependencies (requirements.txt)" "opencode coverage evidence records repository Python dependency installation"
 	assert_file_contains "$workflow_file" "uv run --no-project --no-build --with-requirements requirements.txt" "opencode coverage evidence resolves wheel-only repository Python requirements before pytest"
