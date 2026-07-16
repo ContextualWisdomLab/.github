@@ -429,6 +429,39 @@ jobs:
             exit "$replay_status"
           fi
 
+      # Run every trusted follow-up before executing pull-request code. Even a
+      # credential-free test can write runner command files, so no trusted shell
+      # step may consume state after coverage measurement begins.
+      - name: Enforce changed-file syntax gate
+        env:
+          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
+          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+        run: |
+          set -euo pipefail
+          # Deterministic per-file syntax check on the PR's changed files. The
+          # LLM reviewer reads diffs and the test suite only exercises imported
+          # files, so a syntax error in a changed file that no test imports (or
+          # in a language with no wired-in runner) could otherwise be approved.
+          changed_files_file="${RUNNER_TEMP}/opencode-syntax-changed-files.txt"
+          if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --name-only "$PR_BASE_SHA" HEAD >"$changed_files_file" 2>/dev/null; then
+            : >"$changed_files_file"
+          fi
+          syntax_report="${RUNNER_TEMP}/opencode-syntax-report.txt"
+          syntax_status=0
+          ( cd "$COVERAGE_SOURCE_WORKDIR" && python3 "${GITHUB_WORKSPACE}/scripts/ci/changed_file_syntax_gate.py" --changed-files-file "$changed_files_file" ) >"$syntax_report" 2>&1 || syntax_status=$?
+          cat "$syntax_report"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              printf '## Changed-file syntax gate\n\n```text\n'
+              cat "$syntax_report"
+              printf '\n```\n'
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$syntax_status" -ne 0 ]; then
+            echo "::error::A changed file has a syntax error; OpenCode approval is blocked until it parses on the current head."
+            exit 1
+          fi
+
       - name: Install Python coverage measurement tools
         run: >-
           python3 -m pip install --disable-pip-version-check --require-hashes
@@ -440,6 +473,10 @@ jobs:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+          # Apply wheel-only resolution in the same step that consumes
+          # pull-request dependency metadata. A value on an earlier step does
+          # not cross the GitHub Actions step boundary.
+          UV_NO_BUILD: "1"
         run: |
           set -euo pipefail
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN
@@ -486,7 +523,19 @@ jobs:
             append '```text'
             append_command "$@"
             set +e
-            timeout 900 "$@" >"$log_file" 2>&1
+            timeout 900 env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GH_TOKEN \
+              -u GITHUB_TOKEN \
+              GITHUB_ENV=/dev/null \
+              GITHUB_PATH=/dev/null \
+              GITHUB_OUTPUT=/dev/null \
+              GITHUB_STEP_SUMMARY=/dev/null \
+              BASH_ENV=/dev/null \
+              UV_NO_BUILD=1 \
+              "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
             emit_captured_log "$log_file"
@@ -512,7 +561,19 @@ jobs:
             append '```text'
             append_command "$@"
             set +e
-            timeout 900 "$@" >"$log_file" 2>&1
+            timeout 900 env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GH_TOKEN \
+              -u GITHUB_TOKEN \
+              GITHUB_ENV=/dev/null \
+              GITHUB_PATH=/dev/null \
+              GITHUB_OUTPUT=/dev/null \
+              GITHUB_STEP_SUMMARY=/dev/null \
+              BASH_ENV=/dev/null \
+              UV_NO_BUILD=1 \
+              "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
             emit_captured_log "$log_file"
@@ -642,7 +703,7 @@ jobs:
           install_python_project_dependencies() {
             if [ -f requirements.txt ]; then
               run_and_capture "Python project dependencies (requirements.txt)" \
-                uv run --no-project --with-requirements requirements.txt python -c 'import sys; print("binary-only requirements resolved with", sys.executable)'
+                uv run --no-project --no-build --with-requirements requirements.txt python -c 'import sys; print("binary-only requirements resolved with", sys.executable)'
             fi
 
             while IFS= read -r project_dir; do
@@ -672,11 +733,11 @@ jobs:
                 fi
                 if [ -f "${project_dir}/requirements.txt" ]; then
                   run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
-                    bash -c 'cd "$1" && uv run --no-project --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
+                    bash -c 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
                 fi
               elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
                 run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && uv run --no-project --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
+                  bash -c 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
           }
@@ -704,20 +765,20 @@ jobs:
                 done <<<"$configured_commands_json"
             elif [ -f "${project_dir}/pyproject.toml" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with coverage coverage report --show-missing' bash "$project_dir"
             elif [ -f "${project_dir}/requirements.txt" ]; then
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest tests && uv run --with coverage coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with coverage coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'PYTHONPATH=. uv run --with coverage --with pytest coverage run -m pytest && uv run --with coverage coverage report --show-missing'
+                  bash -c 'PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest && uv run --no-build --with coverage coverage report --show-missing'
               elif python3 -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -844,10 +905,10 @@ jobs:
                 measured_projects=1
                 if [ -f "${project_dir}/pyproject.toml" ]; then
                   run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. uv run pytest tests/test_docstrings.py' bash "$project_dir"
+                    bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build pytest tests/test_docstrings.py' bash "$project_dir"
                 elif [ -f "${project_dir}/requirements.txt" ]; then
                   run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
+                    bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
                 else
                   run_and_capture "Python docstring coverage (${project_dir})" \
                     bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
@@ -1526,36 +1587,6 @@ jobs:
 
           cat "$summary_file"
           if [ "$failures" -ne 0 ]; then
-            exit 1
-          fi
-
-      - name: Enforce changed-file syntax gate
-        env:
-          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
-        run: |
-          set -euo pipefail
-          # Deterministic per-file syntax check on the PR's changed files. The
-          # LLM reviewer reads diffs and the test suite only exercises imported
-          # files, so a syntax error in a changed file that no test imports (or
-          # in a language with no wired-in runner) could otherwise be approved.
-          changed_files_file="${RUNNER_TEMP}/opencode-syntax-changed-files.txt"
-          if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --name-only "$PR_BASE_SHA" HEAD >"$changed_files_file" 2>/dev/null; then
-            : >"$changed_files_file"
-          fi
-          syntax_report="${RUNNER_TEMP}/opencode-syntax-report.txt"
-          syntax_status=0
-          ( cd "$COVERAGE_SOURCE_WORKDIR" && python3 "${GITHUB_WORKSPACE}/scripts/ci/changed_file_syntax_gate.py" --changed-files-file "$changed_files_file" ) >"$syntax_report" 2>&1 || syntax_status=$?
-          cat "$syntax_report"
-          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            {
-              printf '## Changed-file syntax gate\n\n```text\n'
-              cat "$syntax_report"
-              printf '\n```\n'
-            } >>"$GITHUB_STEP_SUMMARY"
-          fi
-          if [ "$syntax_status" -ne 0 ]; then
-            echo "::error::A changed file has a syntax error; OpenCode approval is blocked until it parses on the current head."
             exit 1
           fi
 

@@ -38,6 +38,7 @@ DEFAULT_PROVIDER=""
 LLM_API_BASE_FILE="${LLM_API_BASE_FILE:-}"
 STRIX_GITHUB_MODELS_API_BASE_FILE="${STRIX_GITHUB_MODELS_API_BASE_FILE:-}"
 STRIX_INPUT_FILE_ROOT="${STRIX_INPUT_FILE_ROOT:-${RUNNER_TEMP:-}}"
+STRIX_EXECUTABLE_PATH="${STRIX_EXECUTABLE_PATH:-}"
 STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
@@ -2415,14 +2416,14 @@ run_strix_once() {
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
-		STRIX_CHILD_LLM_API_KEY="$child_llm_api_key" \
-		STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
-		STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
-		python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" <<'PY'
+	STRIX_CHILD_LLM_API_KEY="$child_llm_api_key" \
+	STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
+	STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
+	STRIX_CHILD_EXECUTABLE_PATH="$STRIX_EXECUTABLE_PATH" \
+	python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" <<'PY'
 import os
 import pathlib
 import signal
-import shutil
 import subprocess
 import sys
 
@@ -2495,11 +2496,26 @@ if llm_api_base:
 else:
     child_env.pop("LLM_API_BASE", None)
 
-resolved_strix_bin = shutil.which("strix") or ""
-if not resolved_strix_bin:
-    sys.stderr.write("ERROR: strix executable not found in PATH.\n")
+configured_strix_bin = os.environ.get("STRIX_CHILD_EXECUTABLE_PATH", "")
+if not configured_strix_bin:
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must name the trusted installed Strix executable.\n")
     raise SystemExit(127)
-resolved_strix_bin = str(pathlib.Path(resolved_strix_bin).resolve(strict=True))
+configured_strix_path = pathlib.Path(configured_strix_bin)
+if not configured_strix_path.is_absolute() or configured_strix_path.is_symlink():
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be an absolute non-symlink path.\n")
+    raise SystemExit(127)
+try:
+    resolved_strix_path = configured_strix_path.resolve(strict=True)
+except OSError as exc:
+    sys.stderr.write(f"ERROR: STRIX_EXECUTABLE_PATH could not be canonicalized: {exc}\n")
+    raise SystemExit(127)
+if not resolved_strix_path.is_file() or not os.access(resolved_strix_path, os.X_OK):
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be an executable regular file.\n")
+    raise SystemExit(127)
+if resolved_strix_path.stat().st_uid != os.geteuid():
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be owned by the current runner identity.\n")
+    raise SystemExit(127)
+resolved_strix_bin = str(resolved_strix_path)
 
 try:
     target_cwd = pathlib.Path(target_path).resolve(strict=True)
@@ -2509,6 +2525,13 @@ except OSError as exc:
 if not target_cwd.is_dir():
     sys.stderr.write("ERROR: Strix target path must be a directory.\n")
     raise SystemExit(2)
+try:
+    resolved_strix_path.relative_to(target_cwd)
+except ValueError:
+    pass
+else:
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be outside the untrusted scan target.\n")
+    raise SystemExit(127)
 if any(ch in str(target_cwd) for ch in ("\x00", "\n", "\r")):
     sys.stderr.write("ERROR: Strix target path contains unsupported control characters.\n")
     raise SystemExit(2)

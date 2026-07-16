@@ -492,7 +492,22 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         working-directory: trusted-strix-source
         run: |
+          set -euo pipefail
           python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
+          strix_executable="$(command -v strix || true)"
+          if [ -z "$strix_executable" ] || [[ "$strix_executable" != /* ]] \
+            || [ ! -f "$strix_executable" ] || [ -L "$strix_executable" ] \
+            || [ ! -x "$strix_executable" ]; then
+            echo "::error::Pinned Strix installation did not produce a trusted absolute executable path."
+            exit 1
+          fi
+          case "$strix_executable" in
+            "$GITHUB_WORKSPACE"/*|"$RUNNER_TEMP"/*)
+              echo "::error::Refusing a Strix executable from a workspace or runner-temp path."
+              exit 1
+              ;;
+          esac
+          printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable" >> "$GITHUB_ENV"
 
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'

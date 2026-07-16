@@ -843,6 +843,13 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage evidence logs an actionable merge-tree failure reason"
 	assert_file_contains "$workflow_file" "--require-hashes" "coverage tooling installs from a hash-pinned lock"
 	assert_file_contains "$workflow_file" "--only-binary=:all: -r requirements-opencode-review-ci-hashes.txt" "coverage tooling installs only binary packages from the pinned lock"
+	assert_file_contains "$workflow_file" 'GITHUB_ENV=/dev/null' "PR-controlled coverage commands cannot write runner environment command files"
+	assert_file_contains "$workflow_file" 'GITHUB_PATH=/dev/null' "PR-controlled coverage commands cannot extend later-step PATH"
+	assert_file_contains "$workflow_file" 'GITHUB_OUTPUT=/dev/null' "PR-controlled coverage commands cannot forge trusted step outputs"
+	assert_file_contains "$workflow_file" 'BASH_ENV=/dev/null' "PR-controlled coverage commands cannot persist shell startup hooks"
+	assert_file_contains "$workflow_file" 'UV_NO_BUILD: "1"' "coverage wheel-only policy is scoped to the dependency-consuming measure step"
+	assert_file_contains "$workflow_file" 'uv run --no-project --no-build --with-requirements' "requirements resolution rejects PR-controlled source builds"
+	assert_file_contains "$workflow_file" 'uv run --no-build --with coverage' "coverage resolution rejects PR-controlled source builds"
 	assert_file_contains "$workflow_file" 'ref: ${{ steps.trusted_source.outputs.ref }}' "OpenCode review checks out validated central trusted scripts for same-head validation"
 	assert_file_contains "$workflow_file" 'COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || '\''skipped'\'' }}' "opencode approval receives the coverage-evidence job conclusion"
 	assert_file_contains "$workflow_file" 'PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}' "coverage evidence receives the live validated PR base SHA for changed-file scoped measurement"
@@ -859,6 +866,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "pnpm install --frozen-lockfile --ignore-scripts" "coverage dependency installation suppresses pnpm lifecycle hooks"
 	assert_file_contains "$workflow_file" "yarn install --immutable --mode=skip-builds" "coverage dependency installation suppresses Yarn build hooks"
 	assert_file_contains "$workflow_file" "--no-build --no-install-project" "coverage dependency installation refuses PR-controlled Python build backends"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_PATH=%s' "Strix workflow captures the pinned installation executable before scanning"
+	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must name the trusted installed Strix executable' "Strix gate requires an explicit trusted executable path"
+	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must be outside the untrusted scan target' "Strix executable cannot come from the scan target"
+	assert_file_not_contains "$GATE_SCRIPT" 'shutil.which("strix")' "Strix gate never resolves its credential-bearing executable through inherited PATH"
 	assert_file_not_contains "$workflow_file" "https://sh.rustup.rs" "coverage refuses a mutable Rust network installer"
 	assert_file_contains "$workflow_file" "cargo install cargo-llvm-cov --version 0.8.7 --locked" "coverage pins cargo-llvm-cov"
 	assert_file_contains "$workflow_file" "Run merge scheduler after approval" "opencode approval runs the merge scheduler after current-head review publication"
@@ -907,20 +918,20 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "package.metadata.opencode.coverage.minimum_lines" "opencode coverage evidence documents the Rust coverage baseline metadata key"
 	assert_file_contains "$workflow_file" '--fail-under-lines "$threshold"' "opencode coverage evidence enforces the resolved Rust line coverage threshold"
 	assert_file_contains "$workflow_file" "Python project dependencies (requirements.txt)" "opencode coverage evidence records repository Python dependency installation"
-	assert_file_contains "$workflow_file" "uv run --no-project --with-requirements requirements.txt" "opencode coverage evidence resolves binary-only repository Python requirements before pytest"
+	assert_file_contains "$workflow_file" "uv run --no-project --no-build --with-requirements requirements.txt" "opencode coverage evidence resolves wheel-only repository Python requirements before pytest"
 	assert_file_contains "$workflow_file" "'requirements.txt' '*/requirements.txt'" "opencode coverage evidence discovers nested requirements-only Python test projects"
 	assert_file_contains "$workflow_file" "Python project dependencies (\${project_dir}/requirements.txt)" "opencode coverage evidence installs nested requirements-only Python project dependencies"
 	assert_file_contains "$workflow_file" "Python uv lockfile consistency (\${project_dir})" "opencode coverage evidence logs uv lockfile drift before installing uv-managed Python dependencies"
 	assert_file_contains "$workflow_file" "uv lock --check" "opencode coverage evidence rejects stale uv lockfiles before pytest"
 	assert_file_contains "$workflow_file" "uv sync --project" "opencode coverage evidence installs uv-managed Python project dependencies before pytest"
-	assert_file_contains "$workflow_file" 'cd "$1" && uv run --no-project --with-requirements requirements.txt' "opencode coverage evidence resolves requirements without executing a PR project backend"
+	assert_file_contains "$workflow_file" 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt' "opencode coverage evidence resolves requirements without executing a PR project backend"
 	assert_file_contains "$workflow_file" "--extra dev" "opencode coverage evidence installs pyproject optional dev extras when repositories do not use dependency-groups"
 	assert_file_contains "$workflow_file" "configured_python_ci_test_commands()" "opencode coverage evidence prefers repository-configured CI pytest commands before falling back to the full tests tree"
 	assert_file_contains "$workflow_file" 'safe_pytest_command.py" discover' "opencode coverage evidence discovers default CI workflow pytest commands through the trusted shell-free parser"
 	assert_file_contains "$workflow_file" "Python configured CI test suite" "opencode coverage evidence labels repository-configured pytest evidence separately"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run pytest tests' "opencode coverage evidence runs uv-managed Python project tests inside their project environment"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests' "opencode coverage evidence runs requirements-only Python project coverage inside its dependency environment"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' "opencode coverage evidence runs requirements-only Python docstring tests inside its dependency environment"
+	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --no-build pytest tests' "opencode coverage evidence runs uv-managed Python project tests without source builds"
+	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests' "opencode coverage evidence runs requirements-only Python project coverage without source builds"
+	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' "opencode coverage evidence runs requirements-only Python docstring tests without source builds"
 	assert_file_contains "$workflow_file" "JavaScript/TypeScript dependencies (npm ci, lifecycle hooks disabled)" "opencode coverage evidence installs npm workspace dependencies without lifecycle hooks before JS coverage"
 	assert_file_contains "$workflow_file" "coverage/coverage-summary.json" "opencode coverage evidence reads JS coverage summaries instead of trusting test exit codes"
 	assert_file_contains "$workflow_file" "coverage/coverage-final.json" "opencode coverage evidence supports Vitest Istanbul final coverage files"
@@ -3074,15 +3085,23 @@ run_gate_case() {
 	# Separate bin/ (fake strix + helper files) from workspace/ (target path)
 	# so grep -r over the target path never matches the fake strix script itself.
 	local bin_dir="$tmp_dir/bin"
+	local untrusted_bin_dir="$tmp_dir/untrusted-bin"
 	local workspace_dir="$tmp_dir/workspace"
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
-	mkdir -p "$bin_dir" "$repo_root_dir/src"
+	mkdir -p "$bin_dir" "$untrusted_bin_dir" "$repo_root_dir/src"
 	mkdir -p "$repo_root_dir/scripts/ci"
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$GATE_SCRIPT" "$gate_under_test"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$gate_under_test"
 	local fake_strix="$bin_dir/strix"
+	local path_hijack_log="$tmp_dir/path-hijack.log"
+	cat >"$untrusted_bin_dir/strix" <<'EOF'
+#!/usr/bin/env bash
+printf 'inherited PATH executable was invoked\n' >"${FAKE_STRIX_PATH_HIJACK_LOG:?}"
+exit 99
+EOF
+	chmod +x "$untrusted_bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
 	local api_base_log="$tmp_dir/api_base.log"
 	local target_log="$tmp_dir/target.log"
@@ -5255,7 +5274,9 @@ PY
 
 	set +e
 	local env_cmd=(
-		PATH="$bin_dir:$PATH"
+		PATH="$untrusted_bin_dir:$bin_dir:$PATH"
+		STRIX_EXECUTABLE_PATH="$fake_strix"
+		FAKE_STRIX_PATH_HIJACK_LOG="$path_hijack_log"
 		STRIX_INPUT_FILE_ROOT="$tmp_dir"
 		GITHUB_EVENT_NAME=""
 		GITHUB_EVENT_PATH=""
@@ -5418,6 +5439,9 @@ PY
 		call_count="$(wc -l <"$call_log" | tr -d ' ')"
 	fi
 	assert_equals "$expected_calls" "$call_count" "scenario=$scenario strix call count"
+	if [ -e "$path_hijack_log" ]; then
+		record_failure "scenario=$scenario selected a PATH-controlled Strix executable instead of STRIX_EXECUTABLE_PATH"
+	fi
 
 	if [ -n "$expected_model_sequence" ]; then
 		local actual_model_sequence=""
@@ -5531,6 +5555,16 @@ run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
 	"")
 		return 0
+		;;
+	success)
+		run_gate_case "success" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan ok" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
 		;;
 	github-models-token-limit-fallback-success)
 		run_gate_case "github-models-token-limit-fallback-success" \
@@ -5988,6 +6022,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6110,6 +6145,7 @@ EOS
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6217,6 +6253,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6355,6 +6392,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6392,6 +6430,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request" \
 			STRIX_TEST_CHANGED_FILES_OVERRIDE="$(printf '%s\n%s' '../outside.py' "$changed_file")" \
@@ -6599,6 +6638,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6791,6 +6831,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6888,6 +6929,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7021,6 +7063,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			REAL_GIT_PATH="$real_git" \
 			FAKE_GIT_FAIL_COMMAND="$fake_git_fail_command" \
@@ -7114,6 +7157,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7200,6 +7244,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7273,6 +7318,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7344,6 +7390,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u STRIX_TEST_PR_SCA_STATUS_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			GITHUB_EVENT_PATH="$event_payload_file" \
@@ -7427,6 +7474,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE -u STRIX_INPUT_FILE_ROOT \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CHILD_PID_FILE="$child_pid_file" \
@@ -7555,6 +7603,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE -u STRIX_INPUT_FILE_ROOT \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CALL_COUNT_FILE="$call_count_file" \
@@ -8261,6 +8310,7 @@ EOF
 		cd "$repo_root_dir"
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
 			STRIX_LLM_FILE="$strix_llm_file" \

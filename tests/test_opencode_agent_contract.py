@@ -1545,6 +1545,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     coverage_start = workflow.index("  coverage-evidence:\n")
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
     coverage_job = workflow[coverage_start:coverage_end]
+    syntax_step = coverage_job.index("      - name: Enforce changed-file syntax gate\n")
+    measure_step = coverage_job.index("      - name: Measure test and docstring evidence\n")
+    measure = coverage_job[measure_step:]
     target_start = coverage_end + 1
     target_job = workflow[target_start:]
 
@@ -1564,7 +1567,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "actions: read" in coverage_job
     assert "contents: read" not in coverage_job
     assert 'GITHUB_TOKEN: ""' in coverage_job
-    assert 'UV_NO_BUILD: "1"' in coverage_job
+    assert syntax_step < measure_step
+    assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
+    assert 'UV_NO_BUILD: "1"' in measure
+    assert measure.count("GITHUB_ENV=/dev/null") == 2
+    assert measure.count("GITHUB_PATH=/dev/null") == 2
+    assert measure.count("GITHUB_OUTPUT=/dev/null") == 2
+    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 2
+    assert measure.count("BASH_ENV=/dev/null") == 2
+    assert "uv run --no-project --no-build --with-requirements" in measure
+    assert "uv run --no-build --with coverage" in measure
     assert (
         'uv sync --project "$project_dir" --group dev --no-build --no-install-project'
         in coverage_job
