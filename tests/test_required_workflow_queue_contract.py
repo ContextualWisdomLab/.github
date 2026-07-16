@@ -191,6 +191,18 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     )
 
 
+def test_strix_install_normalizes_executable_permissions_before_hashing() -> None:
+    workflow = workflow_text("strix.yml")
+    install_step = workflow_step(workflow, "Install Strix")
+
+    assert install_step.index("umask 022") < install_step.index(
+        "python3 -m pip install"
+    )
+    assert install_step.index('chmod go-w -- "$strix_executable"') < install_step.index(
+        'strix_executable_sha256="'
+    )
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     workflows = (
         "close-empty-pr.yml",
@@ -884,6 +896,26 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert (
         '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
     )
+
+
+def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
+    workflow = workflow_text("strix.yml")
+    run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(
+        "      - name:", 1
+    )[0]
+
+    assert "STRIX_TARGET_PATH:" in run_step
+    assert "github.event_name == 'repository_dispatch'" in run_step
+    assert "github.event.client_payload.pr_number != ''" in run_step
+    assert (
+        "steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || "
+        "github.token"
+    ) in run_step
+    assert "github.event_name == 'pull_request_target' && github.token" in run_step
+    assert (
+        "(github.event_name == 'pull_request_target' || "
+        "github.event.client_payload.pr_number != '') && github.token"
+    ) not in run_step
 
 
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> (

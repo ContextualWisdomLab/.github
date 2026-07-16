@@ -504,6 +504,11 @@ jobs:
               exit 1
               ;;
           esac
+          # pip can preserve an existing console-script mode instead of applying
+          # the process umask, so normalize the resolved artifact itself before
+          # pinning its digest. The runtime gate still fails closed if anything
+          # relaxes these bits after this trusted installation step.
+          chmod go-w -- "$strix_executable"
           strix_scripts_root="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
           strix_executable_sha256="$(python3 - "$strix_executable" <<'PY'
           import hashlib
@@ -718,7 +723,11 @@ jobs:
           BUN_CONFIG_IGNORE_SCRIPTS: "true"
           STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
           STRIX_DISABLE_PR_SCOPING: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '0' || '1' }}
-          GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && github.token || '' }}
+          # A repository_dispatch executes in this central repository, so its
+          # github.token cannot read the target repository's PR. Reuse the
+          # target-app token that already validated and fetched that exact PR;
+          # preserve the target-repository token for pull_request_target runs.
+          GH_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && (steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token) || github.event_name == 'pull_request_target' && github.token || '' }}
           PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
