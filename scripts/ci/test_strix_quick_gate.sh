@@ -889,6 +889,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_PATH=%s' "Strix workflow captures the pinned installation executable before scanning"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_SHA256=%s' "Strix workflow pins the installed executable digest before scanning"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_ROOT=%s' "Strix workflow pins the installed executable root before scanning"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'umask 022' "Strix installation creates runner tools without group/world write permissions"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'chmod go-w -- "$strix_executable"' "Strix installation normalizes the resolved executable before hashing"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must name the trusted installed Strix executable' "Strix gate requires an explicit trusted executable path"
 	assert_file_contains "$GATE_SCRIPT" 'did not match the pinned SHA-256 digest' "Strix gate rejects executable substitution after trusted installation"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must be outside the untrusted scan target' "Strix executable cannot come from the scan target"

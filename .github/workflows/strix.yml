@@ -485,6 +485,7 @@ jobs:
         working-directory: trusted-strix-source
         run: |
           set -euo pipefail
+          umask 022
           python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
           strix_executable="$(command -v strix || true)"
           if [ -z "$strix_executable" ] || [[ "$strix_executable" != /* ]] \
@@ -499,6 +500,7 @@ jobs:
               exit 1
               ;;
           esac
+          chmod go-w -- "$strix_executable"
           strix_scripts_root="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
           strix_executable_sha256="$(python3 - "$strix_executable" <<'PY'
           import hashlib
@@ -508,9 +510,11 @@ jobs:
           print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
           PY
           )"
-          printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable" >> "$GITHUB_ENV"
-          printf 'STRIX_EXECUTABLE_ROOT=%s\n' "$strix_scripts_root" >> "$GITHUB_ENV"
-          printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256" >> "$GITHUB_ENV"
+          {
+            printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable"
+            printf 'STRIX_EXECUTABLE_ROOT=%s\n' "$strix_scripts_root"
+            printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256"
+          } >> "$GITHUB_ENV"
 
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'

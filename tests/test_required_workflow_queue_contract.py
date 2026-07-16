@@ -191,6 +191,18 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     )
 
 
+def test_strix_install_normalizes_executable_permissions_before_hashing() -> None:
+    workflow = workflow_text("strix.yml")
+    install_step = workflow_step(workflow, "Install Strix")
+
+    assert install_step.index("umask 022") < install_step.index(
+        "python3 -m pip install"
+    )
+    assert install_step.index('chmod go-w -- "$strix_executable"') < install_step.index(
+        'strix_executable_sha256="'
+    )
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     workflows = (
         "close-empty-pr.yml",
