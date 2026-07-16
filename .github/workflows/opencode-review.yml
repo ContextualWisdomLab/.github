@@ -519,7 +519,7 @@ jobs:
 
           # The runner worker retains an Actions runtime token in an ancestor
           # environment even after shell variables are unset. Execute all
-          # pull-request-controlled tests in a separate PID namespace with a
+          # pull-request-controlled tests in Docker's default private PID namespace with a
           # read-only trusted tree and no host Docker socket. The image is
           # pinned to the reviewed linux/amd64 manifest digest.
           if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" != "1" ]; then
@@ -544,7 +544,6 @@ jobs:
             sandbox_status=0
             docker run --rm --init \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-              --pid private \
               --pids-limit 2048 \
               --memory 14g \
               --cpus 4 \

@@ -321,7 +321,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
     assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
-    assert "python3 -I - \"$COVERAGE_SOURCE_ARCHIVE\" \"$COVERAGE_SOURCE_WORKDIR\"" in workflow
+    assert (
+        'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
+    )
     assert "member.isfile() or member.isdir()" in workflow
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
@@ -329,19 +331,30 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
     assert "--cap-drop ALL" in measure_step
-    assert "--pid private" in measure_step
+    # Docker already creates a private PID namespace by default. Passing the
+    # unsupported literal `private` makes hosted-runner Docker exit 125 before
+    # any coverage evidence can run.
+    assert "--pid private" not in measure_step
+    assert "--pid host" not in measure_step
+    assert "Docker's default private PID namespace" in measure_step
     assert 'measure_step_script="$(realpath "$0")"' in measure_step
-    assert 'source=${measure_step_script},target=/trusted-measure-step.sh,readonly' in measure_step
+    assert (
+        "source=${measure_step_script},target=/trusted-measure-step.sh,readonly"
+        in measure_step
+    )
     assert "target=/trusted,readonly" in measure_step
     assert "target=/work" in measure_step
     assert "/var/run/docker.sock" not in measure_step
     assert "OPENCODE_SANDBOX_UID=65532" in measure_step
-    assert 'chown -R --no-dereference' in measure_step
+    assert "chown -R --no-dereference" in measure_step
     assert 'setpriv \\\n              --reuid "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'pkill -KILL -u "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'python3 -I - "$1"' in measure_step
     assert "python3 -I -c 'import pytest_cov'" in measure_step
-    assert 'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"' in measure_step
+    assert (
+        'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"'
+        in measure_step
+    )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
     assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' in measure_step
     assert "cargo llvm-cov --version" not in measure_step
@@ -1577,7 +1590,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
     coverage_job = workflow[coverage_start:coverage_end]
     syntax_step = coverage_job.index("      - name: Enforce changed-file syntax gate\n")
-    measure_step = coverage_job.index("      - name: Measure test and docstring evidence\n")
+    measure_step = coverage_job.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
     measure = coverage_job[measure_step:]
     target_start = coverage_end + 1
     target_job = workflow[target_start:]
@@ -1814,9 +1829,7 @@ def test_opencode_approve_review_publication_failure_fails_closed():
 
     assert "APPROVE_PUBLICATION_FAILED" in workflow
     assert "APPROVE_PUBLICATION_SKIPPED" not in workflow
-    assert (
-        "OpenCode approve review publication failed for head" in workflow
-    )
+    assert "OpenCode approve review publication failed for head" in workflow
     assert (
         "skipping non-authoritative overview comment mutation so the required approval check can finish promptly"
         in workflow
@@ -1840,10 +1853,7 @@ def test_opencode_approve_review_publication_failure_fails_closed():
     assert "the pull request advanced from event head" in workflow
     assert "This pull request has been updated since you started reviewing" in workflow
     assert "Central fast approval published APPROVE review" in workflow
-    assert (
-        "an unpublished approval cannot satisfy review governance"
-        in workflow
-    )
+    assert "an unpublished approval cannot satisfy review governance" in workflow
     assert re.search(
         r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1600}return 1',
         workflow,

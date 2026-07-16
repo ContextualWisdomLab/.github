@@ -198,7 +198,11 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
     assert install_step.index("umask 022") < install_step.index(
         "python3 -m pip install"
     )
-    assert install_step.index('chmod go-w -- "$strix_executable"') < install_step.index(
+    permission_normalization = 'chmod go-w -- "$strix_scripts_root" "$strix_executable"'
+    assert install_step.index('strix_scripts_root="') < install_step.index(
+        permission_normalization
+    )
+    assert install_step.index(permission_normalization) < install_step.index(
         'strix_executable_sha256="'
     )
 

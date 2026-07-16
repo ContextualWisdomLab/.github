@@ -455,7 +455,16 @@ pull_request_metadata_env_present() {
 
 pull_request_head_blob_required() {
 	[ "${GITHUB_EVENT_NAME:-}" = "pull_request_target" ] ||
-		{ [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && pull_request_metadata_env_present; }
+		{
+			case "${GITHUB_EVENT_NAME:-}" in
+			workflow_dispatch | repository_dispatch)
+				pull_request_metadata_env_present
+				;;
+			*)
+				return 1
+				;;
+			esac
+		}
 }
 
 is_valid_git_commit_sha() {
@@ -794,7 +803,7 @@ is_pull_request_event() {
 	pull_request | pull_request_target)
 		github_event_payload_has_pull_request
 		;;
-	workflow_dispatch)
+	workflow_dispatch | repository_dispatch)
 		pull_request_metadata_env_present
 		;;
 	*)

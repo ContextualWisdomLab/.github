@@ -890,7 +890,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_SHA256=%s' "Strix workflow pins the installed executable digest before scanning"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_ROOT=%s' "Strix workflow pins the installed executable root before scanning"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'umask 022' "Strix workflow creates the credential-bearing executable without group/world write access"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'chmod go-w -- "$strix_executable"' "Strix workflow normalizes the resolved executable before hashing"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'chmod go-w -- "$strix_scripts_root" "$strix_executable"' "Strix workflow normalizes the installation root and resolved executable before hashing"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must name the trusted installed Strix executable' "Strix gate requires an explicit trusted executable path"
 	assert_file_contains "$GATE_SCRIPT" 'did not match the pinned SHA-256 digest' "Strix gate rejects executable substitution after trusted installation"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must be outside the untrusted scan target' "Strix executable cannot come from the scan target"
@@ -5359,6 +5359,23 @@ PY
 			STRIX_EXECUTABLE_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
 		)
 	fi
+	if [ "$scenario" = "pr-executable-root-group-writable" ]; then
+		local fake_strix_sha256
+		fake_strix_sha256="$(python3 - "$fake_strix" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+		env_cmd+=(
+			IS_PR_EVIDENCE_RUN="true"
+			STRIX_EXECUTABLE_ROOT="$bin_dir"
+			STRIX_EXECUTABLE_SHA256="$fake_strix_sha256"
+		)
+		chmod 0775 "$bin_dir"
+	fi
 	if [ "$scenario" = "pr-executable-group-writable" ]; then
 		chmod 0775 "$fake_strix"
 	fi
@@ -5649,6 +5666,16 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"1" \
 			"must not be group/world writable" \
+			"0" \
+			"" \
+			""
+		;;
+	pr-executable-root-group-writable)
+		run_gate_case "pr-executable-root-group-writable" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"pinned Strix installation root must not be group/world writable" \
 			"0" \
 			"" \
 			""
@@ -6029,6 +6056,19 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"Container build manifest changed; materialized full PR-head blob scope"
 		;;
+	repository-dispatch-pr-scope-uses-head-blob)
+		run_pull_request_target_head_scope_case \
+			"repository-dispatch-pr-scope-uses-head-blob" \
+			"backend/db/models.py" \
+			"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+			"HEAD_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+			"0" \
+			"0" \
+			"__PR_SCOPE__" \
+			"0" \
+			"Materialized PR-head changed-file scope" \
+			"repository_dispatch"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -6052,6 +6092,7 @@ run_pull_request_target_head_scope_case() {
 	local target_path="${7-.}"
 	local expected_full_head_scope="${8-$disable_pr_scoping}"
 	local expected_scope_message="${9-}"
+	local github_event_name="${10-pull_request_target}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -6170,7 +6211,8 @@ EOF
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
-			GITHUB_EVENT_NAME="pull_request_target" \
+			GITHUB_EVENT_NAME="$github_event_name" \
+			PR_NUMBER="123" \
 			PR_BASE_SHA="$base_sha" \
 			PR_HEAD_SHA="$head_sha" \
 			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
@@ -8586,6 +8628,18 @@ run_pull_request_target_head_scope_case \
 	"__PR_SCOPE__"
 
 run_pull_request_target_head_scope_case \
+	"repository-dispatch-pr-scope-uses-head-blob" \
+	"backend/db/models.py" \
+	"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+	"0" \
+	"0" \
+	"__PR_SCOPE__" \
+	"0" \
+	"Materialized PR-head changed-file scope" \
+	"repository_dispatch"
+
+run_pull_request_target_head_scope_case \
 	"pull-request-target-added-file-uses-head-blob" \
 	"src/new_module.py" \
 	"__ABSENT__" \
@@ -8772,6 +8826,15 @@ run_gate_case "pr-executable-group-writable" \
 	"" \
 	"1" \
 	"must not be group/world writable" \
+	"0" \
+	"" \
+	""
+
+run_gate_case "pr-executable-root-group-writable" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"pinned Strix installation root must not be group/world writable" \
 	"0" \
 	"" \
 	""
