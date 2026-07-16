@@ -485,6 +485,11 @@ jobs:
         working-directory: trusted-strix-source
         run: |
           set -euo pipefail
+          # GitHub-hosted runners may inherit a collaborative umask (0002),
+          # which makes pip-generated console scripts group-writable.  Pin a
+          # private install umask before creating the credential-bearing Strix
+          # entry point; the runtime gate still rejects any later relaxation.
+          umask 022
           python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
           strix_executable="$(command -v strix || true)"
           if [ -z "$strix_executable" ] || [[ "$strix_executable" != /* ]] \
@@ -508,9 +513,11 @@ jobs:
           print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
           PY
           )"
-          printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable" >> "$GITHUB_ENV"
-          printf 'STRIX_EXECUTABLE_ROOT=%s\n' "$strix_scripts_root" >> "$GITHUB_ENV"
-          printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256" >> "$GITHUB_ENV"
+          {
+            printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable"
+            printf 'STRIX_EXECUTABLE_ROOT=%s\n' "$strix_scripts_root"
+            printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256"
+          } >> "$GITHUB_ENV"
 
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
