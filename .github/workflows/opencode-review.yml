@@ -1874,7 +1874,7 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Materialize pull request head for OpenCode review data
+      - name: Materialize inert pull request blobs for OpenCode review data
         env:
           GH_TOKEN: ${{ steps.review_read_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
@@ -1882,24 +1882,35 @@ jobs:
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          OPENCODE_SOURCE_GIT_DIR: ${{ runner.temp }}/opencode-pr-objects.git
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          OPENCODE_SOURCE_MANIFEST: ${{ runner.temp }}/opencode-pr-source-manifest.json
         run: |
           set -euo pipefail
           gh auth setup-git
-          git remote remove pr-source 2>/dev/null || true
-          git remote add pr-source "$GITHUB_SERVER_URL/$GH_REPOSITORY.git"
-          git fetch --no-tags pr-source \
+          rm -rf "$OPENCODE_SOURCE_GIT_DIR" "$OPENCODE_SOURCE_WORKDIR"
+          rm -f "$OPENCODE_SOURCE_MANIFEST"
+          git init --bare "$OPENCODE_SOURCE_GIT_DIR"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" remote add pr-source \
+            "$GITHUB_SERVER_URL/$GH_REPOSITORY.git"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" fetch --no-tags --no-recurse-submodules pr-source \
             "+refs/heads/${PR_BASE_REF}:refs/remotes/pr-source/${PR_BASE_REF}"
-          if ! git cat-file -e "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1; then
-            git fetch --no-tags pr-source "$PR_BASE_SHA"
+          if ! git --git-dir="$OPENCODE_SOURCE_GIT_DIR" cat-file -e "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1; then
+            git --git-dir="$OPENCODE_SOURCE_GIT_DIR" fetch --no-tags --no-recurse-submodules \
+              pr-source "$PR_BASE_SHA"
           fi
-          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
-            git fetch --no-tags pr-source "$PR_HEAD_SHA" || true
+          if ! git --git-dir="$OPENCODE_SOURCE_GIT_DIR" cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+            git --git-dir="$OPENCODE_SOURCE_GIT_DIR" fetch --no-tags --no-recurse-submodules \
+              pr-source "$PR_HEAD_SHA" || true
           fi
-          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+          if ! git --git-dir="$OPENCODE_SOURCE_GIT_DIR" cat-file -e "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
             for pr_head_fetch_attempt in 1 2 3 4 5 6; do
-              git fetch --no-tags --prune pr-source "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr-source/pull/${PR_NUMBER}/head"
-              fetched_head_sha="$(git rev-parse "refs/remotes/pr-source/pull/${PR_NUMBER}/head")"
+              git --git-dir="$OPENCODE_SOURCE_GIT_DIR" fetch --no-tags --prune --no-recurse-submodules \
+                pr-source "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr-source/pull/${PR_NUMBER}/head"
+              fetched_head_sha="$(
+                git --git-dir="$OPENCODE_SOURCE_GIT_DIR" rev-parse \
+                  "refs/remotes/pr-source/pull/${PR_NUMBER}/head"
+              )"
               if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
                 break
               fi
@@ -1909,11 +1920,26 @@ jobs:
               fi
             done
           fi
-          git cat-file -e "${PR_BASE_SHA}^{commit}"
-          git cat-file -e "${PR_HEAD_SHA}^{commit}"
-          rm -rf "$OPENCODE_SOURCE_WORKDIR"
-          git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
-          git -C "$OPENCODE_SOURCE_WORKDIR" status --short
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" cat-file -e "${PR_BASE_SHA}^{commit}"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" cat-file -e "${PR_HEAD_SHA}^{commit}"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" update-ref refs/heads/opencode-review "$PR_HEAD_SHA"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" symbolic-ref HEAD refs/heads/opencode-review
+          python3 scripts/ci/materialize_pr_review_source.py \
+            --git-dir "$OPENCODE_SOURCE_GIT_DIR" \
+            --head-sha "$PR_HEAD_SHA" \
+            --output-dir "$OPENCODE_SOURCE_WORKDIR" \
+            --manifest "$OPENCODE_SOURCE_MANIFEST"
+          [ "$(git -C "$OPENCODE_SOURCE_WORKDIR" rev-parse HEAD)" = "$PR_HEAD_SHA" ]
+          if find "$OPENCODE_SOURCE_WORKDIR" -type l -print -quit | grep -q .; then
+            echo "::error::Inert OpenCode source unexpectedly contains a symbolic link."
+            exit 1
+          fi
+          if find "$OPENCODE_SOURCE_WORKDIR" -type f -perm /111 -print -quit | grep -q .; then
+            echo "::error::Inert OpenCode source unexpectedly contains an executable file."
+            exit 1
+          fi
+          jq '{head_sha, tree_entries, written_files, tree_bytes, skipped, special_representations}' \
+            "$OPENCODE_SOURCE_MANIFEST"
 
       - name: Configure git identity for OpenCode action
         run: |
@@ -2800,7 +2826,7 @@ jobs:
             printf '\n```\n'
 
             printf '\n## Review inspection contract\n\n'
-            printf 'Use the local checkout for exact source and diff inspection.\n'
+            printf 'Use the inert local source tree and isolated read-only Git objects for exact source and diff inspection.\n'
             printf 'Do not run a broad full-diff read into the model context; inspect changed files and focused hunks only.\n'
             printf 'If direct file reads fail but focused changed hunks are present above, review those hunks; do not return file-inaccessible findings for paths shown in this evidence.\n'
           } >"$OPENCODE_EVIDENCE_FILE"

@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""Materialize an inert PR source tree from an isolated bare Git repository.
+
+The privileged OpenCode review job must inspect pull-request content without
+checking an untrusted commit out into the trusted workflow repository.  This
+helper copies only validated Git blobs into a fresh directory, strips every
+executable bit, represents symbolic links as inert regular files, and connects
+read-only Git queries to the separate bare object store through a trusted
+``.git`` pointer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+
+# Git is invoked through an absolute executable path, a fixed argv, and no shell.
+import subprocess  # nosec B404
+import sys
+from typing import BinaryIO
+
+
+SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+REGULAR_MODES = {"100644", "100755"}
+SYMLINK_MODE = "120000"
+GITLINK_MODE = "160000"
+RESERVED_ROOTS = {".codegraph", ".git"}
+DEFAULT_MAX_FILES = 100_000
+DEFAULT_MAX_BYTES = 1_073_741_824
+GIT_EXECUTABLE = shutil.which("git")
+if not GIT_EXECUTABLE or not Path(GIT_EXECUTABLE).is_absolute():
+    raise RuntimeError("an absolute Git executable path is required")
+
+
+def positive_int(value: str) -> int:
+    """Parse a positive integer command-line limit."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--git-dir", type=Path, required=True)
+    parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--max-files", type=positive_int, default=DEFAULT_MAX_FILES)
+    parser.add_argument("--max-bytes", type=positive_int, default=DEFAULT_MAX_BYTES)
+    args = parser.parse_args(argv)
+    if not SHA_RE.fullmatch(args.head_sha):
+        parser.error("--head-sha must be a 40-character hexadecimal commit SHA")
+    return args
+
+
+def git_bytes(git_dir: Path, *args: str) -> bytes:
+    """Run a read-only Git command against the isolated object store."""
+    # argv only; the Git directory and commit inputs are validated before use.
+    completed = subprocess.run(  # nosec B603
+        [GIT_EXECUTABLE, f"--git-dir={git_dir}", *args],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or f"git {' '.join(args)} failed")
+    return completed.stdout
+
+
+def validate_git_dir(git_dir: Path, head_sha: str) -> Path:
+    """Return a resolved, bare Git directory containing the requested commit."""
+    resolved = git_dir.resolve(strict=True)
+    if not resolved.is_dir():
+        raise ValueError("--git-dir must resolve to a directory")
+    bare = git_bytes(resolved, "rev-parse", "--is-bare-repository").decode().strip()
+    if bare != "true":
+        raise ValueError("--git-dir must be an isolated bare repository")
+    commit = git_bytes(resolved, "rev-parse", f"{head_sha}^{{commit}}").decode().strip()
+    if commit.lower() != head_sha.lower():
+        raise ValueError("--head-sha did not resolve to the exact requested commit")
+    return resolved
+
+
+def validate_output_path(output_dir: Path, git_dir: Path) -> Path:
+    """Require a fresh output path that cannot overlap the Git object store."""
+    output = output_dir.absolute()
+    if output.exists() or output.is_symlink():
+        raise ValueError("--output-dir must not already exist")
+    output_parent = output.parent.resolve(strict=True)
+    output = output_parent / output.name
+    if output == git_dir or output in git_dir.parents or git_dir in output.parents:
+        raise ValueError("--output-dir and --git-dir must not overlap")
+    return output
+
+
+def safe_relative_path(raw_path: bytes) -> PurePosixPath:
+    """Decode and validate a Git tree path without accepting traversal."""
+    try:
+        decoded = raw_path.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Git tree contains a non-UTF-8 path") from exc
+    path = PurePosixPath(decoded)
+    if not decoded or decoded.startswith("/") or path.is_absolute():
+        raise ValueError(f"unsafe absolute or empty Git tree path: {decoded!r}")
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"unsafe Git tree path component: {decoded!r}")
+    return path
+
+
+def parse_tree(
+    git_dir: Path, head_sha: str
+) -> list[tuple[str, str, str, int, PurePosixPath]]:
+    """Return validated recursive Git tree entries."""
+    raw = git_bytes(git_dir, "ls-tree", "-r", "-z", "-l", "--full-tree", head_sha)
+    entries: list[tuple[str, str, str, int, PurePosixPath]] = []
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode_raw, kind_raw, oid_raw, size_raw = metadata.split(maxsplit=3)
+            mode = mode_raw.decode("ascii")
+            kind = kind_raw.decode("ascii")
+            oid = oid_raw.decode("ascii")
+            size_text = size_raw.decode("ascii")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ValueError("could not parse Git tree entry") from exc
+        if not SHA_RE.fullmatch(oid):
+            raise ValueError("Git tree entry has an invalid object id")
+        if mode == GITLINK_MODE and kind == "commit" and size_text == "-":
+            size = len(f"Submodule commit {oid}\n".encode())
+        elif kind == "blob" and size_text.isdigit():
+            size = int(size_text)
+        else:
+            raise ValueError(f"unsupported Git tree entry type/mode: {kind}/{mode}")
+        entries.append((mode, kind, oid, size, safe_relative_path(raw_path)))
+    return entries
+
+
+def open_batch_reader(git_dir: Path) -> subprocess.Popen[bytes]:
+    """Start one Git batch process for bounded blob reads."""
+    # Fixed Git subcommand and no shell evaluation.
+    return subprocess.Popen(  # nosec B603
+        [GIT_EXECUTABLE, f"--git-dir={git_dir}", "cat-file", "--batch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def read_blob(process: subprocess.Popen[bytes], oid: str, expected_size: int) -> bytes:
+    """Read one exact blob through the long-lived Git batch process."""
+    stdin: BinaryIO | None = process.stdin
+    stdout: BinaryIO | None = process.stdout
+    if stdin is None or stdout is None:
+        raise RuntimeError("Git cat-file batch pipes are unavailable")
+    stdin.write(f"{oid}\n".encode("ascii"))
+    stdin.flush()
+    header = stdout.readline().rstrip(b"\n")
+    fields = header.split()
+    if len(fields) != 3 or fields[0].decode("ascii", errors="replace") != oid:
+        raise RuntimeError("Git cat-file returned an unexpected object header")
+    if fields[1] != b"blob" or not fields[2].isdigit():
+        raise RuntimeError("Git cat-file object is not a blob")
+    actual_size = int(fields[2])
+    if actual_size != expected_size:
+        raise RuntimeError("Git blob size changed after tree validation")
+    data = stdout.read(actual_size)
+    delimiter = stdout.read(1)
+    if len(data) != actual_size or delimiter != b"\n":
+        raise RuntimeError("Git cat-file returned a truncated blob")
+    return data
+
+
+def write_inert_file(path: Path, data: bytes) -> None:
+    """Create one non-executable regular file without following links."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+    path.chmod(0o444)
+
+
+def materialize(args: argparse.Namespace) -> dict[str, object]:
+    """Materialize validated inert files and return provenance metadata."""
+    git_dir = validate_git_dir(args.git_dir, args.head_sha)
+    output_dir = validate_output_path(args.output_dir, git_dir)
+    manifest_path = args.manifest.absolute()
+    if manifest_path.exists() or manifest_path.is_symlink():
+        raise ValueError("--manifest must not already exist")
+    if manifest_path == output_dir or output_dir in manifest_path.parents:
+        raise ValueError("--manifest must be outside --output-dir")
+
+    entries = parse_tree(git_dir, args.head_sha)
+    if len(entries) > args.max_files:
+        raise ValueError(
+            f"Git tree exceeds --max-files ({len(entries)} > {args.max_files})"
+        )
+    total_bytes = sum(entry[3] for entry in entries)
+    if total_bytes > args.max_bytes:
+        raise ValueError(
+            f"Git tree exceeds --max-bytes ({total_bytes} > {args.max_bytes})"
+        )
+
+    output_dir.mkdir(mode=0o755)
+    skipped: list[dict[str, str]] = []
+    special: list[dict[str, str]] = []
+    written = 0
+    process = open_batch_reader(git_dir)
+    try:
+        for mode, kind, oid, size, relative in entries:
+            rendered = relative.as_posix()
+            if relative.parts[0] in RESERVED_ROOTS:
+                skipped.append({"path": rendered, "reason": "reserved-review-metadata"})
+                continue
+            destination = output_dir.joinpath(*relative.parts)
+            if mode == GITLINK_MODE and kind == "commit":
+                data = f"Submodule commit {oid}\n".encode()
+                special.append(
+                    {
+                        "path": rendered,
+                        "original_mode": mode,
+                        "representation": "gitlink-marker",
+                    }
+                )
+            elif kind == "blob" and mode in REGULAR_MODES | {SYMLINK_MODE}:
+                data = read_blob(process, oid, size)
+                if mode == SYMLINK_MODE:
+                    special.append(
+                        {
+                            "path": rendered,
+                            "original_mode": mode,
+                            "representation": "inert-regular-file",
+                        }
+                    )
+                elif mode == "100755":
+                    special.append(
+                        {
+                            "path": rendered,
+                            "original_mode": mode,
+                            "representation": "non-executable-regular-file",
+                        }
+                    )
+            else:
+                raise ValueError(f"unsupported Git entry {kind}/{mode} at {rendered}")
+            write_inert_file(destination, data)
+            written += 1
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        stderr = (
+            process.stderr.read().decode("utf-8", errors="replace")
+            if process.stderr
+            else ""
+        )
+        return_code = process.wait()
+        if return_code != 0 and sys.exc_info()[0] is None:
+            raise RuntimeError(stderr.strip() or "Git cat-file batch failed")
+
+    git_pointer = output_dir / ".git"
+    write_inert_file(git_pointer, f"gitdir: {git_dir}\n".encode())
+    metadata: dict[str, object] = {
+        "schema": 1,
+        "head_sha": args.head_sha.lower(),
+        "git_dir": str(git_dir),
+        "source_dir": str(output_dir),
+        "tree_entries": len(entries),
+        "written_files": written,
+        "tree_bytes": total_bytes,
+        "skipped": skipped,
+        "special_representations": special,
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    write_inert_file(
+        manifest_path, (json.dumps(metadata, sort_keys=True, indent=2) + "\n").encode()
+    )
+    return metadata
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the inert PR source materializer."""
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        metadata = materialize(args)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"materialize_pr_review_source: {exc}", file=sys.stderr)
+        return 1
+    print(
+        "Materialized inert PR source blobs: "
+        f"head={metadata['head_sha']} files={metadata['written_files']} bytes={metadata['tree_bytes']}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

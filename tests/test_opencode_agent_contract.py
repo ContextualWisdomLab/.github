@@ -1656,6 +1656,18 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     ) < target_job.index(
         "Exchange OpenCode app token for target repository review reads"
     )
+    materialize_step = target_job.split(
+        "      - name: Materialize inert pull request blobs for OpenCode review data", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert 'git init --bare "$OPENCODE_SOURCE_GIT_DIR"' in materialize_step
+    assert 'git --git-dir="$OPENCODE_SOURCE_GIT_DIR" fetch' in materialize_step
+    assert "python3 scripts/ci/materialize_pr_review_source.py" in materialize_step
+    assert 'git worktree add --detach "$OPENCODE_SOURCE_WORKDIR"' not in target_job
+    assert 'find "$OPENCODE_SOURCE_WORKDIR" -type l' in materialize_step
+    assert 'find "$OPENCODE_SOURCE_WORKDIR" -type f -perm /111' in materialize_step
+    assert materialize_step.index("materialize_pr_review_source.py") < materialize_step.index(
+        'git -C "$OPENCODE_SOURCE_WORKDIR" rev-parse HEAD'
+    )
     codegraph_step = target_job.split(
         "      - name: Initialize CodeGraph index for OpenCode", 1
     )[1].split("\n      - name:", 1)[0]
