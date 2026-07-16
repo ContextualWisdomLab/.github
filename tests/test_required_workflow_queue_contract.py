@@ -886,6 +886,26 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     )
 
 
+def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
+    workflow = workflow_text("strix.yml")
+    run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(
+        "      - name:", 1
+    )[0]
+
+    assert "STRIX_TARGET_PATH:" in run_step
+    assert "github.event_name == 'repository_dispatch'" in run_step
+    assert "github.event.client_payload.pr_number != ''" in run_step
+    assert (
+        "steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || "
+        "github.token"
+    ) in run_step
+    assert "github.event_name == 'pull_request_target' && github.token" in run_step
+    assert (
+        "(github.event_name == 'pull_request_target' || "
+        "github.event.client_payload.pr_number != '') && github.token"
+    ) not in run_step
+
+
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> (
     None
 ):
