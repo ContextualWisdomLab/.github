@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -239,8 +240,8 @@ def test_opencode_ignores_superseded_cancelled_rollup_checks():
     ) in workflow
 
 
-def test_opencode_target_coverage_materializes_merge_tree_without_checkout_action():
-    """Avoid pull_request_target action checkouts of untrusted PR refs."""
+def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
+    """Keep PR-controlled test execution off the pull_request_target path."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     assert "required-workflow-bootstrap:" in workflow
     assert "Required OpenCode workflow run materialized for this PR event." in workflow
@@ -248,10 +249,6 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     bootstrap_end = workflow.index("\n  validate-pr-metadata:", bootstrap_start)
     bootstrap_job = workflow[bootstrap_start:bootstrap_end]
     assert "\n    if:" not in bootstrap_job
-    assert (
-        "github.event.pull_request.head.repo.full_name == "
-        "github.event.pull_request.base.repo.full_name"
-    ) in workflow
     assert (
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
@@ -262,6 +259,8 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     source_start = workflow.index("  coverage-source-tree:\n")
     source_end = workflow.index("\n  coverage-evidence:", source_start)
     source_job = workflow[source_start:source_end]
+    assert "github.event_name == 'repository_dispatch'" in source_job
+    assert "github.event_name == 'pull_request_target'" not in source_job
     assert "id-token: write" in source_job
     assert (
         "Exchange OpenCode app token for target repository coverage reads" in source_job
@@ -277,6 +276,8 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     coverage_start = workflow.index("  coverage-evidence:\n")
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
     coverage_job = workflow[coverage_start:coverage_end]
+    assert "github.event_name == 'repository_dispatch'" in coverage_job
+    assert "github.event_name == 'pull_request_target'" not in coverage_job
     assert "id-token: write" not in coverage_job
     assert "Report coverage source materialization failure" in coverage_job
     assert (
@@ -319,6 +320,31 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "GH_TOKEN:" not in measure_step
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
+    assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
+    assert "python3 -I - \"$COVERAGE_SOURCE_ARCHIVE\" \"$COVERAGE_SOURCE_WORKDIR\"" in workflow
+    assert "member.isfile() or member.isdir()" in workflow
+    assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
+    assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
+    assert "docker.io/library/ubuntu@sha256:" in measure_step
+    assert "apt-get install --no-install-recommends -y" in measure_step
+    assert "--require-hashes" in measure_step
+    assert "--cap-drop ALL" in measure_step
+    assert "--pid private" in measure_step
+    assert 'measure_step_script="$(realpath "$0")"' in measure_step
+    assert 'source=${measure_step_script},target=/trusted-measure-step.sh,readonly' in measure_step
+    assert "target=/trusted,readonly" in measure_step
+    assert "target=/work" in measure_step
+    assert "/var/run/docker.sock" not in measure_step
+    assert "OPENCODE_SANDBOX_UID=65532" in measure_step
+    assert 'chown -R --no-dereference' in measure_step
+    assert 'setpriv \\\n              --reuid "$OPENCODE_SANDBOX_UID"' in measure_step
+    assert 'pkill -KILL -u "$OPENCODE_SANDBOX_UID"' in measure_step
+    assert 'python3 -I - "$1"' in measure_step
+    assert "python3 -I -c 'import pytest_cov'" in measure_step
+    assert 'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"' in measure_step
+    assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
+    assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' in measure_step
+    assert "cargo llvm-cov --version" not in measure_step
     assert "emit_captured_log()" in measure_step
     assert 'append_command "$@"' in measure_step
     assert "tail -n 180" in measure_step
@@ -334,15 +360,190 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "scripts/ci/rust_coverage_threshold.py" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
     assert "run_python_uv_lock_check()" in measure_step
+    assert "pyproject_has_no_selected_dependencies()" in measure_step
     assert "Python uv lockfile consistency (${project_dir})" in measure_step
     assert "uv lock --check" in measure_step
     assert measure_step.index(
         'run_python_uv_lock_check "$project_dir"'
     ) < measure_step.index('uv sync --project "$project_dir" --group dev')
 
+    target_start = workflow.index("  opencode-review-target:\n")
+    target_job = workflow[target_start:]
+    target_condition = target_job.split("    runs-on:", 1)[0]
+    assert "github.event_name == 'repository_dispatch'" in target_condition
+    assert "github.event_name == 'pull_request_target'" not in target_condition
 
-def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
-    """pnpm workspaces must not be measured through npm after corepack setup."""
+
+def test_opencode_repository_dispatch_authorization_is_fail_closed():
+    """Reject an untrusted dispatcher or a target outside the exact allowlist."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    validate_step = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata\n",
+        1,
+    )[1].split("          pull_request_json=", 1)[0]
+    shell = textwrap.dedent(validate_step.split("        run: |\n", 1)[1])
+
+    assert "DISPATCH_ACTOR: ${{ github.triggering_actor }}" in validate_step
+    assert "DISPATCH_ACTOR: ${{ github.actor }}" not in validate_step
+    assert "DISPATCH_SENDER: ${{ github.event.sender.login || '' }}" in validate_step
+    assert (
+        "ALLOWED_DISPATCH_ACTOR: "
+        "${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}" in validate_step
+    )
+    assert (
+        "ALLOWED_DISPATCH_TARGETS: "
+        "${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}" in validate_step
+    )
+
+    base_env = {
+        **os.environ,
+        "EVENT_NAME": "repository_dispatch",
+        "DISPATCH_ACTOR": "github-actions[bot]",
+        "DISPATCH_SENDER": "github-actions[bot]",
+        "ALLOWED_DISPATCH_ACTOR": "github-actions[bot]",
+        "ALLOWED_DISPATCH_TARGETS": (
+            "ContextualWisdomLab/.github,ContextualWisdomLab/naruon"
+        ),
+        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "PR_NUMBER": "1085",
+    }
+
+    authorized = subprocess.run(
+        ["bash", "-c", shell],
+        env=base_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert authorized.returncode == 0, authorized.stderr
+    assert "Authorized repository_dispatch actor=" in authorized.stdout
+
+    for overrides, expected_reason in (
+        ({"ALLOWED_DISPATCH_ACTOR": ""}, "rejected actor="),
+        ({"DISPATCH_SENDER": "seonghobae"}, "rejected actor="),
+        (
+            {"ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/.github"},
+            "rejected target=ContextualWisdomLab/naruon",
+        ),
+    ):
+        rejected = subprocess.run(
+            ["bash", "-c", shell],
+            env={**base_env, **overrides},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected.returncode == 1
+        assert expected_reason in rejected.stdout
+
+
+def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
+    """Do not broaden workflow permissions for a recursive review dispatch."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    assert "opencode-exhausted-retry:" not in workflow
+    assert "RETRY_DISPATCH_TOKEN" not in workflow
+    assert "contents: write" not in workflow
+
+
+def test_opencode_empty_pyproject_dependency_probe_is_fail_closed(tmp_path):
+    """Skip only declaratively empty dependency sets without running build hooks."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    function = workflow.split(
+        "          pyproject_has_no_selected_dependencies() {\n", 1
+    )[1].split("\n          PY\n          }", 1)[0]
+    probe = textwrap.dedent(function.split("<<'PY'\n", 1)[1])
+    pyproject = tmp_path / "pyproject.toml"
+
+    def run(source: str, selection: str) -> subprocess.CompletedProcess[str]:
+        pyproject.write_text(textwrap.dedent(source), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, "-", str(pyproject), selection],
+            input=probe,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert (
+        run(
+            """
+        [project]
+        name = "empty"
+        dynamic = ["version"]
+        dependencies = []
+        """,
+            "runtime",
+        ).returncode
+        == 0
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "runtime"
+        version = "1.0.0"
+        dependencies = ["pydantic>=2"]
+        """,
+            "runtime",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "group"
+        version = "1.0.0"
+        dependencies = []
+
+        [dependency-groups]
+        dev = ["pytest>=8"]
+        """,
+            "group-dev",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "dynamic"
+        version = "1.0.0"
+        dynamic = ["dependencies"]
+        """,
+            "runtime",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "dynamic-extra"
+        version = "1.0.0"
+        dynamic = ["optional-dependencies"]
+        dependencies = []
+        """,
+            "extra-dev",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "malformed"
+        version = "1.0.0"
+        dependencies = "pytest"
+        """,
+            "runtime",
+        ).returncode
+        == 2
+    )
+
+
+def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
+    """pnpm workspaces must not activate PR-selected tooling or fall back to npm."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     measure_start = workflow.index(
         "      - name: Measure test and docstring evidence\n"
@@ -357,8 +558,9 @@ def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
     select_function = measure_step[select_start:select_end]
 
     assert 'jq -r \'.packageManager // "" | split("@")[0]\'' in measure_step
-    assert 'corepack prepare "$spec" --activate' in measure_step
-    assert "not falling back to npm" in measure_step
+    assert 'corepack prepare "$spec" --activate' not in measure_step
+    assert "not preinstalled in the pinned sandbox image" in measure_step
+    assert "or fall back to npm" in measure_step
     assert "ensure_corepack_runner pnpm" in select_function
     assert "ensure_corepack_runner yarn" in select_function
     assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
@@ -518,7 +720,10 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     worker = Path(".github/workflows/pr-review-autofix.yml").read_text(encoding="utf-8")
 
     assert "types: [pr-review-autofix]" in worker
-    assert "RESOLVE_CONFLICT: ${{ github.event.client_payload.resolve_conflict || 'false' }}" in worker
+    assert (
+        "RESOLVE_CONFLICT: ${{ github.event.client_payload.resolve_conflict || 'false' }}"
+        in worker
+    )
     # The review-feedback fix steps do not run in conflict mode.
     assert worker.count("if: env.RESOLVE_CONFLICT != 'true'") >= 3
     # The dedicated conflict step exists and is fail-closed.
@@ -799,11 +1004,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "600"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"'
         in workflow
     )
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"'
         in workflow
     )
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
@@ -872,18 +1077,18 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
     )
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 150", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 300", workflow)
     assert "timeout-minutes: 12" in workflow
     assert re.search(
-        r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 65", workflow
+        r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
     )
-    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "2100"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert (
         'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s"'
         in workflow
@@ -926,26 +1131,26 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'github-models/deepseek/deepseek-r1"'
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "600"' in workflow
-    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "120"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "2100"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert (
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
         in workflow
     )
-    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
-    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "600"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "600"' in workflow
-    assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "1800"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
+    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
@@ -1147,6 +1352,48 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "forced smooth scrolling" in prompt_template
 
 
+def test_opencode_job_timeout_contains_full_sequential_review_budget():
+    """Keep the outer job alive through evidence, review, and publication."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+
+    def timeout_minutes(pattern: str) -> int:
+        match = re.search(pattern, workflow, re.MULTILINE)
+        assert match, f"missing timeout contract: {pattern}"
+        return int(match.group(1))
+
+    job_timeout = timeout_minutes(
+        r"^  opencode-review-target:\n[\s\S]{0,4000}?^    timeout-minutes: (\d+)$"
+    )
+    evidence_timeout = timeout_minutes(
+        r"^      - name: Prepare bounded OpenCode review evidence\n"
+        r"[\s\S]{0,200}?^        timeout-minutes: (\d+)$"
+    )
+    model_pool_timeout = timeout_minutes(
+        r"^      - name: Run OpenCode PR Review model pool\n"
+        r"[\s\S]{0,300}?^        timeout-minutes: (\d+)$"
+    )
+    fast_publish_timeout = timeout_minutes(
+        r"^      - name: Publish central OpenCode fast approval\n"
+        r"[\s\S]{0,500}?^        timeout-minutes: (\d+)$"
+    )
+    normal_publish_timeout = timeout_minutes(
+        r"^      - name: Publish OpenCode review outcome\n"
+        r"[\s\S]{0,1200}?^        timeout-minutes: (\d+)$"
+    )
+    setup_and_cleanup_margin = 30
+    required_timeout = (
+        evidence_timeout
+        + model_pool_timeout
+        + max(fast_publish_timeout, normal_publish_timeout)
+        + setup_and_cleanup_margin
+    )
+
+    assert job_timeout >= required_timeout, (
+        "opencode-review-target can terminate before publishing the bounded "
+        f"current-head result: job={job_timeout}m required={required_timeout}m"
+    )
+
+
 def test_opencode_approval_gate_shell_is_parseable():
     """Guard the large inline approval shell against YAML-valid syntax breaks."""
     if os.name == "nt":
@@ -1274,10 +1521,13 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     ) in status_step
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
     assert "steps.opencode_app_token.outputs" not in status_step
+    assert "continue-on-error: true" not in status_step
     assert (
         "same-repository github.token is available for cross-repository target"
         in status_step
     )
+    assert "status publication failed because pr_head_sha was empty" in status_step
+    assert "exit 1" in status_step
     assert "using %s token" in status_step
     assert "scripts/ci/opencode_dispatch_status.py" in status_step
     assert "COVERAGE_EVIDENCE_RESULT" in status_step
@@ -1326,9 +1576,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     coverage_start = workflow.index("  coverage-evidence:\n")
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
     coverage_job = workflow[coverage_start:coverage_end]
+    syntax_step = coverage_job.index("      - name: Enforce changed-file syntax gate\n")
+    measure_step = coverage_job.index("      - name: Measure test and docstring evidence\n")
+    measure = coverage_job[measure_step:]
     target_start = coverage_end + 1
-    target_end = workflow.index("\n  opencode-exhausted-retry:", target_start)
-    target_job = workflow[target_start:target_end]
+    target_job = workflow[target_start:]
 
     assert 'scripts/ci/safe_pytest_command.py" discover' in coverage_job
     assert 'scripts/ci/safe_pytest_command.py" execute' in coverage_job
@@ -1346,7 +1598,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "actions: read" in coverage_job
     assert "contents: read" not in coverage_job
     assert 'GITHUB_TOKEN: ""' in coverage_job
-    assert 'UV_NO_BUILD: "1"' in coverage_job
+    assert syntax_step < measure_step
+    assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
+    assert 'UV_NO_BUILD: "1"' in measure
+    assert measure.count("GITHUB_ENV=/dev/null") == 2
+    assert measure.count("GITHUB_PATH=/dev/null") == 2
+    assert measure.count("GITHUB_OUTPUT=/dev/null") == 2
+    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 2
+    assert measure.count("BASH_ENV=/dev/null") == 2
+    assert "uv run --no-project --no-build --with-requirements" in measure
+    assert "uv run --no-build --with coverage" in measure
     assert (
         'uv sync --project "$project_dir" --group dev --no-build --no-install-project'
         in coverage_job
@@ -1359,10 +1620,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "cargo install cargo-llvm-cov --version 0.8.7 --locked" in coverage_job
     assert "install.packages(" not in coverage_job
 
-    assert (
-        "github.event.pull_request.head.repo.full_name == "
-        "github.event.pull_request.base.repo.full_name"
-    ) in target_job
+    target_condition = target_job.split("    runs-on:", 1)[0]
+    assert "github.event_name == 'repository_dispatch'" in target_condition
+    assert "github.event_name == 'pull_request_target'" not in target_condition
     assert "pull_request_target:" in workflow.split("permissions:", 1)[0]
     assert "\n  pull_request:\n" not in workflow.split("permissions:", 1)[0]
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
@@ -1390,7 +1650,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "scripts/ci/codegraph-package/package-lock.json" in codegraph_step
     assert 'cd "$CODEGRAPH_TRUSTED_ROOT"' in codegraph_step
     assert "npm ci --ignore-scripts --omit=dev --no-audit --no-fund" in codegraph_step
-    assert "npm audit --package-lock-only --omit=dev --audit-level=moderate" in codegraph_step
+    assert (
+        "npm audit --package-lock-only --omit=dev --audit-level=moderate"
+        in codegraph_step
+    )
     assert 'patched_picomatch_version" != "4.0.4"' in codegraph_step
     assert 'locked_version" != "4.0.4"' in codegraph_step
     assert "Hardened CodeGraph platform bundle" in codegraph_step
@@ -1466,7 +1729,9 @@ def test_opencode_strix_security_regressions_are_closed():
 
     assert "  validate-pr-metadata:\n" in workflow
     assert "^ContextualWisdomLab/[A-Za-z0-9_.-]+$" in workflow
-    assert "repository_dispatch metadata does not match the live pull request" in workflow
+    assert (
+        "repository_dispatch metadata does not match the live pull request" in workflow
+    )
     assert "needs.validate-pr-metadata.outputs.base_sha" in workflow
     assert "needs.validate-pr-metadata.outputs.head_sha" in workflow
     assert "metadata changed before OIDC" in workflow
@@ -1543,14 +1808,14 @@ def test_opencode_review_publication_prefers_app_token_for_review_writes():
     )
 
 
-def test_opencode_approve_review_publication_failure_keeps_gate_result():
-    """A rejected APPROVE review write is logged without losing source evidence."""
+def test_opencode_approve_review_publication_failure_fails_closed():
+    """A rejected APPROVE review write must not leave a successful review gate."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
 
-    assert "APPROVE_PUBLICATION_SKIPPED" in workflow
-    assert "APPROVE_PUBLICATION_FAILED" not in workflow
+    assert "APPROVE_PUBLICATION_FAILED" in workflow
+    assert "APPROVE_PUBLICATION_SKIPPED" not in workflow
     assert (
-        "OpenCode approve review publication skipped after successful gate" in workflow
+        "OpenCode approve review publication failed for head" in workflow
     )
     assert (
         "skipping non-authoritative overview comment mutation so the required approval check can finish promptly"
@@ -1576,11 +1841,11 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
     assert "This pull request has been updated since you started reviewing" in workflow
     assert "Central fast approval published APPROVE review" in workflow
     assert (
-        "Branch protection and rulesets remain authoritative if a matching GitHub pull review is required"
+        "an unpublished approval cannot satisfy review governance"
         in workflow
     )
     assert re.search(
-        r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1600}return 0',
+        r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1600}return 1',
         workflow,
     )
 
