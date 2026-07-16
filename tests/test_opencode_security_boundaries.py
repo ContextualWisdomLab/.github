@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import runpy
 import subprocess
 import sys
@@ -170,8 +169,6 @@ def test_safe_pytest_parser_rejects_shell_and_non_pytest_execution(command: str)
 def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The realistic configured-command boundary executes validated argv with shell disabled."""
     observed: dict[str, object] = {}
-    virtualenv_bin = tmp_path / ".venv" / "bin"
-    virtualenv_bin.mkdir(parents=True)
 
     def fake_run(argv, *, cwd, env, shell, check):
         observed.update(argv=argv, cwd=cwd, env=env, shell=shell, check=check)
@@ -184,7 +181,6 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
     assert observed["shell"] is False
     assert observed["check"] is False
     assert observed["env"]["PYTHONPATH"] == "."
-    assert observed["env"]["PATH"].split(os.pathsep)[0] == str(virtualenv_bin)
 
 
 def test_configured_pytest_discovery_drops_injected_workflow_command(tmp_path: Path) -> None:

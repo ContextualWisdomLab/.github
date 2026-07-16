@@ -81,14 +81,6 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
         raise ValueError("configured command is not a safe direct pytest invocation")
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
-    virtualenv_bin = project_dir.resolve() / ".venv" / "bin"
-    if virtualenv_bin.is_dir():
-        inherited_path = env.get("PATH")
-        env["PATH"] = (
-            os.pathsep.join((str(virtualenv_bin), inherited_path))
-            if inherited_path
-            else str(virtualenv_bin)
-        )
     completed = subprocess.run(
         list(argv),
         cwd=project_dir,
