@@ -504,6 +504,11 @@ jobs:
               exit 1
               ;;
           esac
+          # pip can preserve an existing console-script mode instead of applying
+          # the process umask, so normalize the resolved artifact itself before
+          # pinning its digest. The runtime gate still fails closed if anything
+          # relaxes these bits after this trusted installation step.
+          chmod go-w -- "$strix_executable"
           strix_scripts_root="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
           strix_executable_sha256="$(python3 - "$strix_executable" <<'PY'
           import hashlib
