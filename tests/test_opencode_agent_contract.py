@@ -516,7 +516,10 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     worker = Path(".github/workflows/pr-review-autofix.yml").read_text(encoding="utf-8")
 
     assert "types: [pr-review-autofix]" in worker
-    assert "RESOLVE_CONFLICT: ${{ github.event.client_payload.resolve_conflict || 'false' }}" in worker
+    assert (
+        "RESOLVE_CONFLICT: ${{ github.event.client_payload.resolve_conflict || 'false' }}"
+        in worker
+    )
     # The review-feedback fix steps do not run in conflict mode.
     assert worker.count("if: env.RESOLVE_CONFLICT != 'true'") >= 3
     # The dedicated conflict step exists and is fail-closed.
@@ -870,7 +873,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
     )
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 240", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 300", workflow)
     assert "timeout-minutes: 12" in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
@@ -1145,6 +1148,48 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "forced smooth scrolling" in prompt_template
 
 
+def test_opencode_job_timeout_contains_full_sequential_review_budget():
+    """Keep the outer job alive through evidence, review, and publication."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+
+    def timeout_minutes(pattern: str) -> int:
+        match = re.search(pattern, workflow, re.MULTILINE)
+        assert match, f"missing timeout contract: {pattern}"
+        return int(match.group(1))
+
+    job_timeout = timeout_minutes(
+        r"^  opencode-review-target:\n[\s\S]{0,4000}?^    timeout-minutes: (\d+)$"
+    )
+    evidence_timeout = timeout_minutes(
+        r"^      - name: Prepare bounded OpenCode review evidence\n"
+        r"[\s\S]{0,200}?^        timeout-minutes: (\d+)$"
+    )
+    model_pool_timeout = timeout_minutes(
+        r"^      - name: Run OpenCode PR Review model pool\n"
+        r"[\s\S]{0,300}?^        timeout-minutes: (\d+)$"
+    )
+    fast_publish_timeout = timeout_minutes(
+        r"^      - name: Publish central OpenCode fast approval\n"
+        r"[\s\S]{0,500}?^        timeout-minutes: (\d+)$"
+    )
+    normal_publish_timeout = timeout_minutes(
+        r"^      - name: Publish OpenCode review outcome\n"
+        r"[\s\S]{0,1200}?^        timeout-minutes: (\d+)$"
+    )
+    setup_and_cleanup_margin = 30
+    required_timeout = (
+        evidence_timeout
+        + model_pool_timeout
+        + max(fast_publish_timeout, normal_publish_timeout)
+        + setup_and_cleanup_margin
+    )
+
+    assert job_timeout >= required_timeout, (
+        "opencode-review-target can terminate before publishing the bounded "
+        f"current-head result: job={job_timeout}m required={required_timeout}m"
+    )
+
+
 def test_opencode_approval_gate_shell_is_parseable():
     """Guard the large inline approval shell against YAML-valid syntax breaks."""
     if os.name == "nt":
@@ -1388,7 +1433,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "scripts/ci/codegraph-package/package-lock.json" in codegraph_step
     assert 'cd "$CODEGRAPH_TRUSTED_ROOT"' in codegraph_step
     assert "npm ci --ignore-scripts --omit=dev --no-audit --no-fund" in codegraph_step
-    assert "npm audit --package-lock-only --omit=dev --audit-level=moderate" in codegraph_step
+    assert (
+        "npm audit --package-lock-only --omit=dev --audit-level=moderate"
+        in codegraph_step
+    )
     assert 'patched_picomatch_version" != "4.0.4"' in codegraph_step
     assert 'locked_version" != "4.0.4"' in codegraph_step
     assert "Hardened CodeGraph platform bundle" in codegraph_step
@@ -1464,7 +1512,9 @@ def test_opencode_strix_security_regressions_are_closed():
 
     assert "  validate-pr-metadata:\n" in workflow
     assert "^ContextualWisdomLab/[A-Za-z0-9_.-]+$" in workflow
-    assert "repository_dispatch metadata does not match the live pull request" in workflow
+    assert (
+        "repository_dispatch metadata does not match the live pull request" in workflow
+    )
     assert "needs.validate-pr-metadata.outputs.base_sha" in workflow
     assert "needs.validate-pr-metadata.outputs.head_sha" in workflow
     assert "metadata changed before OIDC" in workflow

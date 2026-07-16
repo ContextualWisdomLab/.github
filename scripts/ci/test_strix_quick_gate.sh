@@ -647,7 +647,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 240' "opencode review target leaves room for the bounded long-review pool and publication gates"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 300' "opencode review target contains evidence, the bounded long-review pool, publication, and cleanup overhead"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool preserves full-hour candidates within a bounded provider-pool window"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 34' "opencode fast approval publication is bounded around the dynamic image and package/GPU check wait"

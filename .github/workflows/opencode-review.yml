@@ -1514,9 +1514,11 @@ jobs:
       # continue-on-error, so it survives the job failing.
       model_pool_outcome: ${{ steps.opencode_review_model_pool.outputs.review_status }}
     # Coverage and current-head evidence are prepared before the model pool.
-    # A single legitimate review may need a full hour. Keep enough room for the
-    # bounded 195-minute provider pool plus final current-head publication gates.
-    timeout-minutes: 240
+    # A single legitimate review may need a full hour. The enclosing job must
+    # contain the 12-minute evidence step, 205-minute provider-pool step, the
+    # 36-minute publication gate, and setup/cleanup overhead without truncating
+    # a late current-head verdict or its bounded failure reason.
+    timeout-minutes: 300
     permissions:
       actions: read
       checks: read
