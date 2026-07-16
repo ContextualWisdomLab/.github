@@ -5837,6 +5837,18 @@ run_filtered_gate_case_if_requested() {
 	pull-request-target-gitlink-is-explicitly-skipped)
 		run_pull_request_target_gitlink_is_explicitly_skipped_case
 		;;
+	pull-request-target-dockerfile-change-uses-full-head-context)
+		run_pull_request_target_head_scope_case \
+			"pull-request-target-dockerfile-change-uses-full-head-context" \
+			"Dockerfile" \
+			"FROM python:3.12-slim AS base" \
+			"FROM python:3.12-slim AS head" \
+			"0" \
+			"0" \
+			"." \
+			"1" \
+			"Container build manifest changed; materialized full PR-head blob scope"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -5858,6 +5870,8 @@ run_pull_request_target_head_scope_case() {
 	local disable_pr_scoping="${5-0}"
 	local make_head_executable="${6-0}"
 	local target_path="${7-.}"
+	local expected_full_head_scope="${8-$disable_pr_scoping}"
+	local expected_scope_message="${9-}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -5984,7 +5998,7 @@ EOF
 			FAKE_STRIX_UNEXPECTED_BASE_CONTENT="$unexpected_base_content" \
 			FAKE_STRIX_EXPECTED_UNCHANGED_FILE="docs/full-scope-context.md" \
 			FAKE_STRIX_EXPECTED_UNCHANGED_CONTENT="HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED" \
-			FAKE_STRIX_EXPECT_FULL_HEAD_SCOPE="$disable_pr_scoping" \
+			FAKE_STRIX_EXPECT_FULL_HEAD_SCOPE="$expected_full_head_scope" \
 			STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping" \
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
@@ -5997,6 +6011,9 @@ EOF
 
 	assert_equals "0" "$rc" "case=$case_name exit code"
 	assert_file_contains "$output_log" "scan ok with PR head content" "case=$case_name output"
+	if [ -n "$expected_scope_message" ]; then
+		assert_file_contains "$output_log" "$expected_scope_message" "case=$case_name scope reason"
+	fi
 
 	rm -rf "$tmp_dir"
 }
@@ -8411,6 +8428,17 @@ run_pull_request_target_head_scope_case \
 	"BASE_NESTED_CONTENT_SHOULD_NOT_BE_SCANNED" \
 	"HEAD_NESTED_CONTENT_SHOULD_BE_SCANNED" \
 	"1"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-dockerfile-change-uses-full-head-context" \
+	"Dockerfile" \
+	"FROM python:3.12-slim AS base" \
+	"FROM python:3.12-slim AS head" \
+	"0" \
+	"0" \
+	"." \
+	"1" \
+	"Container build manifest changed; materialized full PR-head blob scope"
 
 run_pull_request_target_bounded_head_context_scope_case
 

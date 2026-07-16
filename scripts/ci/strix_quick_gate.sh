@@ -1655,6 +1655,19 @@ PY
 	LAST_PULL_REQUEST_SCOPE_DIR="$scope_dir"
 }
 
+pull_request_changes_require_full_head_context() {
+	local changed_file normalized_changed_file
+	for changed_file in "${CHANGED_FILES[@]}"; do
+		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
+		case "$normalized_changed_file" in
+		Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Containerfile.* | */Containerfile.* | docker-compose.yml | */docker-compose.yml | docker-compose.yaml | */docker-compose.yaml | docker-compose.*.yml | */docker-compose.*.yml | docker-compose.*.yaml | */docker-compose.*.yaml | compose.yml | */compose.yml | compose.yaml | */compose.yaml | compose.*.yml | */compose.*.yml | compose.*.yaml | */compose.*.yaml)
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
 prepare_pull_request_scan_scope() {
 	if ! is_pull_request_event; then
 		return 0
@@ -1693,6 +1706,28 @@ prepare_pull_request_scan_scope() {
 
 	CHANGED_FILES=("${scoped_changed_files[@]}")
 	local total_files="${#CHANGED_FILES[@]}"
+	if pull_request_head_blob_required; then
+		local full_context_rc=0
+		pull_request_changes_require_full_head_context || full_context_rc=$?
+		case "$full_context_rc" in
+		0)
+			local build_full_context_rc=0
+			build_pull_request_head_tree_scope_dir || build_full_context_rc=$?
+			if [ "$build_full_context_rc" -ne 0 ]; then
+				return 2
+			fi
+			TARGET_PATH="$LAST_PULL_REQUEST_SCOPE_DIR"
+			TARGET_PATH_IS_INTERNAL_PR_SCOPE=1
+			printf "Container build manifest changed; materialized full PR-head blob scope so referenced source paths are available while %s changed file(s) remain the findings boundary.\n" "$total_files" >&2
+			return 0
+			;;
+		1)
+			;;
+		*)
+			return 2
+			;;
+		esac
+	fi
 	derive_pull_request_full_target_path() {
 		python3 - "$REPO_ROOT" "$@" <<'PY'
 from pathlib import Path
