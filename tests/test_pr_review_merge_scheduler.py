@@ -1628,6 +1628,8 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     calls.clear()
 
     required_workflow_pr = make_pr(
+        baseRefOid=base_sha,
+        headRefOid=head_sha,
         statusCheckRollup={
             "contexts": {
                 "nodes": [
@@ -1644,7 +1646,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=in_progress", "-F", "per_page=100"],
     ]
     assert calls[2:] == [
-        ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"],
+        ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
         ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/202/rerun"],
     ]
 
