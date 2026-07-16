@@ -320,6 +320,31 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GH_TOKEN:" not in measure_step
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
+    assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
+    assert "python3 -I - \"$COVERAGE_SOURCE_ARCHIVE\" \"$COVERAGE_SOURCE_WORKDIR\"" in workflow
+    assert "member.isfile() or member.isdir()" in workflow
+    assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
+    assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
+    assert "docker.io/library/ubuntu@sha256:" in measure_step
+    assert "apt-get install --no-install-recommends -y" in measure_step
+    assert "--require-hashes" in measure_step
+    assert "--cap-drop ALL" in measure_step
+    assert "--pid private" in measure_step
+    assert 'measure_step_script="$(realpath "$0")"' in measure_step
+    assert 'source=${measure_step_script},target=/trusted-measure-step.sh,readonly' in measure_step
+    assert "target=/trusted,readonly" in measure_step
+    assert "target=/work" in measure_step
+    assert "/var/run/docker.sock" not in measure_step
+    assert "OPENCODE_SANDBOX_UID=65532" in measure_step
+    assert 'chown -R --no-dereference' in measure_step
+    assert 'setpriv \\\n              --reuid "$OPENCODE_SANDBOX_UID"' in measure_step
+    assert 'pkill -KILL -u "$OPENCODE_SANDBOX_UID"' in measure_step
+    assert 'python3 -I - "$1"' in measure_step
+    assert "python3 -I -c 'import pytest_cov'" in measure_step
+    assert 'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"' in measure_step
+    assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
+    assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' in measure_step
+    assert "cargo llvm-cov --version" not in measure_step
     assert "emit_captured_log()" in measure_step
     assert 'append_command "$@"' in measure_step
     assert "tail -n 180" in measure_step
@@ -515,8 +540,8 @@ def test_opencode_empty_pyproject_dependency_probe_is_fail_closed(tmp_path):
     )
 
 
-def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
-    """pnpm workspaces must not be measured through npm after corepack setup."""
+def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
+    """pnpm workspaces must not activate PR-selected tooling or fall back to npm."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     measure_start = workflow.index(
         "      - name: Measure test and docstring evidence\n"
@@ -531,8 +556,9 @@ def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
     select_function = measure_step[select_start:select_end]
 
     assert 'jq -r \'.packageManager // "" | split("@")[0]\'' in measure_step
-    assert 'corepack prepare "$spec" --activate' in measure_step
-    assert "not falling back to npm" in measure_step
+    assert 'corepack prepare "$spec" --activate' not in measure_step
+    assert "not preinstalled in the pinned sandbox image" in measure_step
+    assert "or fall back to npm" in measure_step
     assert "ensure_corepack_runner pnpm" in select_function
     assert "ensure_corepack_runner yarn" in select_function
     assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
@@ -1493,10 +1519,13 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     ) in status_step
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
     assert "steps.opencode_app_token.outputs" not in status_step
+    assert "continue-on-error: true" not in status_step
     assert (
         "same-repository github.token is available for cross-repository target"
         in status_step
     )
+    assert "status publication failed because pr_head_sha was empty" in status_step
+    assert "exit 1" in status_step
     assert "using %s token" in status_step
     assert "scripts/ci/opencode_dispatch_status.py" in status_step
     assert "COVERAGE_EVIDENCE_RESULT" in status_step
@@ -1777,14 +1806,14 @@ def test_opencode_review_publication_prefers_app_token_for_review_writes():
     )
 
 
-def test_opencode_approve_review_publication_failure_keeps_gate_result():
-    """A rejected APPROVE review write is logged without losing source evidence."""
+def test_opencode_approve_review_publication_failure_fails_closed():
+    """A rejected APPROVE review write must not leave a successful review gate."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
 
-    assert "APPROVE_PUBLICATION_SKIPPED" in workflow
-    assert "APPROVE_PUBLICATION_FAILED" not in workflow
+    assert "APPROVE_PUBLICATION_FAILED" in workflow
+    assert "APPROVE_PUBLICATION_SKIPPED" not in workflow
     assert (
-        "OpenCode approve review publication skipped after successful gate" in workflow
+        "OpenCode approve review publication failed for head" in workflow
     )
     assert (
         "skipping non-authoritative overview comment mutation so the required approval check can finish promptly"
@@ -1810,11 +1839,11 @@ def test_opencode_approve_review_publication_failure_keeps_gate_result():
     assert "This pull request has been updated since you started reviewing" in workflow
     assert "Central fast approval published APPROVE review" in workflow
     assert (
-        "Branch protection and rulesets remain authoritative if a matching GitHub pull review is required"
+        "an unpublished approval cannot satisfy review governance"
         in workflow
     )
     assert re.search(
-        r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1600}return 0',
+        r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1600}return 1',
         workflow,
     )
 

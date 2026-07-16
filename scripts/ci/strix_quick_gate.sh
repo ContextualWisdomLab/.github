@@ -43,8 +43,9 @@ STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
 STRIX_FAIL_ON_PROVIDER_SIGNAL="${STRIX_FAIL_ON_PROVIDER_SIGNAL:-0}"
-RUN_START_EPOCH="$(date +%s)"
+RUN_START_EPOCH=0
 TOTAL_TIMEOUT_EXCEEDED=0
+ATTEMPT_LOG_SEQUENCE=0
 PREEXISTING_REPORT_DIRS=()
 REPO_NAME="${REPO_ROOT##*/}"
 # shellcheck source=scripts/ci/strix_model_utils.sh
@@ -119,6 +120,9 @@ publish_artifact_reports() {
 	if [ -d "$ACTIVE_REPORTS_DIR" ]; then
 		cp -R -- "$ACTIVE_REPORTS_DIR"/. "$ARTIFACT_REPORTS_DIR"/
 	fi
+	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
+		cp -- "$STRIX_LOG" "$ARTIFACT_REPORTS_DIR/gate-last-attempt.log"
+	fi
 	local scope_dir scope_reports_dir
 	for scope_dir in "${PULL_REQUEST_SCOPE_DIRS[@]}"; do
 		scope_reports_dir="$scope_dir/strix_runs"
@@ -126,6 +130,22 @@ publish_artifact_reports() {
 			cp -R -- "$scope_reports_dir"/. "$ARTIFACT_REPORTS_DIR"/
 		fi
 	done
+}
+
+preserve_attempt_log() {
+	local model="$1"
+	local rc="$2"
+	local safe_model attempt_dir attempt_log
+	ATTEMPT_LOG_SEQUENCE=$((ATTEMPT_LOG_SEQUENCE + 1))
+	safe_model="$(printf '%s' "$model" | tr -c 'A-Za-z0-9._-' '_')"
+	attempt_dir="$ACTIVE_REPORTS_DIR/gate-attempts"
+	mkdir -p -- "$attempt_dir"
+	attempt_log="$(printf '%s/%03d-%s-rc%s.log' "$attempt_dir" "$ATTEMPT_LOG_SEQUENCE" "$safe_model" "$rc")"
+	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
+		cp -- "$STRIX_LOG" "$attempt_log"
+	else
+		printf 'Strix attempt produced no console log (model=%s rc=%s).\n' "$model" "$rc" >"$attempt_log"
+	fi
 }
 
 sanitize_known_strix_report_warnings() {
@@ -728,6 +748,10 @@ remaining_total_budget() {
 
 	local now elapsed remaining
 	now="$(date +%s)"
+	if [ "$RUN_START_EPOCH" -le 0 ]; then
+		echo "$STRIX_TOTAL_TIMEOUT_SECONDS"
+		return 0
+	fi
 	elapsed=$((now - RUN_START_EPOCH))
 	remaining=$((STRIX_TOTAL_TIMEOUT_SECONDS - elapsed))
 	if [ "$remaining" -lt 0 ]; then
@@ -1058,155 +1082,6 @@ if not head:
     raise SystemExit(1)
 print(head)
 PY
-}
-
-load_pull_request_number() {
-	local pr_number
-	pr_number="$(trim_whitespace "${PR_NUMBER:-}")"
-	if [ -n "$pr_number" ]; then
-		if [[ "$pr_number" =~ ^[0-9]+$ ]] && [ "$pr_number" -gt 0 ]; then
-			printf '%s\n' "$pr_number"
-			return 0
-		fi
-		return 1
-	fi
-
-	if [ -z "${GITHUB_EVENT_PATH:-}" ] || [ ! -f "$GITHUB_EVENT_PATH" ]; then
-		return 1
-	fi
-
-	python3 - "$GITHUB_EVENT_PATH" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], 'r', encoding='utf-8') as fh:
-    payload = json.load(fh)
-pull_request = payload.get('pull_request') or {}
-number = pull_request.get('number')
-if not isinstance(number, int) or number <= 0:
-    raise SystemExit(1)
-print(number)
-PY
-}
-
-authoritative_sca_checks_passed_for_pr_head() {
-	if [ "${STRIX_TEST_PR_SCA_STATUS_OVERRIDE+x}" = x ]; then
-		case "$(trim_whitespace "$STRIX_TEST_PR_SCA_STATUS_OVERRIDE")" in
-		passed)
-			return 0
-			;;
-		unverified | failed | "")
-			return 1
-			;;
-		error)
-			echo "Unable to verify authoritative SCA checks for this pull request head; failing closed." >&2
-			return 1
-			;;
-		esac
-		echo "Unsupported STRIX_TEST_PR_SCA_STATUS_OVERRIDE value; failing closed." >&2
-		return 1
-	fi
-
-	if ! is_pull_request_event; then
-		echo "Unable to verify authoritative SCA checks outside a pull request context; failing closed." >&2
-		return 1
-	fi
-
-	local head_sha pr_number repository gh_token workflow_runs_json verification_result
-	if ! head_sha="$(load_pull_request_head_sha)"; then
-		echo "Unable to determine pull request head SHA for authoritative SCA verification; failing closed." >&2
-		return 1
-	fi
-	if ! pr_number="$(load_pull_request_number)"; then
-		echo "Unable to determine pull request identity for authoritative SCA verification; failing closed." >&2
-		return 1
-	fi
-
-	repository="$(trim_whitespace "${GITHUB_REPOSITORY:-}")"
-	if [ -z "$repository" ]; then
-		echo "GITHUB_REPOSITORY is required for authoritative SCA verification; failing closed." >&2
-		return 1
-	fi
-
-	gh_token="$(trim_whitespace "${GH_TOKEN:-${GITHUB_TOKEN:-}}")"
-	if [ -z "$gh_token" ]; then
-		echo "GitHub token is required for authoritative SCA verification; failing closed." >&2
-		return 1
-	fi
-
-	if ! workflow_runs_json="$(GH_TOKEN="$gh_token" gh api \
-		-H "Accept: application/vnd.github+json" \
-		"repos/$repository/actions/runs?head_sha=$head_sha&event=pull_request&per_page=100")"; then
-		echo "Unable to query authoritative SCA workflow runs for this pull request head; failing closed." >&2
-		return 1
-	fi
-
-	if ! verification_result="$(
-		WORKFLOW_RUNS_JSON="$workflow_runs_json" python3 - "$head_sha" "$pr_number" <<'PY'
-import json
-import os
-import sys
-
-head_sha = sys.argv[1]
-pr_number = int(sys.argv[2])
-payload = json.loads(os.environ["WORKFLOW_RUNS_JSON"])
-runs = payload.get("workflow_runs") or []
-required = {
-    ".github/workflows/dependency-review.yml": "Dependency review",
-    ".github/workflows/osvscanner.yml": "OSV-Scanner",
-}
-latest = {}
-for run in runs:
-    path = (run.get("path") or "").strip()
-    name = (run.get("name") or "").strip()
-    candidate = None
-    for required_path, required_name in required.items():
-        if path.endswith(required_path) or name == required_name:
-            candidate = required_path
-            break
-    if candidate is None:
-        continue
-    if (run.get("head_sha") or "") != head_sha:
-        continue
-    pull_requests = run.get("pull_requests") or []
-    if not any(int(pr.get("number") or 0) == pr_number for pr in pull_requests if isinstance(pr, dict)):
-        continue
-    run_id = int(run.get("id") or 0)
-    previous = latest.get(candidate)
-    if previous is None or run_id > int(previous.get("id") or 0):
-        latest[candidate] = run
-
-missing = [path for path in required if path not in latest]
-if missing:
-    print("missing")
-    raise SystemExit(0)
-
-for required_path, run in latest.items():
-    if (run.get("status") or "") != "completed":
-        print("unverified")
-        raise SystemExit(0)
-    if (run.get("conclusion") or "") != "success":
-        print("unverified")
-        raise SystemExit(0)
-
-print("passed")
-PY
-		)"; then
-		echo "Unable to evaluate authoritative SCA workflow results for this pull request head; failing closed." >&2
-		return 1
-	fi
-
-	case "$verification_result" in
-	passed)
-		return 0
-		;;
-	missing | unverified)
-		return 1
-		;;
-	esac
-
-	echo "Unexpected authoritative SCA verification result '$verification_result'; failing closed." >&2
-	return 1
 }
 
 is_scannable_changed_file() {
@@ -2036,21 +1911,29 @@ PY
 	return "$intersects_rc"
 }
 
-extract_first_severity_rank() {
+extract_max_severity_rank() {
 	local source_path="$1"
-	local line severity rank=-1
+	local line severity severity_value rank=-1
 
 	while IFS= read -r line; do
 		if [[ "${line^^}" =~ SEVERITY[[:space:]]*:[[:space:][:punct:]]*(CRITICAL|HIGH|MEDIUM|LOW|INFO|INFORMATIONAL|NONE)([[:space:][:punct:]]|$) ]]; then
 			severity="${BASH_REMATCH[1]}"
-			rank="$(severity_rank "$severity")"
-			if [ "$rank" -gt -1 ]; then
-				break
+			severity_value="$(severity_rank "$severity")"
+			if [ "$severity_value" -gt "$rank" ]; then
+				rank="$severity_value"
 			fi
 		fi
 	done < <(grep -Ei 'severity[[:space:]]*:' "$source_path" || true)
 
 	printf '%s\n' "$rank"
+}
+
+vulnerability_file_is_below_threshold() {
+	local vuln_file="$1"
+	local threshold_rank report_rank
+	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
+	report_rank="$(extract_max_severity_rank "$vuln_file")"
+	[ "$report_rank" -ge 0 ] && [ "$report_rank" -lt "$threshold_rank" ]
 }
 
 evaluate_pull_request_findings() {
@@ -2091,7 +1974,7 @@ evaluate_pull_request_findings() {
 				found_retryable_model_inconsistency=1
 				continue
 			fi
-			rank="$(extract_first_severity_rank "$vuln_file")"
+			rank="$(extract_max_severity_rank "$vuln_file")"
 			if [ "$rank" -lt 0 ]; then
 				PR_FINDINGS_DECISION="block_unmapped"
 				echo "Unrecognized Strix severity marker; failing closed for pull request." >&2
@@ -2143,7 +2026,7 @@ evaluate_pull_request_findings() {
 	done
 
 	if [ "$found_baseline_threshold_finding" -eq 0 ] && [ "$found_changed_manifest_only_threshold_finding" -eq 0 ]; then
-		rank="$(extract_first_severity_rank "$STRIX_LOG")"
+		rank="$(extract_max_severity_rank "$STRIX_LOG")"
 		if [ "$rank" -lt 0 ]; then
 			if [ "$found_retryable_model_inconsistency" -eq 1 ]; then
 				PR_FINDINGS_DECISION="retry_model_inconsistency"
@@ -2200,13 +2083,8 @@ evaluate_pull_request_findings() {
 	fi
 
 	if [ "$found_changed_manifest_only_threshold_finding" -eq 1 ]; then
-		if authoritative_sca_checks_passed_for_pr_head; then
-			PR_FINDINGS_DECISION="allow_manifest_only"
-			echo "Strix changed-manifest finding is covered by verified authoritative SCA checks on this PR head; allowing pipeline continuation." >&2
-			return 0
-		fi
-		PR_FINDINGS_DECISION="block_manifest_unverified"
-		echo "Strix changed-manifest finding requires verified authoritative SCA checks on this PR head; failing closed." >&2
+		PR_FINDINGS_DECISION="block_manifest_finding"
+		echo "Strix changed-manifest threshold finding requires package and CVE remediation; pull-request-controlled SCA workflow results cannot override model evidence, so the scan is failing closed." >&2
 		return 1
 	fi
 
@@ -2217,6 +2095,44 @@ evaluate_pull_request_findings() {
 	fi
 
 	return 1
+}
+
+has_unmapped_threshold_report() {
+	local threshold_rank run_dir vulnerabilities_dir vuln_file rank
+	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ] || is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+		vulnerabilities_dir="$run_dir/vulnerabilities"
+		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
+			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			rank="$(extract_max_severity_rank "$vuln_file")"
+			if [ "$rank" -lt "$threshold_rank" ]; then
+				continue
+			fi
+			local vulnerability_locations=()
+			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$vuln_file")
+			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
+				return 0
+			fi
+		done
+	done
+	return 1
+}
+
+fail_unmapped_threshold_report() {
+	if ! has_unmapped_threshold_report; then
+		return 1
+	fi
+	PR_FINDINGS_DECISION="block_unmapped"
+	echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+	return 0
 }
 
 fallback_models_raw_for_model() {
@@ -2382,6 +2298,9 @@ run_strix_once() {
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
+	if [ "$RUN_START_EPOCH" -le 0 ]; then
+		RUN_START_EPOCH="$(date +%s)"
+	fi
 	if [ "$STRIX_TOTAL_TIMEOUT_SECONDS" -gt 0 ]; then
 		local remaining_budget
 		remaining_budget="$(remaining_total_budget)"
@@ -2431,6 +2350,10 @@ timeout_seconds = int(sys.argv[1])
 target_path = sys.argv[2]
 scan_mode = sys.argv[3]
 log_path = pathlib.Path(sys.argv[4])
+# Failure classifiers read this path even when trusted executable or target
+# validation fails before a child process starts. Materialize it first so the
+# primary log shows one configuration error instead of repeated grep noise.
+log_path.write_text("", encoding="utf-8")
 process_timeout = None if timeout_seconds == 0 else timeout_seconds
 child_env = {}
 for key in (
@@ -2589,6 +2512,7 @@ PY
 			printf "Strix quick scan exceeded total timeout of %ss.\n" "$STRIX_TOTAL_TIMEOUT_SECONDS" | tee -a "$STRIX_LOG" >&2
 		fi
 	fi
+	preserve_attempt_log "$model" "$rc"
 
 	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
@@ -3060,7 +2984,8 @@ has_only_below_threshold_vulnerabilities() {
 	done
 
 	if [ "$found_any_vuln_file" -eq 0 ]; then
-		update_max_severity_from_stream "$STRIX_LOG"
+		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
+		return 1
 	fi
 
 	if [ "$saw_any_severity" -eq 0 ]; then
@@ -3114,7 +3039,7 @@ has_blocking_vulnerability_reports() {
 				continue
 			fi
 
-			rank="$(extract_first_severity_rank "$vuln_file")"
+			rank="$(extract_max_severity_rank "$vuln_file")"
 			if [ "$rank" -lt 0 ] || [ "$rank" -ge "$threshold_rank" ]; then
 				return 0
 			fi
@@ -3126,7 +3051,7 @@ has_blocking_vulnerability_reports() {
 
 fail_reported_vulnerabilities_before_fallback_success() {
 	case "$PR_FINDINGS_DECISION" in
-	allow_baseline | allow_manifest_only)
+	allow_baseline)
 		return 1
 		;;
 	esac
@@ -3333,7 +3258,8 @@ is_hallucinated_endpoint_finding() {
 	local vuln_file
 
 	for vuln_file in "$latest_report_dir"/vulnerabilities/*.md; do
-		if vulnerability_file_has_absent_endpoint_finding "$vuln_file"; then
+		if vulnerability_file_is_below_threshold "$vuln_file" &&
+			vulnerability_file_has_absent_endpoint_finding "$vuln_file"; then
 			return 0
 		fi
 	done
@@ -3756,6 +3682,9 @@ vulnerability_file_reports_generic_github_actions_workflow_insecurity() {
 
 vulnerability_file_is_retryable_model_inconsistency() {
 	local vuln_file="$1"
+	if ! vulnerability_file_is_below_threshold "$vuln_file"; then
+		return 1
+	fi
 	if vulnerability_file_has_absent_endpoint_finding "$vuln_file"; then
 		return 0
 	fi
@@ -3782,7 +3711,8 @@ is_hallucinated_source_claim_finding() {
 
 	local vuln_file
 	for vuln_file in "$latest_report_dir"/vulnerabilities/*.md; do
-		if vulnerability_file_has_hallucinated_source_claim "$vuln_file"; then
+		if vulnerability_file_is_below_threshold "$vuln_file" &&
+			vulnerability_file_has_hallucinated_source_claim "$vuln_file"; then
 			return 0
 		fi
 	done
@@ -3891,6 +3821,9 @@ run_current_target_scan() {
 		return 1
 		;;
 	esac
+	if fail_unmapped_threshold_report; then
+		return 1
+	fi
 
 	if [ "$strict_primary_provider_fallback" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
 		return 1
@@ -3964,6 +3897,9 @@ run_current_target_scan() {
 			return 1
 			;;
 		esac
+		if fail_unmapped_threshold_report; then
+			return 1
+		fi
 
 		if fail_reported_vulnerabilities_before_fallback_success; then
 			return 1

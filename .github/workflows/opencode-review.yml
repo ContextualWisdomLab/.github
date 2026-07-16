@@ -388,19 +388,61 @@ jobs:
       - name: Prepare pull request merge tree for coverage measurement
         env:
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
-          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
         run: |
           set -euo pipefail
           rm -rf "$COVERAGE_SOURCE_WORKDIR"
           mkdir -p "$COVERAGE_SOURCE_WORKDIR"
-          tar -xf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR"
+          # The archive contains pull-request-controlled paths. Validate every
+          # member before extraction so a symlink, hardlink, device, FIFO, or
+          # traversal path cannot redirect a later trusted host-side parser.
+          python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR" <<'PY'
+          import os
+          from pathlib import Path, PurePosixPath
+          import sys
+          import tarfile
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2]).resolve()
+          if not archive.is_file() or archive.is_symlink():
+              raise SystemExit(
+                  f"Coverage source archive is not a regular non-symlink file: {archive}"
+              )
+
+          with tarfile.open(archive, mode="r:*") as bundle:
+              members = bundle.getmembers()
+              seen: set[str] = set()
+              for member in members:
+                  path = PurePosixPath(member.name)
+                  normalized = path.as_posix()
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(
+                          f"Coverage source archive contains an unsafe path: {member.name!r}"
+                      )
+                  if normalized in seen:
+                      raise SystemExit(
+                          f"Coverage source archive contains a duplicate path: {member.name!r}"
+                      )
+                  seen.add(normalized)
+                  if not (member.isfile() or member.isdir()):
+                      raise SystemExit(
+                          "Coverage source archive contains a forbidden non-regular "
+                          f"member: {member.name!r}"
+                      )
+                  candidate = (destination / Path(*path.parts)).resolve()
+                  if os.path.commonpath((str(destination), str(candidate))) != str(destination):
+                      raise SystemExit(
+                          f"Coverage source archive escapes its destination: {member.name!r}"
+                      )
+              bundle.extractall(destination, members=members, filter="data")
+          PY
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
       - name: Enforce post-merge stale agent replay guard
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
           # Dependency resolution may consume wheels/packages, but PR-defined
           # install/build hooks are never executed implicitly.
           UV_NO_BUILD: "1"
@@ -435,7 +477,7 @@ jobs:
       - name: Enforce changed-file syntax gate
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
         run: |
           set -euo pipefail
           # Deterministic per-file syntax check on the PR's changed files. The
@@ -462,23 +504,139 @@ jobs:
             exit 1
           fi
 
-      - name: Install Python coverage measurement tools
-        run: >-
-          python3 -m pip install --disable-pip-version-check --require-hashes
-          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
-
       - name: Measure test and docstring evidence
         id: measure
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ github.workspace }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
           # Apply wheel-only resolution in the same step that consumes
           # pull-request dependency metadata. A value on an earlier step does
           # not cross the GitHub Actions step boundary.
           UV_NO_BUILD: "1"
         run: |
           set -euo pipefail
+
+          # The runner worker retains an Actions runtime token in an ancestor
+          # environment even after shell variables are unset. Execute all
+          # pull-request-controlled tests in a separate PID namespace with a
+          # read-only trusted tree and no host Docker socket. The image is
+          # pinned to the reviewed linux/amd64 manifest digest.
+          if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" != "1" ]; then
+            host_github_output="$GITHUB_OUTPUT"
+            sandbox_result_dir="${RUNNER_TEMP}/opencode-coverage-sandbox-result"
+            measure_step_script="$(realpath "$0")"
+            case "$measure_step_script" in
+              "${RUNNER_TEMP}"/*) ;;
+              *)
+                echo "::error::Coverage sandbox launcher is outside RUNNER_TEMP: ${measure_step_script}."
+                exit 1
+                ;;
+            esac
+            if [ ! -f "$measure_step_script" ] || [ -L "$0" ] || [ "$(stat -c '%u' "$measure_step_script")" != "$(id -u)" ]; then
+              echo "::error::Coverage sandbox launcher failed regular-file, symlink, or ownership validation."
+              exit 1
+            fi
+            sudo rm -rf "$sandbox_result_dir"
+            mkdir -p "$sandbox_result_dir"
+            chmod 0700 "$sandbox_result_dir"
+
+            sandbox_status=0
+            docker run --rm --init \
+              --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --pid private \
+              --pids-limit 2048 \
+              --memory 14g \
+              --cpus 4 \
+              --security-opt no-new-privileges:true \
+              --cap-drop ALL \
+              --cap-add CHOWN \
+              --cap-add DAC_OVERRIDE \
+              --cap-add DAC_READ_SEARCH \
+              --cap-add FOWNER \
+              --cap-add KILL \
+              --cap-add SETGID \
+              --cap-add SETUID \
+              --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777,size=4g \
+              --tmpfs /secure-output:rw,noexec,nosuid,nodev,mode=0700,size=64m \
+              --mount "type=bind,source=${GITHUB_WORKSPACE},target=/trusted,readonly" \
+              --mount "type=bind,source=${COVERAGE_SOURCE_WORKDIR},target=/work" \
+              --mount "type=bind,source=${sandbox_result_dir},target=/out" \
+              --mount "type=bind,source=${measure_step_script},target=/trusted-measure-step.sh,readonly" \
+              --env OPENCODE_COVERAGE_SANDBOXED=1 \
+              --env OPENCODE_SANDBOX_RESULT_DIR=/out \
+              --env GITHUB_ACTIONS=true \
+              --env CI=true \
+              --env GITHUB_WORKSPACE=/trusted \
+              --env COVERAGE_SOURCE_WORKDIR=/work \
+              --env PR_BASE_SHA="$PR_BASE_SHA" \
+              --env PR_HEAD_SHA="$PR_HEAD_SHA" \
+              --env RUNNER_TEMP=/secure-output \
+              --env GITHUB_OUTPUT=/secure-output/github-output \
+              --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
+              docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf \
+              /bin/bash /trusted-measure-step.sh || sandbox_status=$?
+
+            sandbox_output="${sandbox_result_dir}/github-output"
+            if [ ! -f "$sandbox_output" ] || [ -L "$sandbox_output" ]; then
+              echo "::error::Coverage sandbox did not publish a regular authenticated output file; sandbox exit=${sandbox_status}."
+              exit 1
+            fi
+            sandbox_output_owner="$(stat -c '%u' "$sandbox_output")"
+            sandbox_output_size="$(stat -c '%s' "$sandbox_output")"
+            if [ "$sandbox_output_owner" != "0" ] || [ "$sandbox_output_size" -gt 262144 ]; then
+              echo "::error::Coverage sandbox output failed ownership/size validation (owner=${sandbox_output_owner}, bytes=${sandbox_output_size})."
+              exit 1
+            fi
+            cat "$sandbox_output" >>"$host_github_output"
+            if [ "$sandbox_status" -ne 0 ]; then
+              echo "::error::Coverage sandbox reported failing test, build, or coverage evidence (exit ${sandbox_status}); the complete reason is in the log above."
+              exit "$sandbox_status"
+            fi
+            echo "Coverage measurement completed in the isolated current-head sandbox."
+            exit 0
+          fi
+
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install --no-install-recommends -y \
+            ca-certificates \
+            cargo \
+            curl \
+            git \
+            jq \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libxml2-dev \
+            nodejs \
+            npm \
+            python3 \
+            python3-pip \
+            python3-venv \
+            r-base \
+            r-cran-covr \
+            r-cran-testthat \
+            rustc \
+            util-linux
+          rm -rf /var/lib/apt/lists/*
+          python3 -m pip install \
+            --break-system-packages \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r /trusted/requirements-opencode-review-ci-hashes.txt
+
+          # Use a fixed nobody-like identity that cannot traverse the host-owned
+          # /out bind mount. This prevents even a daemonized test process from
+          # racing trusted result publication.
+          export OPENCODE_SANDBOX_UID=65532
+          export OPENCODE_SANDBOX_GID=65532
+          chown -R --no-dereference "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work
+          mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
+          chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
+          chmod 0700 "$RUNNER_TEMP"
+          : >"$GITHUB_OUTPUT"
+          chmod 0600 "$GITHUB_OUTPUT"
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN
           umask 077
           cd "$COVERAGE_SOURCE_WORKDIR"
@@ -523,7 +681,11 @@ jobs:
             append '```text'
             append_command "$@"
             set +e
-            timeout 900 env \
+            timeout --kill-after=20 900 setpriv \
+              --reuid "$OPENCODE_SANDBOX_UID" \
+              --regid "$OPENCODE_SANDBOX_GID" \
+              --clear-groups \
+              env \
               -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
               -u ACTIONS_ID_TOKEN_REQUEST_URL \
               -u ACTIONS_RUNTIME_TOKEN \
@@ -535,6 +697,10 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              HOME=/work/.opencode-sandbox-home \
+              XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
+              CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
+              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -561,7 +727,11 @@ jobs:
             append '```text'
             append_command "$@"
             set +e
-            timeout 900 env \
+            timeout --kill-after=20 900 setpriv \
+              --reuid "$OPENCODE_SANDBOX_UID" \
+              --regid "$OPENCODE_SANDBOX_GID" \
+              --clear-groups \
+              env \
               -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
               -u ACTIONS_ID_TOKEN_REQUEST_URL \
               -u ACTIONS_RUNTIME_TOKEN \
@@ -573,6 +743,10 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              HOME=/work/.opencode-sandbox-home \
+              XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
+              CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
+              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -630,7 +804,7 @@ jobs:
           }
 
           pyproject_has_dev_dependency_group() {
-            python3 - "$1" <<'PY'
+            python3 -I - "$1" <<'PY'
           import sys
           import tomllib
 
@@ -641,7 +815,7 @@ jobs:
           }
 
           pyproject_has_dev_optional_extra() {
-            python3 - "$1" <<'PY'
+            python3 -I - "$1" <<'PY'
           import sys
           import tomllib
 
@@ -653,7 +827,7 @@ jobs:
           }
 
           pyproject_has_no_selected_dependencies() {
-            python3 - "$1" "$2" <<'PY'
+            python3 -I - "$1" "$2" <<'PY'
           import sys
           import tomllib
 
@@ -746,7 +920,7 @@ jobs:
             local project_dir="$1"
             local workflow_dir="${project_dir}/.github/workflows"
             [ -d "$workflow_dir" ] || return 0
-            python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" discover \
+            python3 -I "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" discover \
               --workflow-dir "$workflow_dir"
           }
 
@@ -779,7 +953,7 @@ jobs:
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
                   bash -c 'PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest && uv run --no-build --with coverage coverage report --show-missing'
-              elif python3 -c 'import pytest_cov' >/dev/null 2>&1; then
+              elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
                 append "### Python test suite"
@@ -851,18 +1025,11 @@ jobs:
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
-            if ! command -v corepack >/dev/null 2>&1; then
-              printf 'Coverage package runner %s with specification %s is required, but corepack is unavailable; not falling back to a mutable runner.\n' "$runner" "$spec" >&2
-              return 1
-            fi
-
-            corepack enable >&2
-            corepack prepare "$spec" --activate >&2
             if command -v "$runner" >/dev/null 2>&1; then
               return 0
             fi
 
-            printf 'Coverage package runner %s could not be activated through corepack; not falling back to npm.\n' "$runner" >&2
+            printf 'Coverage package runner %s at exact specification %s is not preinstalled in the pinned sandbox image; central review will not activate PR-selected package-manager code outside an untrusted command boundary or fall back to npm.\n' "$runner" "$spec" >&2
             return 1
           }
 
@@ -1073,7 +1240,7 @@ jobs:
 
           check_javascript_coverage_thresholds() {
             local summary_list
-            summary_list="${RUNNER_TEMP}/javascript-coverage-summaries.txt"
+            summary_list="$(mktemp /tmp/javascript-coverage-summaries.XXXXXX)"
             find . \
               \( -path '*/coverage/coverage-summary.json' -o -path '*/coverage/coverage-final.json' \) \
               -type f \
@@ -1118,8 +1285,9 @@ jobs:
               failures=$((failures + 1))
               return
             fi
-            export R_LIBS_USER="${RUNNER_TEMP}/R-library"
+            export R_LIBS_USER="/work/.opencode-r-library"
             mkdir -p "$R_LIBS_USER"
+            chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" "$R_LIBS_USER"
             run_and_capture "R coverage tooling availability (distribution packages only)" \
               Rscript -e 'required <- c("covr", "testthat"); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("signed distribution coverage packages unavailable: ", paste(missing, collapse = ", "))'
             if [ -f DESCRIPTION ]; then
@@ -1224,7 +1392,7 @@ jobs:
               failures=$((failures + 1))
               return 1
             fi
-            if command -v cargo >/dev/null 2>&1 && ! cargo llvm-cov --version >/dev/null 2>&1; then
+            if [ ! -x /work/.opencode-sandbox-home/.cargo/bin/cargo-llvm-cov ]; then
               run_and_capture "Rust coverage tooling (cargo-llvm-cov 0.8.7)" cargo install cargo-llvm-cov --version 0.8.7 --locked
             fi
             ensure_rust_gpu_adapter
@@ -1260,7 +1428,7 @@ jobs:
 
           rust_coverage_fail_under_lines() {
             local manifest="$1"
-            python3 - "$manifest" <<'PY'
+            python3 -I - "$manifest" <<'PY'
           import sys
           import tomllib
           from pathlib import Path
@@ -1349,57 +1517,12 @@ jobs:
           }
 
           run_docker_evidence() {
-            if ! command -v docker >/dev/null 2>&1; then
-              append "### Docker evidence"
-              append ""
-              append "- Result: FAIL"
-              append "- Reason: Docker files changed, but docker was not available on the runner."
-              append "- Fix: run the Docker build/compose contract on a Docker-capable runner and include the failing Dockerfile or compose service output."
-              append ""
-              failures=$((failures + 1))
-              return
-            fi
-            run_and_capture "Docker runtime version" docker version
-            changed_dockerfiles="$(mktemp)"
-            while IFS= read -r dockerfile; do
-              if [ -f "$dockerfile" ]; then
-                printf '%s\n' "$dockerfile"
-              fi
-            done >"$changed_dockerfiles" < <(changed_files_for_coverage | grep -E '(^|/)Dockerfile(\..*)?$' || true)
-            while IFS= read -r dockerfile; do
-              [ -n "$dockerfile" ] || continue
-              docker_context="$(dirname "$dockerfile")"
-              if [ "$docker_context" = "." ]; then
-                docker_context="."
-              fi
-              tag_suffix="$(printf '%s' "$dockerfile" | tr '[:upper:]' '[:lower:]' | tr '/.' '--' | tr -cd '[:alnum:]-' | cut -c1-80)"
-              image_tag="opencode-review-${PR_HEAD_SHA:-head}-${tag_suffix}"
-              run_and_capture "Docker build (${dockerfile})" \
-                bash -c '
-                  set -euo pipefail
-                  dockerfile="$1"
-                  image_tag="$2"
-                  docker_context="$3"
-                  if docker build --pull=false -f "$dockerfile" -t "$image_tag" "$docker_context"; then
-                    exit 0
-                  fi
-                  if [ "$docker_context" != "." ]; then
-                    echo "Docker build failed with context ${docker_context}; retrying with repository root context so nested Dockerfiles that COPY repo-root paths can provide actionable evidence."
-                    docker build --pull=false -f "$dockerfile" -t "$image_tag" .
-                    exit 0
-                  fi
-                  echo "Docker build failed with repository root context; no fallback context remains."
-                  exit 1
-                ' bash "$dockerfile" "$image_tag" "$docker_context"
-            done <"$changed_dockerfiles"
-            if has_changed_tracked_files 'docker-compose.yml' 'docker-compose.yaml' 'compose.yml' 'compose.yaml'; then
-              for compose_file in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
-                if [ -f "$compose_file" ]; then
-                  run_and_capture "Docker Compose config (${compose_file})" docker compose -f "$compose_file" config
-                  run_and_capture "Docker Compose build (${compose_file})" docker compose -f "$compose_file" build
-                fi
-              done
-            fi
+            append "### Docker evidence"
+            append ""
+            append "- Result: DEFERRED"
+            append "- Reason: the central coverage sandbox intentionally has no host Docker socket; executing a PR-controlled Docker client against the privileged runner daemon would break the review isolation boundary."
+            append "- Required evidence: the current-head repository Docker build/compose check and Strix deployment scan remain blocking peer checks, and their logs must identify the failing Dockerfile or service."
+            append ""
           }
 
           append "# Coverage Evidence"
@@ -1409,7 +1532,7 @@ jobs:
           append "- Required docstring evidence: repository-owned docstring gates must pass when configured; otherwise docstring coverage is advisory."
           append ""
 
-          implementation_changed_files="$(mktemp)"
+          implementation_changed_files="$(mktemp /tmp/implementation-changed-files.XXXXXX)"
           changed_files_for_coverage >"$implementation_changed_files"
           run_and_capture "Implementation completeness scan" \
             python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
@@ -1432,7 +1555,7 @@ jobs:
               append "- Result: DEFERRED"
               append "- Reason: package.json defines check:python-docstrings; repository-owned docstring coverage runs after package dependency setup."
               append ""
-            elif python3 -m interrogate --version >/dev/null 2>&1; then
+            elif python3 -I -m interrogate --version >/dev/null 2>&1; then
               run_and_capture "Python docstring coverage advisory" bash -c 'python3 -m interrogate . || true'
             else
               append "### Python docstring coverage"
@@ -1570,12 +1693,12 @@ jobs:
             failures=$((failures + 1))
           fi
 
-          python3 "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py" \
+          python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py" \
             "$coverage_output_file" "$summary_output_file"
 
-          coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+          coverage_output_delimiter="$(python3 -I -c 'import os; print("coverage_" + os.urandom(24).hex())')"
           while grep -Fqx "$coverage_output_delimiter" "$summary_output_file"; do
-            coverage_output_delimiter="$(python3 -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+            coverage_output_delimiter="$(python3 -I -c 'import os; print("coverage_" + os.urandom(24).hex())')"
           done
           {
             printf 'coverage_summary<<%s\n' "$coverage_output_delimiter"
@@ -1586,6 +1709,12 @@ jobs:
             "$(wc -c <"$summary_output_file" | tr -d ' ')"
 
           cat "$summary_file"
+          # No process running pull-request code may survive into the trusted
+          # publication phase. The result is copied from a root-only tmpfs only
+          # after every low-privilege process has been terminated.
+          pkill -KILL -u "$OPENCODE_SANDBOX_UID" 2>/dev/null || true
+          rm -rf -- "${OPENCODE_SANDBOX_RESULT_DIR:?}"/*
+          install -m 0644 "$GITHUB_OUTPUT" "${OPENCODE_SANDBOX_RESULT_DIR}/github-output"
           if [ "$failures" -ne 0 ]; then
             exit 1
           fi
@@ -4852,9 +4981,9 @@ jobs:
               if [ "$event" = "APPROVE" ]; then
                 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                   {
-                    printf '## OpenCode approve review publication skipped\n\n'
-                    printf 'OpenCode produced a source-backed current-head APPROVE gate result, but GitHub rejected the pull review publication. The required workflow keeps the successful approval gate result because the PR review write is a GitHub side effect, not source evidence. Branch protection and rulesets remain authoritative if a matching GitHub pull review is required.\n\n'
-                    printf -- "- Result: \`APPROVE_PUBLICATION_SKIPPED\`\n"
+                    printf '## OpenCode approve review publication failed\n\n'
+                    printf 'OpenCode produced a source-backed current-head APPROVE decision, but GitHub rejected the pull review publication. The required workflow fails closed because an unpublished approval cannot satisfy review governance.\n\n'
+                    printf -- "- Result: \`APPROVE_PUBLICATION_FAILED\`\n"
                     printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
                     printf -- '- Workflow run: %s\n' "$RUN_ID"
                     printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
@@ -4862,8 +4991,8 @@ jobs:
                     printf -- '- Branch protection: remains authoritative for required reviews and peer checks.\n\n'
                   } >>"$GITHUB_STEP_SUMMARY"
                 fi
-                printf '::warning::OpenCode approve review publication skipped after successful gate; keeping the successful approval gate result for head %s after logging the GitHub API error above. Branch protection remains authoritative for any required GitHub review.\n' "$HEAD_SHA"
-                return 0
+                printf '::error::OpenCode approve review publication failed for head %s; the required review job is failing because GitHub review state was not updated.\n' "$HEAD_SHA"
+                return 1
               fi
               printf '::error::OpenCode could not publish the pull review for head %s, so the review state was not changed.\n' "$HEAD_SHA"
               case "$event" in
@@ -7315,7 +7444,6 @@ jobs:
           && github.event_name == 'repository_dispatch'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
@@ -7328,13 +7456,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${PR_HEAD_SHA:-}" ]; then
-            echo "::warning::OpenCode repository_dispatch status publication skipped because pr_head_sha was empty."
-            exit 0
+            echo "::error::OpenCode repository_dispatch status publication failed because pr_head_sha was empty."
+            exit 1
           fi
           if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
             [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ]; then
-            echo "::warning::OpenCode repository_dispatch status publication skipped because only the same-repository github.token is available for cross-repository target ${GH_REPOSITORY}; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish this status."
-            exit 0
+            echo "::error::OpenCode repository_dispatch status publication failed because only the same-repository github.token is available for cross-repository target ${GH_REPOSITORY}; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish this status."
+            exit 1
           fi
 
           state="failure"

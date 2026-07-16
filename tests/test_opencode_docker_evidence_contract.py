@@ -1,15 +1,11 @@
-import re
 from pathlib import Path
 
 
-def test_opencode_docker_root_context_retry_exits_on_success() -> None:
-    """Docker evidence must not fail after a successful repository-root retry."""
+def test_opencode_docker_evidence_never_exposes_host_daemon_to_pr_code() -> None:
+    """Docker checks defer to peer CI instead of mounting a privileged daemon."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
 
-    assert re.search(
-        r'docker build --pull=false -f "\$dockerfile" -t "\$image_tag" \.\n'
-        r"\s+exit 0\n"
-        r"\s+fi\n"
-        r'\s+echo "Docker build failed with repository root context; no fallback context remains\."',
-        workflow,
-    )
+    assert "central coverage sandbox intentionally has no host Docker socket" in workflow
+    assert "current-head repository Docker build/compose check" in workflow
+    assert "/var/run/docker.sock" not in workflow
+    assert 'docker build --pull=false -f "$dockerfile"' not in workflow
