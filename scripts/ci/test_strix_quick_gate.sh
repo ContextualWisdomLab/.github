@@ -6029,6 +6029,19 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"Container build manifest changed; materialized full PR-head blob scope"
 		;;
+	repository-dispatch-pr-scope-uses-head-blob)
+		run_pull_request_target_head_scope_case \
+			"repository-dispatch-pr-scope-uses-head-blob" \
+			"backend/tests/test_release_governance.py" \
+			"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+			"HEAD_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+			"0" \
+			"0" \
+			"__PR_SCOPE__" \
+			"0" \
+			"Materialized PR-head changed-file scope" \
+			"repository_dispatch"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -6052,6 +6065,7 @@ run_pull_request_target_head_scope_case() {
 	local target_path="${7-.}"
 	local expected_full_head_scope="${8-$disable_pr_scoping}"
 	local expected_scope_message="${9-}"
+	local github_event_name="${10-pull_request_target}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -6170,7 +6184,7 @@ EOF
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
-			GITHUB_EVENT_NAME="pull_request_target" \
+			GITHUB_EVENT_NAME="$github_event_name" \
 			PR_BASE_SHA="$base_sha" \
 			PR_HEAD_SHA="$head_sha" \
 			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
@@ -8584,6 +8598,18 @@ run_pull_request_target_head_scope_case \
 	"0" \
 	"0" \
 	"__PR_SCOPE__"
+
+run_pull_request_target_head_scope_case \
+	"repository-dispatch-pr-scope-uses-head-blob" \
+	"backend/tests/test_release_governance.py" \
+	"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+	"0" \
+	"0" \
+	"__PR_SCOPE__" \
+	"0" \
+	"Materialized PR-head changed-file scope" \
+	"repository_dispatch"
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-added-file-uses-head-blob" \
