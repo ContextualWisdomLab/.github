@@ -66,6 +66,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          # A rerun retains github.actor from the original dispatch; authorize
+          # the identity that initiated the current run or rerun instead.
+          DISPATCH_ACTOR: ${{ github.triggering_actor }}
+          DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
+          ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
+          ALLOWED_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
           SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
@@ -74,6 +80,30 @@ jobs:
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
+              [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
+              [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
+              printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match the configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
+              exit 1
+            fi
+
+            target_allowed=0
+            IFS=',' read -r -a allowed_dispatch_targets <<<"$ALLOWED_DISPATCH_TARGETS"
+            for allowed_target in "${allowed_dispatch_targets[@]}"; do
+              allowed_target="${allowed_target//[[:space:]]/}"
+              if [ -n "$allowed_target" ] && [ "$TARGET_REPOSITORY" = "$allowed_target" ]; then
+                target_allowed=1
+                break
+              fi
+            done
+            if [ "$target_allowed" -ne 1 ]; then
+              printf '::error::repository_dispatch authorization rejected target=%s because it is absent from the configured exact repository allowlist.\n' "${TARGET_REPOSITORY:-<empty>}"
+              exit 1
+            fi
+            printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
+          fi
+
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
@@ -133,14 +163,7 @@ jobs:
     needs: [validate-pr-metadata]
     if: >-
       needs.validate-pr-metadata.result == 'success'
-      && (
-        github.event_name == 'repository_dispatch'
-        || (
-          github.event_name == 'pull_request_target'
-          && github.event.action != 'closed'
-          && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
-        )
-      )
+      && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -287,14 +310,7 @@ jobs:
       always()
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-source-tree.result != 'cancelled'
-      && (
-        github.event_name == 'repository_dispatch'
-        || (
-          github.event_name == 'pull_request_target'
-          && github.event.action != 'closed'
-          && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
-        )
-      )
+      && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -575,6 +591,46 @@ jobs:
           PY
           }
 
+          pyproject_has_no_selected_dependencies() {
+            python3 - "$1" "$2" <<'PY'
+          import sys
+          import tomllib
+
+          with open(sys.argv[1], "rb") as fh:
+              data = tomllib.load(fh)
+
+          selection = sys.argv[2]
+          project = data.get("project", {})
+          dynamic = project.get("dynamic", [])
+          if not isinstance(dynamic, list):
+              raise SystemExit(2)
+          if "dependencies" in dynamic:
+              raise SystemExit(1)
+
+          dependencies = project.get("dependencies", [])
+          if not isinstance(dependencies, list):
+              raise SystemExit(2)
+          selected = list(dependencies)
+
+          if selection == "group-dev":
+              group = data.get("dependency-groups", {}).get("dev", [])
+              if not isinstance(group, list):
+                  raise SystemExit(2)
+              selected.extend(group)
+          elif selection == "extra-dev":
+              if "optional-dependencies" in dynamic:
+                  raise SystemExit(1)
+              extra = project.get("optional-dependencies", {}).get("dev", [])
+              if not isinstance(extra, list):
+                  raise SystemExit(2)
+              selected.extend(extra)
+          elif selection != "runtime":
+              raise SystemExit(2)
+
+          raise SystemExit(0 if not selected else 1)
+          PY
+          }
+
           run_python_uv_lock_check() {
             local project_dir="$1"
             if [ -f "${project_dir}/uv.lock" ]; then
@@ -594,9 +650,20 @@ jobs:
               if [ -f "$pyproject_file" ]; then
                 run_python_uv_lock_check "$project_dir"
                 if pyproject_has_dev_dependency_group "$pyproject_file"; then
+                  dependency_selection="group-dev"
+                elif pyproject_has_dev_optional_extra "$pyproject_file"; then
+                  dependency_selection="extra-dev"
+                else
+                  dependency_selection="runtime"
+                fi
+
+                if pyproject_has_no_selected_dependencies "$pyproject_file" "$dependency_selection"; then
+                  run_and_capture "Python project dependencies (${project_dir})" \
+                    python3 -c 'print("No selected runtime/dev dependencies are declared; safe dependency materialization is not applicable.")'
+                elif [ "$dependency_selection" = "group-dev" ]; then
                   run_and_capture "Python project dependencies (${project_dir})" \
                     uv sync --project "$project_dir" --group dev --no-build --no-install-project
-                elif pyproject_has_dev_optional_extra "$pyproject_file"; then
+                elif [ "$dependency_selection" = "extra-dev" ]; then
                   run_and_capture "Python project dependencies (${project_dir})" \
                     uv sync --project "$project_dir" --extra dev --no-build --no-install-project
                 else
@@ -1499,20 +1566,8 @@ jobs:
       always()
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-evidence.result != 'cancelled'
-      && (
-        github.event_name == 'repository_dispatch'
-        || (
-          github.event_name == 'pull_request_target'
-          && github.event.action != 'closed'
-          && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
-        )
-      )
+      && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
-    outputs:
-      # The exhausted-pool deferred retry job reads this after a fail-closed
-      # MODEL_OUTPUT_UNAVAILABLE exit; the model-pool step records it under
-      # continue-on-error, so it survives the job failing.
-      model_pool_outcome: ${{ steps.opencode_review_model_pool.outputs.review_status }}
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
@@ -7388,98 +7443,3 @@ jobs:
           if [ "$scheduler_status" -ne 0 ]; then
             printf '::warning::Merge scheduler follow-up failed after approval; leaving OpenCode review intact. Repository=%s base=%s. The scheduled and PR-event scheduler paths remain authoritative.\n' "$GH_REPOSITORY" "$base_branch"
           fi
-
-  opencode-exhausted-retry:
-    name: opencode-exhausted-retry
-    needs: [opencode-review-target]
-    # A pool-exhausted required review fails closed with MODEL_OUTPUT_UNAVAILABLE
-    # after the publish gate has already verified that current-head coverage,
-    # peer checks, code-scanning alerts, and review threads are clean, so a
-    # deferred same-head retry is safe and needs no human. GitHub Actions has no
-    # delayed-dispatch primitive, so this job holds a small runner for one
-    # backoff window and then re-dispatches the central same-head review through
-    # the same trusted repository_dispatch path the merge scheduler uses. It
-    # retries once; outages longer than the backoff window stay owned by the
-    # merge scheduler org-sweep heartbeat, which keeps re-dispatching the same
-    # current head until a model produces a verdict.
-    if: >-
-      always()
-      && github.event_name == 'pull_request_target'
-      && github.event.action != 'closed'
-      && needs.opencode-review-target.result == 'failure'
-      && needs.opencode-review-target.outputs.model_pool_outcome == 'exhausted'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      pull-requests: read
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
-      - name: Dispatch deferred same-head review retry after model-pool exhaustion
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # Cross-repository dispatch of the central workflow needs a PAT; the
-          # target-repository runner token cannot dispatch workflows that live
-          # in the central .github repository, and the OpenCode app token has
-          # no Actions permission.
-          RETRY_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
-          RETRY_DISPATCH_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'none' }}
-          # One fixed backoff window before the single deferred retry. GitHub
-          # Models per-minute throttles recover well inside this window; daily
-          # quota exhaustion outlives any in-workflow delay and is the org
-          # sweep's job.
-          RETRY_DELAY_SECONDS: "300"
-          CENTRAL_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${RETRY_DISPATCH_TOKEN:-}" ]; then
-            echo "::warning::Deferred exhausted-pool retry skipped because no cross-repository dispatch credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) is configured; the merge scheduler org sweep remains the retry path."
-            exit 0
-          fi
-
-          printf 'OpenCode model pool exhausted for head %s; sleeping %ss before one deferred same-head review dispatch with the %s token.\n' \
-            "$PR_HEAD_SHA" "$RETRY_DELAY_SECONDS" "$RETRY_DISPATCH_TOKEN_SOURCE"
-          sleep "$RETRY_DELAY_SECONDS"
-
-          # A head pushed or a PR closed during the backoff window already has
-          # (or no longer needs) its own fresh required review run.
-          live_pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, .head.sha] | join(" ")' || true)"
-          live_state="${live_pr%% *}"
-          live_head="${live_pr##* }"
-          if [ "$live_state" != "open" ] || [ "$live_head" != "$PR_HEAD_SHA" ]; then
-            printf 'Deferred exhausted-pool retry skipped: PR #%s state=%s live head=%s no longer matches exhausted head %s.\n' \
-              "$PR_NUMBER" "${live_state:-unknown}" "${live_head:-unknown}" "$PR_HEAD_SHA"
-            exit 0
-          fi
-
-          dispatch_payload="$(
-            jq -n \
-              --arg target_repository "$GITHUB_REPOSITORY" \
-              --argjson pr_number "$PR_NUMBER" \
-              --arg pr_base_ref "$PR_BASE_REF" \
-              --arg pr_base_sha "$PR_BASE_SHA" \
-              --arg pr_head_ref "$PR_HEAD_REF" \
-              --arg pr_head_sha "$PR_HEAD_SHA" \
-              '{event_type: "opencode-review", client_payload: {
-                target_repository: $target_repository,
-                pr_number: $pr_number,
-                pr_base_ref: $pr_base_ref,
-                pr_base_sha: $pr_base_sha,
-                pr_head_ref: $pr_head_ref,
-                pr_head_sha: $pr_head_sha
-              }}'
-          )"
-          if ! GH_TOKEN="$RETRY_DISPATCH_TOKEN" gh api -X POST \
-            "repos/${CENTRAL_WORKFLOW_REPOSITORY}/dispatches" \
-            --input - <<<"$dispatch_payload"; then
-            echo "::warning::Deferred exhausted-pool retry dispatch failed; the merge scheduler org sweep remains the retry path."
-            exit 0
-          fi
-          printf 'Deferred same-head OpenCode review retry dispatched for %s#%s head %s.\n' \
-            "$GITHUB_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"

@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -239,8 +240,8 @@ def test_opencode_ignores_superseded_cancelled_rollup_checks():
     ) in workflow
 
 
-def test_opencode_target_coverage_materializes_merge_tree_without_checkout_action():
-    """Avoid pull_request_target action checkouts of untrusted PR refs."""
+def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
+    """Keep PR-controlled test execution off the pull_request_target path."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     assert "required-workflow-bootstrap:" in workflow
     assert "Required OpenCode workflow run materialized for this PR event." in workflow
@@ -248,10 +249,6 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     bootstrap_end = workflow.index("\n  validate-pr-metadata:", bootstrap_start)
     bootstrap_job = workflow[bootstrap_start:bootstrap_end]
     assert "\n    if:" not in bootstrap_job
-    assert (
-        "github.event.pull_request.head.repo.full_name == "
-        "github.event.pull_request.base.repo.full_name"
-    ) in workflow
     assert (
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
@@ -262,6 +259,8 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     source_start = workflow.index("  coverage-source-tree:\n")
     source_end = workflow.index("\n  coverage-evidence:", source_start)
     source_job = workflow[source_start:source_end]
+    assert "github.event_name == 'repository_dispatch'" in source_job
+    assert "github.event_name == 'pull_request_target'" not in source_job
     assert "id-token: write" in source_job
     assert (
         "Exchange OpenCode app token for target repository coverage reads" in source_job
@@ -277,6 +276,8 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     coverage_start = workflow.index("  coverage-evidence:\n")
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
     coverage_job = workflow[coverage_start:coverage_end]
+    assert "github.event_name == 'repository_dispatch'" in coverage_job
+    assert "github.event_name == 'pull_request_target'" not in coverage_job
     assert "id-token: write" not in coverage_job
     assert "Report coverage source materialization failure" in coverage_job
     assert (
@@ -332,11 +333,186 @@ def test_opencode_target_coverage_materializes_merge_tree_without_checkout_actio
     assert "package.metadata.opencode.coverage.minimum_lines" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
     assert "run_python_uv_lock_check()" in measure_step
+    assert "pyproject_has_no_selected_dependencies()" in measure_step
     assert "Python uv lockfile consistency (${project_dir})" in measure_step
     assert "uv lock --check" in measure_step
     assert measure_step.index(
         'run_python_uv_lock_check "$project_dir"'
     ) < measure_step.index('uv sync --project "$project_dir" --group dev')
+
+    target_start = workflow.index("  opencode-review-target:\n")
+    target_job = workflow[target_start:]
+    target_condition = target_job.split("    runs-on:", 1)[0]
+    assert "github.event_name == 'repository_dispatch'" in target_condition
+    assert "github.event_name == 'pull_request_target'" not in target_condition
+
+
+def test_opencode_repository_dispatch_authorization_is_fail_closed():
+    """Reject an untrusted dispatcher or a target outside the exact allowlist."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    validate_step = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata\n",
+        1,
+    )[1].split("          pull_request_json=", 1)[0]
+    shell = textwrap.dedent(validate_step.split("        run: |\n", 1)[1])
+
+    assert "DISPATCH_ACTOR: ${{ github.triggering_actor }}" in validate_step
+    assert "DISPATCH_ACTOR: ${{ github.actor }}" not in validate_step
+    assert "DISPATCH_SENDER: ${{ github.event.sender.login || '' }}" in validate_step
+    assert (
+        "ALLOWED_DISPATCH_ACTOR: "
+        "${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}" in validate_step
+    )
+    assert (
+        "ALLOWED_DISPATCH_TARGETS: "
+        "${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}" in validate_step
+    )
+
+    base_env = {
+        **os.environ,
+        "EVENT_NAME": "repository_dispatch",
+        "DISPATCH_ACTOR": "github-actions[bot]",
+        "DISPATCH_SENDER": "github-actions[bot]",
+        "ALLOWED_DISPATCH_ACTOR": "github-actions[bot]",
+        "ALLOWED_DISPATCH_TARGETS": (
+            "ContextualWisdomLab/.github,ContextualWisdomLab/naruon"
+        ),
+        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "PR_NUMBER": "1085",
+    }
+
+    authorized = subprocess.run(
+        ["bash", "-c", shell],
+        env=base_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert authorized.returncode == 0, authorized.stderr
+    assert "Authorized repository_dispatch actor=" in authorized.stdout
+
+    for overrides, expected_reason in (
+        ({"ALLOWED_DISPATCH_ACTOR": ""}, "rejected actor="),
+        ({"DISPATCH_SENDER": "seonghobae"}, "rejected actor="),
+        (
+            {"ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/.github"},
+            "rejected target=ContextualWisdomLab/naruon",
+        ),
+    ):
+        rejected = subprocess.run(
+            ["bash", "-c", shell],
+            env={**base_env, **overrides},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected.returncode == 1
+        assert expected_reason in rejected.stdout
+
+
+def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
+    """Do not broaden workflow permissions for a recursive review dispatch."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    assert "opencode-exhausted-retry:" not in workflow
+    assert "RETRY_DISPATCH_TOKEN" not in workflow
+    assert "contents: write" not in workflow
+
+
+def test_opencode_empty_pyproject_dependency_probe_is_fail_closed(tmp_path):
+    """Skip only declaratively empty dependency sets without running build hooks."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    function = workflow.split(
+        "          pyproject_has_no_selected_dependencies() {\n", 1
+    )[1].split("\n          PY\n          }", 1)[0]
+    probe = textwrap.dedent(function.split("<<'PY'\n", 1)[1])
+    pyproject = tmp_path / "pyproject.toml"
+
+    def run(source: str, selection: str) -> subprocess.CompletedProcess[str]:
+        pyproject.write_text(textwrap.dedent(source), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, "-", str(pyproject), selection],
+            input=probe,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert (
+        run(
+            """
+        [project]
+        name = "empty"
+        dynamic = ["version"]
+        dependencies = []
+        """,
+            "runtime",
+        ).returncode
+        == 0
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "runtime"
+        version = "1.0.0"
+        dependencies = ["pydantic>=2"]
+        """,
+            "runtime",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "group"
+        version = "1.0.0"
+        dependencies = []
+
+        [dependency-groups]
+        dev = ["pytest>=8"]
+        """,
+            "group-dev",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "dynamic"
+        version = "1.0.0"
+        dynamic = ["dependencies"]
+        """,
+            "runtime",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "dynamic-extra"
+        version = "1.0.0"
+        dynamic = ["optional-dependencies"]
+        dependencies = []
+        """,
+            "extra-dev",
+        ).returncode
+        == 1
+    )
+    assert (
+        run(
+            """
+        [project]
+        name = "malformed"
+        version = "1.0.0"
+        dependencies = "pytest"
+        """,
+            "runtime",
+        ).returncode
+        == 2
+    )
 
 
 def test_opencode_coverage_prefers_declared_pnpm_runner_before_npm():
@@ -1370,8 +1546,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
     coverage_job = workflow[coverage_start:coverage_end]
     target_start = coverage_end + 1
-    target_end = workflow.index("\n  opencode-exhausted-retry:", target_start)
-    target_job = workflow[target_start:target_end]
+    target_job = workflow[target_start:]
 
     assert 'scripts/ci/safe_pytest_command.py" discover' in coverage_job
     assert 'scripts/ci/safe_pytest_command.py" execute' in coverage_job
@@ -1402,10 +1577,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "cargo install cargo-llvm-cov --version 0.8.7 --locked" in coverage_job
     assert "install.packages(" not in coverage_job
 
-    assert (
-        "github.event.pull_request.head.repo.full_name == "
-        "github.event.pull_request.base.repo.full_name"
-    ) in target_job
+    target_condition = target_job.split("    runs-on:", 1)[0]
+    assert "github.event_name == 'repository_dispatch'" in target_condition
+    assert "github.event_name == 'pull_request_target'" not in target_condition
     assert "pull_request_target:" in workflow.split("permissions:", 1)[0]
     assert "\n  pull_request:\n" not in workflow.split("permissions:", 1)[0]
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
