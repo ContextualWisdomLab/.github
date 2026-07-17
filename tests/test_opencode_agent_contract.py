@@ -353,6 +353,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "trusted_git()" in measure_step
     assert "GIT_CONFIG_NOSYSTEM=1" in measure_step
     assert "GIT_CONFIG_GLOBAL=/dev/null" in measure_step
+    assert "-c safe.directory=/work" in measure_step
     assert "-c core.fsmonitor=false" in measure_step
     assert "-c core.hooksPath=/dev/null" in measure_step
     assert "git -c core.quotePath=false ls-files" not in measure_step

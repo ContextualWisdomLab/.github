@@ -777,6 +777,7 @@ jobs:
               GIT_CONFIG_NOSYSTEM=1 \
               GIT_CONFIG_GLOBAL=/dev/null \
               git \
+                -c safe.directory=/work \
                 -c core.fsmonitor=false \
                 -c core.hooksPath=/dev/null \
                 -c core.quotePath=false \
