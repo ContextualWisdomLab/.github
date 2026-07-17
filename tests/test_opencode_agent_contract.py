@@ -1433,7 +1433,12 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in workflow
     assert "secrets.OPENCODE_APPROVE_TOKEN" in workflow
     assert "steps.scheduler_app_token.outputs.token" in workflow
-    assert "SCHEDULER_READ_TOKEN: ${{ github.token }}" in workflow
+    assert (
+        "SCHEDULER_READ_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || "
+        "github.token }}"
+    ) in workflow
+    assert "SCHEDULER_ACTIONS_REPOSITORY:" in workflow
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
     assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow

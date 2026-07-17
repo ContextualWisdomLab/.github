@@ -94,6 +94,7 @@ concurrency:
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && format('target-{0}-pr-{1}', github.event.client_payload.target_repository, github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.run_id ||
     github.ref }}
@@ -226,6 +227,68 @@ jobs:
             echo "available=true"
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
+
+      - name: Bind targeted central dispatch to live pull request metadata
+        id: dispatch_target
+        if: >-
+          github.event_name == 'repository_dispatch' &&
+          github.event.client_payload.target_repository != ''
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
+          MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
+          TARGET_PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REPOSITORY" != "ContextualWisdomLab/.github" ]; then
+            echo "::error::Cross-repository targeted dispatch is only allowed from ContextualWisdomLab/.github."
+            exit 1
+          fi
+          if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::target_repository must name a ContextualWisdomLab repository."
+            exit 1
+          fi
+          if [[ ! "$TARGET_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::pr_number must be a positive integer for targeted dispatch."
+            exit 1
+          fi
+          if [ "$MUTATION_TOKEN_SOURCE" = "github-token" ]; then
+            echo "::error::Targeted central dispatch has no sibling-repository credential. Configure PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app token exchange."
+            exit 1
+          fi
+
+          pull_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"
+          live_state="$(jq -r '.state // empty' <<<"$pull_json")"
+          base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_json")"
+          base_branch="$(jq -r '.base.ref // empty' <<<"$pull_json")"
+          base_sha="$(jq -r '.base.sha // empty' <<<"$pull_json")"
+          head_sha="$(jq -r '.head.sha // empty' <<<"$pull_json")"
+
+          if [ "$live_state" != "open" ] || [ "$base_repository" != "$TARGET_REPOSITORY" ]; then
+            echo "::error::Targeted dispatch must resolve to an open PR whose base repository exactly matches target_repository."
+            exit 1
+          fi
+          if [[ ! "$base_branch" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+             [[ "$base_branch" == *".."* ]] || [[ "$base_branch" == *"@{"* ]] ||
+             [[ "$base_branch" == .* ]] || [[ "$base_branch" == */.* ]] ||
+             [[ "$base_branch" == */ ]] || [[ "$base_branch" == *. ]]; then
+            echo "::error::Live PR base ref is not safe for targeted scheduler arguments."
+            exit 1
+          fi
+          if [[ ! "$base_sha" =~ ^[0-9a-fA-F]{40}$ ]] || [[ ! "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Live PR metadata did not provide exact 40-character base and head SHAs."
+            exit 1
+          fi
+
+          {
+            echo "repository=$TARGET_REPOSITORY"
+            echo "pr_number=$TARGET_PR_NUMBER"
+            echo "base_branch=$base_branch"
+            echo "base_sha=$base_sha"
+            echo "head_sha=$head_sha"
+          } >>"$GITHUB_OUTPUT"
+          echo "Targeted scheduler bound to ${TARGET_REPOSITORY}#${TARGET_PR_NUMBER} at head ${head_sha} (base ${base_branch}@${base_sha})."
 
       - name: Resolve trusted scheduler source ref
         id: trusted_source
@@ -406,21 +469,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
+          # A targeted central run controls only central Actions. The app/PAT in
+          # GH_TOKEN reads and mutates the sibling PR, while github.token inspects
+          # and dispatches the central required workflows without making a
+          # doomed sibling Actions API request first.
+          SCHEDULER_ACTIONS_REPOSITORY: ${{ steps.dispatch_target.outputs.repository != '' && github.repository || '' }}
           # Same-repository dispatch credential: when this scheduler runs inside
           # ContextualWisdomLab/.github (the repository the required workflows are
           # dispatched on), the runner token can dispatch them without any
           # cross-repository PAT. The scheduler only uses it when
           # GITHUB_REPOSITORY equals the dispatch repository.
           SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
-          SCHEDULER_READ_TOKEN: ${{ github.token }}
+          SCHEDULER_READ_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
           SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
+          SCHEDULER_TARGET_REPOSITORY: ${{ steps.dispatch_target.outputs.repository || github.repository }}
+          SCHEDULER_TARGET_BASE_BRANCH: ${{ steps.dispatch_target.outputs.base_branch || env.DEFAULT_BRANCH }}
+          SCHEDULER_TARGET_PR_NUMBER: ${{ steps.dispatch_target.outputs.pr_number || env.PULL_REQUEST_NUMBER }}
+          SCHEDULER_TARGET_HEAD_SHA: ${{ steps.dispatch_target.outputs.head_sha || '' }}
         run: |
           set -euo pipefail
           project_flow="$PROJECT_FLOW_INPUT"
           if [ -z "$project_flow" ]; then
-            case "$DEFAULT_BRANCH" in
+            case "$SCHEDULER_TARGET_BASE_BRANCH" in
               main|master) project_flow="github-flow" ;;
               develop) project_flow="git-flow" ;;
               *) project_flow="github-flow" ;;
@@ -435,8 +507,8 @@ jobs:
             branch_update_limit="1"
           fi
           args=(
-            --repo "$GITHUB_REPOSITORY"
-            --base-branch "$DEFAULT_BRANCH"
+            --repo "$SCHEDULER_TARGET_REPOSITORY"
+            --base-branch "$SCHEDULER_TARGET_BASE_BRANCH"
             --max-prs "$MAX_PRS"
             --project-flow "$project_flow"
             --review-workflow "Required OpenCode Review"
@@ -444,8 +516,11 @@ jobs:
             --branch-update-limit "$branch_update_limit"
             --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
           )
-          if [ -n "$PULL_REQUEST_NUMBER" ]; then
-            args+=(--pr-number "$PULL_REQUEST_NUMBER")
+          if [ -n "$SCHEDULER_TARGET_PR_NUMBER" ]; then
+            args+=(--pr-number "$SCHEDULER_TARGET_PR_NUMBER")
+          fi
+          if [ -n "$SCHEDULER_TARGET_HEAD_SHA" ]; then
+            args+=(--expected-head-sha "$SCHEDULER_TARGET_HEAD_SHA")
           fi
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)

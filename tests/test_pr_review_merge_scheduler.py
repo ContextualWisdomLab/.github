@@ -1995,6 +1995,40 @@ def test_scheduler_dispatch_env_is_noop_without_distinct_token(monkeypatch):
     assert sched.scheduler_dispatch_env() is None
 
 
+def test_actions_repository_scope_skips_inaccessible_sibling_queries(monkeypatch, capsys):
+    """A central runner token must not query sibling Actions before dispatch."""
+    monkeypatch.setenv(
+        "SCHEDULER_ACTIONS_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions",
+        lambda *args, **kwargs: pytest.fail("out-of-scope Actions API call"),
+    )
+
+    assert sched.active_workflow_runs("ContextualWisdomLab/scopeweave") == []
+    assert "Actions run inspection skipped for ContextualWisdomLab/scopeweave" in capsys.readouterr().out
+
+
+def test_actions_repository_scope_keeps_central_run_inspection(monkeypatch):
+    """The same scope still permits deduplication against central workflows."""
+    calls = []
+    monkeypatch.setenv(
+        "SCHEDULER_ACTIONS_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions",
+        lambda args, stdin=None: calls.append(args) or json.dumps({"workflow_runs": []}),
+    )
+
+    assert sched.active_workflow_runs("ContextualWisdomLab/.github") == []
+    assert len(calls) == 2
+    assert all("repos/ContextualWisdomLab/.github/actions/runs" in call for call in calls)
+
+
 def test_run_github_dispatch_uses_dispatch_token_env(monkeypatch):
     calls = []
     monkeypatch.setenv("GH_TOKEN", "mutation-token")
@@ -4214,6 +4248,34 @@ def test_main_rejects_invalid_branch_update_limit():
                 "-2",
             ]
         )
+
+
+def test_main_expected_head_rejects_stale_targeted_dispatch(monkeypatch, capsys):
+    """A PR synchronize race must not let an old targeted event act on a new head."""
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: [make_pr(headRefOid="b" * 40)],
+    )
+
+    assert (
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--pr-number",
+                "7",
+                "--expected-head-sha",
+                "a" * 40,
+            ]
+        )
+        == 0
+    )
+    assert "Targeted scheduler skipped stale dispatch" in capsys.readouterr().out
 
 
 def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):

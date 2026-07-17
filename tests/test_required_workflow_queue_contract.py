@@ -428,6 +428,23 @@ def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> N
     assert "github.event.workflow_run.pull_requests[0].number" in workflow
 
 
+def test_targeted_central_scheduler_binds_live_sibling_pr_metadata() -> None:
+    """A bounded central dispatch must validate and operate on the requested live PR."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert "Bind targeted central dispatch to live pull request metadata" in workflow
+    assert "^ContextualWisdomLab/[A-Za-z0-9._-]+$" in workflow
+    assert 'pull_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"' in workflow
+    assert 'base_repository" != "$TARGET_REPOSITORY"' in workflow
+    assert "Live PR metadata did not provide exact 40-character base and head SHAs" in workflow
+    assert "SCHEDULER_ACTIONS_REPOSITORY:" in workflow
+    assert '--repo "$SCHEDULER_TARGET_REPOSITORY"' in workflow
+    assert '--base-branch "$SCHEDULER_TARGET_BASE_BRANCH"' in workflow
+    assert 'args+=(--pr-number "$SCHEDULER_TARGET_PR_NUMBER")' in workflow
+    assert 'args+=(--expected-head-sha "$SCHEDULER_TARGET_HEAD_SHA")' in workflow
+    assert 'case "$SCHEDULER_TARGET_BASE_BRANCH" in' in workflow
+
+
 def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     """Guard the org-wide approved-PR fallback sweep contract.
 

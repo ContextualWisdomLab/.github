@@ -489,6 +489,22 @@ def run_github_actions(args: Sequence[str], *, stdin: str | None = None) -> str:
     return run_with_env(args, stdin=stdin, env=env)
 
 
+def scheduler_actions_repository_in_scope(repo: str) -> bool:
+    """Return whether the Actions control credential may access ``repo``.
+
+    A central targeted scheduler run deliberately uses the central repository's
+    ``github.token`` for Actions control while an app/PAT reads and mutates the
+    sibling target repository.  The runner token cannot read sibling Actions
+    runs, so querying them would turn a safe targeted dispatch into a 403 before
+    the central workflow can be inspected or dispatched.
+    """
+    target_repo = validate_github_repository(repo)
+    scoped_repo = (os.environ.get("SCHEDULER_ACTIONS_REPOSITORY") or "").strip()
+    if not scoped_repo:
+        return True
+    return target_repo == validate_github_repository(scoped_repo)
+
+
 def scheduler_dispatch_env() -> dict[str, str] | None:
     """Return an env override for central repository dispatch when configured.
 
@@ -1818,12 +1834,24 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     """Ask GitHub Actions to rerun an existing required-workflow job."""
     if dry_run:
         return
+    if not scheduler_actions_repository_in_scope(repo):
+        raise RuntimeError(
+            f"{action} refused for {repo}; the Actions credential is scoped to "
+            f"{os.environ.get('SCHEDULER_ACTIONS_REPOSITORY')}"
+        )
     require_github_actions_control_actor(action)
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
 def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
     """Return active workflow runs for a repository."""
+    if not scheduler_actions_repository_in_scope(repo):
+        print(
+            "Actions run inspection skipped for "
+            f"{repo}: control credential is scoped to "
+            f"{os.environ.get('SCHEDULER_ACTIONS_REPOSITORY')}"
+        )
+        return []
     runs: list[dict[str, Any]] = []
     for status in statuses:
         payload = json.loads(
@@ -2099,7 +2127,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
 def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
     job_id = matching_actions_job_id(pr, is_strix_context)
-    if job_id:
+    if job_id and scheduler_actions_repository_in_scope(repo):
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
         return "rerun" if not dry_run else "dry_run"
     if dry_run:
@@ -3672,6 +3700,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--project-flow", default=os.environ.get("PROJECT_FLOW", ""))
     parser.add_argument("--max-prs", type=int, default=100)
     parser.add_argument("--pr-number", type=int, default=0)
+    parser.add_argument(
+        "--expected-head-sha",
+        default="",
+        help="Optional exact PR head bound by a trusted targeted-dispatch preflight",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -3718,11 +3751,32 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--project-flow is required")
     if args.pr_number < 0:
         raise SystemExit("--pr-number must not be negative")
+    if args.expected_head_sha:
+        if not args.pr_number:
+            raise SystemExit("--expected-head-sha requires --pr-number")
+        try:
+            validate_git_sha(args.expected_head_sha)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     if args.review_dispatch_limit < -1:
         raise SystemExit("--review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if args.expected_head_sha:
+        if not prs:
+            print(
+                f"Targeted scheduler skipped: PR #{args.pr_number} is no longer available in {args.repo}."
+            )
+            return 0
+        live_head = str(prs[0].get("headRefOid") or "")
+        if live_head.lower() != args.expected_head_sha.lower():
+            print(
+                "Targeted scheduler skipped stale dispatch: "
+                f"{args.repo}#{args.pr_number} expected head {args.expected_head_sha}, "
+                f"live head {live_head or 'missing'}."
+            )
+            return 0
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0
