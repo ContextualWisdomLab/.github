@@ -2029,6 +2029,28 @@ def test_actions_repository_scope_keeps_central_run_inspection(monkeypatch):
     assert all("repos/ContextualWisdomLab/.github/actions/runs" in call for call in calls)
 
 
+def test_actions_repository_scope_refuses_sibling_job_rerun(monkeypatch):
+    """A central runner token must not rerun a sibling repository job."""
+    monkeypatch.setenv(
+        "SCHEDULER_ACTIONS_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "retry failed job refused for ContextualWisdomLab/scopeweave; "
+            "the Actions credential is scoped to ContextualWisdomLab/.github"
+        ),
+    ):
+        sched.rerun_actions_job(
+            "ContextualWisdomLab/scopeweave",
+            "42",
+            dry_run=False,
+            action="retry failed job",
+        )
+
+
 def test_run_github_dispatch_uses_dispatch_token_env(monkeypatch):
     calls = []
     monkeypatch.setenv("GH_TOKEN", "mutation-token")
@@ -4248,6 +4270,67 @@ def test_main_rejects_invalid_branch_update_limit():
                 "-2",
             ]
         )
+
+
+def test_main_expected_head_requires_pr_number():
+    with pytest.raises(SystemExit, match="--expected-head-sha requires --pr-number"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--expected-head-sha",
+                "a" * 40,
+            ]
+        )
+
+
+def test_main_expected_head_rejects_invalid_sha():
+    with pytest.raises(SystemExit, match="invalid git sha"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--pr-number",
+                "7",
+                "--expected-head-sha",
+                "not-a-sha",
+            ]
+        )
+
+
+def test_main_expected_head_skips_closed_targeted_pr(monkeypatch, capsys):
+    """A delayed targeted event must no-op after its pull request closes."""
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [])
+
+    assert (
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--pr-number",
+                "7",
+                "--expected-head-sha",
+                "a" * 40,
+            ]
+        )
+        == 0
+    )
+    assert (
+        "Targeted scheduler skipped: PR #7 is no longer available in owner/repo."
+        in capsys.readouterr().out
+    )
 
 
 def test_main_expected_head_rejects_stale_targeted_dispatch(monkeypatch, capsys):
