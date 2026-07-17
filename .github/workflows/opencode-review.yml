@@ -542,7 +542,7 @@ jobs:
             chmod 0700 "$sandbox_result_dir"
 
             sandbox_status=0
-            docker run --rm --init \
+            docker run --rm --init --network=none \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --pids-limit 2048 \
               --memory 14g \
@@ -630,7 +630,16 @@ jobs:
           # racing trusted result publication.
           export OPENCODE_SANDBOX_UID=65532
           export OPENCODE_SANDBOX_GID=65532
-          chown -R --no-dereference "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work
+          # Keep repository-local Git metadata outside the untrusted test
+          # identity's write boundary. The source tree itself stays writable so
+          # package managers and tests can create ordinary build artifacts.
+          chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work
+          find /work -mindepth 1 -maxdepth 1 ! -name .git \
+            -exec chown -R --no-dereference "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" {} +
+          if [ -e /work/.git ] || [ -L /work/.git ]; then
+            chown -R root:root /work/.git
+            chmod -R go-w /work/.git
+          fi
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chmod 0700 "$RUNNER_TEMP"
@@ -699,7 +708,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -745,7 +754,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -761,17 +770,31 @@ jobs:
             rm -f "$log_file"
           }
 
+          trusted_git() {
+            env -i \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              HOME=/tmp \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
+              git \
+                -c safe.directory=/work \
+                -c core.fsmonitor=false \
+                -c core.hooksPath=/dev/null \
+                -c core.quotePath=false \
+                "$@"
+          }
+
           has_tracked_files() {
-            git -c core.quotePath=false ls-files "$@" | awk 'NF { found=1 } END { exit found ? 0 : 1 }'
+            trusted_git ls-files "$@" | awk 'NF { found=1 } END { exit found ? 0 : 1 }'
           }
 
           changed_files_for_coverage() {
             if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] \
-              && git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
-              && git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
-              git -c core.quotePath=false diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
+              && trusted_git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
+              && trusted_git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
+              trusted_git diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
             else
-              git -c core.quotePath=false ls-files
+              trusted_git ls-files
             fi
           }
 
@@ -780,7 +803,7 @@ jobs:
             changed_list="$(mktemp)"
             tracked_list="$(mktemp)"
             changed_files_for_coverage >"$changed_list"
-            git -c core.quotePath=false ls-files "$@" >"$tracked_list"
+            trusted_git ls-files "$@" >"$tracked_list"
             awk 'NR==FNR { changed[$0]=1; next } ($0 in changed) { found=1 } END { exit found ? 0 : 1 }' \
               "$changed_list" "$tracked_list"
             local rc=$?
@@ -789,7 +812,7 @@ jobs:
           }
 
           tracked_python_projects_with_tests() {
-            git -c core.quotePath=false ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
+            trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
               | while IFS= read -r pyproject_file; do
                   project_dir="$(dirname "$pyproject_file")"
                   if [ "$project_dir" = "." ]; then
@@ -982,7 +1005,7 @@ jobs:
                       manifest="${candidate_dir}/package.json"
                     fi
                     if [ -f "$manifest" ] \
-                      && git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
+                      && trusted_git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
                       printf '%s\n' "$candidate_dir"
                       break
                     fi
