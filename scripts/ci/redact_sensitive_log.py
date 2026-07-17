@@ -9,7 +9,9 @@ import sys
 from typing import Any
 
 REDACTED = "[REDACTED]"
-KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+KEY_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
+)
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
@@ -20,8 +22,7 @@ JWT_RE = re.compile(
     r"[A-Za-z0-9_-]{3,}(?![A-Za-z0-9_-])"
 )
 BEARER_RE = re.compile(
-    r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)"
-    r"[^\s\"'\\]+",
+    r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)" r"[^\s\"'\\]+",
     re.IGNORECASE,
 )
 PROVIDER_TOKEN_RES = (
@@ -88,7 +89,11 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
             elif char == value_quote:
                 break
     else:
-        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
+        while (
+            cursor < len(text)
+            and not text[cursor].isspace()
+            and text[cursor] not in ",}"
+        ):
             cursor += 1
     if cursor == value_start:
         return None
@@ -97,6 +102,10 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
 
 def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
+    # ⚡ Bolt: Fast-path return to skip O(N) assignment parsing for safe logs
+    if not SENSITIVE_KEY_RE.search(text):
+        return text
+
     output: list[str] = []
     cursor = 0
     while cursor < len(text):

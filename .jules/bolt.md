@@ -43,3 +43,7 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+
+## 2024-05-20 - Fast-path pre-filter for O(N) un-trusted log parsing
+**Learning:** The custom character-by-character parser in redact_sensitive_log.py safely avoids regex backtracking on untrusted logs, but blindly iterating through every log line is computationally wasteful for the vast majority of safe logs.
+**Action:** Always include a fast-path regex pre-filter (like `SENSITIVE_KEY_RE.search(text)`) before initiating manual O(N) string parsing loops to skip safe inputs entirely.
