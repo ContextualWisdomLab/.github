@@ -170,6 +170,7 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     pr = make_pr()
     calls = []
 
+    monkeypatch.setattr(fix, "current_token_actor", lambda: "scheduler[bot]")
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("current-head OpenCode requested changes",)))
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
@@ -529,6 +530,7 @@ def test_dispatch_autofix_rejects_selectable_workflow_and_invalid_repository():
 def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
     """An approved conflicting PR dispatches autofix in resolve_conflict mode."""
     captured = {}
+    monkeypatch.setattr(fix, "current_token_actor", lambda: "scheduler[bot]")
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
     monkeypatch.setattr(
         fix,
@@ -548,6 +550,7 @@ def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
 def test_process_queue_includes_conflict_resolution_candidates(monkeypatch, capsys):
     """The queue pre-filter fetches comments for approved conflicting PRs too."""
     pr = _approved_dirty_pr()
+    monkeypatch.setattr(fix, "current_token_actor", lambda: "scheduler[bot]")
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
     monkeypatch.setattr(
