@@ -343,6 +343,7 @@ def process_queue(args: argparse.Namespace) -> int:
 def self_test() -> int:
     """Run cheap contract checks."""
     head = "a" * 40
+    base = "b" * 40
     comments = [{"body": f"{FIX_MARKER} head_sha={head} epoch={int(time.time())} -->"}]
     assert recent_fix_marker_exists(comments, head, 24 * 3600)
     assert not recent_fix_marker_exists(comments, "b" * 40, 24 * 3600)
@@ -371,11 +372,18 @@ def self_test() -> int:
                     "state": "APPROVED",
                     "author": {"login": "opencode-agent"},
                     "commit": {"oid": head},
-                    "body": "Approved.",
+                    "body": (
+                        "Approved.\n"
+                        "- Base ref: `main`\n"
+                        f"- Base SHA: `{base}`\n"
+                        f"- Head SHA: `{head}`"
+                    ),
                 }
             ]
         },
         "reviewThreads": {"nodes": []},
+        "baseRefName": "main",
+        "baseRefOid": base,
         "headRefOid": head,
         "mergeStateStatus": "DIRTY",
     }

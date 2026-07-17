@@ -11,10 +11,17 @@ from typing import Any, Sequence
 
 APPROVAL_AUTHORS = frozenset({"opencode-agent", "opencode-agent[bot]"})
 HEAD_SHA_RE = re.compile(r"Head SHA:\s*`?([0-9a-fA-F]{40})`?", re.IGNORECASE)
+BASE_SHA_RE = re.compile(r"Base SHA:\s*`?([0-9a-fA-F]{40})`?", re.IGNORECASE)
+BASE_REF_RE = re.compile(r"Base ref:\s*`?([A-Za-z0-9._/-]+)`?", re.IGNORECASE)
 
 
-def _has_current_approval(reviews: Sequence[dict[str, Any]], head_sha: str) -> bool:
-    """Return whether the latest OpenCode decision explicitly approves the exact head."""
+def _has_current_approval(
+    reviews: Sequence[dict[str, Any]],
+    head_sha: str,
+    base_ref: str,
+    base_sha: str,
+) -> bool:
+    """Return whether the latest OpenCode decision approves the exact PR identity."""
     for review in reversed(reviews):
         author = str((review.get("user") or {}).get("login") or "").casefold()
         if author not in APPROVAL_AUTHORS:
@@ -24,6 +31,16 @@ def _has_current_approval(reviews: Sequence[dict[str, Any]], head_sha: str) -> b
         body_heads = HEAD_SHA_RE.findall(str(review.get("body") or ""))
         if not body_heads or body_heads[-1].lower() != head_sha.lower():
             continue
+        body = str(review.get("body") or "")
+        body_base_refs = BASE_REF_RE.findall(body)
+        body_base_shas = BASE_SHA_RE.findall(body)
+        if (
+            not body_base_refs
+            or body_base_refs[-1] != base_ref
+            or not body_base_shas
+            or body_base_shas[-1].lower() != base_sha.lower()
+        ):
+            return False
         return str(review.get("state") or "").upper() == "APPROVED"
     return False
 
@@ -33,23 +50,36 @@ def decide_status(
     model_outcome: str,
     coverage_result: str,
     expected_head: str,
+    expected_base_ref: str,
+    expected_base_sha: str,
     pull_request: dict[str, Any],
     reviews: Sequence[dict[str, Any]],
 ) -> dict[str, str]:
     """Return a fail-closed GitHub commit-status decision."""
     live_head = str((pull_request.get("head") or {}).get("sha") or "")
+    live_base_ref = str((pull_request.get("base") or {}).get("ref") or "")
+    live_base_sha = str((pull_request.get("base") or {}).get("sha") or "")
     if model_outcome != "success":
         reason = "OpenCode model review did not produce approval evidence."
     elif coverage_result != "success":
         reason = "OpenCode coverage evidence did not pass for the current head."
     elif not expected_head or live_head.lower() != expected_head.lower():
         reason = "OpenCode status target is stale or the live PR head is unavailable."
-    elif not _has_current_approval(reviews, expected_head):
-        reason = "No validated exact-current-head OpenCode approval was published."
+    elif (
+        not expected_base_ref
+        or live_base_ref != expected_base_ref
+        or not expected_base_sha
+        or live_base_sha.lower() != expected_base_sha.lower()
+    ):
+        reason = "OpenCode status target base changed or is unavailable."
+    elif not _has_current_approval(
+        reviews, expected_head, expected_base_ref, expected_base_sha
+    ):
+        reason = "No validated exact-current-PR OpenCode approval was published."
     else:
         return {
             "state": "success",
-            "description": "Validated current-head OpenCode approval and coverage passed.",
+            "description": "Validated base-bound current-head OpenCode approval and coverage.",
         }
     return {"state": "failure", "description": reason}
 
@@ -60,6 +90,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-outcome", required=True)
     parser.add_argument("--coverage-result", required=True)
     parser.add_argument("--expected-head", required=True)
+    parser.add_argument("--expected-base-ref", required=True)
+    parser.add_argument("--expected-base-sha", required=True)
     parser.add_argument("--pull-request-file", required=True, type=Path)
     parser.add_argument("--reviews-file", required=True, type=Path)
     return parser.parse_args(argv)
@@ -78,6 +110,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_outcome=args.model_outcome,
                 coverage_result=args.coverage_result,
                 expected_head=args.expected_head,
+                expected_base_ref=args.expected_base_ref,
+                expected_base_sha=args.expected_base_sha,
                 pull_request=pull_request,
                 reviews=reviews,
             ),

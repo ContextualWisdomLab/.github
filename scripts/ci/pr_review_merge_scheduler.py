@@ -125,7 +125,9 @@ ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
+REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([^`\s]+)`")
+REVIEW_BODY_BASE_REF_RE = re.compile(r"Base ref:\s*`([A-Za-z0-9._/-]+)`")
+REVIEW_BODY_BASE_SHA_RE = re.compile(r"Base SHA:\s*`([^`\s]+)`")
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "base branch policy prohibits the merge",
@@ -987,17 +989,38 @@ def parse_github_datetime(value: str | None) -> datetime | None:
 
 
 def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> bool:
-    """Return whether a review is valid evidence for the current head commit."""
+    """Return whether a review is valid evidence for the current PR identity."""
     head = pr.get("headRefOid")
     commit = (review.get("commit") or {}).get("oid")
     if not head:
         return False
     body_head = review_body_head_sha(review)
+    head_matches = False
     if commit == head:
-        return body_head is None or body_head.lower() == head.lower()
-    if not commit and body_head is not None:
-        return body_head.lower() == head.lower()
-    return False
+        head_matches = body_head is None or body_head.lower() == head.lower()
+    elif not commit and body_head is not None:
+        head_matches = body_head.lower() == head.lower()
+    if not head_matches:
+        return False
+    if str(review.get("state") or "").upper() != "APPROVED":
+        return True
+
+    body = str(review.get("body") or "")
+    if any(marker in body.lower() for marker in DETERMINISTIC_APPROVAL_MARKERS):
+        return True
+    base_refs = REVIEW_BODY_BASE_REF_RE.findall(body)
+    base_shas = REVIEW_BODY_BASE_SHA_RE.findall(body)
+    base_ref = str(pr.get("baseRefName") or "")
+    base_sha = str(pr.get("baseRefOid") or "")
+    return bool(
+        body_head
+        and base_ref
+        and base_sha
+        and base_refs
+        and base_refs[-1] == base_ref
+        and base_shas
+        and base_shas[-1].lower() == base_sha.lower()
+    )
 
 
 def review_body_head_sha(review: dict[str, Any]) -> str | None:
@@ -3180,7 +3203,12 @@ def self_test() -> None:
                 {
                     "state": "APPROVED",
                     "author": {"login": "opencode-agent"},
-                    "body": "OpenCode Agent approved this head.",
+                    "body": (
+                        "OpenCode Agent approved this head.\n"
+                        "- Base ref: `main`\n"
+                        "- Base SHA: `base`\n"
+                        "- Head SHA: `abc`"
+                    ),
                     "submittedAt": "2026-06-25T15:42:19Z",
                     "commit": {"oid": "abc"},
                 }
@@ -3371,6 +3399,12 @@ def self_test() -> None:
     assert decision.action == "update_branch"
     assert "branch is outdated before review dispatch" in decision.reason
     sample["reviews"]["nodes"][0]["commit"]["oid"] = "abc"
+    sample["reviews"]["nodes"][0]["body"] = (
+        "OpenCode approved the current PR identity.\n"
+        "- Base ref: `main`\n"
+        "- Base SHA: `base`\n"
+        "- Head SHA: `abc`"
+    )
     decision = inspect_pr(
         "owner/repo",
         sample,
@@ -3552,7 +3586,12 @@ def self_test() -> None:
                 {
                     "state": "APPROVED",
                     "author": {"login": "opencode-agent"},
-                    "body": "OpenCode Agent approved this head.",
+                    "body": (
+                        "OpenCode Agent approved this head.\n"
+                        "- Base ref: `main`\n"
+                        "- Base SHA: `base`\n"
+                        "- Head SHA: `abc`"
+                    ),
                     "submittedAt": "2026-06-25T15:42:19Z",
                     "commit": {"oid": "abc"},
                 }

@@ -7,6 +7,23 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+HEAD = "a" * 40
+BASE_REF = "main"
+BASE_SHA = "b" * 40
+
+
+def identity_body(marker: str = "Result: APPROVE", *, head: str = HEAD) -> str:
+    """Build review text bound to the default test PR identity."""
+    return "\n".join(
+        (
+            marker,
+            f"- Base ref: `{BASE_REF}`",
+            f"- Base SHA: `{BASE_SHA}`",
+            f"- Head SHA: `{head}`",
+        )
+    )
+
+
 def fake_secret(*parts: str) -> str:
     return "".join(parts)
 
@@ -18,7 +35,9 @@ def make_pr(**overrides):
         "title": "Noema",
         "body": "",
         "isDraft": False,
-        "headRefOid": "head",
+        "baseRefName": BASE_REF,
+        "baseRefOid": BASE_SHA,
+        "headRefOid": HEAD,
         "reviews": {"nodes": []},
         "reviewThreads": {"nodes": []},
         "statusCheckRollup": {"contexts": {"nodes": []}},
@@ -27,11 +46,11 @@ def make_pr(**overrides):
     return value
 
 
-def review(state="APPROVED", commit="head", login="opencode-agent", body="Result: APPROVE"):
+def review(state="APPROVED", commit=HEAD, login="opencode-agent", body=None):
     """Build a minimal review node for Noema tests."""
     return {
         "state": state,
-        "body": body,
+        "body": identity_body() if body is None else body,
         "author": {"login": login},
         "commit": {"oid": commit},
     }
@@ -92,30 +111,65 @@ def test_split_repo_and_graphql(monkeypatch):
 
 
 def test_review_state_helpers_cover_current_head_logic():
-    marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
+    marker_body = identity_body(
+        "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
+    )
     current = review(body=marker_body)
     old = review(commit="old", body=marker_body)
     pr = make_pr(reviews={"nodes": [old, current]})
 
     assert noema.review_author(current) == "opencode-agent"
     assert noema.review_author({}) == ""
-    assert noema.review_commit(current) == "head"
+    assert noema.review_commit(current) == HEAD
     assert noema.review_commit({}) == ""
     assert noema.current_primary_approval(pr) == current
-    assert noema.current_primary_approval(make_pr(reviews={"nodes": [old]})) is None
-    assert noema.current_primary_approval(make_pr(reviews={"nodes": [review("COMMENTED", body=marker_body)]})) is None
-    assert noema.current_primary_approval(make_pr(reviews={"nodes": [review(login="human", body=marker_body)]})) is None
-    assert noema.current_primary_approval(
-        make_pr(
-            reviews={
-                "nodes": [review(login="github-actions[bot]", body=marker_body)]
-            }
+    assert (
+        noema.current_primary_approval(
+            make_pr(baseRefName="release", reviews={"nodes": [current]})
         )
-    ) is None
-    assert noema.has_current_changes_requested(make_pr(reviews={"nodes": [review("CHANGES_REQUESTED")]}))
-    assert not noema.has_current_changes_requested(make_pr(reviews={"nodes": [review("CHANGES_REQUESTED", commit="old")]}))
-    assert noema.has_unresolved_threads(make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}))
-    assert not noema.has_unresolved_threads(make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": True}]}))
+        is None
+    )
+    assert (
+        noema.current_primary_approval(
+            make_pr(baseRefOid="c" * 40, reviews={"nodes": [current]})
+        )
+        is None
+    )
+    assert noema.current_primary_approval(make_pr(reviews={"nodes": [old]})) is None
+    assert (
+        noema.current_primary_approval(
+            make_pr(reviews={"nodes": [review("COMMENTED", body=marker_body)]})
+        )
+        is None
+    )
+    assert (
+        noema.current_primary_approval(
+            make_pr(reviews={"nodes": [review(login="human", body=marker_body)]})
+        )
+        is None
+    )
+    assert (
+        noema.current_primary_approval(
+            make_pr(
+                reviews={
+                    "nodes": [review(login="github-actions[bot]", body=marker_body)]
+                }
+            )
+        )
+        is None
+    )
+    assert noema.has_current_changes_requested(
+        make_pr(reviews={"nodes": [review("CHANGES_REQUESTED")]})
+    )
+    assert not noema.has_current_changes_requested(
+        make_pr(reviews={"nodes": [review("CHANGES_REQUESTED", commit="old")]})
+    )
+    assert noema.has_unresolved_threads(
+        make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]})
+    )
+    assert not noema.has_unresolved_threads(
+        make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": True}]})
+    )
 
 
 def test_review_state_helpers_reject_explicit_previous_head_evidence():
@@ -128,7 +182,7 @@ def test_review_state_helpers_reject_explicit_previous_head_evidence():
     )
     exact_approval = review(
         commit=current_head,
-        body=f"{approval_marker}\n\n- Head SHA: `{current_head}`",
+        body=identity_body(approval_marker, head=current_head),
     )
     stale_change_request = review(
         "CHANGES_REQUESTED",
@@ -192,31 +246,59 @@ def test_check_helpers_and_existing_noema_review():
     assert "CI / lint: FAILURE" in blockers
     assert "CI / slow: IN_PROGRESS" in blockers
     assert noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}),
+        make_pr(
+            reviews={
+                "nodes": [
+                    review(
+                        login="noema",
+                        body=identity_body(
+                            "<!-- noema-review-gate base_ref=main "
+                            f"base_sha={BASE_SHA} head_sha={HEAD} -->"
+                        ),
+                    )
+                ]
+            }
+        ),
         "noema",
     )
-    assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
-    assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema"
+    )
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema"
+    )
 
 
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "noema\n")
     assert noema.current_actor() == "noema"
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")))
+    monkeypatch.setattr(
+        noema,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")),
+    )
     assert noema.current_actor() == ""
 
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "x" * (noema.MAX_DIFF_CHARS + 5))
+    monkeypatch.setattr(
+        noema, "run", lambda *args, **kwargs: "x" * (noema.MAX_DIFF_CHARS + 5)
+    )
     diff, truncated = noema.fetch_diff("owner/repo", 1)
     assert truncated
     assert len(diff) == noema.MAX_DIFF_CHARS
 
-    assert noema.extract_json_object('{"decision":"approve"}') == {"decision": "approve"}
-    assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}
+    assert noema.extract_json_object('{"decision":"approve"}') == {
+        "decision": "approve"
+    }
+    assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {
+        "decision": "comment"
+    }
     with pytest.raises(RuntimeError, match="did not contain"):
         noema.extract_json_object("not-json")
 
 
-def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch, tmp_path):
+def test_review_context_builders_include_codegraph_threads_and_files(
+    monkeypatch, tmp_path
+):
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
@@ -479,18 +561,29 @@ def test_format_findings_and_submit_review(monkeypatch):
 
     calls = []
     monkeypatch.setenv("NOEMA_REVIEW_TOKEN_SOURCE", "oidc")
-    monkeypatch.setattr(noema, "run", lambda args, stdin=None: calls.append((args, json.loads(stdin))) or "")
+    monkeypatch.setattr(
+        noema,
+        "run",
+        lambda args, stdin=None: calls.append((args, json.loads(stdin))) or "",
+    )
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
     noema.submit_review(
         "owner/repo",
         7,
         make_pr(),
         "noema",
-        {"decision": "request_changes", "summary": "fix it", "findings": [{"file": "a.py", "line": 1, "message": "bad"}]},
+        {
+            "decision": "request_changes",
+            "summary": "fix it",
+            "findings": [{"file": "a.py", "line": 1, "message": "bad"}],
+        },
     )
     payload = calls[0][1]
     assert payload["event"] == "REQUEST_CHANGES"
-    assert payload["commit_id"] == "head"
+    assert payload["commit_id"] == HEAD
     assert "Noema LLM review" in payload["body"]
+    assert f"- Base ref: `{BASE_REF}`" in payload["body"]
+    assert f"- Base SHA: `{BASE_SHA}`" in payload["body"]
     assert "oidc" in payload["body"]
 
     calls.clear()
@@ -498,9 +591,21 @@ def test_format_findings_and_submit_review(monkeypatch):
     assert calls[0][1]["event"] == "COMMENT"
     assert "No blocking findings" in calls[0][1]["body"]
 
+    monkeypatch.setattr(
+        noema,
+        "fetch_pr",
+        lambda repo, number: make_pr(baseRefName="release"),
+    )
+    with pytest.raises(RuntimeError, match="live base/head identity changed"):
+        noema.submit_review(
+            "owner/repo", 7, make_pr(), "noema", {"decision": "approve"}
+        )
+
 
 def test_inspect_and_review_skip_paths(monkeypatch):
-    marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
+    marker_body = identity_body(
+        "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
+    )
     clean_pr = make_pr(reviews={"nodes": [review(body=marker_body)]})
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
@@ -516,10 +621,51 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     cases = [
         (make_pr(), "noema"),
         (make_pr(isDraft=True), "noema"),
-        (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
-        (make_pr(reviews={"nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]}), "noema"),
-        (make_pr(reviews={"nodes": [review(body=marker_body)]}, reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}), "noema"),
-        (make_pr(reviews={"nodes": [review(body=marker_body)]}, statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}}), "noema"),
+        (
+            make_pr(
+                reviews={
+                    "nodes": [
+                        review(
+                            login="noema",
+                            body=identity_body("<!-- noema-review-gate -->"),
+                        )
+                    ]
+                }
+            ),
+            "noema",
+        ),
+        (
+            make_pr(
+                reviews={
+                    "nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]
+                }
+            ),
+            "noema",
+        ),
+        (
+            make_pr(
+                reviews={"nodes": [review(body=marker_body)]},
+                reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
+            ),
+            "noema",
+        ),
+        (
+            make_pr(
+                reviews={"nodes": [review(body=marker_body)]},
+                statusCheckRollup={
+                    "contexts": {
+                        "nodes": [
+                            {
+                                "__typename": "StatusContext",
+                                "context": "ci",
+                                "state": "FAILURE",
+                            }
+                        ]
+                    }
+                },
+            ),
+            "noema",
+        ),
         (clean_pr, "opencode-agent"),
     ]
     for pr, actor in cases:
@@ -536,7 +682,11 @@ def test_parse_args_and_main(monkeypatch):
     assert parsed.pr_number == 9
 
     seen = []
-    monkeypatch.setattr(noema, "inspect_and_review", lambda repo, number: seen.append((repo, number)) or 0)
+    monkeypatch.setattr(
+        noema,
+        "inspect_and_review",
+        lambda repo, number: seen.append((repo, number)) or 0,
+    )
     assert noema.main(["--repo", "owner/repo", "--pr-number", "9"]) == 0
     assert seen == [("owner/repo", 9)]
 

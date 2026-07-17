@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
+import time
 
 from scripts.ci import materialize_pr_review_source as materializer
 
@@ -148,3 +150,71 @@ def test_rejects_unsafe_tree_paths() -> None:
         except ValueError:
             continue
         raise AssertionError(f"unsafe path was accepted: {unsafe!r}")
+
+
+def test_tree_file_limit_stops_streaming_producer_early(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The parser terminates Git as soon as the next entry exceeds the limit."""
+    oid = "a" * 40
+
+    def record(name: str) -> bytes:
+        return f"100644 blob {oid} 1\t{name}\0".encode()
+
+    producer = (
+        "import os,time; "
+        f"os.write(1, {record('one')!r}); "
+        f"os.write(1, {record('two')!r}); "
+        "time.sleep(30)"
+    )
+
+    def open_producer(_git_dir: Path, _head_sha: str):
+        return subprocess.Popen(
+            [sys.executable, "-c", producer],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    monkeypatch.setattr(materializer, "open_tree_reader", open_producer)
+    started = time.monotonic()
+    try:
+        materializer.parse_tree(
+            tmp_path,
+            oid,
+            max_files=1,
+            max_bytes=10,
+            timeout_seconds=10,
+        )
+    except ValueError as exc:
+        assert "--max-files (2 > 1)" in str(exc)
+    else:
+        raise AssertionError("oversized streaming tree was accepted")
+    assert time.monotonic() - started < 5
+
+
+def test_tree_byte_limit_fails_before_materializing_output(tmp_path: Path) -> None:
+    """Accumulated blob sizes are rejected before the output directory exists."""
+    _work, bare, _base_sha, head_sha = build_repository(tmp_path)
+    output = tmp_path / "bounded-source"
+    args = materializer.parse_args(
+        [
+            "--git-dir",
+            str(bare),
+            "--head-sha",
+            head_sha,
+            "--output-dir",
+            str(output),
+            "--manifest",
+            str(tmp_path / "bounded-manifest.json"),
+            "--max-bytes",
+            "1",
+        ]
+    )
+
+    try:
+        materializer.materialize(args)
+    except ValueError as exc:
+        assert "--max-bytes" in str(exc)
+    else:
+        raise AssertionError("oversized tree bytes were accepted")
+    assert not output.exists()

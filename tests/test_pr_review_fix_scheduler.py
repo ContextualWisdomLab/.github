@@ -402,6 +402,8 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
 
 def _approved_dirty_pr(**overrides):
     """Return an approved PR that GitHub reports as conflicting."""
+    head = "a" * 40
+    base = "b" * 40
     fields = {
         "mergeStateStatus": "DIRTY",
         "reviews": {
@@ -409,8 +411,13 @@ def _approved_dirty_pr(**overrides):
                 {
                     "state": "APPROVED",
                     "author": {"login": "opencode-agent"},
-                    "commit": {"oid": "a" * 40},
-                    "body": "Approved.",
+                    "commit": {"oid": head},
+                    "body": (
+                        "Approved.\n"
+                        "- Base ref: `main`\n"
+                        f"- Base SHA: `{base}`\n"
+                        f"- Head SHA: `{head}`"
+                    ),
                 }
             ]
         },
@@ -430,6 +437,14 @@ def test_needs_conflict_resolution_requires_approved_and_conflicting():
     # Approved but clean.
     assert fix.needs_conflict_resolution(
         _approved_dirty_pr(mergeStateStatus="CLEAN")
+    ) == (False, ())
+    # A base retarget or base advance invalidates the prior approval even when
+    # the head commit itself did not change.
+    assert fix.needs_conflict_resolution(
+        _approved_dirty_pr(baseRefName="release")
+    ) == (False, ())
+    assert fix.needs_conflict_resolution(
+        _approved_dirty_pr(baseRefOid="c" * 40)
     ) == (False, ())
 
 

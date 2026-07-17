@@ -29,6 +29,8 @@ PRIMARY_REVIEW_MARKERS = (
     "opencode-review-control-v1",
 )
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
+REVIEW_BODY_BASE_REF_RE = re.compile(r"Base ref:\s*`([A-Za-z0-9._/-]+)`")
+REVIEW_BODY_BASE_SHA_RE = re.compile(r"Base SHA:\s*`([0-9a-fA-F]{40})`")
 IGNORED_RUNNING_CHECKS = {
     "approve-after-primary-review",
     "noema-review",
@@ -109,6 +111,8 @@ query($owner: String!, $name: String!, $number: Int!) {
       title
       body
       isDraft
+      baseRefName
+      baseRefOid
       headRefOid
       reviewDecision
       reviewThreads(first: 100) {
@@ -186,20 +190,42 @@ def review_body_head_sha(review: dict[str, Any]) -> str | None:
     return matches[-1] if matches else None
 
 
-def review_matches_current_head(review: dict[str, Any], head_sha: str) -> bool:
-    """Return whether commit and explicit review-body evidence match the live head."""
+def review_matches_current_head(
+    review: dict[str, Any],
+    pr: dict[str, Any],
+    *,
+    require_base_identity: bool = False,
+) -> bool:
+    """Return whether review evidence matches the live pull-request identity."""
+    head_sha = str(pr.get("headRefOid") or "")
     if not head_sha or review_commit(review) != head_sha:
         return False
     body_head = review_body_head_sha(review)
-    return body_head is None or body_head.lower() == head_sha.lower()
+    if body_head is not None and body_head.lower() != head_sha.lower():
+        return False
+    if not require_base_identity:
+        return True
+    body = str(review.get("body") or "")
+    base_refs = REVIEW_BODY_BASE_REF_RE.findall(body)
+    base_shas = REVIEW_BODY_BASE_SHA_RE.findall(body)
+    base_ref = str(pr.get("baseRefName") or "")
+    base_sha = str(pr.get("baseRefOid") or "")
+    return bool(
+        body_head
+        and base_ref
+        and base_sha
+        and base_refs
+        and base_refs[-1] == base_ref
+        and base_shas
+        and base_shas[-1].lower() == base_sha.lower()
+    )
 
 
 def current_primary_approval(pr: dict[str, Any]) -> dict[str, Any] | None:
     """Return the current-head OpenCode approval when it matches the contract."""
-    head_sha = str(pr.get("headRefOid") or "")
-    reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
+    reviews = ((pr.get("reviews") or {}).get("nodes")) or []
     for review in reversed(reviews):
-        if not review_matches_current_head(review, head_sha):
+        if not review_matches_current_head(review, pr, require_base_identity=True):
             continue
         if str(review.get("state") or "").upper() != "APPROVED":
             continue
@@ -212,36 +238,48 @@ def current_primary_approval(pr: dict[str, Any]) -> dict[str, Any] | None:
 
 def has_current_changes_requested(pr: dict[str, Any]) -> bool:
     """Return whether the current head has any changes-requested review."""
-    head_sha = str(pr.get("headRefOid") or "")
-    reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
+    reviews = ((pr.get("reviews") or {}).get("nodes")) or []
     for review in reversed(reviews):
-        if review_matches_current_head(review, head_sha) and str(review.get("state") or "").upper() == "CHANGES_REQUESTED":
+        if (
+            review_matches_current_head(review, pr)
+            and str(review.get("state") or "").upper() == "CHANGES_REQUESTED"
+        ):
             return True
     return False
 
 
 def has_unresolved_threads(pr: dict[str, Any]) -> bool:
     """Return whether any non-outdated review thread is unresolved."""
-    threads = (((pr.get("reviewThreads") or {}).get("nodes")) or [])
-    return any(not thread.get("isResolved") and not thread.get("isOutdated") for thread in threads)
+    threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
+    return any(
+        not thread.get("isResolved") and not thread.get("isOutdated")
+        for thread in threads
+    )
 
 
 def check_label(node: dict[str, Any]) -> str:
     """Return a human-readable label for a status context or check run."""
     if node.get("__typename") == "StatusContext":
         return str(node.get("context") or "")
-    workflow = ((((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name") or "")
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}
+    ).get("name") or ""
     name = str(node.get("name") or "")
     return f"{workflow} / {name}" if workflow else name
 
 
 def blocking_checks(pr: dict[str, Any]) -> list[str]:
     """Return check contexts that should block Noema review."""
-    contexts = ((((pr.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes")) or [])
+    contexts = (
+        ((pr.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes")
+    ) or []
     blockers: list[str] = []
     for node in contexts:
         label = check_label(node)
-        if label in IGNORED_RUNNING_CHECKS or str(node.get("name") or "") in IGNORED_RUNNING_CHECKS:
+        if (
+            label in IGNORED_RUNNING_CHECKS
+            or str(node.get("name") or "") in IGNORED_RUNNING_CHECKS
+        ):
             continue
         if node.get("__typename") == "StatusContext":
             state = str(node.get("state") or "").upper()
@@ -259,12 +297,15 @@ def blocking_checks(pr: dict[str, Any]) -> list[str]:
 
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     """Return whether Noema already reviewed the current head."""
-    head_sha = str(pr.get("headRefOid") or "")
     marker = "<!-- noema-review-gate"
-    for review in (((pr.get("reviews") or {}).get("nodes")) or []):
-        if review_commit(review) != head_sha:
+    for review in ((pr.get("reviews") or {}).get("nodes")) or []:
+        if not review_matches_current_head(review, pr, require_base_identity=True):
             continue
-        if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
+        if str(review.get("state") or "").upper() not in {
+            "APPROVED",
+            "CHANGES_REQUESTED",
+            "COMMENTED",
+        }:
             continue
         if review_author(review) == actor or marker in str(review.get("body") or ""):
             return True
@@ -484,6 +525,8 @@ def call_llm(
                 f"Repository: {repo}",
                 f"PR: #{number}",
                 f"Title: {pr.get('title') or ''}",
+                f"Base ref: {pr.get('baseRefName') or ''}",
+                f"Base SHA: {pr.get('baseRefOid') or ''}",
                 f"Head SHA: {pr.get('headRefOid') or ''}",
                 f"Diff truncated: {truncated}",
                 "Additional context:",
@@ -533,20 +576,48 @@ def format_findings(findings: Any) -> list[str]:
         severity = str(finding.get("severity") or "info")
         file_name = str(finding.get("file") or "unknown")
         line = finding.get("line")
-        location = f"{file_name}:{line}" if isinstance(line, int) and line > 0 else file_name
+        location = (
+            f"{file_name}:{line}" if isinstance(line, int) and line > 0 else file_name
+        )
         message = str(finding.get("message") or "").strip()
         if message:
             lines.append(f"- [{severity}] {location}: {message}")
     return lines
 
 
-def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdict: dict[str, Any]) -> None:
+def submit_review(
+    repo: str, number: int, pr: dict[str, Any], actor: str, verdict: dict[str, Any]
+) -> None:
     """Submit the Noema review verdict to the pull request."""
-    head_sha = str(pr.get("headRefOid") or "")
+    live_pr = fetch_pr(repo, number)
+    expected_identity = (
+        str(pr.get("baseRefName") or ""),
+        str(pr.get("baseRefOid") or ""),
+        str(pr.get("headRefOid") or ""),
+    )
+    live_identity = (
+        str(live_pr.get("baseRefName") or ""),
+        str(live_pr.get("baseRefOid") or ""),
+        str(live_pr.get("headRefOid") or ""),
+    )
+    if not all(expected_identity) or live_identity != expected_identity:
+        raise RuntimeError(
+            "Noema review publication refused because the live base/head identity changed"
+        )
+
+    base_ref, base_sha, head_sha = expected_identity
     decision = str(verdict.get("decision") or "comment").lower()
-    event = "APPROVE" if decision == "approve" else "REQUEST_CHANGES" if decision == "request_changes" else "COMMENT"
+    event = (
+        "APPROVE"
+        if decision == "approve"
+        else "REQUEST_CHANGES"
+        if decision == "request_changes"
+        else "COMMENT"
+    )
     source = os.environ.get("NOEMA_REVIEW_TOKEN_SOURCE") or "NOEMA_REVIEW_TOKEN"
-    summary = str(verdict.get("summary") or "Noema completed an independent LLM review.").strip()
+    summary = str(
+        verdict.get("summary") or "Noema completed an independent LLM review."
+    ).strip()
     findings = format_findings(verdict.get("findings"))
     body = "\n".join(
         [
@@ -558,11 +629,13 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
             *(findings or ["- No blocking findings."]),
             "",
             f"- Result: {event}",
+            f"- Base ref: `{base_ref}`",
+            f"- Base SHA: `{base_sha}`",
             f"- Head SHA: `{head_sha}`",
             f"- Reviewer credential: `{source}`",
             f"- Actor: `{actor or 'unknown'}`",
             "",
-            f"<!-- noema-review-gate head_sha={head_sha} decision={decision} -->",
+            f"<!-- noema-review-gate base_ref={base_ref} base_sha={base_sha} head_sha={head_sha} decision={decision} -->",
         ]
     )
     payload = {
@@ -594,7 +667,9 @@ def inspect_and_review(repo: str, number: int) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     if not current_primary_approval(pr):
-        print("Current head does not have a primary OpenCode approval; Noema review skipped.")
+        print(
+            "Current head does not have a primary OpenCode approval; Noema review skipped."
+        )
         return 0
     if has_current_changes_requested(pr):
         print("Current head has requested changes; Noema review skipped.")

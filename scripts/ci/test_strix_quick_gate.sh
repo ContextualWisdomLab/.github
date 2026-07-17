@@ -461,7 +461,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	local opencode_config="$REPO_ROOT/opencode.jsonc"
 
 	assert_file_contains "$workflow_file" "pull_request_target:" "opencode review workflow loads privileged review logic from the protected base ref"
-	assert_file_contains "$workflow_file" "types: [opened, synchronize, reopened, ready_for_review, closed]" "opencode required workflow reacts to current PR head changes and closed-PR cleanup"
+	assert_file_contains "$workflow_file" "types: [opened, synchronize, reopened, ready_for_review, edited, closed]" "opencode required workflow reacts to current PR/base changes and closed-PR cleanup"
 	assert_file_contains "$workflow_file" "repository_dispatch:" "opencode review supports default-branch scheduler current-head dispatch"
 	assert_file_contains "$workflow_file" "types: [opencode-review]" "opencode repository dispatch accepts only its dedicated event type"
 	assert_file_not_contains "$workflow_file" "workflow_dispatch:" "privileged opencode retries cannot load a caller-selected workflow ref"

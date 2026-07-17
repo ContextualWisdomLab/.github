@@ -245,13 +245,20 @@ def test_safe_pytest_cli_paths_and_invalid_execution(
     assert exc.value.code == 0
 
 
+BASE_REF = "main"
+BASE_SHA = "b" * 40
+
+
 def approval_review(head_sha: str, **overrides: object) -> dict[str, object]:
     """Build one exact-current-head OpenCode approval review."""
     review: dict[str, object] = {
         "state": "APPROVED",
         "commit_id": head_sha,
         "user": {"login": "opencode-agent[bot]"},
-        "body": f"- Result: APPROVE\n- Head SHA: `{head_sha}`",
+        "body": (
+            f"- Result: APPROVE\n- Base ref: `{BASE_REF}`\n"
+            f"- Base SHA: `{BASE_SHA}`\n- Head SHA: `{head_sha}`"
+        ),
     }
     review.update(overrides)
     return review
@@ -264,7 +271,12 @@ def test_dispatch_status_requires_live_current_head_approval_and_coverage() -> N
         model_outcome="success",
         coverage_result="success",
         expected_head=head,
-        pull_request={"head": {"sha": head}},
+        expected_base_ref=BASE_REF,
+        expected_base_sha=BASE_SHA,
+        pull_request={
+            "head": {"sha": head},
+            "base": {"ref": BASE_REF, "sha": BASE_SHA},
+        },
         reviews=[approval_review(head)],
     )
 
@@ -284,8 +296,52 @@ def test_dispatch_status_latest_current_head_decision_is_authoritative() -> None
         model_outcome="success",
         coverage_result="success",
         expected_head=head,
-        pull_request={"head": {"sha": head}},
+        expected_base_ref=BASE_REF,
+        expected_base_sha=BASE_SHA,
+        pull_request={
+            "head": {"sha": head},
+            "base": {"ref": BASE_REF, "sha": BASE_SHA},
+        },
         reviews=reviews,
+    )
+
+    assert decision["state"] == "failure"
+
+
+@pytest.mark.parametrize(
+    ("live_base_ref", "live_base_sha", "review_body"),
+    [
+        ("release", BASE_SHA, None),
+        (BASE_REF, "c" * 40, None),
+        (
+            BASE_REF,
+            BASE_SHA,
+            f"- Result: APPROVE\n- Base ref: `release`\n"
+            f"- Base SHA: `{BASE_SHA}`\n- Head SHA: `{'a' * 40}`",
+        ),
+    ],
+)
+def test_dispatch_status_rejects_unchanged_head_base_retarget(
+    live_base_ref: str,
+    live_base_sha: str,
+    review_body: str | None,
+) -> None:
+    """A same-head approval cannot be replayed after the base identity changes."""
+    head = "a" * 40
+    review = approval_review(head)
+    if review_body is not None:
+        review["body"] = review_body
+    decision = dispatch_status.decide_status(
+        model_outcome="success",
+        coverage_result="success",
+        expected_head=head,
+        expected_base_ref=BASE_REF,
+        expected_base_sha=BASE_SHA,
+        pull_request={
+            "head": {"sha": head},
+            "base": {"ref": live_base_ref, "sha": live_base_sha},
+        },
+        reviews=[review],
     )
 
     assert decision["state"] == "failure"
@@ -316,7 +372,12 @@ def test_dispatch_status_fails_closed_without_validated_approval(
         model_outcome=model_outcome,
         coverage_result=coverage_result,
         expected_head=head,
-        pull_request={"head": {"sha": observed_head}},
+        expected_base_ref=BASE_REF,
+        expected_base_sha=BASE_SHA,
+        pull_request={
+            "head": {"sha": observed_head},
+            "base": {"ref": BASE_REF, "sha": BASE_SHA},
+        },
         reviews=[approval_review(head, **review_overrides)],
     )
 
@@ -333,7 +394,15 @@ def test_dispatch_status_cli_and_evidence_shape_validation(
     head = "a" * 40
     pr_file = tmp_path / "pr.json"
     reviews_file = tmp_path / "reviews.json"
-    pr_file.write_text(json.dumps({"head": {"sha": head}}), encoding="utf-8")
+    pr_file.write_text(
+        json.dumps(
+            {
+                "head": {"sha": head},
+                "base": {"ref": BASE_REF, "sha": BASE_SHA},
+            }
+        ),
+        encoding="utf-8",
+    )
     reviews_file.write_text(json.dumps([approval_review(head)]), encoding="utf-8")
     args = [
         "--model-outcome",
@@ -342,6 +411,10 @@ def test_dispatch_status_cli_and_evidence_shape_validation(
         "success",
         "--expected-head",
         head,
+        "--expected-base-ref",
+        BASE_REF,
+        "--expected-base-sha",
+        BASE_SHA,
         "--pull-request-file",
         str(pr_file),
         "--reviews-file",

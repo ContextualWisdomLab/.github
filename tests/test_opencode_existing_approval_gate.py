@@ -12,6 +12,8 @@ from scripts.ci import opencode_review_normalize_output
 
 
 HEAD = "a" * 40
+BASE_REF = "main"
+BASE_SHA = "b" * 40
 SOURCE_LINES = (
     b"name: Required OpenCode Review",
     b"on:",
@@ -105,6 +107,8 @@ def valid_body(head: str = HEAD) -> str:
             "```",
             "",
             "- Result: APPROVE",
+            f"- Base ref: `{BASE_REF}`",
+            f"- Base SHA: `{BASE_SHA}`",
             f"- Head SHA: `{head}`",
             "- Workflow run: 123",
             "- Workflow attempt: 2",
@@ -129,7 +133,9 @@ def review(**overrides):
 def test_flatten_reviews_and_accept_real_model_approval(payload):
     reviews = gate.flatten_reviews(payload)
     log = io.StringIO()
-    assert gate.has_reusable_real_model_approval(reviews, HEAD, log=log)
+    assert gate.has_reusable_real_model_approval(
+        reviews, HEAD, BASE_REF, BASE_SHA, log=log
+    )
     assert "accepted real-model review" in log.getvalue()
 
 
@@ -177,6 +183,34 @@ def test_extract_adversarial_evidence_uses_last_parseable_block():
         ),
         (
             lambda value: value.update(
+                body=value["body"].replace(f"- Base ref: `{BASE_REF}`", "")
+            ),
+            "base ref",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace(f"- Base SHA: `{BASE_SHA}`", "")
+            ),
+            "base SHA",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace(
+                    f"- Base ref: `{BASE_REF}`", "- Base ref: `release`"
+                )
+            ),
+            "base ref",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace(
+                    f"- Base SHA: `{BASE_SHA}`", f"- Base SHA: `{'c' * 40}`"
+                )
+            ),
+            "base SHA",
+        ),
+        (
+            lambda value: value.update(
                 body=value["body"].replace("- Workflow run: 123", "")
             ),
             "workflow run",
@@ -198,7 +232,7 @@ def test_extract_adversarial_evidence_uses_last_parseable_block():
 def test_review_rejection_reason_rejects_non_model_evidence(mutate, reason):
     value = review()
     mutate(value)
-    assert reason in gate.review_rejection_reason(value, HEAD)
+    assert reason in gate.review_rejection_reason(value, HEAD, BASE_REF, BASE_SHA)
 
 
 @pytest.mark.parametrize(
@@ -298,6 +332,8 @@ def test_has_reusable_real_model_approval_logs_rejected_candidates():
             fallback,
         ],
         HEAD,
+        BASE_REF,
+        BASE_SHA,
         log=log,
     )
     assert "rejected same-head review" in log.getvalue()
@@ -310,11 +346,13 @@ def test_opencode_app_only_mode_rejects_github_actions_approval():
     strict_log = io.StringIO()
 
     assert not gate.has_reusable_real_model_approval(
-        [actions_review], HEAD, log=default_log
+        [actions_review], HEAD, BASE_REF, BASE_SHA, log=default_log
     )
     assert not gate.has_reusable_real_model_approval(
         [actions_review],
         HEAD,
+        BASE_REF,
+        BASE_SHA,
         log=strict_log,
         approval_authors=gate.OPENCODE_APP_APPROVAL_AUTHORS,
     )
@@ -328,6 +366,8 @@ def test_opencode_app_only_mode_accepts_app_approval():
     assert gate.has_reusable_real_model_approval(
         [review()],
         HEAD,
+        BASE_REF,
+        BASE_SHA,
         log=log,
         approval_authors=gate.OPENCODE_APP_APPROVAL_AUTHORS,
     )
@@ -405,30 +445,36 @@ def test_adversarial_validation_rejects_forged_traversal_receipt():
 
 
 def test_parse_args_and_main(monkeypatch, capsys):
-    args = gate.parse_args(["--head", HEAD])
+    gate_args = ["--head", HEAD, "--base-ref", BASE_REF, "--base-sha", BASE_SHA]
+    args = gate.parse_args(gate_args)
     assert args.head == HEAD
+    assert args.base_ref == BASE_REF
+    assert args.base_sha == BASE_SHA
     assert not args.require_opencode_app
 
-    strict_args = gate.parse_args(["--head", HEAD, "--require-opencode-app"])
+    strict_args = gate.parse_args([*gate_args, "--require-opencode-app"])
     assert strict_args.require_opencode_app
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps([[review()]])))
-    assert gate.main(["--head", HEAD]) == 0
+    assert gate.main(gate_args) == 0
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
-    assert gate.main(["--head", HEAD]) == 2
+    assert gate.main(gate_args) == 2
     assert "could not parse reviews" in capsys.readouterr().err
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
-    assert gate.main(["--head", "short"]) == 2
+    assert (
+        gate.main(["--head", "short", "--base-ref", BASE_REF, "--base-sha", BASE_SHA])
+        == 2
+    )
     assert "40-character" in capsys.readouterr().err
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
-    assert gate.main(["--head", HEAD]) == 1
+    assert gate.main(gate_args) == 1
 
     monkeypatch.setattr(
         sys,
         "stdin",
         io.StringIO(json.dumps([[review(user={"login": "github-actions[bot]"})]])),
     )
-    assert gate.main(["--head", HEAD, "--require-opencode-app"]) == 1
+    assert gate.main([*gate_args, "--require-opencode-app"]) == 1

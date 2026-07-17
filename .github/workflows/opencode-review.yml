@@ -10,7 +10,7 @@ on:
   # pull_request workflow is evaluated from the PR merge ref and therefore lets
   # an in-repository branch rewrite steps before repository secrets are bound.
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, edited, closed]
   # repository_dispatch is evaluated only from the default branch. This keeps
   # privileged retries from loading workflow code from a caller-selected ref.
   repository_dispatch:
@@ -630,7 +630,16 @@ jobs:
           # racing trusted result publication.
           export OPENCODE_SANDBOX_UID=65532
           export OPENCODE_SANDBOX_GID=65532
-          chown -R --no-dereference "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work
+          # Keep repository-local Git metadata outside the untrusted test
+          # identity's write boundary. The source tree itself stays writable so
+          # package managers and tests can create ordinary build artifacts.
+          chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work
+          find /work -mindepth 1 -maxdepth 1 ! -name .git \
+            -exec chown -R --no-dereference "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" {} +
+          if [ -e /work/.git ] || [ -L /work/.git ]; then
+            chown -R root:root /work/.git
+            chmod -R go-w /work/.git
+          fi
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chmod 0700 "$RUNNER_TEMP"
@@ -761,17 +770,30 @@ jobs:
             rm -f "$log_file"
           }
 
+          trusted_git() {
+            env -i \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              HOME=/tmp \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
+              git \
+                -c core.fsmonitor=false \
+                -c core.hooksPath=/dev/null \
+                -c core.quotePath=false \
+                "$@"
+          }
+
           has_tracked_files() {
-            git -c core.quotePath=false ls-files "$@" | awk 'NF { found=1 } END { exit found ? 0 : 1 }'
+            trusted_git ls-files "$@" | awk 'NF { found=1 } END { exit found ? 0 : 1 }'
           }
 
           changed_files_for_coverage() {
             if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] \
-              && git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
-              && git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
-              git -c core.quotePath=false diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
+              && trusted_git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
+              && trusted_git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
+              trusted_git diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
             else
-              git -c core.quotePath=false ls-files
+              trusted_git ls-files
             fi
           }
 
@@ -780,7 +802,7 @@ jobs:
             changed_list="$(mktemp)"
             tracked_list="$(mktemp)"
             changed_files_for_coverage >"$changed_list"
-            git -c core.quotePath=false ls-files "$@" >"$tracked_list"
+            trusted_git ls-files "$@" >"$tracked_list"
             awk 'NR==FNR { changed[$0]=1; next } ($0 in changed) { found=1 } END { exit found ? 0 : 1 }' \
               "$changed_list" "$tracked_list"
             local rc=$?
@@ -789,7 +811,7 @@ jobs:
           }
 
           tracked_python_projects_with_tests() {
-            git -c core.quotePath=false ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
+            trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
               | while IFS= read -r pyproject_file; do
                   project_dir="$(dirname "$pyproject_file")"
                   if [ "$project_dir" = "." ]; then
@@ -982,7 +1004,7 @@ jobs:
                       manifest="${candidate_dir}/package.json"
                     fi
                     if [ -f "$manifest" ] \
-                      && git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
+                      && trusted_git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
                       printf '%s\n' "$candidate_dir"
                       break
                     fi
@@ -3765,6 +3787,7 @@ jobs:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
+          PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
           HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -4310,6 +4333,8 @@ jobs:
             "- Reason: ${model_reason}" \
             "- Scope: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unknown}\`" \
             "- Changed files: \`${CENTRAL_REVIEW_PROCESS_FALLBACK_CHANGED_COUNT:-unknown}\`" \
+            "- Base ref: \`${PR_BASE_REF}\`" \
+            "- Base SHA: \`${PR_BASE_SHA}\`" \
             "- Head SHA: \`${HEAD_SHA}\`" \
             "- Workflow run: ${RUN_ID}" \
             "- Workflow attempt: ${RUN_ATTEMPT}" \
@@ -4326,9 +4351,11 @@ jobs:
             echo "::warning::CENTRAL_FAST_APPROVAL_LIVE_HEAD_UNAVAILABLE: could not re-check the live pull request head immediately before publishing an approval for ${HEAD_SHA}; skipping this GitHub side effect."
             exit 0
           fi
+          live_base_ref="$(jq -r '.base.ref // empty' "$live_head_file")"
+          live_base_sha="$(jq -r '.base.sha // empty' "$live_head_file")"
           live_head="$(jq -r '.head.sha // empty' "$live_head_file")"
-          if [ "$live_head" != "$HEAD_SHA" ]; then
-            echo "::notice::CENTRAL_FAST_APPROVAL_STALE_HEAD: expected ${HEAD_SHA}, observed ${live_head:-missing}; skipping review publication."
+          if [ "$live_base_ref" != "$PR_BASE_REF" ] || [ "$live_base_sha" != "$PR_BASE_SHA" ] || [ "$live_head" != "$HEAD_SHA" ]; then
+            echo "::notice::CENTRAL_FAST_APPROVAL_STALE_IDENTITY: expected ${PR_BASE_REF}@${PR_BASE_SHA}..${HEAD_SHA}, observed ${live_base_ref:-missing}@${live_base_sha:-missing}..${live_head:-missing}; skipping review publication."
             exit 0
           fi
           if ! curl_api_write -X POST --data-binary "@${payload_file}" \
@@ -4403,6 +4430,7 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
+          PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
           HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -4512,10 +4540,11 @@ jobs:
               --input "$review_payload_file" >"$response_file" 2>"$error_file"
           }
 
-          review_live_head_sha() {
+          review_live_pr_identity() {
             timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
               env GH_TOKEN="$review_head_guard_token" \
-              gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty'
+              gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" \
+                --jq '[.base.ref // "", .base.sha // "", .head.sha // ""] | @tsv'
           }
 
           dismiss_stale_published_review() {
@@ -4545,19 +4574,20 @@ jobs:
 
           validate_published_review_head() {
             local token_value="$1" response_file="$2" error_file="$3"
-            local live_head
+            local live_identity live_base_ref live_base_sha live_head
 
-            if ! live_head="$(review_live_head_sha 2>>"$error_file")"; then
+            if ! live_identity="$(review_live_pr_identity 2>>"$error_file")"; then
               REVIEW_PUBLICATION_STALE_HEAD=1
-              printf 'OPENCODE_REVIEW_STALE_HEAD: live PR head could not be verified after publication for expected head %s.\n' "$HEAD_SHA" >>"$error_file"
+              printf 'OPENCODE_REVIEW_STALE_IDENTITY: live PR identity could not be verified after publication for expected base %s@%s and head %s.\n' "$PR_BASE_REF" "$PR_BASE_SHA" "$HEAD_SHA" >>"$error_file"
               return 1
             fi
-            if [ "$live_head" = "$HEAD_SHA" ]; then
+            IFS=$'\t' read -r live_base_ref live_base_sha live_head <<<"$live_identity"
+            if [ "$live_base_ref" = "$PR_BASE_REF" ] && [ "$live_base_sha" = "$PR_BASE_SHA" ] && [ "$live_head" = "$HEAD_SHA" ]; then
               return 0
             fi
 
             REVIEW_PUBLICATION_STALE_HEAD=1
-            printf 'OPENCODE_REVIEW_STALE_HEAD: publication raced with a head update; expected %s, observed %s.\n' "$HEAD_SHA" "${live_head:-missing}" >>"$error_file"
+            printf 'OPENCODE_REVIEW_STALE_IDENTITY: publication raced with a PR identity update; expected %s@%s..%s, observed %s@%s..%s.\n' "$PR_BASE_REF" "$PR_BASE_SHA" "$HEAD_SHA" "${live_base_ref:-missing}" "${live_base_sha:-missing}" "${live_head:-missing}" >>"$error_file"
             dismiss_stale_published_review "$token_value" "$response_file" "$live_head" "$error_file" || true
             return 1
           }
@@ -4593,7 +4623,7 @@ jobs:
 
           post_pull_review_with_retry() {
             local token_label="$1" token_value="$2" review_payload_file="$3" error_file="$4" response_file="$5"
-            local attempts default_sleep attempt sleep_seconds api_timeout publish_status live_head
+            local attempts default_sleep attempt sleep_seconds api_timeout publish_status live_identity live_base_ref live_base_sha live_head
 
             attempts="${REVIEW_PUBLISH_RETRY_ATTEMPTS:-3}"
             default_sleep="${REVIEW_PUBLISH_RETRY_SLEEP_SECONDS:-30}"
@@ -4602,9 +4632,15 @@ jobs:
             while :; do
               : >"$error_file"
               : >"$response_file"
-              if ! live_head="$(review_live_head_sha 2>>"$error_file")" || [ "$live_head" != "$HEAD_SHA" ]; then
+              if ! live_identity="$(review_live_pr_identity 2>>"$error_file")"; then
                 REVIEW_PUBLICATION_STALE_HEAD=1
-                printf 'OPENCODE_REVIEW_STALE_HEAD: refusing publication because expected head %s no longer matches live head %s.\n' "$HEAD_SHA" "${live_head:-missing}" >>"$error_file"
+                printf 'OPENCODE_REVIEW_STALE_IDENTITY: refusing publication because live PR identity could not be read for expected %s@%s..%s.\n' "$PR_BASE_REF" "$PR_BASE_SHA" "$HEAD_SHA" >>"$error_file"
+                return 1
+              fi
+              IFS=$'\t' read -r live_base_ref live_base_sha live_head <<<"$live_identity"
+              if [ "$live_base_ref" != "$PR_BASE_REF" ] || [ "$live_base_sha" != "$PR_BASE_SHA" ] || [ "$live_head" != "$HEAD_SHA" ]; then
+                REVIEW_PUBLICATION_STALE_HEAD=1
+                printf 'OPENCODE_REVIEW_STALE_IDENTITY: refusing publication because expected %s@%s..%s no longer matches live %s@%s..%s.\n' "$PR_BASE_REF" "$PR_BASE_SHA" "$HEAD_SHA" "${live_base_ref:-missing}" "${live_base_sha:-missing}" "${live_head:-missing}" >>"$error_file"
                 return 1
               fi
               printf 'OpenCode publishing pull review with %s token (attempt %s/%s, timeout %ss).\n' "$token_label" "$attempt" "$attempts" "$api_timeout" >&2
@@ -4696,6 +4732,8 @@ jobs:
               printf 'OpenCode current-head approval bridge\n\n'
               printf 'OpenCode approved current head `%s` with the primary review token, but legacy OpenCode `REQUEST_CHANGES` reviews published by `github-actions[bot]` can still determine GitHub `reviewDecision`. This same-head bridge approval supersedes only those stale OpenCode workflow reviews.\n\n' "$HEAD_SHA"
               printf -- '- Result: `APPROVE`\n'
+              printf -- '- Base ref: `%s`\n' "$PR_BASE_REF"
+              printf -- '- Base SHA: `%s`\n' "$PR_BASE_SHA"
               printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
               printf -- '- Workflow run: %s\n' "$RUN_ID"
               printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
@@ -6985,6 +7023,8 @@ jobs:
             printf '%s\n' "$reviews_json" |
               python3 scripts/ci/opencode_existing_approval_gate.py \
                 --head "$HEAD_SHA" \
+                --base-ref "$PR_BASE_REF" \
+                --base-sha "$PR_BASE_SHA" \
                 --require-opencode-app
           }
 
@@ -7330,6 +7370,8 @@ jobs:
                 "" \
                 "- Result: APPROVE" \
                 "- Reason: ${reason}" \
+                "- Base ref: \`${PR_BASE_REF}\`" \
+                "- Base SHA: \`${PR_BASE_SHA}\`" \
                 "- Head SHA: \`${HEAD_SHA}\`" \
                 "- Workflow run: ${RUN_ID}" \
                 "- Workflow attempt: ${RUN_ATTEMPT}"
@@ -7448,6 +7490,8 @@ jobs:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
+          PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
+          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
@@ -7482,6 +7526,8 @@ jobs:
                 --model-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-missing}" \
                 --coverage-result "${COVERAGE_EVIDENCE_RESULT:-missing}" \
                 --expected-head "$PR_HEAD_SHA" \
+                --expected-base-ref "$PR_BASE_REF" \
+                --expected-base-sha "$PR_BASE_SHA" \
                 --pull-request-file "$pull_request_file" \
                 --reviews-file "$reviews_file"
             )"
@@ -7507,6 +7553,7 @@ jobs:
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
+          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
         run: |
@@ -7536,6 +7583,8 @@ jobs:
               if printf '%s\n' "$reviews_json" |
                 python3 scripts/ci/opencode_existing_approval_gate.py \
                   --head "$PR_HEAD_SHA" \
+                  --base-ref "$PR_BASE_REF" \
+                  --base-sha "$PR_BASE_SHA" \
                   --require-opencode-app \
                   2>"$gate_error_file"; then
                 approval_visible=1
@@ -7560,6 +7609,24 @@ jobs:
 
           if [ "$approval_visible" -ne 1 ]; then
             printf '::warning::Merge scheduler follow-up skipped because current-head OpenCode App approval did not become visible after publication. Repository=%s PR=%s head=%s reason=%s. The review-event and scheduled scheduler paths remain authoritative.\n' "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA" "$approval_reason"
+            exit 0
+          fi
+
+          live_pr_file="$(mktemp)"
+          live_pr_error_file="$(mktemp)"
+          if ! GH_TOKEN="$approval_read_token" timeout 30s \
+            gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" >"$live_pr_file" 2>"$live_pr_error_file"; then
+            live_reason="$(tail -n 1 "$live_pr_error_file" 2>/dev/null || true)"
+            rm -f "$live_pr_file" "$live_pr_error_file"
+            printf '::warning::Merge scheduler follow-up skipped because live PR identity could not be revalidated after approval: %s.\n' "${live_reason:-GitHub API lookup failed}"
+            exit 0
+          fi
+          live_base_ref="$(jq -r '.base.ref // empty' "$live_pr_file")"
+          live_base_sha="$(jq -r '.base.sha // empty' "$live_pr_file")"
+          live_head_sha="$(jq -r '.head.sha // empty' "$live_pr_file")"
+          rm -f "$live_pr_file" "$live_pr_error_file"
+          if [ "$live_base_ref" != "$PR_BASE_REF" ] || [ "$live_base_sha" != "$PR_BASE_SHA" ] || [ "$live_head_sha" != "$PR_HEAD_SHA" ]; then
+            printf '::warning::Merge scheduler follow-up skipped because PR identity changed after approval validation. Expected=%s@%s..%s observed=%s@%s..%s.\n' "$PR_BASE_REF" "$PR_BASE_SHA" "$PR_HEAD_SHA" "${live_base_ref:-missing}" "${live_base_sha:-missing}" "${live_head_sha:-missing}"
             exit 0
           fi
 

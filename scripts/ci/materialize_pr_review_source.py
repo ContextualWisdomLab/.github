@@ -16,11 +16,13 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import selectors
 import shutil
 
 # Git is invoked through an absolute executable path, a fixed argv, and no shell.
 import subprocess  # nosec B404
 import sys
+import time
 from typing import BinaryIO
 
 
@@ -31,6 +33,9 @@ GITLINK_MODE = "160000"
 RESERVED_ROOTS = {".codegraph", ".git"}
 DEFAULT_MAX_FILES = 100_000
 DEFAULT_MAX_BYTES = 1_073_741_824
+DEFAULT_TREE_TIMEOUT_SECONDS = 60
+TREE_READ_CHUNK_BYTES = 65_536
+MAX_TREE_RECORD_BYTES = 1_048_576
 GIT_EXECUTABLE = shutil.which("git")
 if not GIT_EXECUTABLE or not Path(GIT_EXECUTABLE).is_absolute():
     raise RuntimeError("an absolute Git executable path is required")
@@ -53,6 +58,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--max-files", type=positive_int, default=DEFAULT_MAX_FILES)
     parser.add_argument("--max-bytes", type=positive_int, default=DEFAULT_MAX_BYTES)
+    parser.add_argument(
+        "--tree-timeout-seconds",
+        type=positive_int,
+        default=DEFAULT_TREE_TIMEOUT_SECONDS,
+    )
     args = parser.parse_args(argv)
     if not SHA_RE.fullmatch(args.head_sha):
         parser.error("--head-sha must be a 40-character hexadecimal commit SHA")
@@ -115,34 +125,150 @@ def safe_relative_path(raw_path: bytes) -> PurePosixPath:
     return path
 
 
+def parse_tree_entry(
+    record: bytes,
+) -> tuple[str, str, str, int, PurePosixPath]:
+    """Parse one bounded NUL-delimited ``git ls-tree`` record."""
+    try:
+        metadata, raw_path = record.split(b"\t", 1)
+        mode_raw, kind_raw, oid_raw, size_raw = metadata.split(maxsplit=3)
+        mode = mode_raw.decode("ascii")
+        kind = kind_raw.decode("ascii")
+        oid = oid_raw.decode("ascii")
+        size_text = size_raw.decode("ascii")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("could not parse Git tree entry") from exc
+    if not SHA_RE.fullmatch(oid):
+        raise ValueError("Git tree entry has an invalid object id")
+    if mode == GITLINK_MODE and kind == "commit" and size_text == "-":
+        size = len(f"Submodule commit {oid}\n".encode())
+    elif kind == "blob" and size_text.isdigit():
+        size = int(size_text)
+    else:
+        raise ValueError(f"unsupported Git tree entry type/mode: {kind}/{mode}")
+    return mode, kind, oid, size, safe_relative_path(raw_path)
+
+
+def open_tree_reader(git_dir: Path, head_sha: str) -> subprocess.Popen[bytes]:
+    """Start bounded streaming enumeration of one exact commit tree."""
+    return subprocess.Popen(  # nosec B603
+        [
+            GIT_EXECUTABLE,
+            f"--git-dir={git_dir}",
+            "ls-tree",
+            "-r",
+            "-z",
+            "-l",
+            "--full-tree",
+            head_sha,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+    )
+
+
+def terminate_process(process: subprocess.Popen[bytes]) -> None:
+    """Stop a tree producer promptly after a limit or parser failure."""
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
 def parse_tree(
-    git_dir: Path, head_sha: str
-) -> list[tuple[str, str, str, int, PurePosixPath]]:
-    """Return validated recursive Git tree entries."""
-    raw = git_bytes(git_dir, "ls-tree", "-r", "-z", "-l", "--full-tree", head_sha)
+    git_dir: Path,
+    head_sha: str,
+    *,
+    max_files: int,
+    max_bytes: int,
+    timeout_seconds: int,
+) -> tuple[list[tuple[str, str, str, int, PurePosixPath]], int]:
+    """Stream and bound validated recursive Git tree entries."""
+    process = open_tree_reader(git_dir, head_sha)
+    stdout = process.stdout
+    if stdout is None:
+        terminate_process(process)
+        raise RuntimeError("Git ls-tree stdout pipe is unavailable")
+
+    selector = selectors.DefaultSelector()
+    selector.register(stdout, selectors.EVENT_READ)
+    deadline = time.monotonic() + timeout_seconds
+    pending = bytearray()
     entries: list[tuple[str, str, str, int, PurePosixPath]] = []
-    for record in raw.split(b"\0"):
-        if not record:
-            continue
-        try:
-            metadata, raw_path = record.split(b"\t", 1)
-            mode_raw, kind_raw, oid_raw, size_raw = metadata.split(maxsplit=3)
-            mode = mode_raw.decode("ascii")
-            kind = kind_raw.decode("ascii")
-            oid = oid_raw.decode("ascii")
-            size_text = size_raw.decode("ascii")
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise ValueError("could not parse Git tree entry") from exc
-        if not SHA_RE.fullmatch(oid):
-            raise ValueError("Git tree entry has an invalid object id")
-        if mode == GITLINK_MODE and kind == "commit" and size_text == "-":
-            size = len(f"Submodule commit {oid}\n".encode())
-        elif kind == "blob" and size_text.isdigit():
-            size = int(size_text)
-        else:
-            raise ValueError(f"unsupported Git tree entry type/mode: {kind}/{mode}")
-        entries.append((mode, kind, oid, size, safe_relative_path(raw_path)))
-    return entries
+    total_bytes = 0
+    try:
+        reached_eof = False
+        while not reached_eof:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError(
+                    f"Git tree enumeration exceeded --tree-timeout-seconds ({timeout_seconds})"
+                )
+            events = selector.select(timeout=min(1.0, remaining))
+            if not events:
+                if process.poll() is not None:
+                    reached_eof = True
+                continue
+            chunk = os.read(stdout.fileno(), TREE_READ_CHUNK_BYTES)
+            if not chunk:
+                reached_eof = True
+                continue
+            pending.extend(chunk)
+            while True:
+                separator = pending.find(0)
+                if separator < 0:
+                    if len(pending) > MAX_TREE_RECORD_BYTES:
+                        raise ValueError(
+                            "Git tree entry exceeds the bounded record-size limit"
+                        )
+                    break
+                if separator > MAX_TREE_RECORD_BYTES:
+                    raise ValueError(
+                        "Git tree entry exceeds the bounded record-size limit"
+                    )
+                record = bytes(pending[:separator])
+                del pending[: separator + 1]
+                if not record:
+                    continue
+                entry = parse_tree_entry(record)
+                next_file_count = len(entries) + 1
+                if next_file_count > max_files:
+                    raise ValueError(
+                        f"Git tree exceeds --max-files ({next_file_count} > {max_files})"
+                    )
+                next_total_bytes = total_bytes + entry[3]
+                if next_total_bytes > max_bytes:
+                    raise ValueError(
+                        f"Git tree exceeds --max-bytes ({next_total_bytes} > {max_bytes})"
+                    )
+                entries.append(entry)
+                total_bytes = next_total_bytes
+        if pending:
+            raise ValueError("Git tree output ended with an unterminated record")
+    except BaseException:
+        terminate_process(process)
+        raise
+    finally:
+        selector.close()
+
+    try:
+        return_code = process.wait(timeout=5)
+    except subprocess.TimeoutExpired as exc:
+        terminate_process(process)
+        raise RuntimeError("Git ls-tree did not exit after output completed") from exc
+    stderr = (
+        process.stderr.read().decode("utf-8", errors="replace").strip()
+        if process.stderr
+        else ""
+    )
+    if return_code != 0:
+        raise RuntimeError(stderr or "Git ls-tree failed")
+    return entries, total_bytes
 
 
 def open_batch_reader(git_dir: Path) -> subprocess.Popen[bytes]:
@@ -209,16 +335,13 @@ def materialize(args: argparse.Namespace) -> dict[str, object]:
     if manifest_path == output_dir or output_dir in manifest_path.parents:
         raise ValueError("--manifest must be outside --output-dir")
 
-    entries = parse_tree(git_dir, args.head_sha)
-    if len(entries) > args.max_files:
-        raise ValueError(
-            f"Git tree exceeds --max-files ({len(entries)} > {args.max_files})"
-        )
-    total_bytes = sum(entry[3] for entry in entries)
-    if total_bytes > args.max_bytes:
-        raise ValueError(
-            f"Git tree exceeds --max-bytes ({total_bytes} > {args.max_bytes})"
-        )
+    entries, total_bytes = parse_tree(
+        git_dir,
+        args.head_sha,
+        max_files=args.max_files,
+        max_bytes=args.max_bytes,
+        timeout_seconds=args.tree_timeout_seconds,
+    )
 
     output_dir.mkdir(mode=0o755)
     skipped: list[dict[str, str]] = []

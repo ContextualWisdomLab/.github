@@ -35,6 +35,7 @@ ADVERSARIAL_BLOCK_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+BASE_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 WORKFLOW_RUN_RE = re.compile(r"(?m)^- Workflow run: [1-9][0-9]*\s*$")
 WORKFLOW_ATTEMPT_RE = re.compile(r"(?m)^- Workflow attempt: [1-9][0-9]*\s*$")
 REQUIRED_PROBE_FIELDS = (
@@ -119,10 +120,12 @@ def adversarial_rejection_reason(body: str) -> str | None:
 def review_rejection_reason(
     review: dict[str, Any],
     head_sha: str,
+    base_ref: str,
+    base_sha: str,
     *,
     approval_authors: frozenset[str] = APPROVAL_AUTHORS,
 ) -> str | None:
-    """Explain why a review cannot prove a real current-head model approval."""
+    """Explain why a review cannot prove a real current-PR model approval."""
     if str(review.get("state") or "").upper() != "APPROVED":
         return "review state is not APPROVED"
     if str(review.get("commit_id") or "").lower() != head_sha.lower():
@@ -142,6 +145,10 @@ def review_rejection_reason(
         return "review body lacks an APPROVE result"
     if f"- Head SHA: `{head_sha}`" not in body:
         return "review body lacks the exact current-head SHA"
+    if f"- Base ref: `{base_ref}`" not in body:
+        return "review body lacks the exact current base ref"
+    if f"- Base SHA: `{base_sha}`" not in body:
+        return "review body lacks the exact current base SHA"
     if not WORKFLOW_RUN_RE.search(body):
         return "review body lacks a workflow run id"
     if not WORKFLOW_ATTEMPT_RE.search(body):
@@ -152,6 +159,8 @@ def review_rejection_reason(
 def has_reusable_real_model_approval(
     reviews: list[dict[str, Any]],
     head_sha: str,
+    base_ref: str,
+    base_sha: str,
     *,
     log: TextIO,
     approval_authors: frozenset[str] = APPROVAL_AUTHORS,
@@ -170,13 +179,15 @@ def has_reusable_real_model_approval(
         reason = review_rejection_reason(
             review,
             head_sha,
+            base_ref,
+            base_sha,
             approval_authors=approval_authors,
         )
         review_id = review.get("id", "unknown")
         if reason is None:
             print(
                 "existing-approval gate accepted real-model review "
-                f"id={review_id} author={login} head={head_sha}",
+                f"id={review_id} author={login} base={base_ref}@{base_sha} head={head_sha}",
                 file=log,
             )
             return True
@@ -188,7 +199,7 @@ def has_reusable_real_model_approval(
 
     print(
         "existing-approval gate found no reusable real-model approval "
-        f"for head={head_sha}; same-head candidates={candidate_count}",
+        f"for base={base_ref}@{base_sha} head={head_sha}; same-head candidates={candidate_count}",
         file=log,
     )
     return False
@@ -198,6 +209,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse existing-approval gate command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--head", required=True)
+    parser.add_argument("--base-ref", required=True)
+    parser.add_argument("--base-sha", required=True)
     parser.add_argument(
         "--require-opencode-app",
         action="store_true",
@@ -214,6 +227,14 @@ def main(argv: list[str]) -> int:
             "existing-approval gate requires a 40-character head SHA", file=sys.stderr
         )
         return 2
+    if not BASE_REF_RE.fullmatch(args.base_ref):
+        print("existing-approval gate requires a valid base ref", file=sys.stderr)
+        return 2
+    if not SHA_RE.fullmatch(args.base_sha):
+        print(
+            "existing-approval gate requires a 40-character base SHA", file=sys.stderr
+        )
+        return 2
     try:
         reviews = flatten_reviews(json.load(sys.stdin))
     except (json.JSONDecodeError, ValueError) as exc:
@@ -227,6 +248,8 @@ def main(argv: list[str]) -> int:
         if has_reusable_real_model_approval(
             reviews,
             args.head,
+            args.base_ref,
+            args.base_sha,
             log=sys.stderr,
             approval_authors=approval_authors,
         )

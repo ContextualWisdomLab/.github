@@ -78,6 +78,12 @@ def opencode_review(
         "author": {"login": login},
         "submittedAt": submitted_at,
         "commit": {"oid": commit},
+        "body": (
+            "OpenCode review evidence.\n"
+            "- Base ref: `main`\n"
+            "- Base SHA: `base`\n"
+            f"- Head SHA: `{commit}`"
+        ),
     }
 
 
@@ -1013,6 +1019,19 @@ def test_review_state_and_failed_checks():
     assert not sched.has_current_head_approval(
         make_pr(headRefOid="", reviews={"nodes": [opencode_review("APPROVED", "head")]})
     )
+    current_approval = opencode_review("APPROVED", "head")
+    assert not sched.has_current_head_approval(
+        make_pr(
+            baseRefName="release",
+            reviews={"nodes": [current_approval]},
+        )
+    )
+    assert not sched.has_current_head_approval(
+        make_pr(
+            baseRefOid="advanced-base",
+            reviews={"nodes": [current_approval]},
+        )
+    )
     exact_head = "a" * 40
     stale_body_head = "b" * 40
     body_sha_mismatch = make_pr(
@@ -1034,7 +1053,12 @@ def test_review_state_and_failed_checks():
             "nodes": [
                 {
                     **opencode_review("APPROVED", exact_head),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{exact_head.upper()}`",
+                    "body": (
+                        "## Gate evidence\n\n"
+                        "- Base ref: `main`\n"
+                        "- Base SHA: `base`\n"
+                        f"- Head SHA: `{exact_head.upper()}`"
+                    ),
                 }
             ]
         },
@@ -1046,7 +1070,12 @@ def test_review_state_and_failed_checks():
             "nodes": [
                 {
                     **opencode_review("APPROVED", ""),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
+                    "body": (
+                        "## Gate evidence\n\n"
+                        "- Base ref: `main`\n"
+                        "- Base SHA: `base`\n"
+                        f"- Head SHA: `{exact_head}`"
+                    ),
                 }
             ]
         },
@@ -1145,7 +1174,7 @@ def test_review_state_and_failed_checks():
             ]
         }
     )
-    assert sched.has_current_head_approval(missing_review_time)
+    assert not sched.has_current_head_approval(missing_review_time)
     human_review_only = make_pr(
         reviews={"nodes": [opencode_review("APPROVED", "head", login="human")]}
     )
@@ -1196,7 +1225,12 @@ def test_review_state_and_failed_checks():
     exact_head_approval = {
         **opencode_review("APPROVED", exact_head),
         "databaseId": 302,
-        "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
+        "body": (
+            "## Gate evidence\n\n"
+            "- Base ref: `main`\n"
+            "- Base SHA: `base`\n"
+            f"- Head SHA: `{exact_head}`"
+        ),
     }
     stale_approval_history = make_pr(
         headRefOid=exact_head,
@@ -1345,7 +1379,12 @@ def test_body_head_sha_approval_prevents_same_run_opencode_rerun(monkeypatch):
             "nodes": [
                 {
                     **opencode_review("APPROVED", ""),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{head}`",
+                    "body": (
+                        "## Gate evidence\n\n"
+                        "- Base ref: `main`\n"
+                        "- Base SHA: `base`\n"
+                        f"- Head SHA: `{head}`"
+                    ),
                 }
             ]
         },
@@ -4482,27 +4521,55 @@ def test_action_error_guidance_distinguishes_update_branch_from_merge():
     assert "PR head likely changed after inspection" in stale_head_error
     assert "reads the new head before mutating" in stale_head_error
 
+
 def test_parse_conflict_reason_success():
     """Test parse_conflict_reason with valid complete conflict strings."""
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; base=main,head=feature-branch") == ("DIRTY", "main", "feature-branch")
-    assert sched.parse_conflict_reason("Some prior text. merge conflict: BEHIND; base=develop,head=feat/123") == ("BEHIND", "develop", "feat/123")
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; foo=bar; base=master,head=bugfix; other=stuff") == ("DIRTY", "master", "bugfix")
+    assert sched.parse_conflict_reason(
+        "merge conflict: DIRTY; base=main,head=feature-branch"
+    ) == ("DIRTY", "main", "feature-branch")
+    assert sched.parse_conflict_reason(
+        "Some prior text. merge conflict: BEHIND; base=develop,head=feat/123"
+    ) == ("BEHIND", "develop", "feat/123")
+    assert sched.parse_conflict_reason(
+        "merge conflict: DIRTY; foo=bar; base=master,head=bugfix; other=stuff"
+    ) == ("DIRTY", "master", "bugfix")
+
 
 def test_parse_conflict_reason_no_prefix():
     """Test parse_conflict_reason returns None when prefix is missing."""
     assert sched.parse_conflict_reason("no conflict here") is None
     assert sched.parse_conflict_reason("merge  conflict: space issue") is None
 
+
 def test_parse_conflict_reason_empty_state():
     """Test parse_conflict_reason defaults state to UNKNOWN if missing or empty."""
-    assert sched.parse_conflict_reason("merge conflict: ; base=main,head=feature") == ("UNKNOWN", "main", "feature")
-    assert sched.parse_conflict_reason("merge conflict: ") == ("UNKNOWN", "base", "head")
+    assert sched.parse_conflict_reason("merge conflict: ; base=main,head=feature") == (
+        "UNKNOWN",
+        "main",
+        "feature",
+    )
+    assert sched.parse_conflict_reason("merge conflict: ") == (
+        "UNKNOWN",
+        "base",
+        "head",
+    )
+
 
 def test_parse_conflict_reason_missing_branches():
     """Test parse_conflict_reason uses defaults when branch info is missing or malformed."""
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; some other segment") == ("DIRTY", "base", "head")
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; base=,head=something") == ("DIRTY", "base", "something")
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; base=main,head=") == ("DIRTY", "main", "head")
+    assert sched.parse_conflict_reason("merge conflict: DIRTY; some other segment") == (
+        "DIRTY",
+        "base",
+        "head",
+    )
+    assert sched.parse_conflict_reason(
+        "merge conflict: DIRTY; base=,head=something"
+    ) == ("DIRTY", "base", "something")
+    assert sched.parse_conflict_reason("merge conflict: DIRTY; base=main,head=") == (
+        "DIRTY",
+        "main",
+        "head",
+    )
 
 
 def test_run_masks_secrets():

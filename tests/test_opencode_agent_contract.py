@@ -346,7 +346,16 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "target=/work" in measure_step
     assert "/var/run/docker.sock" not in measure_step
     assert "OPENCODE_SANDBOX_UID=65532" in measure_step
-    assert "chown -R --no-dereference" in measure_step
+    assert 'chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work' in measure_step
+    assert "find /work -mindepth 1 -maxdepth 1 ! -name .git" in measure_step
+    assert "chown -R root:root /work/.git" in measure_step
+    assert "chmod -R go-w /work/.git" in measure_step
+    assert "trusted_git()" in measure_step
+    assert "GIT_CONFIG_NOSYSTEM=1" in measure_step
+    assert "GIT_CONFIG_GLOBAL=/dev/null" in measure_step
+    assert "-c core.fsmonitor=false" in measure_step
+    assert "-c core.hooksPath=/dev/null" in measure_step
+    assert "git -c core.quotePath=false ls-files" not in measure_step
     assert 'setpriv \\\n              --reuid "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'pkill -KILL -u "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'python3 -I - "$1"' in measure_step
@@ -639,7 +648,7 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
     measure_end = workflow.index("\n      - name:", measure_start + 1)
     measure_step = workflow[measure_start:measure_end]
 
-    changed_start = measure_step.index("          changed_files_for_coverage() {\n")
+    changed_start = measure_step.index("          trusted_git() {\n")
     changed_end = measure_step.index(
         "\n\n          has_changed_tracked_files()", changed_start
     )
@@ -1803,9 +1812,9 @@ def test_opencode_review_publication_prefers_app_token_for_review_writes():
     assert 'review_write_token="${OPENCODE_APP_TOKEN:-}"' in workflow
     assert 'post_pull_review_with_retry "fallback review"' not in workflow
     assert "OPENCODE_REVIEW_IDENTITY_UNAVAILABLE" in workflow
-    assert "OPENCODE_REVIEW_STALE_HEAD" in workflow
+    assert "OPENCODE_REVIEW_STALE_IDENTITY" in workflow
     assert "OPENCODE_OVERVIEW_STALE_HEAD" in workflow
-    assert "review_live_head_sha()" in workflow
+    assert "review_live_pr_identity()" in workflow
     assert "validate_published_review_head()" in workflow
     assert "dismiss_stale_published_review()" in workflow
     assert 'review_head_guard_token="${GH_TOKEN:-$review_write_token}"' in workflow
