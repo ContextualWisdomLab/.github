@@ -542,7 +542,7 @@ jobs:
             chmod 0700 "$sandbox_result_dir"
 
             sandbox_status=0
-            docker run --rm --init \
+            docker run --rm --init --network=none \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --pids-limit 2048 \
               --memory 14g \
@@ -708,7 +708,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -754,7 +754,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
