@@ -1915,6 +1915,7 @@ jobs:
             local changed_file="$1"
             case "${GH_REPOSITORY}:${changed_file}" in
               ContextualWisdomLab/.github:.github/workflows/opencode-review.yml | \
+              ContextualWisdomLab/.github:.github/workflows/noema-review.yml | \
               ContextualWisdomLab/.github:.github/workflows/pr-review-merge-scheduler.yml | \
               ContextualWisdomLab/.github:.github/workflows/strix.yml | \
               ContextualWisdomLab/.github:.jules/bolt.md | \
@@ -1924,8 +1925,13 @@ jobs:
               ContextualWisdomLab/.github:opencode.jsonc | \
               ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/javascript_coverage_gate.py | \
+              ContextualWisdomLab/.github:scripts/ci/materialize_pr_review_source.py | \
+              ContextualWisdomLab/.github:scripts/ci/noema_review_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \
+              ContextualWisdomLab/.github:scripts/ci/opencode_dispatch_status.py | \
+              ContextualWisdomLab/.github:scripts/ci/opencode_existing_approval_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/pr_head_replay_guard.py | \
+              ContextualWisdomLab/.github:scripts/ci/pr_review_fix_scheduler.py | \
               ContextualWisdomLab/.github:scripts/ci/pr_review_merge_scheduler.py | \
               ContextualWisdomLab/.github:scripts/ci/run_opencode_review_model_pool.sh | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_normalize_output.py | \
@@ -1933,9 +1939,14 @@ jobs:
               ContextualWisdomLab/.github:scripts/ci/validate_opencode_failed_check_review.sh | \
               ContextualWisdomLab/.github:tests/test_changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \
+              ContextualWisdomLab/.github:tests/test_materialize_pr_review_source.py | \
+              ContextualWisdomLab/.github:tests/test_noema_review_gate.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
+              ContextualWisdomLab/.github:tests/test_opencode_existing_approval_gate.py | \
               ContextualWisdomLab/.github:tests/test_opencode_model_pool_runner.py | \
+              ContextualWisdomLab/.github:tests/test_opencode_security_boundaries.py | \
               ContextualWisdomLab/.github:tests/test_pr_head_replay_guard.py | \
+              ContextualWisdomLab/.github:tests/test_pr_review_fix_scheduler.py | \
               ContextualWisdomLab/.github:tests/test_pr_review_fix_scheduler_coverage.py | \
               ContextualWisdomLab/.github:tests/test_pr_review_merge_scheduler.py | \
               ContextualWisdomLab/.github:tests/test_required_workflow_queue_contract.py | \
@@ -3506,25 +3517,25 @@ jobs:
         continue-on-error: true
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          # Native OpenAI backend for the lead review model. GitHub Models
+          # Native OpenAI backend for the direct review model. GitHub Models
           # rate-limits every request and caps bodies at ~4000 tokens, so the
           # rate-starved shared pool never returned a verdict; hitting
-          # api.openai.com directly with the org OPENAI_API_KEY gives the lead
+          # api.openai.com directly with the org OPENAI_API_KEY gives that
           # model a working, un-throttled backend. Resolves {env:OPENAI_API_KEY}
           # in the opencode.jsonc "openai" provider block.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. DeepSeek V3 has been the
-          # most reliable first-pass reviewer in the org queue, then the pool
-          # falls through to the direct GPT-5.6 Luna slot, then the full-size
-          # GPT-4.1 long-context endpoint and provider-specific GPT/o3 fallbacks.
+          # High-sensitivity review candidates only. GPT-4.1 is first because it
+          # was the only provider to return a parseable control artifact during
+          # the latest current-head exhaustion incident; DeepSeek remains the
+          # first fallback but cannot monopolize a full 90-minute cadence slot.
           # The direct-OpenAI slot runs GPT-5.6 Luna: the newest family's
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -3561,6 +3572,10 @@ jobs:
           # larger. Keep the exact runtime failure visible without spending a
           # full medium/large cadence slot after the long-context candidate.
           OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"
+          # DeepSeek returned no provider detail while consuming two complete
+          # 90-minute slots. Five minutes preserves a useful fallback window
+          # while allowing the remaining independent providers to run.
+          OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS: "300"
           OPENCODE_DYNAMIC_MAX_CYCLES: "0"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}

@@ -103,9 +103,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs == [
+        ["github-models", "openai/gpt-4.1"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
-        ["github-models", "openai/gpt-4.1"],
         ["github-models", "openai/gpt-5"],
         ["github-models", "openai/gpt-5-chat"],
         ["github-models", "openai/o3"],
@@ -115,8 +115,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models == [
-        "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
+        "deepseek/deepseek-v3-0324",
         "openai/gpt-5",
         "openai/gpt-5-chat",
         "openai/o3",
@@ -939,6 +939,20 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
+    for central_review_path in (
+        ".github/workflows/noema-review.yml",
+        "scripts/ci/materialize_pr_review_source.py",
+        "scripts/ci/noema_review_gate.py",
+        "scripts/ci/opencode_dispatch_status.py",
+        "scripts/ci/opencode_existing_approval_gate.py",
+        "scripts/ci/pr_review_fix_scheduler.py",
+        "tests/test_materialize_pr_review_source.py",
+        "tests/test_noema_review_gate.py",
+        "tests/test_opencode_existing_approval_gate.py",
+        "tests/test_opencode_security_boundaries.py",
+        "tests/test_pr_review_fix_scheduler.py",
+    ):
+        assert f"ContextualWisdomLab/.github:{central_review_path}" in workflow
     assert (
         "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py"
         in workflow
@@ -1090,9 +1104,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 '
+        "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
-        "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
@@ -1105,6 +1119,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
+    assert 'OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS: "300"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert (
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
@@ -1179,7 +1194,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "while :" in model_pool_runner
     assert "should_skip_model_candidate" in model_pool_runner
     assert "cap_model_run_timeout" in model_pool_runner
-    assert "constrained request-body limit" in model_pool_runner
+    assert "configured provider-specific cap" in model_pool_runner
     assert "run_central_adversarial_harness" not in model_pool_runner
     assert "finish_pool_without_model" in model_pool_runner
     assert "central-current-head-adversarial-harness" not in model_pool_runner
@@ -1213,9 +1228,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 '
+        "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
-        "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
