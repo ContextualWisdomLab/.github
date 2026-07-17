@@ -330,6 +330,14 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "docker.io/library/ubuntu@sha256:" in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
+    assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
+    assert "The networked build context contains only this" in measure_step
+    assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
+    assert "docker build --pull --no-cache --network=default" in measure_step
+    assert '"$coverage_build_dir"' in measure_step
+    assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
+        "docker run --rm --init --network=none"
+    )
     assert "--cap-drop ALL" in measure_step
     # Docker already creates a private PID namespace by default. Passing the
     # unsupported literal `private` makes hosted-runner Docker exit 125 before
@@ -367,6 +375,12 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
     assert "docker run --rm --init --network=none" in measure_step
+    sandbox_runtime = measure_step.split(
+        "          export OPENCODE_SANDBOX_UID=65532", 1
+    )[1]
+    assert "apt-get" not in sandbox_runtime
+    assert "cargo install" not in sandbox_runtime
+    assert "command -v cargo-llvm-cov" in sandbox_runtime
     assert (
         'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
         in measure_step
@@ -1647,7 +1661,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "yarn install --immutable --mode=skip-builds" in coverage_job
     assert 'corepack prepare "${runner}@latest"' not in coverage_job
     assert "https://sh.rustup.rs" not in coverage_job
-    assert "cargo install cargo-llvm-cov --version 0.8.7 --locked" in coverage_job
+    assert "cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz" in coverage_job
+    assert (
+        "967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7"
+        in coverage_job
+    )
+    assert "sha256sum -c -" in coverage_job
     assert "install.packages(" not in coverage_job
 
     target_condition = target_job.split("    runs-on:", 1)[0]
