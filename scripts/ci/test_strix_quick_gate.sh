@@ -676,7 +676,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "not a generic model-exhaustion message" "opencode review tells models to return concrete missing-evidence findings instead of progress-only output"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "tokens_limit_reached" "opencode review detects provider context-window overflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "a required security check must fail" "strix wrapper fails closed when provider outages prevent current-head security evidence"
+	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" "Treating as a neutral skip" "strix wrapper must not convert provider failure into a successful required check"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 300' "opencode review target contains evidence, the bounded long-review pool, publication, and cleanup overhead"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
@@ -3264,7 +3265,7 @@ REPORT
 			echo "openai.RateLimitError: Error code: 429"
 			exit 1
 			;;
-		openai/o3)
+		openai/openai/o3)
 			if [ "${LLM_API_KEY:-}" != "github-models-fallback-token" ]; then
 				echo "unexpected GitHub Models key for fallback (${LLM_API_KEY:-<unset>})" >&2
 				exit 16
@@ -5767,7 +5768,7 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
 			"2" \
-			"openai/gpt-5.6-luna|openai/o3" \
+			"openai/gpt-5.6-luna|openai/openai/o3" \
 			"<unset>|https://models.github.ai/inference" \
 			"vertex_ai" \
 			"" \
@@ -11645,7 +11646,7 @@ run_gate_case "openai-direct-quota-github-models-fallback-success" \
 	"0" \
 	"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
 	"2" \
-	"openai/gpt-5.6-luna|openai/o3" \
+	"openai/gpt-5.6-luna|openai/openai/o3" \
 	"<unset>|https://models.github.ai/inference" \
 	"vertex_ai" \
 	"" \

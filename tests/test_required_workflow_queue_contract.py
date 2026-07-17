@@ -934,21 +934,23 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
-def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+def test_strix_provider_outage_without_report_fails_closed() -> None:
     workflow = workflow_text("strix.yml")
 
-    assert "RateLimitError|Too many requests" in workflow
-    assert "exceeded your current quota" in workflow
-    assert "billing details" in workflow
-    assert "LLM warm-up failed" in workflow
-    assert "zero_vulnerabilities_signal" not in workflow
-    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
-    assert "before producing a vulnerability report" in workflow
-    assert "genuine findings still fail the check" in workflow
-    assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
-    )
+    assert "a required security check must fail" in workflow
+    assert 'strix_rc="${PIPESTATUS[0]}"' in workflow
+    assert 'exit "$strix_rc"' in workflow
+    assert "Treating as a neutral skip" not in workflow
+    assert "backend_unavailable_signal=" not in workflow
+
+
+def test_strix_github_models_openai_id_preserves_publisher() -> None:
+    gate = (REPO_ROOT / "scripts/ci/strix_quick_gate.sh").read_text(encoding="utf-8")
+
+    assert "github_models/openai/*)" in gate
+    assert "catalog ID openai/<model>" in gate
+    assert "printf 'openai/%s\\n' \"${model#github_models/}\"" in gate
 
 
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:

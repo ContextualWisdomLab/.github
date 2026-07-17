@@ -2274,7 +2274,11 @@ child_model_for_api_base() {
 	if [ -n "$llm_api_base_value" ] && is_github_models_api_base "$llm_api_base_value"; then
 		case "$model" in
 		github_models/openai/*)
-			printf '%s\n' "${model#github_models/}"
+			# LiteLLM consumes the first openai/ segment as its provider
+			# selector. Preserve the second one so the GitHub Models request
+			# body receives the catalog ID openai/<model> instead of the
+			# invalid publisher-less <model> value.
+			printf 'openai/%s\n' "${model#github_models/}"
 			return 0
 			;;
 		github_models/*)
