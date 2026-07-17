@@ -3,7 +3,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
@@ -367,7 +366,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "git -c core.quotePath=false ls-files" not in measure_step
     assert 'setpriv \\\n              --reuid "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'pkill -KILL -u "$OPENCODE_SANDBOX_UID"' in measure_step
-    assert 'python3 -I - "$1"' in measure_step
+    assert 'chmod 0444 "$implementation_changed_files"' in measure_step
+    assert "verify_trusted_python_test_toolchain()" in measure_step
+    assert "import coverage, interrogate, pytest, pytest_cov" in measure_step
     assert "python3 -I -c 'import pytest_cov'" in measure_step
     assert (
         'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"'
@@ -401,13 +402,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "workspace.metadata.opencode.coverage.minimum_lines" in measure_step
     assert "scripts/ci/rust_coverage_threshold.py" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
-    assert "run_python_uv_lock_check()" in measure_step
-    assert "pyproject_has_no_selected_dependencies()" in measure_step
-    assert "Python uv lockfile consistency (${project_dir})" in measure_step
-    assert "uv lock --check" in measure_step
-    assert measure_step.index(
-        'run_python_uv_lock_check "$project_dir"'
-    ) < measure_step.index('uv sync --project "$project_dir" --group dev')
+    assert "uv sync --project" not in measure_step
+    assert "uv run --no-project" not in measure_step
+    assert "uv run --no-build" not in measure_step
+    assert "python3 -m coverage run -m pytest tests" in measure_step
+    trusted_requirements = Path(
+        "requirements-opencode-review-ci-hashes.txt"
+    ).read_text(encoding="utf-8")
+    assert "pytest-cov==7.1.0" in trusted_requirements
+    assert (
+        "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
+        in trusted_requirements
+    )
 
     target_start = workflow.index("  opencode-review-target:\n")
     target_job = workflow[target_start:]
@@ -487,101 +493,22 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "contents: write" not in workflow
 
 
-def test_opencode_empty_pyproject_dependency_probe_is_fail_closed(tmp_path):
-    """Skip only declaratively empty dependency sets without running build hooks."""
+def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
+    """Use only the trusted image toolchain during networkless PR execution."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    function = workflow.split(
-        "          pyproject_has_no_selected_dependencies() {\n", 1
-    )[1].split("\n          PY\n          }", 1)[0]
-    probe = textwrap.dedent(function.split("<<'PY'\n", 1)[1])
-    pyproject = tmp_path / "pyproject.toml"
+    measure = workflow.split(
+        "      - name: Measure test and docstring evidence\n", 1
+    )[1].split("\n      - name:", 1)[0]
 
-    def run(source: str, selection: str) -> subprocess.CompletedProcess[str]:
-        pyproject.write_text(textwrap.dedent(source), encoding="utf-8")
-        return subprocess.run(
-            [sys.executable, "-", str(pyproject), selection],
-            input=probe,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    assert (
-        run(
-            """
-        [project]
-        name = "empty"
-        dynamic = ["version"]
-        dependencies = []
-        """,
-            "runtime",
-        ).returncode
-        == 0
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "runtime"
-        version = "1.0.0"
-        dependencies = ["pydantic>=2"]
-        """,
-            "runtime",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "group"
-        version = "1.0.0"
-        dependencies = []
-
-        [dependency-groups]
-        dev = ["pytest>=8"]
-        """,
-            "group-dev",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "dynamic"
-        version = "1.0.0"
-        dynamic = ["dependencies"]
-        """,
-            "runtime",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "dynamic-extra"
-        version = "1.0.0"
-        dynamic = ["optional-dependencies"]
-        dependencies = []
-        """,
-            "extra-dev",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "malformed"
-        version = "1.0.0"
-        dependencies = "pytest"
-        """,
-            "runtime",
-        ).returncode
-        == 2
-    )
+    assert "verify_trusted_python_test_toolchain()" in measure
+    assert "PR-selected dependency manifests are never resolved" in measure
+    assert "missing project imports fail in pytest" in measure
+    assert "uv sync --project" not in measure
+    assert "uv run --no-project" not in measure
+    assert "uv run --no-build" not in measure
+    assert "python3 -m coverage run -m pytest tests" in measure
+    assert "python3 -m coverage report --show-missing" in measure
+    assert "python3 -m pytest tests/test_docstrings.py" in measure
 
 
 def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
@@ -1650,12 +1577,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert measure.count("GITHUB_OUTPUT=/dev/null") == 2
     assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 2
     assert measure.count("BASH_ENV=/dev/null") == 2
-    assert "uv run --no-project --no-build --with-requirements" in measure
-    assert "uv run --no-build --with coverage" in measure
-    assert (
-        'uv sync --project "$project_dir" --group dev --no-build --no-install-project'
-        in coverage_job
-    )
+    assert "uv sync --project" not in measure
+    assert "uv run --no-project" not in measure
+    assert "uv run --no-build" not in measure
+    assert "Trusted offline Python test toolchain" in measure
+    assert "python3 -m coverage run -m pytest tests" in measure
+    assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci --ignore-scripts" in coverage_job
     assert "pnpm install --frozen-lockfile --ignore-scripts" in coverage_job
     assert "yarn install --immutable --mode=skip-builds" in coverage_job
