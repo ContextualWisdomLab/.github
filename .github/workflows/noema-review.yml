@@ -66,6 +66,96 @@ jobs:
         run: |
           echo "::notice::Noema review skipped: no pull request number is associated with this event."
 
+      - name: Bind Noema inputs to the live organization pull request
+        if: env.PR_NUMBER != ''
+        id: live_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ACTOR: ${{ github.triggering_actor }}
+          DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
+          ALLOWED_DISPATCH_ACTOR: ${{ vars.NOEMA_REPOSITORY_DISPATCH_ACTOR || '' }}
+          ALLOWED_DISPATCH_TARGETS: ${{ vars.NOEMA_REPOSITORY_DISPATCH_TARGETS || '' }}
+          SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
+          SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
+          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+        run: |
+          set -euo pipefail
+
+          fail_validation() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
+            fail_validation "Noema target repository must be an exact ContextualWisdomLab repository name."
+          fi
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            fail_validation "Noema pull request number must be a positive integer."
+          fi
+
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if [ -z "$ALLOWED_DISPATCH_ACTOR" ]; then
+              fail_validation "NOEMA_REPOSITORY_DISPATCH_ACTOR must be configured before repository_dispatch can mint reviewer credentials."
+            fi
+            if [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] || [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
+              fail_validation "Noema repository_dispatch actor and sender must exactly match the configured identity."
+            fi
+            target_allowed=false
+            IFS=',' read -ra allowed_targets <<<"$ALLOWED_DISPATCH_TARGETS"
+            for allowed_target in "${allowed_targets[@]}"; do
+              if [ "$TARGET_REPOSITORY" = "${allowed_target//[[:space:]]/}" ]; then
+                target_allowed=true
+                break
+              fi
+            done
+            if [ "$target_allowed" != true ]; then
+              fail_validation "Noema repository_dispatch target is not present in NOEMA_REPOSITORY_DISPATCH_TARGETS."
+            fi
+          fi
+
+          if ! live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            fail_validation "Noema could not load the requested live pull request."
+          fi
+          state="$(jq -r '.state // empty' <<<"$live_pr")"
+          base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$live_pr")"
+          head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$live_pr")"
+          base_ref="$(jq -r '.base.ref // empty' <<<"$live_pr")"
+          base_sha="$(jq -r '.base.sha // empty' <<<"$live_pr")"
+          head_ref="$(jq -r '.head.ref // empty' <<<"$live_pr")"
+          head_sha="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+
+          if [ "$state" != "open" ]; then
+            fail_validation "Noema only reviews open pull requests."
+          fi
+          if [ "$base_repository" != "$TARGET_REPOSITORY" ] || [ "$head_repository" != "$TARGET_REPOSITORY" ]; then
+            fail_validation "Noema reviewer credentials are restricted to same-repository pull requests."
+          fi
+          if [[ ! "$base_ref" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ ! "$head_ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            fail_validation "Noema live pull request refs are invalid."
+          fi
+          if [[ ! "$base_sha" =~ ^[0-9a-fA-F]{40}$ ]] || [[ ! "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            fail_validation "Noema live pull request SHAs are invalid."
+          fi
+
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if [ "$SUPPLIED_BASE_REF" != "$base_ref" ] || [ "$SUPPLIED_BASE_SHA" != "$base_sha" ] || \
+              [ "$SUPPLIED_HEAD_REF" != "$head_ref" ] || [ "$SUPPLIED_HEAD_SHA" != "$head_sha" ]; then
+              fail_validation "Noema repository_dispatch payload does not match the live base/head identity."
+            fi
+          fi
+
+          {
+            echo "target_repository=$TARGET_REPOSITORY"
+            echo "repository_name=${TARGET_REPOSITORY#*/}"
+            echo "pr_number=$PR_NUMBER"
+            echo "base_ref=$base_ref"
+            echo "base_sha=$base_sha"
+            echo "head_ref=$head_ref"
+            echo "head_sha=$head_sha"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Resolve trusted Noema review source ref
         if: env.PR_NUMBER != ''
         id: trusted_source
@@ -139,6 +229,7 @@ jobs:
         if: env.PR_NUMBER != ''
         id: noema_credential
         env:
+          TARGET_REPOSITORY: ${{ steps.live_pr.outputs.target_repository }}
           NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
           TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
@@ -182,7 +273,7 @@ jobs:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
           owner: ContextualWisdomLab
-          repositories: ${{ steps.noema_credential.outputs.repository }}
+          repositories: ${{ steps.live_pr.outputs.repository_name }}
           permission-actions: read
           permission-checks: read
           permission-contents: read
@@ -196,6 +287,7 @@ jobs:
         if: env.PR_NUMBER != '' && steps.noema_credential.outputs.source == 'oidc'
         id: noema_oidc_token
         env:
+          TARGET_REPOSITORY: ${{ steps.live_pr.outputs.target_repository }}
           OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
           TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
         run: |
@@ -253,6 +345,8 @@ jobs:
       - name: Run Noema LLM review and submit verdict
         if: env.PR_NUMBER != ''
         env:
+          TARGET_REPOSITORY: ${{ steps.live_pr.outputs.target_repository }}
+          PR_NUMBER: ${{ steps.live_pr.outputs.pr_number }}
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}

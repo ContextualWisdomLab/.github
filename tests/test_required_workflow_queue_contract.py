@@ -334,6 +334,31 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
 
 
+def test_noema_dispatch_is_authorized_and_bound_to_live_pr_before_token_mint() -> None:
+    """Untrusted dispatch payloads must never select a token repository or PR."""
+    workflow = workflow_text("noema-review.yml")
+    validation = workflow.index(
+        "- name: Bind Noema inputs to the live organization pull request"
+    )
+    credential = workflow.index("- name: Select fail-closed Noema reviewer credential")
+    mint = workflow.index("- name: Mint repository-scoped Noema GitHub App token")
+
+    assert validation < credential < mint
+    assert "NOEMA_REPOSITORY_DISPATCH_ACTOR" in workflow
+    assert "NOEMA_REPOSITORY_DISPATCH_TARGETS" in workflow
+    assert '"$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR"' in workflow
+    assert '"$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR"' in workflow
+    assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in workflow
+    assert '"$base_repository" != "$TARGET_REPOSITORY"' in workflow
+    assert '"$head_repository" != "$TARGET_REPOSITORY"' in workflow
+    assert "payload does not match the live base/head identity" in workflow
+    assert "repositories: ${{ steps.live_pr.outputs.repository_name }}" in workflow
+    assert workflow.count(
+        "TARGET_REPOSITORY: ${{ steps.live_pr.outputs.target_repository }}"
+    ) >= 3
+    assert "PR_NUMBER: ${{ steps.live_pr.outputs.pr_number }}" in workflow
+
+
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
     workflow = workflow_text("noema-review.yml")
 
@@ -381,7 +406,7 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
     assert "client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}" in workflow
     assert "private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}" in workflow
     assert "owner: ContextualWisdomLab" in workflow
-    assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in workflow
+    assert "repositories: ${{ steps.live_pr.outputs.repository_name }}" in workflow
     for permission in (
         "permission-actions: read",
         "permission-checks: read",

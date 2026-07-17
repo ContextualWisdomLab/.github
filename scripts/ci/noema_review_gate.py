@@ -298,6 +298,8 @@ def blocking_checks(pr: dict[str, Any]) -> list[str]:
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     """Return whether Noema already reviewed the current head."""
     marker = "<!-- noema-review-gate"
+    if not actor:
+        return False
     for review in ((pr.get("reviews") or {}).get("nodes")) or []:
         if not review_matches_current_head(review, pr, require_base_identity=True):
             continue
@@ -307,7 +309,10 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
             "COMMENTED",
         }:
             continue
-        if review_author(review) == actor or marker in str(review.get("body") or ""):
+        if (
+            review_author(review) == actor
+            and marker in str(review.get("body") or "")
+        ):
             return True
     return False
 
@@ -486,14 +491,13 @@ def call_llm(
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
     if not api_url or not api_key:
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
-    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
+    if not api_url.lower().startswith("https://"):
         raise ValueError(
-            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
-            "with http:// or https:// to prevent SSRF vulnerabilities"
+            "NOEMA_LLM_API_URL must use https:// to protect review credentials and data"
         )
     parsed = urllib.parse.urlparse(api_url)
-    if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
+    if parsed.scheme.lower() != "https":
+        raise ValueError("NOEMA_LLM_API_URL must use https://")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
@@ -654,35 +658,31 @@ def inspect_and_review(repo: str, number: int) -> int:
     """Inspect PR state and submit Noema's LLM review when gates are clean."""
     pr = fetch_pr(repo, number)
     actor = current_actor()
-    if actor in PRIMARY_REVIEW_AUTHORS:
-        print(
-            f"Current token actor {actor!r} is already a primary review actor; "
-            "Noema review skipped so GitHub receives an independent reviewer."
+    if not actor:
+        raise RuntimeError(
+            "Noema review cannot verify the active reviewer credential identity"
         )
-        return 0
+    if actor in PRIMARY_REVIEW_AUTHORS:
+        raise RuntimeError(
+            f"Current token actor {actor!r} is already a primary review actor; "
+            "an independent Noema reviewer credential is required"
+        )
     if pr.get("isDraft"):
-        print("PR is draft; Noema review skipped.")
-        return 0
+        raise RuntimeError("Noema review cannot approve a draft pull request")
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
         return 0
     if not current_primary_approval(pr):
-        print(
-            "Current head does not have a primary OpenCode approval; Noema review skipped."
+        raise RuntimeError(
+            "Current head does not have a base-bound primary OpenCode approval"
         )
-        return 0
     if has_current_changes_requested(pr):
-        print("Current head has requested changes; Noema review skipped.")
-        return 0
+        raise RuntimeError("Current head has a request-changes review")
     if has_unresolved_threads(pr):
-        print("PR has unresolved review threads; Noema review skipped.")
-        return 0
+        raise RuntimeError("Pull request has unresolved review threads")
     blockers = blocking_checks(pr)
     if blockers:
-        print("Blocking checks remain; Noema review skipped:")
-        for blocker in blockers:
-            print(f"- {blocker}")
-        return 0
+        raise RuntimeError("Blocking checks remain: " + "; ".join(blockers))
     diff, truncated = fetch_diff(repo, number)
     review_context = build_review_context(repo, number, pr)
     verdict = call_llm(repo, number, pr, diff, truncated, review_context)

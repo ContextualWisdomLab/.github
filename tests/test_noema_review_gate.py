@@ -262,6 +262,23 @@ def test_check_helpers_and_existing_noema_review():
         "noema",
     )
     assert not noema.existing_noema_review(
+        make_pr(
+            reviews={
+                "nodes": [
+                    review(
+                        login="attacker",
+                        body=identity_body("<!-- noema-review-gate -->"),
+                    )
+                ]
+            }
+        ),
+        "noema",
+    )
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(login="noema", body=identity_body())]}),
+        "noema",
+    )
+    assert not noema.existing_noema_review(
         make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema"
     )
     assert not noema.existing_noema_review(
@@ -407,7 +424,11 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
-    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+    with pytest.raises(ValueError, match="must use https://"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://llm.example.test/chat")
+    with pytest.raises(ValueError, match="must use https://"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
@@ -452,21 +473,21 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
 
     # Test invalid scheme (and no original URL in error)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
-    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+    with pytest.raises(ValueError, match="must use https://"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     # Test localhost rejection
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://localhost/chat")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     # Test missing hostname
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http:///chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https:///chat")
     with pytest.raises(ValueError, match="URL must have a valid hostname"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     # Test internal IP rejection
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://169.254.169.254/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://169.254.169.254/chat")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
@@ -474,7 +495,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     original_getaddrinfo = socket.getaddrinfo
 
     # Test DNS resolution bypass
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://resolved-to-local.example.com/chat")
     def fake_getaddrinfo(host, port, *args, **kwargs):
         if host == "resolved-to-local.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
@@ -484,7 +505,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     # Test unresolved hostname does not break
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://unresolved.example.com/chat")
     def fake_getaddrinfo_error(host, port, *args, **kwargs):
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
@@ -492,7 +513,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
 
     # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://weird-dns.example.com/chat")
     def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
         if host == "weird-dns.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
@@ -532,7 +553,7 @@ def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
         raise socket.gaierror("Name or service not known")
 
     monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
-    with pytest.raises(ValueError, match="must start with http:// or https://"):
+    with pytest.raises(ValueError, match="must use https://"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
 
@@ -544,7 +565,7 @@ def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
     parsed = noema.urllib.parse.ParseResult("file", "llm.example.test", "/chat", "", "", "")
     monkeypatch.setattr(noema.urllib.parse, "urlparse", lambda _: parsed)
 
-    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+    with pytest.raises(ValueError, match="must use https://"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
 
@@ -618,21 +639,35 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert noema.inspect_and_review("owner/repo", 7) == 0
     assert calls
 
+    existing_review = (
+        make_pr(
+            reviews={
+                "nodes": [
+                    review(
+                        login="noema",
+                        body=identity_body("<!-- noema-review-gate -->"),
+                    )
+                ]
+            }
+        ),
+        "noema",
+    )
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: existing_review[0])
+    monkeypatch.setattr(noema, "current_actor", lambda: existing_review[1])
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert calls == []
+
     cases = [
-        (make_pr(), "noema"),
-        (make_pr(isDraft=True), "noema"),
+        (make_pr(), "noema", "primary OpenCode approval"),
+        (make_pr(isDraft=True), "noema", "draft pull request"),
         (
             make_pr(
-                reviews={
-                    "nodes": [
-                        review(
-                            login="noema",
-                            body=identity_body("<!-- noema-review-gate -->"),
-                        )
-                    ]
-                }
+                reviews={"nodes": [review(body=marker_body)]},
+                reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
             ),
             "noema",
+            "unresolved review threads",
         ),
         (
             make_pr(
@@ -641,13 +676,7 @@ def test_inspect_and_review_skip_paths(monkeypatch):
                 }
             ),
             "noema",
-        ),
-        (
-            make_pr(
-                reviews={"nodes": [review(body=marker_body)]},
-                reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
-            ),
-            "noema",
+            "request-changes review",
         ),
         (
             make_pr(
@@ -665,14 +694,17 @@ def test_inspect_and_review_skip_paths(monkeypatch):
                 },
             ),
             "noema",
+            "Blocking checks remain",
         ),
-        (clean_pr, "opencode-agent"),
+        (clean_pr, "opencode-agent", "independent Noema reviewer"),
+        (clean_pr, "", "credential identity"),
     ]
-    for pr, actor in cases:
+    for pr, actor, message in cases:
         calls.clear()
         monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=pr: pr)
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
-        assert noema.inspect_and_review("owner/repo", 7) == 0
+        with pytest.raises(RuntimeError, match=message):
+            noema.inspect_and_review("owner/repo", 7)
         assert calls == []
 
 
