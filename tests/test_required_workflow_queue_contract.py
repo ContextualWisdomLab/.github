@@ -584,6 +584,24 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     assert 'if [ "$ORG_SWEEP_UPDATE_BRANCHES" = "true" ]; then' in workflow
 
 
+def test_org_queue_sweep_can_be_scoped_to_one_exact_repository() -> None:
+    """A targeted repair must not wake unrelated organization PR queues."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert (
+        "ORG_SWEEP_TARGET_REPOSITORY: "
+        "${{ github.event.client_payload.target_repository || '' }}"
+    ) in workflow
+    assert (
+        '"$ORG_SWEEP_TARGET_REPOSITORY" =~ '
+        "^ContextualWisdomLab/[A-Za-z0-9_.-]+$"
+    ) in workflow
+    assert 'jq -r --arg target "$ORG_SWEEP_TARGET_REPOSITORY"' in workflow
+    assert "select(.full_name == $target)" in workflow
+    assert 'if [ "${#sweep_targets[@]}" -ne 1 ]; then' in workflow
+    assert "Scoped organization sweep target was not found" in workflow
+
+
 def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
     """An inaccessible Actions page must not add a secondary jq null error."""
     jq = shutil.which("jq")

@@ -498,6 +498,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || inputs.dry_run == true }}
       ORG_SWEEP_OWNER: ContextualWisdomLab
+      # A repository_dispatch caller can bound a repair sweep to one exact
+      # organization repository instead of waking every open PR in the org.
+      ORG_SWEEP_TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
       # Inspect the complete practical queue for every repository. The previous
       # default of 30 silently omitted older PRs whenever a repository had a
       # larger queue (BandScope had 34 during the incident that established
@@ -705,6 +708,25 @@ jobs:
               | "\(.full_name)\t\(.default_branch)"
             ' <<<"$repositories_json"
           )
+          if [ -n "$ORG_SWEEP_TARGET_REPOSITORY" ]; then
+            if [[ ! "$ORG_SWEEP_TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
+              echo "::error::Scoped organization sweep target must be an exact ContextualWisdomLab repository name."
+              exit 1
+            fi
+            mapfile -t sweep_targets < <(
+              jq -r --arg target "$ORG_SWEEP_TARGET_REPOSITORY" '
+                .[]
+                | select(.archived == false and .disabled == false)
+                | select(.full_name == $target)
+                | select(.full_name != "ContextualWisdomLab/.github")
+                | "\(.full_name)\t\(.default_branch)"
+              ' <<<"$repositories_json"
+            )
+            if [ "${#sweep_targets[@]}" -ne 1 ]; then
+              echo "::error::Scoped organization sweep target was not found as one active non-central repository."
+              exit 1
+            fi
+          fi
           echo "Sweeping ${#sweep_targets[@]} repositories."
 
           failures=0
