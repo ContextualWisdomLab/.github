@@ -541,6 +541,75 @@ jobs:
             mkdir -p "$sandbox_result_dir"
             chmod 0700 "$sandbox_result_dir"
 
+            # Build the coverage tool image before the pull-request tree is
+            # mounted anywhere. The networked build context contains only this
+            # trusted Dockerfile plus the reviewed, hash-pinned CI requirements
+            # from the default-branch checkout; it never contains PR-controlled
+            # source, dependency manifests, credentials, or runner command files.
+            coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
+            trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
+            if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
+              echo "::error::Trusted coverage requirements must be a regular non-symlink file."
+              exit 1
+            fi
+            sudo rm -rf "$coverage_build_dir"
+            mkdir -p "$coverage_build_dir"
+            chmod 0700 "$coverage_build_dir"
+            install -m 0644 "$trusted_ci_requirements" \
+              "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
+            cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
+          FROM docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update \
+            && apt-get install --no-install-recommends -y \
+              ca-certificates \
+              cargo \
+              curl \
+              git \
+              jq \
+              libcurl4-openssl-dev \
+              libssl-dev \
+              libxml2-dev \
+              mesa-vulkan-drivers \
+              libvulkan1 \
+              nodejs \
+              npm \
+              pkg-config \
+              python3 \
+              python3-pip \
+              python3-venv \
+              r-base \
+              r-cran-covr \
+              r-cran-testthat \
+              rustc \
+              util-linux \
+              vulkan-tools \
+            && rm -rf /var/lib/apt/lists/*
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
+              https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
+            && echo '967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7  /tmp/cargo-llvm-cov.tar.gz' | sha256sum -c - \
+            && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
+            && chmod 0755 /usr/local/bin/cargo-llvm-cov \
+            && rm -f /tmp/cargo-llvm-cov.tar.gz
+          COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
+          RUN python3 -m pip install \
+              --break-system-packages \
+              --disable-pip-version-check \
+              --require-hashes \
+              --only-binary=:all: \
+              -r /tmp/requirements-opencode-review-ci-hashes.txt \
+            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
+          DOCKERFILE
+            if ! docker build --pull --no-cache --network=default \
+              --tag "$coverage_tool_image" \
+              --file "$coverage_build_dir/Dockerfile" \
+              "$coverage_build_dir"; then
+              echo "::error::Trusted coverage tool image build failed before PR execution."
+              exit 1
+            fi
+            sudo rm -rf "$coverage_build_dir"
+
             sandbox_status=0
             docker run --rm --init --network=none \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
@@ -573,7 +642,7 @@ jobs:
               --env RUNNER_TEMP=/secure-output \
               --env GITHUB_OUTPUT=/secure-output/github-output \
               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
-              docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf \
+              "$coverage_tool_image" \
               /bin/bash /trusted-measure-step.sh || sandbox_status=$?
 
             sandbox_output="${sandbox_result_dir}/github-output"
@@ -595,35 +664,6 @@ jobs:
             echo "Coverage measurement completed in the isolated current-head sandbox."
             exit 0
           fi
-
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install --no-install-recommends -y \
-            ca-certificates \
-            cargo \
-            curl \
-            git \
-            jq \
-            libcurl4-openssl-dev \
-            libssl-dev \
-            libxml2-dev \
-            nodejs \
-            npm \
-            python3 \
-            python3-pip \
-            python3-venv \
-            r-base \
-            r-cran-covr \
-            r-cran-testthat \
-            rustc \
-            util-linux
-          rm -rf /var/lib/apt/lists/*
-          python3 -m pip install \
-            --break-system-packages \
-            --disable-pip-version-check \
-            --require-hashes \
-            --only-binary=:all: \
-            -r /trusted/requirements-opencode-review-ci-hashes.txt
 
           # Use a fixed nobody-like identity that cannot traverse the host-owned
           # /out bind mount. This prevents even a daemonized test process from
@@ -1291,8 +1331,7 @@ jobs:
             if command -v Rscript >/dev/null 2>&1 && dpkg -s libcurl4-openssl-dev libssl-dev libxml2-dev >/dev/null 2>&1; then
               return 0
             fi
-            run_and_capture "R runtime and signed distribution coverage packages" \
-              bash -c 'sudo apt-get update && sudo apt-get install -y r-base r-cran-covr r-cran-testthat libcurl4-openssl-dev libssl-dev libxml2-dev'
+            return 1
           }
 
           run_r_test_coverage() {
@@ -1349,10 +1388,6 @@ jobs:
             # coverage command still runs and reports any uncovered GPU lines
             # exactly as before, so Rust repositories without GPU code are
             # unaffected and no gate is weakened.
-            if ! ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
-              run_and_capture "Software Vulkan adapter (Mesa lavapipe) for GPGPU coverage" \
-                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools || true'
-            fi
             if ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
               lvp_icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1)"
               export VK_ICD_FILENAMES="$lvp_icd"
@@ -1384,10 +1419,6 @@ jobs:
             if ! find . -name tauri.conf.json -not -path '*/node_modules/*' -not -path '*/target/*' -print -quit 2>/dev/null | grep -q .; then
               return 0
             fi
-            if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
-              run_and_capture "Tauri Linux system libraries (WebKitGTK/GTK3) for desktop coverage" \
-                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev || true'
-            fi
             if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
               append "### Tauri desktop coverage dependencies"
               append ""
@@ -1414,8 +1445,15 @@ jobs:
               failures=$((failures + 1))
               return 1
             fi
-            if [ ! -x /work/.opencode-sandbox-home/.cargo/bin/cargo-llvm-cov ]; then
-              run_and_capture "Rust coverage tooling (cargo-llvm-cov 0.8.7)" cargo install cargo-llvm-cov --version 0.8.7 --locked
+            if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
+              append "### Rust coverage toolchain"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: the trusted offline coverage image is missing cargo-llvm-cov 0.8.7."
+              append "- Fix: rebuild the trusted coverage image before rerunning current-head evidence."
+              append ""
+              failures=$((failures + 1))
+              return 1
             fi
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
