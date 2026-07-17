@@ -865,117 +865,9 @@ jobs:
               | sort -u
           }
 
-          pyproject_has_dev_dependency_group() {
-            python3 -I - "$1" <<'PY'
-          import sys
-          import tomllib
-
-          with open(sys.argv[1], "rb") as fh:
-              data = tomllib.load(fh)
-          raise SystemExit(0 if "dev" in data.get("dependency-groups", {}) else 1)
-          PY
-          }
-
-          pyproject_has_dev_optional_extra() {
-            python3 -I - "$1" <<'PY'
-          import sys
-          import tomllib
-
-          with open(sys.argv[1], "rb") as fh:
-              data = tomllib.load(fh)
-          optional = data.get("project", {}).get("optional-dependencies", {})
-          raise SystemExit(0 if "dev" in optional else 1)
-          PY
-          }
-
-          pyproject_has_no_selected_dependencies() {
-            python3 -I - "$1" "$2" <<'PY'
-          import sys
-          import tomllib
-
-          with open(sys.argv[1], "rb") as fh:
-              data = tomllib.load(fh)
-
-          selection = sys.argv[2]
-          project = data.get("project", {})
-          dynamic = project.get("dynamic", [])
-          if not isinstance(dynamic, list):
-              raise SystemExit(2)
-          if "dependencies" in dynamic:
-              raise SystemExit(1)
-
-          dependencies = project.get("dependencies", [])
-          if not isinstance(dependencies, list):
-              raise SystemExit(2)
-          selected = list(dependencies)
-
-          if selection == "group-dev":
-              group = data.get("dependency-groups", {}).get("dev", [])
-              if not isinstance(group, list):
-                  raise SystemExit(2)
-              selected.extend(group)
-          elif selection == "extra-dev":
-              if "optional-dependencies" in dynamic:
-                  raise SystemExit(1)
-              extra = project.get("optional-dependencies", {}).get("dev", [])
-              if not isinstance(extra, list):
-                  raise SystemExit(2)
-              selected.extend(extra)
-          elif selection != "runtime":
-              raise SystemExit(2)
-
-          raise SystemExit(0 if not selected else 1)
-          PY
-          }
-
-          run_python_uv_lock_check() {
-            local project_dir="$1"
-            if [ -f "${project_dir}/uv.lock" ]; then
-              run_and_capture "Python uv lockfile consistency (${project_dir})" \
-                bash -c 'cd "$1" && uv lock --check' bash "$project_dir"
-            fi
-          }
-
-          install_python_project_dependencies() {
-            if [ -f requirements.txt ]; then
-              run_and_capture "Python project dependencies (requirements.txt)" \
-                uv run --no-project --no-build --with-requirements requirements.txt python -c 'import sys; print("binary-only requirements resolved with", sys.executable)'
-            fi
-
-            while IFS= read -r project_dir; do
-              pyproject_file="${project_dir}/pyproject.toml"
-              if [ -f "$pyproject_file" ]; then
-                run_python_uv_lock_check "$project_dir"
-                if pyproject_has_dev_dependency_group "$pyproject_file"; then
-                  dependency_selection="group-dev"
-                elif pyproject_has_dev_optional_extra "$pyproject_file"; then
-                  dependency_selection="extra-dev"
-                else
-                  dependency_selection="runtime"
-                fi
-
-                if pyproject_has_no_selected_dependencies "$pyproject_file" "$dependency_selection"; then
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    python3 -c 'print("No selected runtime/dev dependencies are declared; safe dependency materialization is not applicable.")'
-                elif [ "$dependency_selection" = "group-dev" ]; then
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --group dev --no-build --no-install-project
-                elif [ "$dependency_selection" = "extra-dev" ]; then
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --extra dev --no-build --no-install-project
-                else
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --no-build --no-install-project
-                fi
-                if [ -f "${project_dir}/requirements.txt" ]; then
-                  run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
-                    bash -c 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
-                fi
-              elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
-                run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
-              fi
-            done < <(tracked_python_projects_with_tests)
+          verify_trusted_python_test_toolchain() {
+            run_and_capture "Trusted offline Python test toolchain" \
+              python3 -I -c 'import coverage, interrogate, pytest, pytest_cov; print("trusted offline Python test toolchain imports passed")'
           }
 
           configured_python_ci_test_commands() {
@@ -999,22 +891,16 @@ jobs:
                       --project-dir "$project_dir" \
                       --command-json "$configured_command_json"
                 done <<<"$configured_commands_json"
-            elif [ -f "${project_dir}/pyproject.toml" ]; then
-              run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with coverage coverage report --show-missing' bash "$project_dir"
-            elif [ -f "${project_dir}/requirements.txt" ]; then
-              run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with coverage coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest && uv run --no-build --with coverage coverage report --show-missing'
+                  bash -c 'PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
               elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -1132,16 +1018,8 @@ jobs:
             while IFS= read -r project_dir; do
               if [ -f "${project_dir}/tests/test_docstrings.py" ]; then
                 measured_projects=1
-                if [ -f "${project_dir}/pyproject.toml" ]; then
-                  run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build pytest tests/test_docstrings.py' bash "$project_dir"
-                elif [ -f "${project_dir}/requirements.txt" ]; then
-                  run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
-                else
-                  run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
-                fi
+                run_and_capture "Python docstring coverage (${project_dir})" \
+                  bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
             [ "$measured_projects" -eq 1 ]
@@ -1569,6 +1447,7 @@ jobs:
 
           implementation_changed_files="$(mktemp /tmp/implementation-changed-files.XXXXXX)"
           changed_files_for_coverage >"$implementation_changed_files"
+          chmod 0444 "$implementation_changed_files"
           run_and_capture "Implementation completeness scan" \
             python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
               --repo-root . \
@@ -1579,7 +1458,11 @@ jobs:
 
           if has_changed_tracked_files '*.py'; then
             measured_any=1
-            install_python_project_dependencies
+            # PR-selected dependency manifests are never resolved in the
+            # networkless execution phase. The trusted image supplies the
+            # pinned review toolchain; missing project imports fail in pytest
+            # with the exact dependency name instead of reaching the network.
+            verify_trusted_python_test_toolchain
             run_python_test_coverage
 
             if run_python_docstring_coverage; then
