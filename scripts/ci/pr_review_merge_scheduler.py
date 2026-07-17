@@ -1419,18 +1419,9 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
         ):
             latest_check_runs[key] = (started_at, index, node)
 
-    successful_status_contexts = {
-        node.get("context")
-        for node in status_contexts
-        if (node.get("state") or "").upper() == "SUCCESS"
-    }
     for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
-            if is_strix_context(node) and "strix" in successful_status_contexts:
-                continue
-            if is_opencode_context(node) and "opencode-review" in successful_status_contexts:
-                continue
             failed.append(node.get("name") or "check-run")
     for node in status_contexts:
         state = (node.get("state") or "").upper()

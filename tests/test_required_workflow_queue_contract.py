@@ -342,8 +342,10 @@ def test_noema_dispatch_is_authorized_and_bound_to_live_pr_before_token_mint() -
     )
     credential = workflow.index("- name: Select fail-closed Noema reviewer credential")
     mint = workflow.index("- name: Mint repository-scoped Noema GitHub App token")
+    evidence = workflow.index("- name: Materialize exact OpenCode approval evidence")
+    review = workflow.index("- name: Run Noema LLM review and submit verdict")
 
-    assert validation < credential < mint
+    assert validation < credential < mint < evidence < review
     assert "NOEMA_REPOSITORY_DISPATCH_ACTOR" in workflow
     assert "NOEMA_REPOSITORY_DISPATCH_TARGETS" in workflow
     assert '"$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR"' in workflow
@@ -357,6 +359,10 @@ def test_noema_dispatch_is_authorized_and_bound_to_live_pr_before_token_mint() -
         "TARGET_REPOSITORY: ${{ steps.live_pr.outputs.target_repository }}"
     ) >= 3
     assert "PR_NUMBER: ${{ steps.live_pr.outputs.pr_number }}" in workflow
+    assert "git check-ref-format" in workflow
+    assert "materialize_pr_review_source.py" in workflow
+    assert "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: \"true\"" in workflow
+    assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in workflow
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:

@@ -152,6 +152,28 @@ def test_rejects_unsafe_tree_paths() -> None:
         raise AssertionError(f"unsafe path was accepted: {unsafe!r}")
 
 
+def test_rejects_symlink_ancestors_for_manifest_and_output(tmp_path: Path) -> None:
+    """Existing parent links cannot redirect source or provenance writes."""
+    outside = tmp_path / "outside"
+    intended = tmp_path / "intended"
+    outside.mkdir()
+    intended.mkdir()
+    os.symlink(outside, intended / "linked-parent")
+
+    for option_path, option in (
+        (intended / "linked-parent" / "manifest.json", "--manifest"),
+        (intended / "linked-parent" / "source", "--output-dir"),
+    ):
+        try:
+            materializer.reject_symlink_components(option_path, option)
+        except ValueError as exc:
+            assert option in str(exc)
+            assert "symbolic-link path component" in str(exc)
+        else:
+            raise AssertionError(f"{option} accepted a symlink ancestor")
+    assert not (outside / "manifest.json").exists()
+
+
 def test_tree_file_limit_stops_streaming_producer_early(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -218,3 +240,34 @@ def test_tree_byte_limit_fails_before_materializing_output(tmp_path: Path) -> No
     else:
         raise AssertionError("oversized tree bytes were accepted")
     assert not output.exists()
+
+
+def test_tree_metadata_budget_stops_large_paths_before_append(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Aggregate path metadata is bounded independently of blob payload bytes."""
+    oid = "a" * 40
+    record = f"100644 blob {oid} 1\t{'x' * 256}\0".encode()
+    producer = f"import os; os.write(1, {record!r})"
+
+    def open_producer(_git_dir: Path, _head_sha: str):
+        return subprocess.Popen(
+            [sys.executable, "-c", producer],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    monkeypatch.setattr(materializer, "open_tree_reader", open_producer)
+    try:
+        materializer.parse_tree(
+            tmp_path,
+            oid,
+            max_files=10,
+            max_bytes=10,
+            max_tree_metadata_bytes=128,
+            timeout_seconds=10,
+        )
+    except ValueError as exc:
+        assert "--max-tree-metadata-bytes" in str(exc)
+    else:
+        raise AssertionError("oversized tree path metadata was accepted")

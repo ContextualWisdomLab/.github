@@ -18,16 +18,16 @@ import urllib.request
 from collections.abc import Sequence
 from typing import Any
 
+try:
+    from opencode_existing_approval_gate import review_rejection_reason
+except ModuleNotFoundError:
+    from scripts.ci.opencode_existing_approval_gate import review_rejection_reason
+
 
 PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
     "opencode-agent",
 }
-PRIMARY_REVIEW_MARKERS = (
-    "OpenCode reviewed the current-head bounded evidence and found no blocking issues.",
-    "Result: APPROVE",
-    "opencode-review-control-v1",
-)
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 REVIEW_BODY_BASE_REF_RE = re.compile(r"Base ref:\s*`([A-Za-z0-9._/-]+)`")
 REVIEW_BODY_BASE_SHA_RE = re.compile(r"Base SHA:\s*`([0-9a-fA-F]{40})`")
@@ -229,9 +229,24 @@ def current_primary_approval(pr: dict[str, Any]) -> dict[str, Any] | None:
             continue
         if str(review.get("state") or "").upper() != "APPROVED":
             continue
-        body = str(review.get("body") or "")
         author = review_author(review)
-        if author in PRIMARY_REVIEW_AUTHORS and any(marker in body for marker in PRIMARY_REVIEW_MARKERS):
+        if author not in PRIMARY_REVIEW_AUTHORS:
+            continue
+        rest_review = {
+            "state": review.get("state"),
+            "commit_id": review_commit(review),
+            "user": {"login": author},
+            "body": str(review.get("body") or ""),
+        }
+        if (
+            review_rejection_reason(
+                rest_review,
+                str(pr.get("headRefOid") or ""),
+                str(pr.get("baseRefName") or ""),
+                str(pr.get("baseRefOid") or ""),
+            )
+            is None
+        ):
             return review
     return None
 

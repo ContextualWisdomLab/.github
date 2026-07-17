@@ -28,13 +28,42 @@ def make_pr(**overrides):
 
 
 def test_recent_fix_marker_is_head_scoped():
-    """Fix markers are scoped to the exact PR head."""
+    """Only exact-head markers from the token actor and past time are trusted."""
     head = "a" * 40
-    comments = [{"body": f"{fix.FIX_MARKER} head_sha={head} epoch={int(time.time())} -->"}]
+    actor = "github-actions[bot]"
+    now = int(time.time())
+    comments = [
+        {
+            "body": f"{fix.FIX_MARKER} head_sha={head} epoch={now} -->",
+            "user": {"login": actor},
+        }
+    ]
 
-    assert fix.recent_fix_marker_exists(comments, head, 24 * 3600)
-    assert not fix.recent_fix_marker_exists(comments, "b" * 40, 24 * 3600)
-    assert not fix.recent_fix_marker_exists([{"body": f"{fix.FIX_MARKER} head_sha={head} epoch=oops -->"}], head, 24 * 3600)
+    assert fix.recent_fix_marker_exists(comments, head, 24 * 3600, actor)
+    assert not fix.recent_fix_marker_exists(comments, "b" * 40, 24 * 3600, actor)
+    assert not fix.recent_fix_marker_exists(
+        [{"body": f"{fix.FIX_MARKER} head_sha={head} epoch=oops -->"}],
+        head,
+        24 * 3600,
+        actor,
+    )
+    forged = [{**comments[0], "user": {"login": "contributor"}}]
+    assert not fix.recent_fix_marker_exists(forged, head, 24 * 3600, actor)
+    future = [
+        {
+            **comments[0],
+            "body": f"{fix.FIX_MARKER} head_sha={head} epoch={now + 86_400} -->",
+        }
+    ]
+    assert not fix.recent_fix_marker_exists(future, head, 24 * 3600, actor)
+    assert not fix.recent_fix_marker_exists(comments, head, 24 * 3600, "")
+
+
+def test_current_token_actor_fails_closed(monkeypatch):
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"login": "scheduler[bot]"})
+    assert fix.current_token_actor() == "scheduler[bot]"
+    monkeypatch.setattr(fix, "run_json", lambda _args: [])
+    assert fix.current_token_actor() == ""
 
 
 def test_needs_autofix_uses_current_head_evidence():
@@ -542,7 +571,17 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     )
 
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
-    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [{"body": f"{fix.FIX_MARKER} head_sha={'a' * 40} epoch={int(time.time())} -->"}])
+    monkeypatch.setattr(fix, "current_token_actor", lambda: "scheduler[bot]")
+    monkeypatch.setattr(
+        fix,
+        "issue_comments",
+        lambda repo, number: [
+            {
+                "body": f"{fix.FIX_MARKER} head_sha={'a' * 40} epoch={int(time.time())} -->",
+                "user": {"login": "scheduler[bot]"},
+            }
+        ],
+    )
     assert fix.inspect_pr("owner/repo", make_pr(), args) == ("wait", ("recent autofix marker exists for this head",))
 
     pr1 = make_pr(number=1)

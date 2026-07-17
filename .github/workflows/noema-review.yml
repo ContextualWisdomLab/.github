@@ -342,6 +342,88 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
+      - name: Materialize exact OpenCode approval evidence
+        if: env.PR_NUMBER != ''
+        id: primary_approval_evidence
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          GH_REPOSITORY: ${{ steps.live_pr.outputs.target_repository }}
+          PR_BASE_REF: ${{ steps.live_pr.outputs.base_ref }}
+          PR_BASE_SHA: ${{ steps.live_pr.outputs.base_sha }}
+          PR_HEAD_REF: ${{ steps.live_pr.outputs.head_ref }}
+          PR_HEAD_SHA: ${{ steps.live_pr.outputs.head_sha }}
+          OPENCODE_SOURCE_GIT_DIR: ${{ runner.temp }}/noema-pr-objects.git
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/noema-pr-head
+          OPENCODE_SOURCE_MANIFEST: ${{ runner.temp }}/noema-pr-source-manifest.json
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_FILE: ${{ runner.temp }}/opencode-artifact-manifest.json
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema reviewer token is unavailable for exact approval evidence."
+            exit 1
+          fi
+          git check-ref-format "refs/heads/$PR_BASE_REF"
+          git check-ref-format "refs/heads/$PR_HEAD_REF"
+          gh auth setup-git
+          rm -rf "$OPENCODE_SOURCE_GIT_DIR" "$OPENCODE_SOURCE_WORKDIR"
+          rm -f "$OPENCODE_SOURCE_MANIFEST" "$OPENCODE_CHANGED_FILES_FILE" \
+            "$OPENCODE_ARTIFACT_MANIFEST_FILE"
+          git init --bare "$OPENCODE_SOURCE_GIT_DIR"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" remote add pr-source \
+            "$GITHUB_SERVER_URL/$GH_REPOSITORY.git"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" fetch --no-tags --no-recurse-submodules \
+            pr-source "+refs/heads/${PR_BASE_REF}:refs/remotes/pr-source/base"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" fetch --no-tags --no-recurse-submodules \
+            pr-source "+refs/heads/${PR_HEAD_REF}:refs/remotes/pr-source/head"
+          [ "$(git --git-dir="$OPENCODE_SOURCE_GIT_DIR" rev-parse refs/remotes/pr-source/base)" = "$PR_BASE_SHA" ]
+          [ "$(git --git-dir="$OPENCODE_SOURCE_GIT_DIR" rev-parse refs/remotes/pr-source/head)" = "$PR_HEAD_SHA" ]
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" update-ref refs/heads/noema-review "$PR_HEAD_SHA"
+          git --git-dir="$OPENCODE_SOURCE_GIT_DIR" symbolic-ref HEAD refs/heads/noema-review
+          python3 scripts/ci/materialize_pr_review_source.py \
+            --git-dir "$OPENCODE_SOURCE_GIT_DIR" \
+            --head-sha "$PR_HEAD_SHA" \
+            --output-dir "$OPENCODE_SOURCE_WORKDIR" \
+            --manifest "$OPENCODE_SOURCE_MANIFEST"
+          merge_base="$(git -C "$OPENCODE_SOURCE_WORKDIR" merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"
+          git -C "$OPENCODE_SOURCE_WORKDIR" diff --name-only --find-renames \
+            "$merge_base" "$PR_HEAD_SHA" >"$OPENCODE_CHANGED_FILES_FILE"
+          if [ ! -s "$OPENCODE_CHANGED_FILES_FILE" ]; then
+            echo "::error::Noema cannot validate an approval without a non-empty exact-head changed-file manifest."
+            exit 1
+          fi
+          python3 <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          changed_files = Path(os.environ["OPENCODE_CHANGED_FILES_FILE"]).resolve(strict=True)
+          if changed_files != runner_temp / "opencode-changed-files.txt":
+              raise SystemExit("changed-file evidence escaped runner temp")
+          changed_files.chmod(0o600)
+          manifest = Path(os.environ["OPENCODE_ARTIFACT_MANIFEST_FILE"])
+          manifest.write_text(
+              json.dumps(
+                  {
+                      "schema": 1,
+                      "artifacts": {
+                          changed_files.name: hashlib.sha256(
+                              changed_files.read_bytes()
+                          ).hexdigest()
+                      },
+                  },
+                  sort_keys=True,
+              ),
+              encoding="utf-8",
+          )
+          manifest.chmod(0o600)
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"manifest_sha256={digest}\n")
+          PY
+
       - name: Run Noema LLM review and submit verdict
         if: env.PR_NUMBER != ''
         env:
@@ -352,6 +434,10 @@ jobs:
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
           NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/noema-pr-head
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.primary_approval_evidence.outputs.manifest_sha256 }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then

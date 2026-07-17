@@ -36,8 +36,13 @@ ADVERSARIAL_BLOCK_RE = re.compile(
 )
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
-WORKFLOW_RUN_RE = re.compile(r"(?m)^- Workflow run: [1-9][0-9]*\s*$")
-WORKFLOW_ATTEMPT_RE = re.compile(r"(?m)^- Workflow attempt: [1-9][0-9]*\s*$")
+WORKFLOW_RUN_RE = re.compile(r"(?m)^- Workflow run: ([1-9][0-9]*)\s*$")
+WORKFLOW_ATTEMPT_RE = re.compile(r"(?m)^- Workflow attempt: ([1-9][0-9]*)\s*$")
+RESULT_LINE_RE = re.compile(r"(?m)^- Result: ([A-Z_]+)\s*$")
+CONTROL_BLOCK_RE = re.compile(
+    r"<!--[ \t]*opencode-review-control-v1[ \t]*\n(?P<payload>.*?)[ \t]*-->",
+    re.DOTALL,
+)
 REQUIRED_PROBE_FIELDS = (
     "path",
     "hypothesis",
@@ -73,6 +78,20 @@ def extract_adversarial_evidence(body: str) -> dict[str, Any] | None:
         if isinstance(candidate, dict):
             evidence = candidate
     return evidence
+
+
+def extract_control_payload(body: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Return one unambiguous structured OpenCode control payload."""
+    matches = list(CONTROL_BLOCK_RE.finditer(body))
+    if len(matches) != 1:
+        return None, "review body must contain exactly one OpenCode control block"
+    try:
+        payload = json.loads(matches[0].group("payload"))
+    except json.JSONDecodeError:
+        return None, "OpenCode control block is not parseable JSON"
+    if not isinstance(payload, dict):
+        return None, "OpenCode control block must be a JSON object"
+    return payload, None
 
 
 def adversarial_rejection_reason(body: str) -> str | None:
@@ -141,18 +160,32 @@ def review_rejection_reason(
         return "review body is deterministic or model-unavailable fallback evidence"
     if PRIMARY_APPROVAL_MARKER not in body:
         return "review body lacks the real-model approval marker"
-    if "- Result: APPROVE" not in body:
-        return "review body lacks an APPROVE result"
+    if RESULT_LINE_RE.findall(body) != ["APPROVE"]:
+        return "review body must contain exactly one unambiguous APPROVE result"
     if f"- Head SHA: `{head_sha}`" not in body:
         return "review body lacks the exact current-head SHA"
     if f"- Base ref: `{base_ref}`" not in body:
         return "review body lacks the exact current base ref"
     if f"- Base SHA: `{base_sha}`" not in body:
         return "review body lacks the exact current base SHA"
-    if not WORKFLOW_RUN_RE.search(body):
+    workflow_run = WORKFLOW_RUN_RE.search(body)
+    if not workflow_run:
         return "review body lacks a workflow run id"
-    if not WORKFLOW_ATTEMPT_RE.search(body):
+    workflow_attempt = WORKFLOW_ATTEMPT_RE.search(body)
+    if not workflow_attempt:
         return "review body lacks a workflow attempt"
+    control, control_error = extract_control_payload(body)
+    if control_error:
+        return control_error
+    assert control is not None
+    if str(control.get("result") or "").upper() != "APPROVE":
+        return "OpenCode control result is not APPROVE"
+    if str(control.get("head_sha") or "").lower() != head_sha.lower():
+        return "OpenCode control head does not match current head"
+    if str(control.get("run_id") or "") != workflow_run.group(1):
+        return "OpenCode control workflow run does not match review metadata"
+    if str(control.get("run_attempt") or "") != workflow_attempt.group(1):
+        return "OpenCode control workflow attempt does not match review metadata"
     return adversarial_rejection_reason(body)
 
 

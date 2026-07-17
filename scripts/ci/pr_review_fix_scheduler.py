@@ -72,18 +72,37 @@ def issue_comments(repo: str, number: int) -> list[dict[str, Any]]:
     return [comment for page in pages for comment in page]
 
 
+def current_token_actor() -> str:
+    """Return the exact login represented by the active mutation credential."""
+    try:
+        actor = run_json(["api", "user"])
+    except (RuntimeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(actor, dict):
+        return ""
+    return str(actor.get("login") or "").strip()
+
+
 def recent_fix_marker_exists(
     comments: list[dict[str, Any]],
     head_sha: str,
     min_interval_seconds: int,
+    trusted_author: str,
 ) -> bool:
-    """Return whether this head was already dispatched recently."""
+    """Return whether this credential already dispatched the head recently."""
+    trusted_author = trusted_author.strip().casefold()
+    if not trusted_author:
+        return False
     now = int(time.time())
     for comment in reversed(comments):
+        author = str(((comment.get("user") or {}).get("login")) or "").casefold()
+        if author != trusted_author:
+            continue
         match = FIX_MARKER_RE.search(str(comment.get("body") or ""))
         if not match or match.group(1).lower() != head_sha.lower():
             continue
-        return now - int(match.group(2)) < min_interval_seconds
+        age_seconds = now - int(match.group(2))
+        return 0 <= age_seconds < min_interval_seconds
     return False
 
 
@@ -258,7 +277,12 @@ def inspect_pr(
     if comments is None:
         comments = issue_comments(repo, number)
 
-    if recent_fix_marker_exists(comments, str(pr["headRefOid"]), args.retry_hours * 3600):
+    if recent_fix_marker_exists(
+        comments,
+        str(pr["headRefOid"]),
+        args.retry_hours * 3600,
+        current_token_actor(),
+    ):
         return "wait", ("recent autofix marker exists for this head",)
 
     dispatch_autofix(
@@ -344,9 +368,18 @@ def self_test() -> int:
     """Run cheap contract checks."""
     head = "a" * 40
     base = "b" * 40
-    comments = [{"body": f"{FIX_MARKER} head_sha={head} epoch={int(time.time())} -->"}]
-    assert recent_fix_marker_exists(comments, head, 24 * 3600)
-    assert not recent_fix_marker_exists(comments, "b" * 40, 24 * 3600)
+    comments = [
+        {
+            "body": f"{FIX_MARKER} head_sha={head} epoch={int(time.time())} -->",
+            "user": {"login": "github-actions[bot]"},
+        }
+    ]
+    assert recent_fix_marker_exists(
+        comments, head, 24 * 3600, "github-actions[bot]"
+    )
+    assert not recent_fix_marker_exists(
+        comments, "b" * 40, 24 * 3600, "github-actions[bot]"
+    )
     pr = {
         "reviews": {
             "nodes": [

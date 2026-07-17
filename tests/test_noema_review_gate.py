@@ -1,15 +1,67 @@
 import base64
+import hashlib
 import json
 import sys
 
 import pytest
 
 from scripts.ci import noema_review_gate as noema
+from scripts.ci import opencode_existing_approval_gate as approval_gate
+from scripts.ci import opencode_review_normalize_output as normalizer
 
 
 HEAD = "a" * 40
 BASE_REF = "main"
 BASE_SHA = "b" * 40
+SOURCE_PATH = "src/app.py"
+SOURCE_LINES = (b"def one():", b"    return 1")
+
+
+@pytest.fixture(autouse=True)
+def trusted_primary_approval_artifacts(tmp_path, monkeypatch):
+    """Provide exact-head source and changed-file evidence to the shared gate."""
+    runner_temp = tmp_path / "runner-temp"
+    source_root = tmp_path / "source"
+    source_path = source_root / SOURCE_PATH
+    runner_temp.mkdir()
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"\n".join(SOURCE_LINES) + b"\n")
+    changed_files = runner_temp / "opencode-changed-files.txt"
+    changed_files.write_text(f"{SOURCE_PATH}\n", encoding="utf-8")
+    manifest = runner_temp / "opencode-artifact-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "artifacts": {
+                    changed_files.name: hashlib.sha256(
+                        changed_files.read_bytes()
+                    ).hexdigest()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    monkeypatch.setenv("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "true")
+    monkeypatch.setenv(
+        "OPENCODE_ARTIFACT_MANIFEST_SHA256",
+        hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    )
+    cached_helpers = (
+        normalizer.trusted_artifact_manifest,
+        normalizer.current_changed_files,
+        normalizer.trusted_execution_receipts,
+    )
+    for helper in cached_helpers:
+        if hasattr(helper, "cache_clear"):
+            helper.cache_clear()
+    yield
+    for helper in cached_helpers:
+        if hasattr(helper, "cache_clear"):
+            helper.cache_clear()
 
 
 def identity_body(marker: str = "Result: APPROVE", *, head: str = HEAD) -> str:
@@ -20,6 +72,59 @@ def identity_body(marker: str = "Result: APPROVE", *, head: str = HEAD) -> str:
             f"- Base ref: `{BASE_REF}`",
             f"- Base SHA: `{BASE_SHA}`",
             f"- Head SHA: `{head}`",
+        )
+    )
+
+
+def valid_primary_body(*, head: str = HEAD) -> str:
+    """Build a primary review accepted by the shared strict approval gate."""
+    evidence = {
+        "status": "passed",
+        "probes": [
+            {
+                "path": SOURCE_PATH,
+                "line": line,
+                "hypothesis": f"Approval bypass hypothesis {line}.",
+                "attack_or_counterexample": f"Forged review evidence variant {line}.",
+                "evidence": (
+                    f"Source trace at {SOURCE_PATH}:{line} rejected the variant. "
+                    "source-line-sha256=" + hashlib.sha256(source_line).hexdigest()
+                ),
+                "outcome": "falsified",
+            }
+            for line, source_line in enumerate(SOURCE_LINES, start=1)
+        ],
+        "residual_risk": "Repository branch policy remains externally enforced.",
+    }
+    control = {
+        "head_sha": head,
+        "run_id": "123",
+        "run_attempt": "2",
+        "result": "APPROVE",
+        "reason": "No blocking findings.",
+        "summary": "Exact-head evidence passed adversarial validation.",
+        "adversarial_validation": evidence,
+        "findings": [],
+    }
+    return "\n".join(
+        (
+            approval_gate.PRIMARY_APPROVAL_MARKER,
+            "",
+            "<!-- opencode-review-control-v1",
+            json.dumps(control),
+            "-->",
+            "",
+            "## Adversarial validation",
+            "```json",
+            json.dumps(evidence),
+            "```",
+            "",
+            "- Result: APPROVE",
+            f"- Base ref: `{BASE_REF}`",
+            f"- Base SHA: `{BASE_SHA}`",
+            f"- Head SHA: `{head}`",
+            "- Workflow run: 123",
+            "- Workflow attempt: 2",
         )
     )
 
@@ -50,7 +155,7 @@ def review(state="APPROVED", commit=HEAD, login="opencode-agent", body=None):
     """Build a minimal review node for Noema tests."""
     return {
         "state": state,
-        "body": identity_body() if body is None else body,
+        "body": valid_primary_body(head=commit) if body is None else body,
         "author": {"login": login},
         "commit": {"oid": commit},
     }
@@ -111,9 +216,7 @@ def test_split_repo_and_graphql(monkeypatch):
 
 
 def test_review_state_helpers_cover_current_head_logic():
-    marker_body = identity_body(
-        "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
-    )
+    marker_body = valid_primary_body()
     current = review(body=marker_body)
     old = review(commit="old", body=marker_body)
     pr = make_pr(reviews={"nodes": [old, current]})
@@ -123,6 +226,15 @@ def test_review_state_helpers_cover_current_head_logic():
     assert noema.review_commit(current) == HEAD
     assert noema.review_commit({}) == ""
     assert noema.current_primary_approval(pr) == current
+    marker_only = review(
+        body=identity_body(approval_gate.PRIMARY_APPROVAL_MARKER)
+    )
+    assert (
+        noema.current_primary_approval(
+            make_pr(reviews={"nodes": [marker_only]})
+        )
+        is None
+    )
     assert (
         noema.current_primary_approval(
             make_pr(baseRefName="release", reviews={"nodes": [current]})
@@ -182,7 +294,7 @@ def test_review_state_helpers_reject_explicit_previous_head_evidence():
     )
     exact_approval = review(
         commit=current_head,
-        body=identity_body(approval_marker, head=current_head),
+        body=valid_primary_body(head=current_head),
     )
     stale_change_request = review(
         "CHANGES_REQUESTED",
@@ -624,9 +736,7 @@ def test_format_findings_and_submit_review(monkeypatch):
 
 
 def test_inspect_and_review_skip_paths(monkeypatch):
-    marker_body = identity_body(
-        "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
-    )
+    marker_body = valid_primary_body()
     clean_pr = make_pr(reviews={"nodes": [review(body=marker_body)]})
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)

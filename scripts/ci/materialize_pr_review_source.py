@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 import re
 import selectors
 import shutil
+import stat
 
 # Git is invoked through an absolute executable path, a fixed argv, and no shell.
 import subprocess  # nosec B404
@@ -33,9 +34,11 @@ GITLINK_MODE = "160000"
 RESERVED_ROOTS = {".codegraph", ".git"}
 DEFAULT_MAX_FILES = 100_000
 DEFAULT_MAX_BYTES = 1_073_741_824
+DEFAULT_MAX_TREE_METADATA_BYTES = 67_108_864
 DEFAULT_TREE_TIMEOUT_SECONDS = 60
 TREE_READ_CHUNK_BYTES = 65_536
 MAX_TREE_RECORD_BYTES = 1_048_576
+TREE_ENTRY_METADATA_OVERHEAD_BYTES = 128
 GIT_EXECUTABLE = shutil.which("git")
 if not GIT_EXECUTABLE or not Path(GIT_EXECUTABLE).is_absolute():
     raise RuntimeError("an absolute Git executable path is required")
@@ -58,6 +61,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--max-files", type=positive_int, default=DEFAULT_MAX_FILES)
     parser.add_argument("--max-bytes", type=positive_int, default=DEFAULT_MAX_BYTES)
+    parser.add_argument(
+        "--max-tree-metadata-bytes",
+        type=positive_int,
+        default=DEFAULT_MAX_TREE_METADATA_BYTES,
+    )
     parser.add_argument(
         "--tree-timeout-seconds",
         type=positive_int,
@@ -99,9 +107,24 @@ def validate_git_dir(git_dir: Path, head_sha: str) -> Path:
     return resolved
 
 
+def reject_symlink_components(path: Path, option: str) -> Path:
+    """Return an absolute path only when no existing component is a symlink."""
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"{option} contains a symbolic-link path component")
+    return absolute
+
+
 def validate_output_path(output_dir: Path, git_dir: Path) -> Path:
     """Require a fresh output path that cannot overlap the Git object store."""
-    output = output_dir.absolute()
+    output = reject_symlink_components(output_dir, "--output-dir")
     if output.exists() or output.is_symlink():
         raise ValueError("--output-dir must not already exist")
     output_parent = output.parent.resolve(strict=True)
@@ -187,6 +210,7 @@ def parse_tree(
     max_files: int,
     max_bytes: int,
     timeout_seconds: int,
+    max_tree_metadata_bytes: int = DEFAULT_MAX_TREE_METADATA_BYTES,
 ) -> tuple[list[tuple[str, str, str, int, PurePosixPath]], int]:
     """Stream and bound validated recursive Git tree entries."""
     process = open_tree_reader(git_dir, head_sha)
@@ -201,6 +225,7 @@ def parse_tree(
     pending = bytearray()
     entries: list[tuple[str, str, str, int, PurePosixPath]] = []
     total_bytes = 0
+    total_metadata_bytes = 0
     try:
         reached_eof = False
         while not reached_eof:
@@ -235,6 +260,16 @@ def parse_tree(
                 del pending[: separator + 1]
                 if not record:
                     continue
+                next_metadata_bytes = (
+                    total_metadata_bytes
+                    + len(record)
+                    + TREE_ENTRY_METADATA_OVERHEAD_BYTES
+                )
+                if next_metadata_bytes > max_tree_metadata_bytes:
+                    raise ValueError(
+                        "Git tree exceeds --max-tree-metadata-bytes "
+                        f"({next_metadata_bytes} > {max_tree_metadata_bytes})"
+                    )
                 entry = parse_tree_entry(record)
                 next_file_count = len(entries) + 1
                 if next_file_count > max_files:
@@ -248,6 +283,7 @@ def parse_tree(
                     )
                 entries.append(entry)
                 total_bytes = next_total_bytes
+                total_metadata_bytes = next_metadata_bytes
         if pending:
             raise ValueError("Git tree output ended with an unterminated record")
     except BaseException:
@@ -329,7 +365,7 @@ def materialize(args: argparse.Namespace) -> dict[str, object]:
     """Materialize validated inert files and return provenance metadata."""
     git_dir = validate_git_dir(args.git_dir, args.head_sha)
     output_dir = validate_output_path(args.output_dir, git_dir)
-    manifest_path = args.manifest.absolute()
+    manifest_path = reject_symlink_components(args.manifest, "--manifest")
     if manifest_path.exists() or manifest_path.is_symlink():
         raise ValueError("--manifest must not already exist")
     if manifest_path == output_dir or output_dir in manifest_path.parents:
@@ -341,6 +377,7 @@ def materialize(args: argparse.Namespace) -> dict[str, object]:
         max_files=args.max_files,
         max_bytes=args.max_bytes,
         timeout_seconds=args.tree_timeout_seconds,
+        max_tree_metadata_bytes=args.max_tree_metadata_bytes,
     )
 
     output_dir.mkdir(mode=0o755)
@@ -411,6 +448,9 @@ def materialize(args: argparse.Namespace) -> dict[str, object]:
         "skipped": skipped,
         "special_representations": special,
     }
+    # Recheck after materialization so an ancestor swapped to a link cannot
+    # redirect the final provenance write.
+    reject_symlink_components(manifest_path, "--manifest")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     write_inert_file(
         manifest_path, (json.dumps(metadata, sort_keys=True, indent=2) + "\n").encode()

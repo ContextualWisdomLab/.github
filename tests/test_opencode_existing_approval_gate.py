@@ -94,11 +94,25 @@ def valid_body(head: str = HEAD) -> str:
         ],
         "residual_risk": "Hosted token permissions remain externally enforced.",
     }
+    control = {
+        "head_sha": head,
+        "run_id": "123",
+        "run_attempt": "2",
+        "result": "APPROVE",
+        "reason": "No blocking findings after adversarial validation.",
+        "summary": "The exact current-head evidence passed the strict review gate.",
+        "adversarial_validation": evidence,
+        "findings": [],
+    }
     return "\n".join(
         (
             "## Pull request overview",
             "",
             gate.PRIMARY_APPROVAL_MARKER,
+            "",
+            "<!-- opencode-review-control-v1",
+            json.dumps(control),
+            "-->",
             "",
             "## Adversarial validation",
             "",
@@ -174,6 +188,35 @@ def test_extract_adversarial_evidence_uses_last_parseable_block():
                 body=value["body"].replace("- Result: APPROVE", "")
             ),
             "APPROVE result",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"] + "\n- Result: REQUEST_CHANGES"
+            ),
+            "unambiguous APPROVE result",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace(
+                    '"result": "APPROVE"',
+                    '"result": "REQUEST_CHANGES"',
+                )
+            ),
+            "control result",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace('"run_id": "123"', '"run_id": "999"')
+            ),
+            "control workflow run",
+        ),
+        (
+            lambda value: value.update(
+                body=value["body"].replace(
+                    '"run_attempt": "2"', '"run_attempt": "9"'
+                )
+            ),
+            "control workflow attempt",
         ),
         (
             lambda value: value.update(

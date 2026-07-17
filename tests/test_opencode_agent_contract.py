@@ -366,7 +366,12 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
-    assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' in measure_step
+    assert "docker run --rm --init --network=none" in measure_step
+    assert (
+        'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+        in measure_step
+    )
+    assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' not in measure_step
     assert "cargo llvm-cov --version" not in measure_step
     assert "emit_captured_log()" in measure_step
     assert 'append_command "$@"' in measure_step
