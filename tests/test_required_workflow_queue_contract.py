@@ -1079,20 +1079,46 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
-def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+def test_strix_provider_outage_without_findings_fails_closed(tmp_path: Path) -> None:
     workflow = workflow_text("strix.yml")
+    run_step = workflow_step(workflow, "Run Strix (quick)")
+    run_marker = "        run: |\n"
+    run_body = run_step.split(run_marker, 1)[1]
+    script = textwrap.dedent(
+        "\n".join(line[10:] for line in run_body.splitlines())
+    )
 
-    assert "RateLimitError|Too many requests" in workflow
-    assert "exceeded your current quota" in workflow
-    assert "billing details" in workflow
-    assert "LLM warm-up failed" in workflow
-    assert "zero_vulnerabilities_signal" not in workflow
-    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
-    assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
-    assert "before producing a vulnerability report" in workflow
-    assert "genuine findings still fail the check" in workflow
-    assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+    fake_gate = tmp_path / "fake-strix-gate.sh"
+    fake_gate.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo 'openai.RateLimitError: exceeded your current quota'\n"
+        "echo 'Configured model and fallback models were unavailable.'\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake_gate.chmod(0o700)
+
+    result = subprocess.run(
+        ["bash"],
+        input=script,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "RUNNER_TEMP": str(tmp_path),
+            "TRUSTED_STRIX_GATE": str(fake_gate),
+        },
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Provider outages without a vulnerability report" in result.stdout
+    assert "not converted to success" in result.stdout
+    assert "Treating as a neutral skip" not in workflow
+    assert "backend_unavailable_signal=" not in workflow
+    assert (tmp_path / "strix_gate_console.log").read_text(encoding="utf-8") == (
+        "openai.RateLimitError: exceeded your current quota\n"
+        "Configured model and fallback models were unavailable.\n"
     )
 
 
