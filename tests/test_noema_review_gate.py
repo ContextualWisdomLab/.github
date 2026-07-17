@@ -339,6 +339,7 @@ def test_check_helpers_and_existing_noema_review():
 
     assert noema.check_label(status_context) == "ci"
     assert noema.check_label(check_run) == "CI / build"
+    assert not noema.existing_noema_review(make_pr(), "")
     blockers = noema.blocking_checks(
         make_pr(
             statusCheckRollup={

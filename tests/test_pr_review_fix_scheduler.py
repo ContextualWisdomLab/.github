@@ -64,6 +64,12 @@ def test_current_token_actor_fails_closed(monkeypatch):
     assert fix.current_token_actor() == "scheduler[bot]"
     monkeypatch.setattr(fix, "run_json", lambda _args: [])
     assert fix.current_token_actor() == ""
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: (_ for _ in ()).throw(json.JSONDecodeError("bad", "x", 0)),
+    )
+    assert fix.current_token_actor() == ""
 
 
 def test_needs_autofix_uses_current_head_evidence():

@@ -165,6 +165,41 @@ def test_extract_adversarial_evidence_uses_last_parseable_block():
     assert gate.extract_adversarial_evidence("none") is None
 
 
+def test_extract_control_payload_rejects_ambiguous_and_malformed_blocks():
+    """Reusable approval bodies contain exactly one object-shaped control block."""
+    assert gate.extract_control_payload("none")[1] == (
+        "review body must contain exactly one OpenCode control block"
+    )
+    one = "<!-- opencode-review-control-v1\n{}\n-->"
+    assert gate.extract_control_payload(f"{one}\n{one}")[1] == (
+        "review body must contain exactly one OpenCode control block"
+    )
+    assert "parseable JSON" in gate.extract_control_payload(
+        "<!-- opencode-review-control-v1\nnot-json\n-->"
+    )[1]
+    assert "JSON object" in gate.extract_control_payload(
+        "<!-- opencode-review-control-v1\n[]\n-->"
+    )[1]
+
+    body = valid_body()
+    control_start = body.index("<!-- opencode-review-control-v1")
+    control_end = body.index("-->", control_start) + len("-->")
+    missing_control = review(body=body[:control_start] + body[control_end:])
+    assert "exactly one" in gate.review_rejection_reason(
+        missing_control, HEAD, BASE_REF, BASE_SHA
+    )
+    wrong_head = review(
+        body=valid_body().replace(
+            f'"head_sha": "{HEAD}"',
+            f'"head_sha": "{"c" * 40}"',
+            1,
+        )
+    )
+    assert "control head" in gate.review_rejection_reason(
+        wrong_head, HEAD, BASE_REF, BASE_SHA
+    )
+
+
 @pytest.mark.parametrize(
     ("mutate", "reason"),
     [
@@ -511,6 +546,18 @@ def test_parse_args_and_main(monkeypatch, capsys):
         == 2
     )
     assert "40-character" in capsys.readouterr().err
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
+    assert gate.main(
+        ["--head", HEAD, "--base-ref", "bad ref", "--base-sha", BASE_SHA]
+    ) == 2
+    assert "valid base ref" in capsys.readouterr().err
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
+    assert gate.main(
+        ["--head", HEAD, "--base-ref", BASE_REF, "--base-sha", "short"]
+    ) == 2
+    assert "40-character base SHA" in capsys.readouterr().err
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
     assert gate.main(gate_args) == 1
