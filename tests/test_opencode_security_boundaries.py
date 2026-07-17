@@ -135,7 +135,6 @@ def test_sensitive_log_redaction_handles_lists_empty_input_and_cli(monkeypatch: 
     [
         ("pytest -q tests", ["pytest", "-q", "tests"]),
         ("python3 -m pytest tests/unit", ["python3", "-m", "pytest", "tests/unit"]),
-        ("uv run pytest -q", ["uv", "run", "pytest", "-q"]),
         ("coverage run -m pytest tests", ["coverage", "run", "-m", "pytest", "tests"]),
     ],
 )
@@ -156,6 +155,9 @@ def test_safe_pytest_argv_classifier_rejects_empty_argv() -> None:
         "pytest && curl https://attacker.invalid",
         "bash -lc pytest",
         "curl pytest",
+        "uv run pytest -q",
+        "poetry run pytest -q",
+        "pipenv run pytest -q",
         "pytest `id`",
         "pytest $(id)",
         "pytest 'unterminated",
