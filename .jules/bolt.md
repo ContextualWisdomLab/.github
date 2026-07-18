@@ -43,3 +43,7 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+
+## 2024-05-18 - [Fix O(N) Set Intersection in javascript_coverage_gate]
+**Learning:** Found an O(N) performance bottleneck in `javascript_coverage_gate.py` where checking if a small line range intersects with a potentially large set of `changed_lines` was done by iterating over the entire set (`any(start <= line <= end for line in changed_lines)`). Because execution unit ranges are typically very small (often 1 line), iterating over all changed lines is highly inefficient for large PRs.
+**Action:** Use `not set.isdisjoint(range(start, end + 1))` when checking for intersection between a set and a small continuous range to change the complexity from O(N) (size of set) to O(R) (size of range), drastically speeding up the inner loop.

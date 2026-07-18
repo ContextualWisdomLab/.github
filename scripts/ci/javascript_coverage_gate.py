@@ -10,7 +10,6 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
-
 METRICS = ("statements", "branches", "functions", "lines")
 SOURCE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 EXCLUDED_PARTS = {
@@ -146,15 +145,11 @@ def summarize_final(data: dict[str, Any]) -> dict[str, float]:
     for file_data in data.values():
         statements = file_data.get("s") or {}
         totals["statements"][1] += len(statements)
-        totals["statements"][0] += sum(
-            1 for count in statements.values() if count > 0
-        )
+        totals["statements"][0] += sum(1 for count in statements.values() if count > 0)
 
         functions = file_data.get("f") or {}
         totals["functions"][1] += len(functions)
-        totals["functions"][0] += sum(
-            1 for count in functions.values() if count > 0
-        )
+        totals["functions"][0] += sum(1 for count in functions.values() if count > 0)
 
         branches = file_data.get("b") or {}
         for counts in branches.values():
@@ -172,8 +167,7 @@ def summarize_final(data: dict[str, Any]) -> dict[str, float]:
         totals["lines"][0] += sum(1 for count in line_counts.values() if count > 0)
 
     return {
-        metric: percentage(values[0], values[1])
-        for metric, values in totals.items()
+        metric: percentage(values[0], values[1]) for metric, values in totals.items()
     }
 
 
@@ -194,16 +188,14 @@ def intersects(location: dict[str, Any] | None, changed_lines: set[int]) -> bool
     if line_range is None:
         return False
     start, end = line_range
-    return any(start <= line <= end for line in changed_lines)
+    return not changed_lines.isdisjoint(range(start, end + 1))
 
 
 def changed_metric_counts(
     records: Sequence[dict[str, Any]], changed_lines: set[int]
 ) -> dict[str, tuple[int, int]]:
     """Return covered/total counts for changed Istanbul execution units."""
-    units: dict[str, dict[tuple[Any, ...], int]] = {
-        metric: {} for metric in METRICS
-    }
+    units: dict[str, dict[tuple[Any, ...], int]] = {metric: {} for metric in METRICS}
     for file_data in records:
         statements = file_data.get("s") or {}
         statement_map = file_data.get("statementMap") or {}
@@ -211,9 +203,7 @@ def changed_metric_counts(
             line_range = location_range(location)
             if line_range is None:
                 continue
-            if not any(
-                line_range[0] <= line <= line_range[1] for line in changed_lines
-            ):
+            if changed_lines.isdisjoint(range(line_range[0], line_range[1] + 1)):
                 continue
             count = int(statements.get(statement_id, 0))
             units["statements"][line_range] = max(
@@ -230,9 +220,7 @@ def changed_metric_counts(
             line_range = location_range(location)
             if line_range is None:
                 continue
-            if not any(
-                line_range[0] <= line <= line_range[1] for line in changed_lines
-            ):
+            if changed_lines.isdisjoint(range(line_range[0], line_range[1] + 1)):
                 continue
             key = (*line_range, str(function_data.get("name") or ""))
             units["functions"][key] = max(
@@ -244,19 +232,18 @@ def changed_metric_counts(
             counts = branches.get(branch_id) or []
             locations = branch_data.get("locations") or []
             for index, count in enumerate(counts):
-                location = locations[index] if index < len(locations) else branch_data.get("loc")
+                location = (
+                    locations[index]
+                    if index < len(locations)
+                    else branch_data.get("loc")
+                )
                 line_range = location_range(location)
                 if line_range is None:
                     continue
-                if not any(
-                    line_range[0] <= line <= line_range[1]
-                    for line in changed_lines
-                ):
+                if changed_lines.isdisjoint(range(line_range[0], line_range[1] + 1)):
                     continue
                 key = (*line_range, str(branch_data.get("type") or ""), index)
-                units["branches"][key] = max(
-                    units["branches"].get(key, 0), int(count)
-                )
+                units["branches"][key] = max(units["branches"].get(key, 0), int(count))
 
     return {
         metric: (sum(1 for count in values.values() if count > 0), len(values))
@@ -283,17 +270,17 @@ def normalize_coverage_path(
             return normalized
 
     slash_path = raw_path.replace("\\", "/").rstrip("/")
-    suffix_matches = [
-        path for path in changed_paths if slash_path.endswith(f"/{path}")
-    ]
+    suffix_matches = [path for path in changed_paths if slash_path.endswith(f"/{path}")]
     return suffix_matches[0] if len(suffix_matches) == 1 else None
 
 
-def likely_runtime_lines(repo_root: Path, path: str, changed_lines: set[int]) -> list[int]:
+def likely_runtime_lines(
+    repo_root: Path, path: str, changed_lines: set[int]
+) -> list[int]:
     """Return changed lines that look executable when Istanbul maps no units."""
-    source_lines = (repo_root / path).read_text(
-        encoding="utf-8", errors="replace"
-    ).splitlines()
+    source_lines = (
+        (repo_root / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    )
     runtime_lines: list[int] = []
     in_block_comment = False
     for line_number, raw_line in enumerate(source_lines, start=1):
@@ -305,7 +292,9 @@ def likely_runtime_lines(repo_root: Path, path: str, changed_lines: set[int]) ->
             or in_block_comment
             or stripped.startswith("//")
             or stripped in {"{", "}", "};", ");", "]", "],"}
-            or stripped.startswith(("interface ", "type ", "export type ", "import type "))
+            or stripped.startswith(
+                ("interface ", "type ", "export type ", "import type ")
+            )
         )
         if line_number in changed_lines and not non_runtime:
             runtime_lines.append(line_number)
@@ -371,17 +360,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"- {path.relative_to(repo_root)} (derived)")
         for metric in METRICS:
             print(f"  {metric}: {metrics[metric]}%")
-    print("- Decision: advisory only; pre-existing global debt is visible but does not mask changed-code evidence.")
+    print(
+        "- Decision: advisory only; pre-existing global debt is visible but does not mask changed-code evidence."
+    )
 
     if not changed:
         print("\n## Changed-source coverage")
-        print("- No changed JavaScript/TypeScript runtime source files; coverage is not applicable.")
+        print(
+            "- No changed JavaScript/TypeScript runtime source files; coverage is not applicable."
+        )
         print("- Result: PASS")
         return 0
     if not finals:
         print("\n## Changed-source coverage")
         print("- Result: FAIL")
-        print("- Reason: coverage-final.json is required for changed-line evidence but was not produced.")
+        print(
+            "- Reason: coverage-final.json is required for changed-line evidence but was not produced."
+        )
         return 1
 
     changed_paths = set(changed)
@@ -401,8 +396,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             continue
         counts = changed_metric_counts(records[path], changed_lines)
         metric_text = ", ".join(
-            f"{metric} {covered}/{total}"
-            for metric, (covered, total) in counts.items()
+            f"{metric} {covered}/{total}" for metric, (covered, total) in counts.items()
         )
         print(f"- {path}: {metric_text}")
         total_units = sum(total for _covered, total in counts.values())
@@ -413,7 +407,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"{path} changed runtime-looking lines {runtime_lines} but Istanbul mapped no execution units"
                 )
             else:
-                print("  changed lines are comments, delimiters, or type-only declarations; no executable units apply")
+                print(
+                    "  changed lines are comments, delimiters, or type-only declarations; no executable units apply"
+                )
             continue
         for metric, (covered, total) in counts.items():
             if total and covered != total:
@@ -429,7 +425,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     print("\n- Result: PASS")
-    print("- Reason: every instrumented execution unit intersecting changed runtime lines is covered.")
+    print(
+        "- Reason: every instrumented execution unit intersecting changed runtime lines is covered."
+    )
     return 0
 
 
