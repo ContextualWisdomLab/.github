@@ -15,6 +15,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import tempfile
 import tomllib
 
 
@@ -78,7 +79,7 @@ def git_show(repo_root: Path, base_sha: str, relative_path: str) -> str | None:
         text=True,
         env={
             "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-            "HOME": "/tmp",
+            "HOME": tempfile.gettempdir(),
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "/dev/null",
         },
