@@ -3531,15 +3531,16 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. DeepSeek V3 has been the
-          # most reliable first-pass reviewer in the org queue, then the pool
-          # falls through to the direct GPT-5.6 Luna slot, then the full-size
-          # GPT-4.1 long-context endpoint and provider-specific GPT/o3 fallbacks.
+          # High-sensitivity review candidates only. Start with the full-size
+          # GPT-4.1 long-context endpoint so one slow DeepSeek or direct-OpenAI
+          # request cannot consume nearly the entire bounded provider budget;
+          # then fall through to GPT-5.6 Luna, DeepSeek V3, and the remaining
+          # provider-specific GPT/o3 fallbacks.
           # The direct-OpenAI slot runs GPT-5.6 Luna: the newest family's
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 openai/gpt-5.6-luna github-models/deepseek/deepseek-v3-0324 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -3579,8 +3580,11 @@ jobs:
           OPENCODE_DYNAMIC_MAX_CYCLES: "0"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"
+          # Central review-process changes are capped at three files above. A
+          # 15-minute candidate cap and one-hour pool budget keep one unavailable
+          # provider from starving every later real-model reviewer.
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "900"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"

@@ -103,9 +103,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs == [
-        ["github-models", "deepseek/deepseek-v3-0324"],
-        ["openai", "gpt-5.6-luna"],
         ["github-models", "openai/gpt-4.1"],
+        ["openai", "gpt-5.6-luna"],
+        ["github-models", "deepseek/deepseek-v3-0324"],
         ["github-models", "openai/gpt-5"],
         ["github-models", "openai/gpt-5-chat"],
         ["github-models", "openai/o3"],
@@ -115,8 +115,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models == [
-        "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
+        "deepseek/deepseek-v3-0324",
         "openai/gpt-5",
         "openai/gpt-5-chat",
         "openai/o3",
@@ -993,11 +993,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "900"'
         in workflow
     )
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"'
         in workflow
     )
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
@@ -1110,9 +1110,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 '
         "openai/gpt-5.6-luna "
-        "github-models/openai/gpt-4.1 "
+        "github-models/deepseek/deepseek-v3-0324 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
@@ -1233,9 +1233,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 '
         "openai/gpt-5.6-luna "
-        "github-models/openai/gpt-4.1 "
+        "github-models/deepseek/deepseek-v3-0324 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
