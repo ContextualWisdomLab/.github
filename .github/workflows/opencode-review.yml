@@ -765,6 +765,69 @@ jobs:
             rm -f "$log_file"
           }
 
+          run_and_capture_python_coverage() {
+            local label="$1"
+            local project_dir="$2"
+            shift 2
+            local log_file classification_file
+            log_file="$(mktemp)"
+            classification_file="$(mktemp)"
+            append "### ${label}"
+            append ""
+            append '```text'
+            append_command "$@"
+            set +e
+            timeout --kill-after=20 900 setpriv \
+              --reuid "$OPENCODE_SANDBOX_UID" \
+              --regid "$OPENCODE_SANDBOX_GID" \
+              --clear-groups \
+              env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GH_TOKEN \
+              -u GITHUB_TOKEN \
+              GITHUB_ENV=/dev/null \
+              GITHUB_PATH=/dev/null \
+              GITHUB_OUTPUT=/dev/null \
+              GITHUB_STEP_SUMMARY=/dev/null \
+              BASH_ENV=/dev/null \
+              UV_NO_BUILD=1 \
+              HOME=/work/.opencode-sandbox-home \
+              XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
+              CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              "$@" >"$log_file" 2>&1
+            local rc=$?
+            set -e
+            emit_captured_log "$log_file"
+            append '```'
+            append ""
+            if [ "$rc" -eq 0 ]; then
+              append "- Result: PASS"
+            elif env -i \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              HOME=/tmp \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
+              python3 -I "${GITHUB_WORKSPACE}/scripts/ci/python_coverage_dependency_guard.py" \
+                --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+                --base-sha "$PR_BASE_SHA" \
+                --project-dir "$project_dir" \
+                --pytest-exit "$rc" \
+                --log-file "$log_file" >"$classification_file" 2>&1; then
+              cat "$classification_file" >>"$summary_file"
+              append "- Result: DEFERRED"
+              append "- Reason: the protected base branch declares the unavailable dependency; repository-native required checks remain mandatory before merge."
+            else
+              cat "$classification_file" >>"$summary_file"
+              append "- Result: FAIL (exit ${rc})"
+              failures=$((failures + 1))
+            fi
+            append ""
+            rm -f "$log_file" "$classification_file"
+          }
+
           run_and_capture_advisory() {
             local label="$1"
             shift
@@ -886,23 +949,24 @@ jobs:
               if [ -n "$configured_commands_json" ]; then
                 while IFS= read -r configured_command_json; do
                   [ -n "$configured_command_json" ] || continue
-                  run_and_capture "Python configured CI test suite (${project_dir})" \
+                  run_and_capture_python_coverage "Python configured CI test suite (${project_dir})" "$project_dir" \
                     python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" execute \
                       --project-dir "$project_dir" \
                       --command-json "$configured_command_json"
                 done <<<"$configured_commands_json"
             else
-              run_and_capture "Python coverage with missing-line report (${project_dir})" \
+              run_and_capture_python_coverage "Python coverage with missing-line report (${project_dir})" "$project_dir" \
                 bash -c 'cd "$1" && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
-                run_and_capture "Python coverage with missing-line report" \
+                run_and_capture_python_coverage "Python coverage with missing-line report" "." \
                   bash -c 'PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
               elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
-                run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
+                run_and_capture_python_coverage "Python pytest-cov coverage" "." \
+                  python3 -m pytest --cov=. --cov-report=term-missing
               else
                 append "### Python test suite"
                 append ""

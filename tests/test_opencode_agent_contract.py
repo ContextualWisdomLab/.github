@@ -520,6 +520,12 @@ def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
     assert "python3 -m coverage run -m pytest tests" in measure
     assert "python3 -m coverage report --show-missing" in measure
     assert "python3 -m pytest tests/test_docstrings.py" in measure
+    assert "run_and_capture_python_coverage()" in measure
+    assert "scripts/ci/python_coverage_dependency_guard.py" in measure
+    assert '--base-sha "$PR_BASE_SHA"' in measure
+    assert '--pytest-exit "$rc"' in measure
+    assert "repository-native required checks remain mandatory before merge" in measure
+    assert "- Result: DEFERRED" in measure
 
 
 def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
@@ -1587,11 +1593,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert syntax_step < measure_step
     assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
     assert 'UV_NO_BUILD: "1"' in measure
-    assert measure.count("GITHUB_ENV=/dev/null") == 2
-    assert measure.count("GITHUB_PATH=/dev/null") == 2
-    assert measure.count("GITHUB_OUTPUT=/dev/null") == 2
-    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 2
-    assert measure.count("BASH_ENV=/dev/null") == 2
+    assert measure.count("GITHUB_ENV=/dev/null") == 3
+    assert measure.count("GITHUB_PATH=/dev/null") == 3
+    assert measure.count("GITHUB_OUTPUT=/dev/null") == 3
+    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 3
+    assert measure.count("BASH_ENV=/dev/null") == 3
     assert "uv sync --project" not in measure
     assert "uv run --no-project" not in measure
     assert "uv run --no-build" not in measure
