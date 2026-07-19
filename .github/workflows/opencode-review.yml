@@ -559,12 +559,14 @@ jobs:
             install -m 0644 "$trusted_ci_requirements" \
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
-          FROM docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf
+          # Official Rust 1.97.1 linux/amd64 manifest. Pin the architecture
+          # manifest itself so the trusted build cannot drift across releases
+          # or platforms while retaining stable Rust 2024 support.
+          FROM docker.io/library/rust@sha256:389c1ae98c20fbcadca68a685482749267cec3c90893ae4671c5a37cc894c416
           ENV DEBIAN_FRONTEND=noninteractive
           RUN apt-get update \
             && apt-get install --no-install-recommends -y \
               ca-certificates \
-              cargo \
               curl \
               git \
               jq \
@@ -582,10 +584,14 @@ jobs:
               r-base \
               r-cran-covr \
               r-cran-testthat \
-              rustc \
               util-linux \
               vulkan-tools \
             && rm -rf /var/lib/apt/lists/*
+          RUN test "$(rustc --version --verbose | sed -n 's/^release: //p')" = "1.97.1" \
+            && rustup component add llvm-tools-preview \
+            && rustup component list --installed | grep -Eq '^llvm-tools-' \
+            && chown -R root:root /usr/local/rustup /usr/local/cargo \
+            && chmod -R go-w /usr/local/rustup /usr/local/cargo
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
               https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
             && echo '967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7  /tmp/cargo-llvm-cov.tar.gz' | sha256sum -c - \
@@ -748,7 +754,8 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              RUSTUP_HOME=/usr/local/rustup \
+              PATH="/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -794,7 +801,8 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              RUSTUP_HOME=/usr/local/rustup \
+              PATH="/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -1333,6 +1341,13 @@ jobs:
               failures=$((failures + 1))
               return 1
             fi
+            append "### Rust coverage toolchain"
+            append ""
+            append "- Result: PASS"
+            append "- Rust: \`$(rustc --version)\`"
+            append "- Cargo: \`$(cargo --version)\`"
+            append "- Coverage: \`$(cargo-llvm-cov --version)\`"
+            append ""
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
           }

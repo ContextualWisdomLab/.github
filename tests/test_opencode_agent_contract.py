@@ -326,10 +326,25 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "member.isfile() or member.isdir()" in workflow
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
-    assert "docker.io/library/ubuntu@sha256:" in measure_step
+    assert (
+        "docker.io/library/rust@sha256:"
+        "389c1ae98c20fbcadca68a685482749267cec3c90893ae4671c5a37cc894c416"
+        in measure_step
+    )
+    assert 'test "$(rustc --version --verbose' in measure_step
+    assert '= "1.97.1"' in measure_step
+    assert "rustup component add llvm-tools-preview" in measure_step
+    assert "rustup component list --installed" in measure_step
+    assert "chown -R root:root /usr/local/rustup /usr/local/cargo" in measure_step
+    assert "chmod -R go-w /usr/local/rustup /usr/local/cargo" in measure_step
+    assert "              cargo \\\n" not in measure_step
+    assert "              rustc \\\n" not in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
-    assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
+    assert (
+        'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"'
+        in measure_step
+    )
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
@@ -382,10 +397,15 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "apt-get" not in sandbox_runtime
     assert "cargo install" not in sandbox_runtime
     assert "command -v cargo-llvm-cov" in sandbox_runtime
-    assert (
-        'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
-        in measure_step
+    assert 'append "- Rust: \\`$(rustc --version)\\`"' in sandbox_runtime
+    assert 'append "- Cargo: \\`$(cargo --version)\\`"' in sandbox_runtime
+    assert 'append "- Coverage: \\`$(cargo-llvm-cov --version)\\`"' in sandbox_runtime
+    trusted_runtime_path = (
+        'PATH="/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:'
+        '/usr/sbin:/usr/bin:/sbin:/bin"'
     )
+    assert measure_step.count(trusted_runtime_path) == 2
+    assert measure_step.count("RUSTUP_HOME=/usr/local/rustup") == 2
     assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' not in measure_step
     assert "cargo llvm-cov --version" not in measure_step
     assert "emit_captured_log()" in measure_step
