@@ -220,6 +220,30 @@ def test_normalizer_does_not_rebind_ambiguous_receipted_citations(
     assert normalizer.repair_adversarial_probe_evidence_bindings(value) is value
 
 
+def test_receipt_verified_location_rejects_unverifiable_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing receipts and invalid cited lines cannot yield a trusted location."""
+    path, _, receipt = prepare_probe_binding_artifacts(tmp_path, monkeypatch)
+    changed_files = frozenset({path})
+
+    assert (
+        normalizer.receipt_verified_evidence_location(
+            f"Source trace at {path}:1 rejected malformed input with exit code 1",
+            changed_files,
+        )
+        is None
+    )
+    assert (
+        normalizer.receipt_verified_evidence_location(
+            f"Source trace at {path}:99 rejected malformed input with exit code 1; "
+            f"{receipt}",
+            changed_files,
+        )
+        is None
+    )
+
+
 def test_normalizer_probe_binding_repair_remains_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
