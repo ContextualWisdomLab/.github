@@ -15,7 +15,6 @@ from collections.abc import Sequence
 RUN_LINE_RE = re.compile(r"\s*(?:-\s*)?run:\s*(.+?)\s*$")
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
-RUNNER_EXECUTABLES = frozenset({"uv", "poetry", "pipenv"})
 
 
 def _basename(value: str) -> str:
@@ -32,8 +31,6 @@ def _is_pytest_argv(argv: Sequence[str]) -> bool:
         return True
     if executable in PYTHON_EXECUTABLES:
         return len(argv) >= 3 and argv[1:3] == ["-m", "pytest"]
-    if executable in RUNNER_EXECUTABLES:
-        return len(argv) >= 3 and argv[1] == "run" and _is_pytest_argv(argv[2:])
     if executable == "coverage":
         return len(argv) >= 4 and argv[1:4] == ["run", "-m", "pytest"]
     return False
@@ -81,6 +78,14 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
         raise ValueError("configured command is not a safe direct pytest invocation")
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
+    virtualenv_bin = project_dir.resolve() / ".venv" / "bin"
+    if virtualenv_bin.is_dir():
+        inherited_path = env.get("PATH")
+        env["PATH"] = (
+            os.pathsep.join((str(virtualenv_bin), inherited_path))
+            if inherited_path
+            else str(virtualenv_bin)
+        )
     completed = subprocess.run(
         list(argv),
         cwd=project_dir,

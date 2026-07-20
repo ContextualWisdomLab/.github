@@ -92,14 +92,12 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
-    # The scan itself is hard-bounded to 12 min (the "Run Strix (quick)" step
-    # has timeout-minutes: 12 and exports STRIX_TOTAL_TIMEOUT_SECONDS=720), and
-    # every other step is quick or self-bounded (self-test is 2 min). A healthy
-    # run finishes well under 20 min. The 45 cap only ever bites HUNG runs (e.g.
-    # a network stall in pip/git with no per-step timeout); 45 min still clears
-    # the realistic worst case with margin while freeing a stuck runner in half
-    # the time. Fail-closed: hitting the cap fails the run, never passes it.
-    timeout-minutes: 45
+    # Large repositories can require a legitimate full-hour review. The scanner
+    # gets a 90-minute process budget and a 95-minute total retry budget; the
+    # 100-minute step and 120-minute job leave deterministic time to preserve
+    # partial reports and publish a concrete failure reason. Hitting any cap is
+    # fail-closed and never turns an incomplete scan into an approval.
+    timeout-minutes: 120
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
@@ -360,9 +358,6 @@ jobs:
           # refs/pull/<n>/head has already advanced before this queued run starts.
           if git -C "$TRUSTED_WORKSPACE" fetch --no-tags --depth=1 origin "$PR_HEAD_SHA"; then
             git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
-            if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
-              git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
-            fi
             if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
               mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
               git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
@@ -380,9 +375,6 @@ jobs:
             fetched_head_sha="$(git -C "$TRUSTED_WORKSPACE" rev-parse "refs/remotes/pull/${PR_NUMBER}/head")"
             if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
               git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
-              if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:opencode.jsonc" 2>/dev/null; then
-                git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:opencode.jsonc" > "$TRUSTED_WORKSPACE/opencode.jsonc"
-              fi
               if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:.github/workflows/strix.yml" 2>/dev/null; then
                 mkdir -p "$TRUSTED_WORKSPACE/.github/workflows"
                 git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:.github/workflows/strix.yml" > "$TRUSTED_WORKSPACE/.github/workflows/strix.yml"
@@ -494,7 +486,57 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         working-directory: trusted-strix-source
         run: |
+          set -euo pipefail
+          # GitHub-hosted runners may inherit a collaborative umask (0002),
+          # which makes pip-generated console scripts group-writable.  Pin a
+          # private install umask before creating the credential-bearing Strix
+          # entry point; the runtime gate still rejects any later relaxation.
+          umask 022
           python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
+          strix_executable="$(command -v strix || true)"
+          if [ -z "$strix_executable" ] || [[ "$strix_executable" != /* ]] \
+            || [ ! -f "$strix_executable" ] || [ -L "$strix_executable" ] \
+            || [ ! -x "$strix_executable" ]; then
+            echo "::error::Pinned Strix installation did not produce a trusted absolute executable path."
+            exit 1
+          fi
+          case "$strix_executable" in
+            "$GITHUB_WORKSPACE"/*|"$RUNNER_TEMP"/*)
+              echo "::error::Refusing a Strix executable from a workspace or runner-temp path."
+              exit 1
+              ;;
+          esac
+          strix_scripts_root="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+          if [ -z "$strix_scripts_root" ] || [[ "$strix_scripts_root" != /* ]] \
+            || [ ! -d "$strix_scripts_root" ] || [ -L "$strix_scripts_root" ]; then
+            echo "::error::Pinned Strix installation did not produce a trusted absolute scripts root."
+            exit 1
+          fi
+          case "$strix_executable" in
+            "$strix_scripts_root"/*) ;;
+            *)
+              echo "::error::Pinned Strix executable is outside the trusted scripts root."
+              exit 1
+              ;;
+          esac
+          # pip and the hosted tool cache can preserve collaborative write bits
+          # even after a private install umask. Normalize both the containing
+          # scripts root and resolved console script before pinning their
+          # identity; the runtime gate still fails closed on later relaxation.
+          chmod go-w -- "$strix_scripts_root" "$strix_executable"
+          strix_executable_sha256="$(python3 - "$strix_executable" <<'PY'
+          import hashlib
+          from pathlib import Path
+          import sys
+
+          print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+          PY
+          )"
+          {
+            printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable"
+            printf 'STRIX_EXECUTABLE_ROOT=%s\n' "$strix_scripts_root"
+            printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256"
+          } >> "$GITHUB_ENV"
 
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
@@ -656,7 +698,7 @@ jobs:
       - name: Run Strix (quick)
         id: run_strix
         if: steps.gate.outputs.enabled == 'true'
-        timeout-minutes: 30
+        timeout-minutes: 100
         # Security invariant for pull_request_target: execute only from the
         # trusted base checkout. The gate copies PR-head blobs into an isolated
         # temporary scope with execute bits stripped, then scans that scope as
@@ -696,18 +738,22 @@ jobs:
           BUN_CONFIG_IGNORE_SCRIPTS: "true"
           STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
           STRIX_DISABLE_PR_SCOPING: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '0' || '1' }}
-          GH_TOKEN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && github.token || '' }}
+          # A repository_dispatch executes in this central repository, so its
+          # github.token cannot read the target repository's PR. Reuse the
+          # target-app token that already validated and fetched that exact PR;
+          # preserve the target-repository token for pull_request_target runs.
+          GH_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && (steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token) || github.event_name == 'pull_request_target' && github.token || '' }}
           PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
         run: |
           budget_suffix="TIME""OUT"
-          process_budget_seconds="600"
-          export "LLM_${budget_suffix}=120"
-          export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=10"
+          process_budget_seconds="5400"
+          export "LLM_${budget_suffix}=900"
+          export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=300"
           export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
-          export "STRIX_TOTAL_${budget_suffix}_SECONDS=720"
+          export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"
 
           # Capture the gate exit code plus its console output. The gate returns
           # exit 1 both for genuine blocking vulnerabilities AND for
@@ -773,6 +819,10 @@ jobs:
               copied_reports=1
             fi
           done
+          if [ -f "$RUNNER_TEMP/strix_gate_console.log" ]; then
+            cp "$RUNNER_TEMP/strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log"
+            copied_reports=1
+          fi
           if [ -n "$(find "$GITHUB_WORKSPACE/strix_runs" -mindepth 1 -print -quit)" ]; then
             copied_reports=1
           fi

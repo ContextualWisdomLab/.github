@@ -2043,7 +2043,14 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
 
 
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
-    """Dispatch OpenCode for the PR head, or report an active same-head run."""
+    """Dispatch trusted OpenCode for the PR head, or report an active run.
+
+    The review job is intentionally restricted to ``repository_dispatch``. A
+    check-run job exposed by the original ``pull_request_target`` workflow is
+    therefore not a reusable execution entrypoint: rerunning that job preserves
+    the original event and leaves the review job skipped. Always use the
+    default-branch dispatch entrypoint after same-head deduplication.
+    """
     if not dry_run:
         require_github_actions_control_actor("inspect-active-opencode-review")
         current_run_refs, stale_run_refs = active_opencode_run_refs(repo, workflow, pr)
@@ -2056,10 +2063,6 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
                 )
             )
             return "already_running"
-    job_id = matching_actions_job_id(pr, is_opencode_context)
-    if job_id:
-        rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-opencode-review")
-        return "rerun"
     if dry_run:
         return "dry_run"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)

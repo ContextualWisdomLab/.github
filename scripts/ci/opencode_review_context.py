@@ -26,10 +26,16 @@ def load_event(path: Path) -> Mapping[str, object]:
     try:
         event = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"::error::Could not read GitHub event payload for OpenCode review context: {exc}", file=sys.stderr)
+        print(
+            f"::error::Could not read GitHub event payload for OpenCode review context: {exc}",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from exc
     if not isinstance(event, dict):
-        print("::error::GitHub event payload for OpenCode review context was not a JSON object.", file=sys.stderr)
+        print(
+            "::error::GitHub event payload for OpenCode review context was not a JSON object.",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     return event
 
@@ -39,7 +45,9 @@ def object_value(value: object) -> Mapping[str, object]:
     return value if isinstance(value, dict) else {}
 
 
-def resolve_context(event: Mapping[str, object], default_repository: str) -> dict[str, str]:
+def resolve_context(
+    event: Mapping[str, object], default_repository: str
+) -> dict[str, str]:
     """Resolve and validate the OpenCode review context values."""
     inputs = object_value(event.get("inputs"))
     client_payload = object_value(event.get("client_payload"))
@@ -77,7 +85,10 @@ def resolve_context(event: Mapping[str, object], default_repository: str) -> dic
     values["HEAD_SHA"] = values["PR_HEAD_SHA"]
     for name, pattern in CONTEXT_VALIDATORS.items():
         if not pattern.fullmatch(values[name]):
-            print(f"::error::Invalid OpenCode review context value for {name}.", file=sys.stderr)
+            print(
+                f"::error::Invalid OpenCode review context value for {name}.",
+                file=sys.stderr,
+            )
             raise SystemExit(1)
     # Free-text PR metadata for the review-language signal. It is arbitrary
     # author text, so it is not pattern-validated; it stays shell-safe because
@@ -93,7 +104,9 @@ def resolve_context(event: Mapping[str, object], default_repository: str) -> dic
 def write_shell_exports(path: Path, values: Mapping[str, str]) -> None:
     """Write validated values as shell export statements."""
     path.write_text(
-        "".join(f"export {name}={shlex.quote(value)}\n" for name, value in values.items()),
+        "".join(
+            f"export {name}={shlex.quote(value)}\n" for name, value in values.items()
+        ),
         encoding="utf-8",
     )
 
@@ -103,7 +116,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event-path", required=True, type=Path)
     parser.add_argument("--env-file", required=True, type=Path)
-    parser.add_argument("--default-repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    parser.add_argument(
+        "--default-repository", default=os.environ.get("GITHUB_REPOSITORY", "")
+    )
     return parser.parse_args(argv)
 
 
