@@ -483,6 +483,10 @@ jobs:
           SCHEDULER_READ_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
+          # Bound the aggregate central model-review queue across all target
+          # repositories. Per-run REVIEW_DISPATCH_LIMIT alone cannot prevent a
+          # large set of concurrent scheduler runs from saturating Actions.
+          ACTIVE_OPENCODE_REVIEW_LIMIT: ${{ vars.ACTIVE_OPENCODE_REVIEW_LIMIT || '16' }}
           SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
           SCHEDULER_TARGET_REPOSITORY: ${{ steps.dispatch_target.outputs.repository || github.repository }}
           SCHEDULER_TARGET_BASE_BRANCH: ${{ steps.dispatch_target.outputs.base_branch || env.DEFAULT_BRANCH }}
@@ -746,6 +750,7 @@ jobs:
           SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.sweep_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
+          ACTIVE_OPENCODE_REVIEW_LIMIT: ${{ vars.ACTIVE_OPENCODE_REVIEW_LIMIT || '16' }}
           SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail

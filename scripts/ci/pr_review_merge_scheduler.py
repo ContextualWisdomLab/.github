@@ -1770,6 +1770,8 @@ def post_update_branch_followup(
     dispatch_result = dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
     if dispatch_result == "already_running":
         return f"{head_note}; same-head OpenCode workflow run is already active"
+    if dispatch_result == "capacity_reached":
+        return f"{head_note}; central OpenCode active-run capacity is full, so a later heartbeat will retry"
     return f"{head_note}; same-head Strix evidence is complete, so OpenCode review was dispatched"
 
 
@@ -2010,6 +2012,62 @@ def active_opencode_run_ids(
     return [run_id for _, run_id in current], [run_id for _, run_id in stale]
 
 
+def active_central_opencode_dispatch_refs(
+    repo: str,
+    workflow: str,
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> list[tuple[str, str]]:
+    """Return active central repository-dispatch OpenCode run references.
+
+    Per-PR deduplication prevents duplicate work for one head, but it does not
+    bound the aggregate central queue when many repository schedulers run at
+    once. Count only trusted central ``repository_dispatch`` review runs so
+    ordinary pull-request checks and unrelated workflows do not consume the
+    shared model-review capacity.
+    """
+    dispatch_repo = repository_dispatch_target(repo)
+    workflow_names = frozenset({workflow, *OPENCODE_WORKFLOW_NAMES})
+    refs: list[tuple[str, str]] = []
+    for run_data in active_workflow_runs(dispatch_repo, statuses):
+        if run_data.get("event") != "repository_dispatch":
+            continue
+        labels = (
+            str(run_data.get("name") or ""),
+            str(run_data.get("display_title") or ""),
+        )
+        if not any(
+            label == name or label.startswith(f"{name} ")
+            for label in labels
+            for name in workflow_names
+        ):
+            continue
+        run_id = run_data.get("id")
+        if run_id:
+            refs.append((dispatch_repo, str(run_id)))
+    return refs
+
+
+def active_opencode_dispatch_limit() -> int:
+    """Return the configured aggregate central OpenCode run limit.
+
+    ``-1`` preserves unlimited behavior for local callers. The central workflow
+    sets a conservative finite default and may override it through a repository
+    variable without changing scheduler source.
+    """
+    raw_limit = (os.environ.get("ACTIVE_OPENCODE_REVIEW_LIMIT") or "-1").strip()
+    try:
+        limit = int(raw_limit)
+    except ValueError as exc:
+        raise RuntimeError(
+            "ACTIVE_OPENCODE_REVIEW_LIMIT must be an integer greater than or equal to -1"
+        ) from exc
+    if limit < -1:
+        raise RuntimeError(
+            "ACTIVE_OPENCODE_REVIEW_LIMIT must be an integer greater than or equal to -1"
+        )
+    return limit
+
+
 def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, str]:
     """Force-cancel workflow runs without blocking current-head decisions."""
     if not run_ids:
@@ -2098,6 +2156,15 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
                 )
             )
             return "already_running"
+        active_limit = active_opencode_dispatch_limit()
+        if active_limit >= 0:
+            active_refs = active_central_opencode_dispatch_refs(repo, workflow)
+            if len(active_refs) >= active_limit:
+                print(
+                    "OpenCode review dispatch deferred: central active-run capacity "
+                    f"is {len(active_refs)}/{active_limit}; a later scheduler heartbeat will retry"
+                )
+                return "capacity_reached"
     if dry_run:
         return "dry_run"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
@@ -2296,6 +2363,12 @@ def inspect_pr(
                     number,
                     "wait",
                     f"stacked PR onto {base_ref}; same-head OpenCode workflow run is already active",
+                )
+            if dispatch_result == "capacity_reached":
+                return Decision(
+                    number,
+                    "wait",
+                    f"stacked PR onto {base_ref}; central OpenCode active-run capacity is full",
                 )
             return Decision(
                 number,
@@ -2692,6 +2765,11 @@ def inspect_pr(
                 "wait",
                 "OpenCode review exceeded the status-check retry threshold, but a same-head workflow run is already active",
             )
+        if dispatch_result == "capacity_reached":
+            return decide(
+                "wait",
+                "OpenCode review exceeded the status-check retry threshold, but central active-run capacity is full",
+            )
         return decide(
             "review_dispatch",
             f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; same-head OpenCode re-dispatched",
@@ -2730,6 +2808,11 @@ def inspect_pr(
             return decide(
                 "wait",
                 "current head has completed Strix evidence; same-head OpenCode workflow run is already active",
+            )
+        if dispatch_result == "capacity_reached":
+            return decide(
+                "wait",
+                "current head has completed Strix evidence; central OpenCode active-run capacity is full",
             )
         return decide(
             "review_dispatch",

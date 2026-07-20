@@ -1982,6 +1982,19 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
     assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
 
 
+def test_stacked_pr_waits_when_central_opencode_capacity_is_full(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "capacity_reached",
+    )
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+
+    assert stacked.action == "wait"
+    assert stacked.reason == "stacked PR onto develop; central OpenCode active-run capacity is full"
+
+
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
@@ -2218,6 +2231,88 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
         in capsys.readouterr().out
     )
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
+
+
+def test_active_central_opencode_dispatch_refs_filters_unrelated_runs(monkeypatch):
+    central_runs = [
+        {
+            "id": 9200,
+            "name": "Required OpenCode Review owner/repo#1@" + "a" * 40,
+            "display_title": "Required OpenCode Review owner/repo#1@" + "a" * 40,
+            "event": "repository_dispatch",
+        },
+        {
+            "id": 9201,
+            "name": "Required OpenCode Review",
+            "display_title": "Required OpenCode Review owner/other#2@" + "b" * 40,
+            "event": "repository_dispatch",
+        },
+        {
+            "id": 9202,
+            "name": "Required OpenCode Review",
+            "display_title": "ordinary pull request check",
+            "event": "pull_request_target",
+        },
+        {
+            "id": 9203,
+            "name": "Strix Security Scan owner/repo#1@" + "a" * 40,
+            "display_title": "Strix Security Scan owner/repo#1@" + "a" * 40,
+            "event": "repository_dispatch",
+        },
+    ]
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): central_runs,
+    )
+
+    assert sched.active_central_opencode_dispatch_refs(
+        "owner/repo",
+        "OpenCode Review",
+    ) == [
+        ("ContextualWisdomLab/.github", "9200"),
+        ("ContextualWisdomLab/.github", "9201"),
+    ]
+
+
+def test_dispatch_opencode_review_defers_when_central_capacity_is_full(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv("ACTIVE_OPENCODE_REVIEW_LIMIT", "2")
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *args, **kwargs: ([], []))
+    monkeypatch.setattr(sched, "force_cancel_workflow_run_refs", lambda refs: None)
+    monkeypatch.setattr(
+        sched,
+        "active_central_opencode_dispatch_refs",
+        lambda *args, **kwargs: [("central/repo", "1"), ("central/repo", "2")],
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda *args, **kwargs: pytest.fail("capacity guard must prevent dispatch"),
+    )
+
+    result = sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(baseRefOid="b" * 40, headRefOid="a" * 40),
+        dry_run=False,
+    )
+
+    assert result == "capacity_reached"
+    assert "central active-run capacity is 2/2" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("value", ["not-an-integer", "-2"])
+def test_active_opencode_dispatch_limit_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv("ACTIVE_OPENCODE_REVIEW_LIMIT", value)
+
+    with pytest.raises(RuntimeError, match="must be an integer greater than or equal to -1"):
+        sched.active_opencode_dispatch_limit()
 
 
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
