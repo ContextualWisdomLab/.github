@@ -653,15 +653,55 @@ def adversarial_probe_source_receipt_error(
     return ""
 
 
+def receipt_verified_evidence_location(
+    evidence: str,
+    changed_files: frozenset[str],
+) -> tuple[str, int] | None:
+    """Return one evidence citation uniquely bound to its trusted source receipt.
+
+    A model can place a valid changed-file ``path:line`` citation and its exact
+    source-line receipt in ``evidence`` while copying a different location into
+    the redundant structured fields. Consider only safe current-head changed
+    files cited by the evidence, recompute every cited line receipt from the
+    sealed source tree, and return a location only when exactly one distinct
+    citation matches the single model receipt. Ambiguous or unverified evidence
+    remains unrepairable and fails closed.
+    """
+    receipts = SOURCE_LINE_RECEIPT_RE.findall(evidence)
+    if len(receipts) != 1:
+        return None
+    receipt = receipts[0].casefold()
+    matches: set[tuple[str, int]] = set()
+    for path in changed_files:
+        escaped_path = rf"(?<![A-Za-z0-9_./-]){re.escape(path)}"
+        citation_re = re.compile(
+            rf"{escaped_path}(?::|#L|\s+line\s+)([1-9][0-9]*)\b",
+            re.IGNORECASE,
+        )
+        for citation in citation_re.finditer(evidence):
+            line = int(citation.group(1))
+            if adversarial_probe_location_error(path, line):
+                continue
+            digest = adversarial_probe_source_line_digest(path, line)
+            if digest is not None and digest.casefold() == receipt:
+                matches.add((path, line))
+    if len(matches) != 1:
+        return None
+    return next(iter(matches))
+
+
 def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | Any:
     """Bind trusted source receipts and locations into otherwise valid evidence.
 
     Models sometimes place the exact changed-file path and positive line in the
     structured ``path``/``line`` fields but omit the duplicate ``path:line`` text
-    from ``evidence``. Restore only that redundant location after the existing
-    single receipt already matches the sealed current-head line. Missing,
-    duplicate, or mismatched receipts, unsafe paths, missing changed-file
-    evidence, and circular or unobserved claims remain unmodified and fail closed.
+    from ``evidence``, or cite and receipt-bind one changed source line in
+    ``evidence`` while copying a different valid changed-file location into the
+    redundant structured fields. Restore only a missing citation or rebind the
+    structured location when exactly one cited line matches the existing single
+    receipt in the sealed current-head tree. Missing, duplicate, ambiguous, or
+    mismatched receipts, unsafe paths, missing changed-file evidence, and
+    circular or unobserved claims remain unmodified and fail closed.
     """
     if not isinstance(value, dict):
         return value
@@ -696,27 +736,52 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
             continue
 
         receipts = SOURCE_LINE_RECEIPT_RE.findall(evidence)
-        if len(receipts) != 1 or adversarial_probe_source_receipt_error(
-            evidence, path, line
-        ):
+        if len(receipts) != 1:
             repaired_probes.append(probe)
             continue
         repaired_evidence = evidence
+        repaired_path = path
+        repaired_line = line
         rejection = adversarial_evidence_rejection_reason(repaired_evidence, path, line)
         if rejection == "must cite the exact probe path and positive line":
-            repaired_evidence = f"{path}:{line} {repaired_evidence}"
+            if not adversarial_probe_source_receipt_error(evidence, path, line):
+                repaired_evidence = f"{path}:{line} {repaired_evidence}"
+            else:
+                rebound_location = receipt_verified_evidence_location(
+                    evidence,
+                    changed_files,
+                )
+                if rebound_location is None:
+                    repaired_probes.append(probe)
+                    continue
+                repaired_path, repaired_line = rebound_location
         elif rejection:
             repaired_probes.append(probe)
             continue
         if adversarial_probe_source_receipt_error(
-            repaired_evidence, path, line
-        ) or adversarial_evidence_rejection_reason(repaired_evidence, path, line):
+            repaired_evidence, repaired_path, repaired_line
+        ) or adversarial_evidence_rejection_reason(
+            repaired_evidence,
+            repaired_path,
+            repaired_line,
+        ):
             repaired_probes.append(probe)
             continue
-        if repaired_evidence == evidence:
+        if (
+            repaired_evidence == evidence
+            and repaired_path == path
+            and repaired_line == line
+        ):
             repaired_probes.append(probe)
         else:
-            repaired_probes.append({**probe, "evidence": repaired_evidence})
+            repaired_probes.append(
+                {
+                    **probe,
+                    "path": repaired_path,
+                    "line": repaired_line,
+                    "evidence": repaired_evidence,
+                }
+            )
             changed = True
 
     if not changed:
