@@ -15,6 +15,16 @@ from collections.abc import Sequence
 from pathlib import Path
 
 
+SENSITIVE_DATA_SCRUB_PATTERNS = (
+    (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b'), '***'),
+    (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
+    (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
+    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
+)
 DEFAULT_IGNORE = (
     ".git",
     ".hg",
@@ -164,13 +174,24 @@ def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout:
     )
 
 
+def scrub_sensitive_data(text: str | None) -> str | None:
+    """Mask sensitive tokens in text to prevent secret leakage."""
+    if not text:
+        return text
+    for pattern, repl in SENSITIVE_DATA_SCRUB_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
+
 def timeout_output_text(value: str | bytes | None) -> str:
     """Return timeout output as text, regardless of subprocess internals."""
     if value is None:
         return ""
     if isinstance(value, bytes):
-        return value.decode(errors="replace")
-    return value
+        text = value.decode(errors="replace")
+    else:
+        text = value
+    return scrub_sensitive_data(text) or ""
 
 
 def emit_result(

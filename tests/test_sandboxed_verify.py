@@ -1,3 +1,4 @@
+"""Tests for the isolated verification sandbox environment."""
 import json
 import runpy
 import shutil
@@ -80,11 +81,24 @@ def test_copy_workspace_rejects_missing_repo_root(tmp_path):
         sandboxed_verify.copy_workspace(tmp_path / "missing", tmp_path / "sandbox", [])
 
 
+def test_scrub_sensitive_data():
+    """Verify that scrub_sensitive_data masks secrets."""
+    assert sandboxed_verify.scrub_sensitive_data(None) is None
+    assert sandboxed_verify.scrub_sensitive_data("safe output") == "safe output"
+    assert sandboxed_verify.scrub_sensitive_data("token ghp_1234567890abcdef") == "token ***"
+    assert sandboxed_verify.scrub_sensitive_data("sk-live-test1234") == "***"
+    assert sandboxed_verify.scrub_sensitive_data("xoxb-123-456") == "***"
+    assert sandboxed_verify.scrub_sensitive_data("authorization: bearer secret123") == "authorization: bearer ***"
+    assert sandboxed_verify.scrub_sensitive_data("AKIAIOSFODNN7EXAMPLE") == "***"
+
+
 def test_timeout_output_text_normalizes_subprocess_payloads():
-    """Timeout output normalization handles subprocess bytes and missing streams."""
+    """Timeout output normalization handles subprocess bytes and missing streams, and masks secrets."""
     assert sandboxed_verify.timeout_output_text(None) == ""
     assert sandboxed_verify.timeout_output_text(b"byte-output") == "byte-output"
     assert sandboxed_verify.timeout_output_text("text-output") == "text-output"
+    assert sandboxed_verify.timeout_output_text(b"token ghp_1234") == "token ***"
+    assert sandboxed_verify.timeout_output_text("token ghp_1234") == "token ***"
 
 
 def test_main_runs_command_in_copy_without_mutating_source(tmp_path, capsys):
