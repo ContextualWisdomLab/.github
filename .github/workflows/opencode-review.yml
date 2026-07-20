@@ -543,9 +543,10 @@ jobs:
 
             # Build the coverage tool image before the pull-request tree is
             # mounted anywhere. The networked build context contains only this
-            # trusted Dockerfile plus the reviewed, hash-pinned CI requirements
-            # from the default-branch checkout; it never contains PR-controlled
-            # source, dependency manifests, credentials, or runner command files.
+            # trusted Dockerfile, reviewed CI requirements, and strictly parsed
+            # hash-pinned dependency locks read from the exact target base SHA;
+            # it never contains PR-controlled source, dependency manifests,
+            # credentials, or runner command files.
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
@@ -558,6 +559,10 @@ jobs:
             chmod 0700 "$coverage_build_dir"
             install -m 0644 "$trusted_ci_requirements" \
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
+            python3 -I "${GITHUB_WORKSPACE}/scripts/ci/materialize_base_python_locks.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --base-sha "$PR_BASE_SHA" \
+              --output-dir "$coverage_build_dir/base-python-locks"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf
           ENV DEBIAN_FRONTEND=noninteractive
@@ -616,6 +621,21 @@ jobs:
               --only-binary=:all: \
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
+          COPY base-python-locks /tmp/base-python-locks
+          RUN set -eux; \
+            mkdir -p /opt/base-python-envs; \
+            while IFS="$(printf '\t')" read -r project_dir environment lock_file; do \
+              [ -n "$project_dir" ] && [ -n "$environment" ] && [ -n "$lock_file" ]; \
+              python3 -m venv --system-site-packages "/opt/base-python-envs/${environment}"; \
+              "/opt/base-python-envs/${environment}/bin/python" -m pip install \
+                --disable-pip-version-check \
+                --require-hashes \
+                --only-binary=:all: \
+                -r "/tmp/base-python-locks/${lock_file}"; \
+            done </tmp/base-python-locks/manifest.tsv; \
+            cp /tmp/base-python-locks/manifest.tsv /opt/base-python-envs/manifest.tsv; \
+            chmod -R go-w /opt/base-python-envs; \
+            rm -rf /tmp/base-python-locks
           DOCKERFILE
             if ! docker build --pull --no-cache --network=default \
               --tag "$coverage_tool_image" \
@@ -886,6 +906,22 @@ jobs:
               python3 -I -c 'import coverage, interrogate, pytest, pytest_cov; print("trusted offline Python test toolchain imports passed")'
           }
 
+          python_for_project() {
+            local project_dir="$1"
+            local environment
+            environment="$(
+              awk -F '\t' -v project="$project_dir" \
+                '$1 == project { print $2; exit }' \
+                /opt/base-python-envs/manifest.tsv
+            )"
+            if [ -n "$environment" ] \
+              && [ -x "/opt/base-python-envs/${environment}/bin/python" ]; then
+              printf '%s\n' "/opt/base-python-envs/${environment}/bin/python"
+            else
+              printf '%s\n' "python3"
+            fi
+          }
+
           configured_python_ci_test_commands() {
             local project_dir="$1"
             local workflow_dir="${project_dir}/.github/workflows"
@@ -898,18 +934,29 @@ jobs:
             local measured_projects=0
             while IFS= read -r project_dir; do
               measured_projects=1
+              project_python="$(python_for_project "$project_dir")"
+              run_and_capture "Trusted base Python dependency environment (${project_dir})" \
+                "$project_python" -m pip check
               configured_commands_json="$(configured_python_ci_test_commands "$project_dir")"
               if [ -n "$configured_commands_json" ]; then
                 while IFS= read -r configured_command_json; do
                   [ -n "$configured_command_json" ] || continue
-                  run_and_capture "Python configured CI test suite (${project_dir})" \
-                    python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" execute \
-                      --project-dir "$project_dir" \
-                      --command-json "$configured_command_json"
+                  if [[ "$project_python" = /opt/base-python-envs/*/bin/python ]]; then
+                    run_and_capture "Python configured CI test suite (${project_dir})" \
+                      env OPENCODE_PYTHON_ENV_BIN="$(dirname "$project_python")" \
+                      python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" execute \
+                        --project-dir "$project_dir" \
+                        --command-json "$configured_command_json"
+                  else
+                    run_and_capture "Python configured CI test suite (${project_dir})" \
+                      python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" execute \
+                        --project-dir "$project_dir" \
+                        --command-json "$configured_command_json"
+                  fi
                 done <<<"$configured_commands_json"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. "$2" -m coverage run -m pytest tests && "$2" -m coverage report --show-missing' bash "$project_dir" "$project_python"
             fi
             done < <(tracked_python_projects_with_tests)
 
@@ -1044,8 +1091,9 @@ jobs:
             while IFS= read -r project_dir; do
               if [ -f "${project_dir}/tests/test_docstrings.py" ]; then
                 measured_projects=1
+                project_python="$(python_for_project "$project_dir")"
                 run_and_capture "Python docstring coverage (${project_dir})" \
-                  bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
+                  bash -c 'cd "$1" && PYTHONPATH=. "$2" -m pytest tests/test_docstrings.py' bash "$project_dir" "$project_python"
               fi
             done < <(tracked_python_projects_with_tests)
             [ "$measured_projects" -eq 1 ]
@@ -1486,7 +1534,8 @@ jobs:
             measured_any=1
             # PR-selected dependency manifests are never resolved in the
             # networkless execution phase. The trusted image supplies the
-            # pinned review toolchain; missing project imports fail in pytest
+            # pinned review toolchain plus exact hash-locked dependencies from
+            # the trusted base commit; missing imports still fail in pytest
             # with the exact dependency name instead of reaching the network.
             verify_trusted_python_test_toolchain
             run_python_test_coverage

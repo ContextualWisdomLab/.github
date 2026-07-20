@@ -189,6 +189,18 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
     assert observed["env"]["PATH"].split(os.pathsep)[0] == str(virtualenv_bin)
 
 
+def test_safe_pytest_executor_rejects_untrusted_supplied_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A caller cannot redirect configured pytest through a PR-controlled bin path."""
+    untrusted_bin = tmp_path / "attacker-env" / "bin"
+    untrusted_bin.mkdir(parents=True)
+    monkeypatch.setenv("OPENCODE_PYTHON_ENV_BIN", str(untrusted_bin))
+
+    with pytest.raises(ValueError, match="trusted Python environment path"):
+        safe_pytest.execute_command(tmp_path, ["python", "-m", "pytest"])
+
+
 def test_configured_pytest_discovery_drops_injected_workflow_command(tmp_path: Path) -> None:
     """Only supported one-line pytest argv are returned from a PR-controlled workflow file."""
     workflow_dir = tmp_path / ".github" / "workflows"

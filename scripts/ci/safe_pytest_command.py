@@ -10,11 +10,13 @@ import pathlib
 import re
 import shlex
 import subprocess
+import stat
 from collections.abc import Sequence
 
 RUN_LINE_RE = re.compile(r"\s*(?:-\s*)?run:\s*(.+?)\s*$")
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
+TRUSTED_PYTHON_ENV_ROOT = pathlib.Path("/opt/base-python-envs")
 
 
 def _basename(value: str) -> str:
@@ -47,7 +49,9 @@ def parse_safe_pytest_command(command: str) -> list[str] | None:
         argv = shlex.split(command)
     except ValueError:
         return None
-    if not argv or any("\n" in arg or "\x00" in arg or _has_shell_control(arg) for arg in argv):
+    if not argv or any(
+        "\n" in arg or "\x00" in arg or _has_shell_control(arg) for arg in argv
+    ):
         return None
     return argv if _is_pytest_argv(argv) else None
 
@@ -78,7 +82,24 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
         raise ValueError("configured command is not a safe direct pytest invocation")
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
+    supplied_env_bin = os.environ.get("OPENCODE_PYTHON_ENV_BIN", "").strip()
     virtualenv_bin = project_dir.resolve() / ".venv" / "bin"
+    if supplied_env_bin:
+        candidate = pathlib.Path(supplied_env_bin)
+        try:
+            resolved = candidate.resolve(strict=True)
+            candidate_stat = resolved.stat()
+            trusted_root = TRUSTED_PYTHON_ENV_ROOT.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("trusted Python environment path is unavailable") from exc
+        if (
+            not resolved.is_dir()
+            or trusted_root not in resolved.parents
+            or candidate_stat.st_uid != 0
+            or candidate_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise ValueError("trusted Python environment path failed validation")
+        virtualenv_bin = resolved
     if virtualenv_bin.is_dir():
         inherited_path = env.get("PATH")
         env["PATH"] = (
@@ -119,7 +140,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         command = json.loads(args.command_json)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"invalid --command-json: {exc}") from exc
-    if not isinstance(command, list) or not all(isinstance(arg, str) for arg in command):
+    if not isinstance(command, list) or not all(
+        isinstance(arg, str) for arg in command
+    ):
         raise SystemExit("--command-json must be an array of strings")
     print(f"Executing configured pytest argv: {shlex.join(command)}")
     return execute_command(args.project_dir, command)

@@ -330,7 +330,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
-    assert "The networked build context contains only this" in measure_step
+    assert (
+        "hash-pinned dependency locks read from the exact target base SHA"
+        in measure_step
+    )
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
@@ -405,7 +408,16 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "uv sync --project" not in measure_step
     assert "uv run --no-project" not in measure_step
     assert "uv run --no-build" not in measure_step
-    assert "python3 -m coverage run -m pytest tests" in measure_step
+    assert '"$2" -m coverage run -m pytest tests' in measure_step
+    assert "materialize_base_python_locks.py" in measure_step
+    assert "COPY base-python-locks /tmp/base-python-locks" in measure_step
+    assert "--require-hashes" in measure_step
+    assert "--only-binary=:all:" in measure_step
+    assert "python_for_project()" in measure_step
+    assert (
+        '[[ "$project_python" = /opt/base-python-envs/*/bin/python ]]' in measure_step
+    )
+    assert 'OPENCODE_PYTHON_ENV_BIN="$(dirname "$project_python")"' in measure_step
     trusted_requirements = Path(
         "requirements-opencode-review-ci-hashes.txt"
     ).read_text(encoding="utf-8")
@@ -493,8 +505,8 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "contents: write" not in workflow
 
 
-def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
-    """Use only the trusted image toolchain during networkless PR execution."""
+def test_opencode_python_coverage_uses_only_base_hash_locked_dependencies():
+    """Use trusted base locks and never resolve PR-selected dependencies."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     measure = workflow.split(
         "      - name: Measure test and docstring evidence\n", 1
@@ -502,13 +514,13 @@ def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
 
     assert "verify_trusted_python_test_toolchain()" in measure
     assert "PR-selected dependency manifests are never resolved" in measure
-    assert "missing project imports fail in pytest" in measure
+    assert "trusted base commit; missing imports still fail in pytest" in measure
     assert "uv sync --project" not in measure
     assert "uv run --no-project" not in measure
     assert "uv run --no-build" not in measure
-    assert "python3 -m coverage run -m pytest tests" in measure
-    assert "python3 -m coverage report --show-missing" in measure
-    assert "python3 -m pytest tests/test_docstrings.py" in measure
+    assert '"$2" -m coverage run -m pytest tests' in measure
+    assert '"$2" -m coverage report --show-missing' in measure
+    assert '"$2" -m pytest tests/test_docstrings.py' in measure
 
 
 def test_opencode_coverage_prefers_exact_preinstalled_declared_pnpm_before_npm():
@@ -1598,7 +1610,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "uv run --no-project" not in measure
     assert "uv run --no-build" not in measure
     assert "Trusted offline Python test toolchain" in measure
-    assert "python3 -m coverage run -m pytest tests" in measure
+    assert '"$2" -m coverage run -m pytest tests' in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci --ignore-scripts" in coverage_job
     assert "pnpm install --frozen-lockfile --ignore-scripts" in coverage_job
