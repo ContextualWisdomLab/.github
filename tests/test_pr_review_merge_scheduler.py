@@ -846,6 +846,70 @@ def test_outdated_thread_cleanup_refetches_before_merge(monkeypatch):
     assert decision.notes[0].startswith("Resolved 1 outdated review thread(s)")
 
 
+@pytest.mark.parametrize(
+    ("refresh_outcome", "reason_fragment"),
+    [
+        ("error", "review-thread refresh failed after outdated-thread cleanup"),
+        ("missing", "pull request disappeared during outdated-thread cleanup"),
+        ("head_changed", "pull request head changed during outdated-thread cleanup"),
+        ("rest_fallback", "review-thread refresh fell back to incomplete REST evidence"),
+        ("base_changed", "pull request base changed during outdated-thread cleanup"),
+    ],
+)
+def test_outdated_thread_cleanup_refresh_failures_stop_mutation(
+    monkeypatch,
+    refresh_outcome,
+    reason_fragment,
+):
+    """Every incomplete or changed refresh snapshot must fail closed."""
+    original = make_pr(
+        reviewThreads={
+            "nodes": [
+                {"id": "old", "isResolved": False, "isOutdated": True},
+            ]
+        },
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+
+    def refresh_pr(repo, number):
+        assert repo == "owner/repo"
+        assert number == 1
+        if refresh_outcome == "error":
+            raise RuntimeError("refresh transport failed")
+        if refresh_outcome == "missing":
+            return []
+        if refresh_outcome == "head_changed":
+            return [make_pr(headRefOid="new-head")]
+        if refresh_outcome == "rest_fallback":
+            return [
+                make_pr(
+                    reviewThreads=None,
+                    reviewThreadEvidenceAvailable=False,
+                )
+            ]
+        return [make_pr(baseRefName="develop")]
+
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sched, "resolve_outdated_review_threads", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(sched, "fetch_pr", refresh_pr)
+    monkeypatch.setattr(
+        sched,
+        "merge_pr",
+        lambda *args, **kwargs: pytest.fail("refresh failure must stop merge mutation"),
+    )
+
+    decision = inspect(
+        original,
+        dry_run=False,
+        trigger_reviews=False,
+        merge_mode="direct",
+    )
+
+    assert decision.action == "wait"
+    assert reason_fragment in decision.reason
+    assert decision.notes[0].startswith("Resolved 1 outdated review thread(s)")
+
+
 def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monkeypatch):
     seen_workers = []
 
