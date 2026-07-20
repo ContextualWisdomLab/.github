@@ -1953,9 +1953,16 @@ def active_review_run_refs(
     *,
     run_title: str,
     workflow_aliases: frozenset[str],
+    dispatch_workflow_paths: frozenset[str],
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Return repository-qualified current and stale review workflow runs."""
+    """Return repository-qualified current and stale review workflow runs.
+
+    GitHub exposes a workflow's dynamic ``run-name`` as both ``name`` and
+    ``display_title`` for repository-dispatch runs. Match the guarded title
+    before fixed workflow aliases, while requiring the canonical trusted
+    workflow path so another dispatch workflow cannot spoof dedupe evidence.
+    """
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
     repositories = tuple(dict.fromkeys((target_repo, dispatch_repo)))
@@ -1968,21 +1975,23 @@ def active_review_run_refs(
     for run_repo in repositories:
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
-                continue
             run_id = run_data.get("id")
             if not run_id:
                 continue
             run_ref = (run_repo, str(run_id))
             display_title = str(run_data.get("display_title") or "")
             if (
-                run_data.get("event") == "repository_dispatch"
+                run_repo == dispatch_repo
+                and run_data.get("event") == "repository_dispatch"
+                and str(run_data.get("path") or "") in dispatch_workflow_paths
                 and display_title.startswith(dispatch_title_prefix)
             ):
                 dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
+                continue
+            if run_name != workflow and run_name not in workflow_aliases:
                 continue
             if run_repo != target_repo:
                 continue
@@ -2018,6 +2027,7 @@ def active_opencode_run_refs(
         pr,
         run_title="Required OpenCode Review",
         workflow_aliases=frozenset(OPENCODE_WORKFLOW_NAMES),
+        dispatch_workflow_paths=frozenset({".github/workflows/opencode-review.yml"}),
         statuses=statuses,
     )
 
@@ -2177,6 +2187,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         pr,
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
+        dispatch_workflow_paths=frozenset({".github/workflows/strix.yml"}),
     )
     force_cancel_workflow_run_refs(stale_run_refs)
     if current_run_refs:

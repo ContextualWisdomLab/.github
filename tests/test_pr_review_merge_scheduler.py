@@ -2283,10 +2283,11 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
     head_sha = "a" * 40
     current_dispatch = {
         "id": 9100,
-        "name": "Required OpenCode Review",
+        "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
         "event": "repository_dispatch",
         "head_sha": "default-branch-sha",
         "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "path": ".github/workflows/opencode-review.yml",
         "pull_requests": [],
     }
 
@@ -2337,18 +2338,20 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
     central_runs = [
         {
             "id": 9300,
-            "name": "Strix Security Scan",
+            "name": f"Strix Security Scan owner/repo#1@{stale_sha}",
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
             "display_title": f"Strix Security Scan owner/repo#1@{stale_sha}",
+            "path": ".github/workflows/strix.yml",
             "pull_requests": [],
         },
         {
             "id": 9301,
-            "name": "Strix Security Scan",
+            "name": f"Strix Security Scan owner/repo#1@{head_sha}",
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
             "display_title": f"Strix Security Scan owner/repo#1@{head_sha}",
+            "path": ".github/workflows/strix.yml",
             "pull_requests": [],
         },
     ]
@@ -2405,9 +2408,10 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
     central_runs = [
         {
             "id": 9400,
-            "name": "Required OpenCode Review",
+            "name": "Required OpenCode Review owner/repo#1@not-a-sha",
             "event": "repository_dispatch",
             "display_title": "Required OpenCode Review owner/repo#1@not-a-sha",
+            "path": ".github/workflows/opencode-review.yml",
             "pull_requests": [],
         },
         {
@@ -2416,6 +2420,14 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
             "event": "pull_request_target",
             "head_sha": head_sha,
             "pull_requests": [{"number": 1}],
+        },
+        {
+            "id": 9402,
+            "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
+            "event": "repository_dispatch",
+            "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+            "path": ".github/workflows/untrusted-review.yml",
+            "pull_requests": [],
         },
     ]
 
