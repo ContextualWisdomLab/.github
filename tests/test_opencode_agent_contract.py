@@ -21,9 +21,8 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert reviewer["color"] == "#7c3aed"
     # Reasoning effort is model-level only (see the model configs below and the
     # ci-autofix agent). An agent-level reasoningEffort is applied to every
-    # candidate the agent runs, including non-reasoning models like
-    # github-models/openai/gpt-4.1, whose OpenAI backend rejects the
-    # reasoning_effort request argument outright.
+    # candidate the agent runs, including non-reasoning candidates whose
+    # provider backends reject the reasoning_effort request argument outright.
     assert "reasoningEffort" not in reviewer
     assert "model" not in reviewer
     assert "Reviews only; never edits code" in reviewer["description"]
@@ -42,7 +41,7 @@ def test_code_reviewer_subagent_contract_is_configured():
 
     for primary_agent in ("ci-review", "ci-review-fallback"):
         # Reasoning effort must NOT be set at the agent level: it would be sent
-        # to every pool candidate, and non-reasoning models (gpt-4.1) reject the
+        # to every pool candidate, and non-reasoning candidates reject the
         # reasoning_effort argument. Reasoning models carry it per-model instead.
         assert "reasoningEffort" not in agents[primary_agent]
         permission = agents[primary_agent]["permission"]
@@ -103,7 +102,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs == [
-        ["github-models", "openai/gpt-4.1"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["github-models", "openai/gpt-5"],
@@ -115,7 +113,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models == [
-        "openai/gpt-4.1",
         "deepseek/deepseek-v3-0324",
         "openai/gpt-5",
         "openai/gpt-5-chat",
@@ -125,6 +122,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
     banned_review_candidates = {
         "gpt-5-nano",
+        "openai/gpt-4.1",
         "openai/gpt-5-nano",
         "openai/o3-mini",
     }
@@ -1090,8 +1088,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 '
-        "github-models/deepseek/deepseek-v3-0324 "
+        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5.6-luna "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
@@ -1213,8 +1210,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 '
-        "github-models/deepseek/deepseek-v3-0324 "
+        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5.6-luna "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
