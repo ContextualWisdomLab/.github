@@ -121,9 +121,9 @@ def pyproject_names(text: str) -> set[str]:
             if match:
                 names.add(normalize_distribution(match.group(1)))
 
-    poetry_dependencies = (
-        ((document.get("tool") or {}).get("poetry") or {}).get("dependencies") or {}
-    )
+    poetry_dependencies = ((document.get("tool") or {}).get("poetry") or {}).get(
+        "dependencies"
+    ) or {}
     names.update(
         normalize_distribution(name)
         for name in poetry_dependencies
@@ -147,7 +147,11 @@ def base_declared_distributions(
     declared: set[str] = set()
     manifests: list[str] = []
     for directory in directories:
-        for filename in ("requirements.txt", "requirements-hashes.txt", "pyproject.toml"):
+        for filename in (
+            "requirements.txt",
+            "requirements-hashes.txt",
+            "pyproject.toml",
+        ):
             relative_path = filename if directory == "." else f"{directory}/{filename}"
             text = git_show(repo_root, base_sha, relative_path)
             if text is None:
@@ -200,8 +204,10 @@ def classify(
     declared, manifests = base_declared_distributions(repo_root, base_sha, project_dir)
     undeclared = sorted(missing - declared)
     if undeclared:
-        return False, "missing modules are not base-declared dependencies: " + ", ".join(
-            undeclared
+        return (
+            False,
+            "missing modules are not base-declared dependencies: "
+            + ", ".join(undeclared),
         )
     return True, (
         "networkless central coverage lacks base-declared dependencies "

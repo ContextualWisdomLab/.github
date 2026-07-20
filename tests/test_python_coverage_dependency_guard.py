@@ -12,10 +12,7 @@ import pytest
 
 
 MODULE_PATH = (
-    Path(__file__).parents[1]
-    / "scripts"
-    / "ci"
-    / "python_coverage_dependency_guard.py"
+    Path(__file__).parents[1] / "scripts" / "ci" / "python_coverage_dependency_guard.py"
 )
 
 
@@ -38,7 +35,9 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def make_repo(tmp_path: Path, manifest: str, *, pyproject: bool = False) -> tuple[Path, str]:
+def make_repo(
+    tmp_path: Path, manifest: str, *, pyproject: bool = False
+) -> tuple[Path, str]:
     repo = tmp_path / "repo"
     (repo / "backend").mkdir(parents=True)
     filename = "pyproject.toml" if pyproject else "requirements.txt"
