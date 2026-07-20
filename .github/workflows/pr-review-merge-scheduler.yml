@@ -83,57 +83,8 @@ on:
     # required check that lands after a PR's last event is auto-updated/merged
     # within ~15 minutes instead of sitting idle for up to an hour.
     - cron: "*/15 * * * *"
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Print planned actions without mutating PRs
-        required: false
-        default: false
-        type: boolean
-      org_sweep:
-        description: Run the organization-wide queue sweep instead of the single-repository scan
-        required: false
-        default: false
-        type: boolean
-      max_prs:
-        description: Maximum open PRs to inspect
-        required: false
-        default: "100"
-      pr_number:
-        description: Optional single pull request number to inspect immediately
-        required: false
-        default: ""
-      trigger_reviews:
-        description: Dispatch OpenCode Review for PR heads without current approval
-        required: false
-        default: true
-        type: boolean
-      review_dispatch_limit:
-        description: OpenCode/Strix review dispatch budget per scheduler run (-1 dispatches every eligible current-head review)
-        required: false
-        default: "1"
-      branch_update_limit:
-        description: Branch update budget per scheduler run (-1 updates every eligible outdated branch)
-        required: false
-        default: "1"
-      enable_auto_merge:
-        description: Enable auto-merge for current-head approved PRs
-        required: false
-        default: true
-        type: boolean
-      merge_mode:
-        description: "Merge behavior for current-head approved PRs: direct_or_auto, auto, direct, or disabled"
-        required: false
-        default: direct_or_auto
-      update_branches:
-        description: Update outdated PR branches after OpenCode approval
-        required: false
-        default: true
-        type: boolean
-      stale_opencode_minutes:
-        description: Redispatch OpenCode Review when an in-progress OpenCode check is older than this many minutes
-        required: false
-        default: "90"
+  repository_dispatch:
+    types: [merge-scheduler]
 
 concurrency:
   group: >-
@@ -143,10 +94,10 @@ concurrency:
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
-    github.event_name == 'workflow_dispatch' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
-    github.event_name == 'workflow_dispatch' && github.run_id ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
+    github.event_name == 'repository_dispatch' && github.run_id ||
     github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'workflow_dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
 # the workflow level. The scan-pr-queue job that actually needs write access
@@ -163,7 +114,7 @@ jobs:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
   scan-pr-queue:
-    # workflow_dispatch review runs do not reliably carry pull_requests metadata.
+    # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
     # The org-sweep cron and org_sweep dispatches are handled by org-queue-sweep
     # below; skipping them here avoids a duplicate same-repository scan.
@@ -184,8 +135,8 @@ jobs:
         github.event.schedule != '*/15 * * * *'
       ) &&
       (
-        github.event_name != 'workflow_dispatch' ||
-        inputs.org_sweep != true
+        github.event_name != 'repository_dispatch' ||
+        github.event.client_payload.org_sweep != true
       )
     runs-on: ubuntu-latest
     permissions:
@@ -197,18 +148,18 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}
-      DEFAULT_BRANCH: ${{ inputs.base_branch || github.event.repository.default_branch }}
-      DRY_RUN: ${{ inputs.dry_run == true }}
-      MAX_PRS: ${{ inputs.max_prs || '100' }}
-      PROJECT_FLOW_INPUT: ${{ inputs.project_flow || vars.PROJECT_FLOW || '' }}
-      PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || inputs.pr_number || '' }}
-      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || inputs.trigger_reviews == true }}
-      REVIEW_DISPATCH_LIMIT_INPUT: ${{ inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
-      BRANCH_UPDATE_LIMIT_INPUT: ${{ inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
-      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.enable_auto_merge == true }}
-      MERGE_MODE: ${{ inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
-      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || inputs.update_branches == true }}
-      STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '90' }}
+      DEFAULT_BRANCH: ${{ github.event.client_payload.base_branch || inputs.base_branch || github.event.repository.default_branch }}
+      DRY_RUN: ${{ github.event.client_payload.dry_run == true || inputs.dry_run == true }}
+      MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
+      PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
+      PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
+      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
+      BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
+      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
+      MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
+      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true }}
+      STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '90' }}
     steps:
       - name: Exchange OpenCode app token for scheduler mutations
         id: scheduler_app_token
@@ -464,8 +415,7 @@ jobs:
           SCHEDULER_READ_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          SCHEDULER_REQUIRED_WORKFLOW_REF: ${{ steps.trusted_source.outputs.ref }}
-          SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
+          SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           project_flow="$PROJECT_FLOW_INPUT"
@@ -533,7 +483,7 @@ jobs:
       github.repository == 'ContextualWisdomLab/.github' &&
       (
         (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
-        (github.event_name == 'workflow_dispatch' && inputs.org_sweep == true)
+        (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -546,20 +496,20 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}
-      DRY_RUN: ${{ inputs.dry_run == true }}
+      DRY_RUN: ${{ github.event.client_payload.dry_run == true || inputs.dry_run == true }}
       ORG_SWEEP_OWNER: ContextualWisdomLab
       # Inspect the complete practical queue for every repository. The previous
       # default of 30 silently omitted older PRs whenever a repository had a
       # larger queue (BandScope had 34 during the incident that established
       # this contract). The scheduler paginates, so 1000 keeps the practical
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
-      ORG_SWEEP_MAX_PRS: ${{ inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
-      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
-      ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
-      ORG_SWEEP_TRIGGER_REVIEWS: ${{ inputs.trigger_reviews == true }}
-      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ inputs.enable_auto_merge == true }}
-      ORG_SWEEP_MERGE_MODE: ${{ inputs.merge_mode || 'direct_or_auto' }}
-      ORG_SWEEP_UPDATE_BRANCHES: ${{ inputs.update_branches == true }}
+      ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
+      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
+      ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
+      ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
+      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}
+      ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}
+      ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
@@ -570,7 +520,7 @@ jobs:
       # if MORE than this many repositories become unreachable at once, the whole
       # credential likely broke and the job fails loudly.
       ORG_SWEEP_MAX_UNAVAILABLE: ${{ vars.ORG_SWEEP_MAX_UNAVAILABLE || '5' }}
-      STALE_OPENCODE_MINUTES: ${{ inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '90' }}
+      STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '90' }}
     steps:
       - name: Exchange OpenCode app token for sweep mutations
         id: sweep_app_token
@@ -714,15 +664,14 @@ jobs:
           SCHEDULER_ACTIONS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.sweep_app_token.outputs.token || github.token }}
           # The sweep executes inside ContextualWisdomLab/.github, which is exactly
           # where the central required workflows are dispatched, so the runner's own
-          # github.token (actions: write) is a sufficient dispatch credential even
+          # github.token (contents: write) is a sufficient dispatch credential even
           # though the OpenCode app token has no Actions permission. Without this the
           # sweep deadlocks every PR that needs current-head review evidence with
-          # "no cross-repository workflow-dispatch credential".
+          # "no cross-repository repository-dispatch credential".
           SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.sweep_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          SCHEDULER_REQUIRED_WORKFLOW_REF: main
-          SCHEDULER_ALLOW_CROSS_REPO_WORKFLOW_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
+          SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           if [ "$SCHEDULER_MUTATION_TOKEN_SOURCE" = "github-token" ]; then

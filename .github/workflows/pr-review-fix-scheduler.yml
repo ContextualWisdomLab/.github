@@ -48,46 +48,13 @@ on:
         required: false
         default: "main"
         type: string
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Print actions without dispatching autofix
-        required: false
-        default: false
-        type: boolean
-      max_prs:
-        description: Maximum open PRs to inspect
-        required: false
-        default: "50"
-      max_dispatches:
-        description: Maximum autofix runs to dispatch
-        required: false
-        default: "1"
-      target_repository:
-        description: Repository to scan, in owner/name form; defaults to PR_REVIEW_FIX_TARGET_REPOSITORY or this repository
-        required: false
-        default: ""
-      base_branch:
-        description: Base branch to scan; defaults to PR_REVIEW_FIX_BASE_BRANCH or this repository default branch
-        required: false
-        default: ""
-      retry_hours:
-        description: Minimum hours before redispatching autofix for the same head
-        required: false
-        default: "24"
-      autofix_workflow:
-        description: Autofix workflow file to dispatch
-        required: false
-        default: "pr-review-autofix.yml"
-      autofix_repository:
-        description: Repository that owns the autofix workflow
-        required: false
-        default: "ContextualWisdomLab/.github"
+  repository_dispatch:
+    types: [pr-review-fix-scheduler]
   schedule:
     - cron: "23 */2 * * *"
 
 concurrency:
-  group: central-pr-review-fix-scheduler-${{ inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
+  group: central-pr-review-fix-scheduler-${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #8): declare a least-privilege default at
@@ -108,15 +75,15 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-      TARGET_REPOSITORY: ${{ inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
-      DEFAULT_BRANCH: ${{ inputs.base_branch || vars.PR_REVIEW_FIX_BASE_BRANCH || github.event.repository.default_branch }}
-      DRY_RUN: ${{ inputs.dry_run == true }}
-      MAX_PRS: ${{ inputs.max_prs || '50' }}
-      MAX_DISPATCHES: ${{ inputs.max_dispatches || '1' }}
-      RETRY_HOURS: ${{ inputs.retry_hours || '24' }}
-      AUTOFIX_WORKFLOW: ${{ inputs.autofix_workflow || 'pr-review-autofix.yml' }}
-      AUTOFIX_REPOSITORY: ${{ inputs.autofix_repository || 'ContextualWisdomLab/.github' }}
-      CANONICAL_REF: ${{ inputs.canonical_ref || 'main' }}
+      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.client_payload.base_branch || inputs.base_branch || vars.PR_REVIEW_FIX_BASE_BRANCH || github.event.repository.default_branch }}
+      DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
+      MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '50' }}
+      MAX_DISPATCHES: ${{ github.event.client_payload.max_dispatches || inputs.max_dispatches || '1' }}
+      RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
+      AUTOFIX_WORKFLOW: pr-review-autofix.yml
+      AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
+      CANONICAL_REF: main
     steps:
       - name: Checkout canonical scheduler
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

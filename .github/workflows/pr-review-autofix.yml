@@ -1,40 +1,19 @@
 name: PR Review Autofix
+run-name: >-
+  PR Review Autofix ${{ github.event.client_payload.target_repository || github.repository }}#${{
+  github.event.client_payload.pr_number || 'event' }}@${{
+  github.event.client_payload.pr_head_sha || github.sha }}
 
 on:
-  workflow_dispatch:
-    inputs:
-      target_repository:
-        description: Repository that owns the pull request, in owner/name form
-        required: true
-        type: string
-      pr_number:
-        description: Pull request number to fix
-        required: true
-        type: string
-      pr_base_ref:
-        description: Pull request base branch
-        required: true
-        type: string
-      pr_base_sha:
-        description: Pull request base SHA
-        required: true
-        type: string
-      pr_head_ref:
-        description: Pull request head branch
-        required: true
-        type: string
-      pr_head_sha:
-        description: Pull request head SHA
-        required: true
-        type: string
-      resolve_conflict:
-        description: Merge the base branch into the head and resolve merge conflicts instead of applying review-feedback fixes
-        required: false
-        default: "false"
-        type: string
+  # Default-branch-only entrypoint: workflow_dispatch would let a caller select
+  # an untrusted branch version before OIDC and write credentials are bound.
+  repository_dispatch:
+    types: [pr-review-autofix]
 
 concurrency:
-  group: pr-review-autofix-${{ inputs.target_repository }}-${{ inputs.pr_number }}
+  group: >-
+    pr-review-autofix-${{ github.event.client_payload.target_repository }}-${{
+    github.event.client_payload.pr_number }}
   cancel-in-progress: false
 
 permissions:
@@ -46,13 +25,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      TARGET_REPOSITORY: ${{ inputs.target_repository }}
-      PR_NUMBER: ${{ inputs.pr_number }}
-      PR_BASE_REF: ${{ inputs.pr_base_ref }}
-      PR_BASE_SHA: ${{ inputs.pr_base_sha }}
-      PR_HEAD_REF: ${{ inputs.pr_head_ref }}
-      PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
-      RESOLVE_CONFLICT: ${{ inputs.resolve_conflict }}
+      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+      PR_BASE_REF: ${{ github.event.client_payload.pr_base_ref }}
+      PR_BASE_SHA: ${{ github.event.client_payload.pr_base_sha }}
+      PR_HEAD_REF: ${{ github.event.client_payload.pr_head_ref }}
+      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+      RESOLVE_CONFLICT: ${{ github.event.client_payload.resolve_conflict || 'false' }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -154,12 +133,28 @@ jobs:
             echo "::error::PR head SHA must be a 40-character git SHA."
             exit 1
           fi
+          if [ "$RESOLVE_CONFLICT" != "true" ] && [ "$RESOLVE_CONFLICT" != "false" ]; then
+            echo "::error::resolve_conflict must be exactly true or false."
+            exit 1
+          fi
 
-          live_head_sha="$(gh api -X GET "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          live_head_repo="$(gh api -X GET "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')"
-          live_head_ref="$(gh api -X GET "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')"
+          live_pr_json="$(gh api -X GET "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr_json")"
+          live_base_ref="$(jq -r '.base.ref // empty' <<<"$live_pr_json")"
+          live_base_sha="$(jq -r '.base.sha // empty' <<<"$live_pr_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pr_json")"
+          live_head_repo="$(jq -r '.head.repo.full_name // empty' <<<"$live_pr_json")"
+          live_head_ref="$(jq -r '.head.ref // empty' <<<"$live_pr_json")"
+          if [ "$live_state" != "open" ]; then
+            echo "::error::Autofix requires an open pull request; live state=${live_state:-missing}."
+            exit 1
+          fi
           if [ "$live_head_repo" != "$TARGET_REPOSITORY" ]; then
             echo "::error::Autofix only supports same-repository PR heads."
+            exit 1
+          fi
+          if [ "$live_base_ref" != "$PR_BASE_REF" ] || [ "$live_base_sha" != "$PR_BASE_SHA" ]; then
+            echo "::error::PR base metadata does not match the live pull request."
             exit 1
           fi
           if [ "$live_head_ref" != "$PR_HEAD_REF" ] || [ "$live_head_sha" != "$PR_HEAD_SHA" ]; then
@@ -313,7 +308,7 @@ jobs:
           }' >"${OPENCODE_AUTOFIX_WORKDIR}/opencode.jsonc"
 
       - name: Run OpenCode review autofix
-        if: inputs.resolve_conflict != 'true'
+        if: env.RESOLVE_CONFLICT != 'true'
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
@@ -388,7 +383,7 @@ jobs:
           trap - EXIT
 
       - name: Validate changed files
-        if: inputs.resolve_conflict != 'true'
+        if: env.RESOLVE_CONFLICT != 'true'
         run: |
           set -euo pipefail
           cd "$TARGET_WORKSPACE"
@@ -429,7 +424,7 @@ jobs:
           fi
 
       - name: Commit and push autofix
-        if: inputs.resolve_conflict != 'true'
+        if: env.RESOLVE_CONFLICT != 'true'
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
         run: |
@@ -449,7 +444,7 @@ jobs:
           git push origin "HEAD:${PR_HEAD_REF}"
 
       - name: Merge base branch and resolve conflicts with OpenCode
-        if: inputs.resolve_conflict == 'true'
+        if: env.RESOLVE_CONFLICT == 'true'
         env:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}

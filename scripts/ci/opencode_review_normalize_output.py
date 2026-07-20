@@ -3,18 +3,26 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import stat
 import sys
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 try:
-    from adversarial_evidence import adversarial_evidence_rejection_reason
+    from adversarial_evidence import (
+        SOURCE_LINE_RECEIPT_RE,
+        adversarial_evidence_rejection_reason,
+    )
 except ModuleNotFoundError:  # pragma: no cover - package import path
-    from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
+    from scripts.ci.adversarial_evidence import (
+        SOURCE_LINE_RECEIPT_RE,
+        adversarial_evidence_rejection_reason,
+    )
 
 STRUCTURAL_FAILURE_PHRASES = (
     "structural exploration was not possible",
@@ -231,6 +239,14 @@ EVIDENCE_REPAIR_ENV_VARS = (
     "OPENCODE_EVIDENCE_FILE",
 )
 
+TRUSTED_ARTIFACT_NAMES = {
+    "OPENCODE_CHANGED_FILES_FILE": "opencode-changed-files.txt",
+    "OPENCODE_EVIDENCE_FILE": "opencode-review-evidence.md",
+    "OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE": "opencode-review-evidence.md",
+    "OPENCODE_EXECUTION_RECEIPTS_FILE": "opencode-execution-receipts.txt",
+}
+TRUSTED_ARTIFACT_MANIFEST = "opencode-artifact-manifest.json"
+
 HANGUL_RE = re.compile(r"[가-힣]")
 PREFERRED_REVIEW_LANGUAGE_RE = re.compile(
     r"Preferred review language:\s*`?([A-Za-z]+)`?", re.IGNORECASE
@@ -336,11 +352,6 @@ def violates_review_language_contract(value: dict[str, Any]) -> bool:
     return not HANGUL_RE.search(control_review_text(value))
 
 
-def contains_non_actionable_failed_check_review(value: dict[str, Any]) -> bool:
-    """Return whether a review punts failed-check diagnosis back to the reader."""
-    return bool(non_actionable_failed_check_review_phrase(value))
-
-
 def non_actionable_failed_check_review_phrase(value: dict[str, Any]) -> str:
     """Return the failed-check deflection phrase found in the review, if any."""
     combined = control_review_text(value).casefold()
@@ -367,22 +378,126 @@ def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
     return bool(CHANGED_FILE_EVIDENCE_PATTERN.search(f"{reason}\n{summary}"))
 
 
+def trusted_runner_temp() -> Path | None:
+    """Return the runner-owned artifact root, rejecting missing or symlink roots."""
+    value = os.environ.get("RUNNER_TEMP", "").strip()
+    if not value:
+        return None
+    root = Path(value)
+    try:
+        if stat.S_ISLNK(root.lstat().st_mode) or not root.is_dir():
+            return None
+        return root.resolve(strict=True)
+    except OSError:
+        return None
+
+
+def safe_runner_artifact(path: Path, expected_name: str) -> Path | None:
+    """Return an exact runner-temp regular file with safe ownership and mode."""
+    root = trusted_runner_temp()
+    if root is None:
+        return None
+    expected = root / expected_name
+    try:
+        file_stat = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    if (
+        resolved != expected
+        or stat.S_ISLNK(file_stat.st_mode)
+        or not stat.S_ISREG(file_stat.st_mode)
+    ):
+        return None
+    if file_stat.st_uid != os.getuid() or file_stat.st_mode & 0o022:
+        return None
+    return resolved
+
+
+def trusted_artifact_manifest() -> dict[str, Any] | None:
+    """Load the runner manifest only when its trusted-step digest still matches."""
+    root = trusted_runner_temp()
+    if root is None:
+        return None
+    manifest_path = safe_runner_artifact(
+        root / TRUSTED_ARTIFACT_MANIFEST, TRUSTED_ARTIFACT_MANIFEST
+    )
+    if manifest_path is None:
+        return None
+    expected_digest = os.environ.get("OPENCODE_ARTIFACT_MANIFEST_SHA256", "").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        return None
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        if hashlib.sha256(manifest_bytes).hexdigest() != expected_digest:
+            return None
+        value = json.loads(manifest_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        return None
+    return value
+
+
+def trusted_artifact_path(env_name: str) -> Path | None:
+    """Resolve and digest-check one exact workflow artifact path."""
+    expected_name = TRUSTED_ARTIFACT_NAMES[env_name]
+    supplied = os.environ.get(env_name, "").strip()
+    if not supplied:
+        return None
+    path = safe_runner_artifact(Path(supplied), expected_name)
+    manifest = trusted_artifact_manifest()
+    if path is None or manifest is None or path.stat().st_size <= 0:
+        return None
+    artifacts = manifest.get("artifacts")
+    expected_digest = (
+        artifacts.get(expected_name) if isinstance(artifacts, dict) else None
+    )
+    if not isinstance(expected_digest, str) or not expected_digest:
+        return None
+    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return path if actual_digest == expected_digest else None
+
+
+def artifact_identity_error(
+    expected_head_sha: str,
+    expected_run_id: str,
+    expected_run_attempt: str,
+) -> str:
+    """Return why the trusted artifact manifest is not bound to this run."""
+    if not all((expected_head_sha, expected_run_id, expected_run_attempt)) or "-" in {
+        expected_head_sha,
+        expected_run_id,
+        expected_run_attempt,
+    }:
+        return "expected head, run, and attempt identities must be explicit"
+    manifest = trusted_artifact_manifest()
+    if manifest is None:
+        return "runner artifact provenance manifest is missing or unsafe"
+    expected = {
+        "head_sha": expected_head_sha,
+        "run_id": expected_run_id,
+        "run_attempt": expected_run_attempt,
+    }
+    mismatches = [
+        field for field, value in expected.items() if manifest.get(field) != value
+    ]
+    if mismatches:
+        return "artifact provenance identity mismatch: " + ", ".join(mismatches)
+    return ""
+
+
 @lru_cache(maxsize=1)
 def current_changed_files() -> frozenset[str]:
     """Return the exact current-head changed files when the workflow provides them."""
-    changed_files_path = os.environ.get("OPENCODE_CHANGED_FILES_FILE")
-    if not changed_files_path:
+    changed_files_path = trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE")
+    if changed_files_path is None:
         return frozenset()
-    try:
-        return frozenset(
-            line.strip()
-            for line in Path(changed_files_path)
-            .read_text(encoding="utf-8")
-            .splitlines()
-            if line.strip()
-        )
-    except OSError:
-        return frozenset()
+    return frozenset(
+        line.strip()
+        for line in changed_files_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
 
 
 def runtime_tool_slug(tool_name: str) -> str:
@@ -393,13 +508,10 @@ def runtime_tool_slug(tool_name: str) -> str:
 @lru_cache(maxsize=1)
 def trusted_execution_receipts() -> frozenset[str]:
     """Return browser tools backed by trusted workflow execution receipts."""
-    receipt_path = os.environ.get("OPENCODE_EXECUTION_RECEIPTS_FILE")
-    if not receipt_path:
+    receipt_path = trusted_artifact_path("OPENCODE_EXECUTION_RECEIPTS_FILE")
+    if receipt_path is None:
         return frozenset()
-    try:
-        receipt_text = Path(receipt_path).read_text(encoding="utf-8")
-    except OSError:
-        return frozenset()
+    receipt_text = receipt_path.read_text(encoding="utf-8")
     return frozenset(
         runtime_tool_slug(match.group(1))
         for match in EXECUTION_RECEIPT_PATTERN.finditer(receipt_text)
@@ -475,6 +587,72 @@ def required_adversarial_probe_count() -> int:
     return 1
 
 
+def adversarial_probe_location_error(path: str, line: int) -> str:
+    """Return why a probe path/line is not present in the bounded source tree."""
+    source_root_text = os.environ.get("OPENCODE_SOURCE_WORKDIR", "").strip()
+    if not source_root_text:
+        return "trusted current-head source root is unavailable"
+    try:
+        source_root = Path(source_root_text).resolve(strict=True)
+        source_path = source_root.joinpath(*PurePosixPath(path).parts).resolve(
+            strict=True
+        )
+    except OSError:
+        return "path does not exist in the trusted current-head source tree"
+    try:
+        source_path.relative_to(source_root)
+    except ValueError:
+        return "path resolves outside the trusted current-head source tree"
+    try:
+        source_stat = source_path.stat()
+        if not stat.S_ISREG(source_stat.st_mode):
+            return "path is not a regular current-head source file"
+        if source_stat.st_size > 2 * 1024 * 1024:
+            return "source file exceeds the bounded 2 MiB probe limit"
+        line_count = len(source_path.read_bytes().splitlines())
+    except OSError:
+        return "source file could not be read from the trusted current-head tree"
+    if line > line_count:
+        return f"line {line} exceeds the current-head file length {line_count}"
+    return ""
+
+
+def adversarial_probe_source_line_digest(path: str, line: int) -> str | None:
+    """Return the SHA-256 digest of the exact trusted current-head line bytes."""
+    source_root_text = os.environ.get("OPENCODE_SOURCE_WORKDIR", "").strip()
+    if not source_root_text:
+        return None
+    try:
+        source_root = Path(source_root_text).resolve(strict=True)
+        source_path = source_root.joinpath(*PurePosixPath(path).parts).resolve(
+            strict=True
+        )
+        source_path.relative_to(source_root)
+        source_lines = source_path.read_bytes().splitlines()
+    except (OSError, ValueError):
+        return None
+    if line > len(source_lines):
+        return None
+    return hashlib.sha256(source_lines[line - 1]).hexdigest()
+
+
+def adversarial_probe_source_receipt_error(
+    evidence: str,
+    path: str,
+    line: int,
+) -> str:
+    """Verify one model receipt against the exact trusted source-line bytes."""
+    receipts = SOURCE_LINE_RECEIPT_RE.findall(evidence)
+    if len(receipts) != 1:
+        return "must contain exactly one source-line-sha256 receipt"
+    expected_digest = adversarial_probe_source_line_digest(path, line)
+    if expected_digest is None:
+        return "source-line receipt could not be verified from the trusted tree"
+    if receipts[0].casefold() != expected_digest:
+        return "source-line-sha256 receipt does not match the cited current-head line"
+    return ""
+
+
 def adversarial_validation_error(
     value: Any,
     *,
@@ -506,6 +684,7 @@ def adversarial_validation_error(
 
     changed_files = current_changed_files()
     confirmed_locations: set[tuple[str, int]] = set()
+    probe_identities: set[tuple[str, int, str, str, str, str]] = set()
     for index, probe in enumerate(probes, start=1):
         if not isinstance(probe, dict):
             return f"adversarial probe {index} must be an object"
@@ -513,35 +692,70 @@ def adversarial_validation_error(
         if not isinstance(path, str) or not path.strip():
             return f"adversarial probe {index} path must be a non-empty string"
         path = path.strip()
-        if path.startswith("/") or ".." in Path(path).parts:
+        posix_path = PurePosixPath(path)
+        windows_path = PureWindowsPath(path)
+        if (
+            "\\" in path
+            or path.startswith(("/", "//"))
+            or posix_path.is_absolute()
+            or windows_path.is_absolute()
+            or bool(windows_path.drive)
+            or ".." in posix_path.parts
+            or path != posix_path.as_posix()
+        ):
             return f"adversarial probe {index} path is unsafe"
-        if changed_files and path not in changed_files:
+        if not changed_files:
+            return "trusted current-head changed-file manifest is unavailable or empty"
+        if path not in changed_files:
             return f"adversarial probe {index} path is not a current-head changed file"
         line = probe.get("line")
         if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
             return f"adversarial probe {index} line must be a positive integer"
+        location_error = adversarial_probe_location_error(path, line)
+        if location_error:
+            return f"adversarial probe {index} {location_error}"
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             field_value = probe.get(field)
             if not isinstance(field_value, str) or not field_value.strip():
                 return f"adversarial probe {index} field {field} must be non-empty"
         probe_evidence = str(probe.get("evidence") or "")
-        receipt_backed_tools = claimed_runtime_tools(probe_evidence)
         runtime_tool = unreceipted_runtime_tool_claim(probe_evidence)
         if runtime_tool:
             return (
                 f"adversarial probe {index} claims {runtime_tool} execution "
                 "without a trusted workflow receipt"
             )
-        if not receipt_backed_tools:
-            evidence_error = adversarial_evidence_rejection_reason(
-                probe_evidence,
-                path,
-            )
-            if evidence_error:
-                return f"adversarial probe {index} evidence {evidence_error}"
+        evidence_error = adversarial_evidence_rejection_reason(
+            probe_evidence,
+            path,
+            line,
+        )
+        if evidence_error:
+            return f"adversarial probe {index} evidence {evidence_error}"
+        receipt_error = adversarial_probe_source_receipt_error(
+            probe_evidence,
+            path,
+            line,
+        )
+        if receipt_error:
+            return f"adversarial probe {index} evidence {receipt_error}"
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
             return f"adversarial probe {index} outcome must be falsified or confirmed"
+        probe_identity = (
+            path,
+            line,
+            " ".join(str(probe["hypothesis"]).split()).casefold(),
+            " ".join(str(probe["attack_or_counterexample"]).split()).casefold(),
+            " ".join(probe_evidence.split()).casefold(),
+            outcome,
+        )
+        if probe_identity in probe_identities:
+            return (
+                f"adversarial probe {index} duplicates an earlier probe after "
+                "canonical normalization"
+            )
+        probe_identities.add(probe_identity)
         if outcome == "confirmed":
             confirmed_locations.add((path, line))
 
@@ -607,13 +821,6 @@ def contradicts_changed_file_kinds(reason: str, summary: str) -> bool:
         return False
 
     combined = f"{reason}\n{summary}".casefold()
-    combined_for_kind_claims = combined.replace(
-        "no supported changed source files or package manifests",
-        "",
-    ).replace(
-        "no supported source files or package manifests",
-        "",
-    )
     has_source_like_change = any(
         changed_file_is_source_like(path) for path in changed_files
     )
@@ -621,11 +828,11 @@ def contradicts_changed_file_kinds(reason: str, summary: str) -> bool:
         changed_file_is_test_like(path) for path in changed_files
     )
     if has_source_like_change and any(
-        phrase in combined_for_kind_claims for phrase in SOURCE_KIND_FALSE_PHRASES
+        phrase in combined for phrase in SOURCE_KIND_FALSE_PHRASES
     ):
         return True
     if has_source_like_change and any(
-        phrase in combined_for_kind_claims for phrase in EXECUTABLE_KIND_FALSE_PHRASES
+        phrase in combined for phrase in EXECUTABLE_KIND_FALSE_PHRASES
     ):
         return True
     if has_test_like_change and any(
@@ -650,16 +857,8 @@ def contradicts_material_changed_file_scope(reason: str, summary: str) -> bool:
 def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     """Return whether an approval names an exact current-head changed file."""
     changed_files = current_changed_files()
-    combined = f"{reason}\n{summary}".casefold()
-    if not changed_files and (
-        "no executable changes" in combined
-        or "no changed files" in combined
-        or "no changes" in combined
-        or "no ui codebase changes" in combined
-    ):
-        return True
     if not changed_files:
-        return mentions_changed_file_evidence(reason, summary)
+        return False
     combined = f"{reason}\n{summary}"
     return any(changed_file in combined for changed_file in changed_files)
 
@@ -723,7 +922,9 @@ def coverage_section_is_valid(section: str) -> bool:
         "no supported source files or package manifests" in section
         or "no supported changed source files or package manifests" in section
     ):
-        return True
+        return not any(
+            changed_file_is_source_like(path) for path in current_changed_files()
+        )
     if any(phrase in section for phrase in COVERAGE_FAILURE_PHRASES):
         return False
     if "supported repository test suites passed" in section:
@@ -758,11 +959,8 @@ def mentions_full_coverage(reason: str, summary: str) -> bool:
 def approval_repair_evidence_file() -> Path | None:
     """Return the bounded evidence file used for approval-summary repair."""
     for env_name in EVIDENCE_REPAIR_ENV_VARS:
-        value = os.environ.get(env_name, "").strip()
-        if not value:
-            continue
-        path = Path(value)
-        if path.is_file():
+        path = trusted_artifact_path(env_name)
+        if path is not None:
             return path
     return None
 
@@ -887,7 +1085,7 @@ DDD/domain: workflow and repository-governance invariants were reviewed against 
 CDD/context: CodeGraph evidence, changed-file history, and focused hunks were reviewed from bounded-review-evidence.md.
 Similar issues: changed-file history evidence was reviewed for comparable local precedents.
 Claim/concept check: bounded evidence, repository source, current-head workflow evidence, and, where numeric, scientific, statistical, or literature-backed claims are affected, original-paper/formula evidence and parameter-recovery expectations were used for claims.
-Standards search: standards and external-source checks are delegated to configured OpenCode web_search/Context7/DeepWiki sources when applicable; no evidence-backed standards blocker is present in bounded evidence.
+Standards search: standards and external-source claims require trusted bounded source evidence prepared outside the isolated model process; no evidence-backed standards blocker is present in bounded evidence.
 Compatibility/convention: changed workflow/script conventions, object naming, and reserved-word safety for schema/API/config/code surfaces were checked in bounded evidence.
 Breaking-change/backcompat: deployment evidence and changed-file history were checked for backward-compatibility risk.
 Performance: changed surfaces were checked for performance risk in bounded evidence.
@@ -908,7 +1106,7 @@ def repair_approval_summary(reason: str, summary: str) -> str:
     if evidence_file is not None:
         evidence_text = read_text_lossy(evidence_file)
         if evidence_text is not None:
-            repaired_summary = build_approval_repair_summary("", evidence_text)
+            repaired_summary = build_approval_repair_summary(summary, evidence_text)
             if repaired_summary:
                 return repaired_summary
 
@@ -954,8 +1152,13 @@ def repair_approval_reason(reason: str, summary: str) -> str:
     return reason
 
 
-def check_structural_approval(control_file: Path) -> int:
-    """Validate an already-normalized control block before publishing approval."""
+def check_structural_approval(
+    control_file: Path,
+    expected_head_sha: str,
+    expected_run_id: str,
+    expected_run_attempt: str,
+) -> int:
+    """Validate a normalized control block bound to an explicit current run."""
 
     def reject(reason: str) -> int:
         """Reject approval with a stable no-conclusion reason."""
@@ -971,68 +1174,19 @@ def check_structural_approval(control_file: Path) -> int:
     if not isinstance(value, dict):
         return reject("control JSON is not an object")
 
-    findings = value.get("findings")
-    if not isinstance(findings, list):
-        findings = []
-    adversarial_error = adversarial_validation_error(
-        value.get("adversarial_validation"),
-        result=str(value.get("result") or ""),
-        findings=findings,
+    validation_reasons: list[str] = []
+    normalized = valid_control(
+        value,
+        expected_head_sha=expected_head_sha,
+        expected_run_id=expected_run_id,
+        expected_run_attempt=expected_run_attempt,
+        rejection_reasons=validation_reasons,
     )
-    if adversarial_error:
-        return reject(adversarial_error)
-    runtime_tool = unreceipted_runtime_tool_claim(control_review_text(value))
-    if runtime_tool:
-        return reject(
-            f"review claims {runtime_tool} execution without a trusted workflow receipt"
+    if normalized is None:
+        detail = (
+            validation_reasons[-1] if validation_reasons else "unknown validation error"
         )
-
-    if value.get("result") == "APPROVE" and admits_missing_structural_review(
-        str(value.get("reason", "")),
-        str(value.get("summary", "")),
-    ):
-        return reject("approval admits missing structural review")
-    if value.get("result") == "APPROVE" and not mentions_actual_changed_file(
-        str(value.get("reason", "")),
-        str(value.get("summary", "")),
-    ):
-        return reject("approval does not cite changed-file evidence")
-    if value.get("result") == "APPROVE" and not mentions_verification_posture(
-        str(value.get("reason", "")),
-        str(value.get("summary", "")),
-    ):
-        return reject("approval does not include the required verification posture")
-    if value.get("result") == "APPROVE" and not mentions_full_coverage(
-        str(value.get("reason", "")),
-        str(value.get("summary", "")),
-    ):
-        return reject(
-            "approval does not prove 100% coverage or an explicit no-source exception"
-        )
-    if value.get("result") == "APPROVE" and contradicts_changed_file_kinds(
-        str(value.get("reason", "")),
-        str(value.get("summary", "")),
-    ):
-        return reject("approval contradicts changed file kinds")
-    if value.get("result") == "APPROVE" and contradicts_material_changed_file_scope(
-        str(value.get("reason", "")),
-        str(value.get("summary", "")),
-    ):
-        return reject("approval trivializes material changed files")
-    if value.get("result") == "APPROVE":
-        phrase = model_failure_approval_phrase(
-            str(value.get("reason", "")),
-            str(value.get("summary", "")),
-        )
-        if phrase:
-            return reject(f"approval depends on failed model output: {phrase}")
-    # Generic failed-check deflections are invalid for both approvals and request-changes.
-    phrase = non_actionable_failed_check_review_phrase(value)
-    if phrase:
-        return reject(f"non-actionable failed-check deflection: {phrase}")
-    if violates_review_language_contract(value):
-        return reject("review prose does not follow the preferred PR language")
-
+        return reject(f"control identity/schema validation failed: {detail}")
     return 0
 
 
@@ -1065,26 +1219,42 @@ def valid_control(
     expected_head_sha: str,
     expected_run_id: str,
     expected_run_attempt: str,
+    rejection_reasons: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Return a normalized control block when it matches the current run."""
-    if not isinstance(value, dict):
+
+    def reject(reason: str) -> None:
+        """Record a bounded, non-secret reason for rejecting one candidate."""
+        if rejection_reasons is not None:
+            rejection_reasons.append(reason)
         return None
 
+    if not isinstance(value, dict):
+        return reject("candidate is not a JSON object")
+
     if value.get("head_sha") != expected_head_sha:
-        return None
+        return reject("head_sha does not match the current pull request head")
     if value.get("run_id") != expected_run_id:
-        return None
+        return reject("run_id does not match the current workflow run")
     if value.get("run_attempt") != expected_run_attempt:
-        return None
+        return reject("run_attempt does not match the current workflow attempt")
+
+    provenance_error = artifact_identity_error(
+        expected_head_sha,
+        expected_run_id,
+        expected_run_attempt,
+    )
+    if provenance_error:
+        return reject(f"trusted artifact provenance failed: {provenance_error}")
 
     result = value.get("result")
     if result not in {"APPROVE", "REQUEST_CHANGES"}:
-        return None
+        return reject("result must be APPROVE or REQUEST_CHANGES")
 
     if not isinstance(value.get("reason"), str) or not value["reason"].strip():
-        return None
+        return reject("reason must be a non-empty string")
     if not isinstance(value.get("summary"), str) or not value["summary"].strip():
-        return None
+        return reject("summary must be a non-empty string")
     reason = value["reason"].strip()
     summary = value["summary"].strip()
 
@@ -1092,44 +1262,70 @@ def valid_control(
     if findings is None and result == "APPROVE":
         findings = []
     if not isinstance(findings, list):
-        return None
+        return reject("findings must be an array")
     if result == "APPROVE" and findings:
-        return None
+        return reject("APPROVE cannot contain findings")
     if result == "REQUEST_CHANGES" and not findings:
-        return None
+        return reject("REQUEST_CHANGES requires at least one finding")
     adversarial_error = adversarial_validation_error(
         value.get("adversarial_validation"),
         result=result,
         findings=findings,
     )
     if adversarial_error:
-        return None
-    if unreceipted_runtime_tool_claim(control_review_text(value)):
-        return None
-    if contains_non_actionable_failed_check_review(value):
-        return None
+        return reject(adversarial_error)
+    runtime_tool = unreceipted_runtime_tool_claim(control_review_text(value))
+    if runtime_tool:
+        return reject(
+            f"review claims {runtime_tool} execution without a trusted workflow receipt"
+        )
+    failed_check_phrase = non_actionable_failed_check_review_phrase(value)
+    if failed_check_phrase:
+        return reject(f"non-actionable failed-check deflection: {failed_check_phrase}")
     if result != "APPROVE" and violates_review_language_contract(value):
-        return None
+        return reject("review prose does not follow the preferred PR language")
     if result == "APPROVE":
         if admits_missing_structural_review(reason, summary):
-            return None
+            return reject("approval admits missing structural review")
+        if not mentions_actual_changed_file(reason, summary):
+            return reject("approval does not cite changed-file evidence")
+        if not mentions_verification_posture(reason, summary):
+            return reject("approval does not include the required verification posture")
+        if not mentions_full_coverage(reason, summary):
+            return reject(
+                "approval does not prove 100% coverage or an explicit no-source exception"
+            )
+        if contradicts_changed_file_kinds(reason, summary):
+            return reject("approval contradicts changed file kinds")
+        if contradicts_material_changed_file_scope(reason, summary):
+            return reject("approval trivializes material changed files")
+        model_failure_phrase = model_failure_approval_phrase(reason, summary)
+        if model_failure_phrase:
+            return reject(
+                f"approval depends on failed model output: {model_failure_phrase}"
+            )
         summary = repair_approval_summary(reason, summary)
         reason = repair_approval_reason(reason, summary)
         value = {**value, "reason": reason, "summary": summary}
         if violates_review_language_contract(value):
-            return None
+            return reject("review prose does not follow the preferred PR language")
         if not mentions_actual_changed_file(reason, summary):
-            return None
+            return reject("approval does not cite changed-file evidence")
         if not mentions_verification_posture(reason, summary):
-            return None
+            return reject("approval does not include the required verification posture")
         if not mentions_full_coverage(reason, summary):
-            return None
+            return reject(
+                "approval does not prove 100% coverage or an explicit no-source exception"
+            )
         if contradicts_changed_file_kinds(reason, summary):
-            return None
+            return reject("approval contradicts changed file kinds")
         if contradicts_material_changed_file_scope(reason, summary):
-            return None
-        if model_failure_approval_phrase(reason, summary):
-            return None
+            return reject("approval trivializes material changed files")
+        model_failure_phrase = model_failure_approval_phrase(reason, summary)
+        if model_failure_phrase:
+            return reject(
+                f"approval depends on failed model output: {model_failure_phrase}"
+            )
 
     required_finding_fields = (
         "path",
@@ -1142,16 +1338,18 @@ def valid_control(
         "suggested_diff",
     )
     normalized_findings = []
-    for finding in findings:
+    for finding_index, finding in enumerate(findings, start=1):
         if not isinstance(finding, dict):
-            return None
+            return reject(f"finding {finding_index} is not an object")
         line = finding.get("line")
         if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
-            return None
+            return reject(f"finding {finding_index} line must be a positive integer")
         finding = canonicalize_finding_fields(finding)
         for field in required_finding_fields:
             if not isinstance(finding.get(field), str) or not finding[field].strip():
-                return None
+                return reject(
+                    f"finding {finding_index} field {field} must be a non-empty string"
+                )
         normalized_findings.append(finding)
 
     normalized = {
@@ -1168,28 +1366,14 @@ def valid_control(
     return normalized
 
 
-def extract_dicts(obj: Any) -> list[Any]:
-    """Iteratively extract all dictionaries from a JSON-like object."""
-    results = []
-    stack = [obj]
-    while stack:
-        current = stack.pop()
-        if isinstance(current, dict):
-            results.append(current)
-            stack.extend(reversed(current.values()))
-        elif isinstance(current, list):
-            stack.extend(reversed(current))
-    return results
-
-
 def iter_json_objects(text: str) -> list[Any]:
-    """Extract JSON objects from raw OpenCode output that may include prose."""
+    """Extract top-level JSON values without promoting nested control objects."""
     decoder = json.JSONDecoder()
     values: list[Any] = []
 
     try:
-        # Fast path for pure JSON payloads; avoid scanning and duplicate decodes.
-        return extract_dicts(json.loads(text))
+        # Fast path for pure JSON payloads; preserve the single top-level value.
+        return [json.loads(text)]
     except json.JSONDecodeError:
         # OpenCode exports may contain prose around the JSON control object.
         pass
@@ -1207,7 +1391,7 @@ def iter_json_objects(text: str) -> list[Any]:
             continue
         try:
             value, new_index = decoder.raw_decode(text, index)
-            values.extend(extract_dicts(value))
+            values.append(value)
             # ⚡ Bolt: Advance index to avoid O(N^2) redundant parsing of nested JSON blocks
             index = new_index
             continue
@@ -1218,16 +1402,37 @@ def iter_json_objects(text: str) -> list[Any]:
     return values
 
 
+def current_run_control_candidate(
+    value: Any,
+    expected_head_sha: str,
+    expected_run_id: str,
+    expected_run_attempt: str,
+) -> bool:
+    """Return whether a top-level value claims the exact current workflow run."""
+    return bool(
+        isinstance(value, dict)
+        and value.get("head_sha") == expected_head_sha
+        and value.get("run_id") == expected_run_id
+        and value.get("run_attempt") == expected_run_attempt
+    )
+
+
 def main(argv: list[str]) -> int:
     """Run the normalizer CLI and write the publishable control block."""
-    if len(argv) == 3 and argv[1] == "--check-structural-approval":
-        return check_structural_approval(Path(argv[2]))
+    if len(argv) == 6 and argv[1] == "--check-structural-approval":
+        return check_structural_approval(
+            Path(argv[5]),
+            argv[2],
+            argv[3],
+            argv[4],
+        )
 
     if len(argv) != 5:
         print(
             "usage: opencode_review_normalize_output.py "
             "<expected_head_sha> <expected_run_id> <expected_run_attempt> <output_file>\n"
-            "   or: opencode_review_normalize_output.py --check-structural-approval <control_json_file>",
+            "   or: opencode_review_normalize_output.py --check-structural-approval "
+            "<expected_head_sha> <expected_run_id> <expected_run_attempt> <control_json_file>",
             file=sys.stderr,
         )
         return 64
@@ -1240,44 +1445,75 @@ def main(argv: list[str]) -> int:
         print(f"cannot read OpenCode output file: {exc}", file=sys.stderr)
         return 65
 
-    for value in iter_json_objects(output_text):
-        control = valid_control(
+    values = iter_json_objects(output_text)
+    current_candidates = [
+        value
+        for value in values
+        if current_run_control_candidate(
             value,
-            expected_head_sha=expected_head_sha,
-            expected_run_id=expected_run_id,
-            expected_run_attempt=expected_run_attempt,
+            expected_head_sha,
+            expected_run_id,
+            expected_run_attempt,
         )
-        if control is None:
-            continue
+    ]
+    if len(current_candidates) != 1:
+        if current_candidates:
+            print(
+                "CONTROL_REJECTED: expected exactly one top-level current-run "
+                f"control candidate, found {len(current_candidates)}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "CONTROL_REJECTED: no top-level current-run control JSON object was found",
+                file=sys.stderr,
+            )
+        print("NO_CONCLUSION", file=sys.stderr)
+        return 4
 
-        normalized_json = (
-            json.dumps(control, separators=(",", ":"), ensure_ascii=False)
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("&", "\\u0026")
+    rejection_reasons: list[str] = []
+    control = valid_control(
+        current_candidates[0],
+        expected_head_sha=expected_head_sha,
+        expected_run_id=expected_run_id,
+        expected_run_attempt=expected_run_attempt,
+        rejection_reasons=rejection_reasons,
+    )
+    if control is None:
+        detail = (
+            rejection_reasons[0]
+            if rejection_reasons
+            else "candidate failed an unspecified control validation"
         )
-        output_file.write_text(
-            "\n".join(
-                [
-                    (
-                        "<!-- opencode-review-gate "
-                        f"head_sha={expected_head_sha} "
-                        f"run_id={expected_run_id} "
-                        f"run_attempt={expected_run_attempt} -->"
-                    ),
-                    "",
-                    "<!-- opencode-review-control-v1",
-                    normalized_json,
-                    "-->",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return 0
+        print(f"CONTROL_REJECTED candidate=1: {detail}", file=sys.stderr)
+        print("NO_CONCLUSION", file=sys.stderr)
+        return 4
 
-    print("NO_CONCLUSION", file=sys.stderr)
-    return 4
+    normalized_json = (
+        json.dumps(control, separators=(",", ":"), ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    output_file.write_text(
+        "\n".join(
+            [
+                (
+                    "<!-- opencode-review-gate "
+                    f"head_sha={expected_head_sha} "
+                    f"run_id={expected_run_id} "
+                    f"run_attempt={expected_run_attempt} -->"
+                ),
+                "",
+                "<!-- opencode-review-control-v1",
+                normalized_json,
+                "-->",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -199,7 +199,8 @@ if [ "$EXPECTED_RUN_ATTEMPT" != "-" ] && [ "$CONTROL_RUN_ATTEMPT" != "$EXPECTED_
   exit 2
 fi
 
-if ! python3 "$NORMALIZER" --check-structural-approval "$TMP_JSON" >/dev/null; then
+if ! python3 "$NORMALIZER" --check-structural-approval \
+  "$EXPECTED_HEAD_SHA" "$EXPECTED_RUN_ID" "$EXPECTED_RUN_ATTEMPT" "$TMP_JSON" >/dev/null; then
   echo "NO_CONCLUSION"
   exit 4
 fi

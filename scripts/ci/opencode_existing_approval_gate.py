@@ -11,8 +11,10 @@ from typing import Any, TextIO
 
 try:
     from adversarial_evidence import adversarial_evidence_rejection_reason
+    from opencode_review_normalize_output import adversarial_validation_error
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from scripts.ci.adversarial_evidence import adversarial_evidence_rejection_reason
+    from scripts.ci.opencode_review_normalize_output import adversarial_validation_error
 
 OPENCODE_APP_APPROVAL_AUTHORS = frozenset({"opencode-agent", "opencode-agent[bot]"})
 APPROVAL_AUTHORS = OPENCODE_APP_APPROVAL_AUTHORS
@@ -100,9 +102,17 @@ def adversarial_rejection_reason(body: str) -> str | None:
         evidence_error = adversarial_evidence_rejection_reason(
             str(probe["evidence"]),
             str(probe["path"]),
+            probe.get("line") if isinstance(probe.get("line"), int) else None,
         )
         if evidence_error:
             return f"adversarial-validation probe evidence {evidence_error}"
+    validation_error = adversarial_validation_error(
+        evidence,
+        result="APPROVE",
+        findings=[],
+    )
+    if validation_error:
+        return f"adversarial-validation trusted-source check failed: {validation_error}"
     return None
 
 
@@ -200,7 +210,9 @@ def main(argv: list[str]) -> int:
     """Read paginated reviews from stdin and evaluate reusable approval evidence."""
     args = parse_args(argv)
     if not SHA_RE.fullmatch(args.head):
-        print("existing-approval gate requires a 40-character head SHA", file=sys.stderr)
+        print(
+            "existing-approval gate requires a 40-character head SHA", file=sys.stderr
+        )
         return 2
     try:
         reviews = flatten_reviews(json.load(sys.stdin))
@@ -208,9 +220,7 @@ def main(argv: list[str]) -> int:
         print(f"existing-approval gate could not parse reviews: {exc}", file=sys.stderr)
         return 2
     approval_authors = (
-        OPENCODE_APP_APPROVAL_AUTHORS
-        if args.require_opencode_app
-        else APPROVAL_AUTHORS
+        OPENCODE_APP_APPROVAL_AUTHORS if args.require_opencode_app else APPROVAL_AUTHORS
     )
     return (
         0

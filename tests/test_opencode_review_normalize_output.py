@@ -1,4 +1,7 @@
+import hashlib
 import json
+import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,10 +11,70 @@ import pytest
 from scripts.ci import opencode_review_normalize_output as norm
 
 
+def anchor_manifest(manifest: Path) -> None:
+    """Bind the manifest bytes to the simulated trusted Actions step output."""
+    os.environ["OPENCODE_ARTIFACT_MANIFEST_SHA256"] = hashlib.sha256(
+        manifest.read_bytes()
+    ).hexdigest()
+
+
+def seal_artifacts(runner_temp: Path, *paths: Path) -> None:
+    """Write the exact current-run digest manifest used by the normalizer."""
+    artifacts = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in paths
+        if path.is_file()
+    }
+    manifest = runner_temp / norm.TRUSTED_ARTIFACT_MANIFEST
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "head_sha": "head",
+                "run_id": "run",
+                "run_attempt": "attempt",
+                "artifacts": artifacts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+    anchor_manifest(manifest)
+    for path in paths:
+        if path.exists():
+            path.chmod(0o600)
+
+
+def source_line_receipt(line_text: str) -> str:
+    """Return the exact source-line receipt expected by the trusted normalizer."""
+    digest = hashlib.sha256(line_text.encode()).hexdigest()
+    return f"source-line-sha256={digest}"
+
+
 @pytest.fixture(autouse=True)
-def clear_caches():
+def clear_caches(tmp_path, monkeypatch):
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    default_source = tmp_path / "scripts" / "ci" / "example.py"
+    default_source.parent.mkdir(parents=True)
+    default_source.write_text(
+        "\n".join(f"line {line}" for line in range(1, 129)), encoding="utf-8"
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    monkeypatch.delenv("OPENCODE_EVIDENCE_FILE", raising=False)
+    monkeypatch.delenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", raising=False)
+    seal_artifacts(tmp_path, changed_files)
     norm.current_changed_files.cache_clear()
     norm.trusted_execution_receipts.cache_clear()
+
+
+def check_structural_approval(
+    path: Path, *, head: str = "head", run: str = "run", attempt: str = "attempt"
+) -> int:
+    """Call the structural gate with explicit trusted workflow identity."""
+    return norm.check_structural_approval(path, head, run, attempt)
 
 
 FULL_SUMMARY = """\
@@ -86,8 +149,9 @@ def adversarial_validation(
                 "hypothesis": f"The changed path fails under adversarial scenario {index + 1}.",
                 "attack_or_counterexample": f"Exercise boundary or failure input {index + 1}.",
                 "evidence": (
-                    f"Focused source trace and regression command {index + 1} "
-                    "disproved or confirmed the hypothesis."
+                    f"Focused source trace at {path}:{7 + index} and regression command {index + 1} "
+                    "disproved or confirmed the hypothesis. "
+                    + source_line_receipt(f"line {7 + index}")
                 ),
                 "outcome": outcome,
             }
@@ -98,11 +162,84 @@ def adversarial_validation(
 
 
 def require_adversarial_validation(tmp_path, monkeypatch, *paths):
-    changed_files = tmp_path / "changed-files.txt"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text("\n".join(paths) + "\n", encoding="utf-8")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    for path in paths:
+        source_path = tmp_path / path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(
+            "\n".join(f"line {line}" for line in range(1, 129)),
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(tmp_path))
     monkeypatch.setenv("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "true")
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
+
+
+def test_adversarial_probe_location_requires_a_source_root(monkeypatch):
+    """Missing trusted source material fails closed with an explicit reason."""
+    monkeypatch.delenv("OPENCODE_SOURCE_WORKDIR")
+
+    assert (
+        norm.adversarial_probe_location_error("scripts/ci/example.py", 1)
+        == "trusted current-head source root is unavailable"
+    )
+
+
+def test_adversarial_probe_location_rejects_missing_and_escaping_paths(
+    tmp_path, monkeypatch
+):
+    """Nonexistent paths and symlink escapes cannot authorize evidence."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+
+    assert "does not exist" in norm.adversarial_probe_location_error("missing.py", 1)
+
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside\n", encoding="utf-8")
+    (source_root / "escape.py").symlink_to(outside)
+    assert "outside" in norm.adversarial_probe_location_error("escape.py", 1)
+
+
+def test_adversarial_probe_location_rejects_non_files_and_oversize_files(
+    tmp_path, monkeypatch
+):
+    """Only bounded regular source files are eligible for line evidence."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+
+    (source_root / "directory.py").mkdir()
+    assert "not a regular" in norm.adversarial_probe_location_error("directory.py", 1)
+
+    (source_root / "oversize.py").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+    assert "exceeds the bounded 2 MiB" in norm.adversarial_probe_location_error(
+        "oversize.py", 1
+    )
+
+
+def test_adversarial_probe_location_reports_read_failures(tmp_path, monkeypatch):
+    """A read error remains visible instead of accepting an unverified line."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source_file = source_root / "unreadable.py"
+    source_file.write_text("line\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+    original_read_bytes = Path.read_bytes
+
+    def fail_target_read(path):
+        if path == source_file:
+            raise OSError("simulated read failure")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_target_read)
+
+    assert "could not be read" in norm.adversarial_probe_location_error(
+        "unreadable.py", 1
+    )
 
 
 def test_adversarial_validation_requires_two_falsified_material_probes(
@@ -146,6 +283,145 @@ def test_adversarial_validation_requires_two_falsified_material_probes(
             expected_run_attempt="attempt",
         )
         is None
+    )
+
+
+def test_adversarial_validation_rejects_duplicate_probe_evidence(tmp_path, monkeypatch):
+    """Repeated probes cannot satisfy the independent material-change minimum."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    probe = adversarial_validation()["probes"][0]
+    duplicate = control(
+        adversarial_validation={
+            "status": "passed",
+            "probes": [probe, dict(probe)],
+            "residual_risk": "External provider behavior remains monitored.",
+        }
+    )
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            duplicate,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert "duplicates an earlier probe" in reasons[-1]
+
+
+def test_adversarial_validation_canonicalizes_case_and_whitespace_for_duplicates(
+    tmp_path, monkeypatch
+):
+    """Cosmetic text drift cannot disguise reused adversarial evidence."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    probe = adversarial_validation()["probes"][0]
+    disguised = dict(probe)
+    disguised["hypothesis"] = f"  {probe['hypothesis'].upper()}  "
+    disguised["attack_or_counterexample"] = (
+        f"  {probe['attack_or_counterexample'].upper()}  "
+    )
+    disguised["evidence"] = "  " + probe["evidence"].replace(" ", "   ") + "  "
+    duplicate = control(
+        adversarial_validation={
+            "status": "passed",
+            "probes": [probe, disguised],
+            "residual_risk": "External provider behavior remains monitored.",
+        }
+    )
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            duplicate,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert "duplicates an earlier probe" in reasons[-1]
+
+
+def test_adversarial_validation_rejects_unbound_or_mismatched_source_receipts(
+    tmp_path, monkeypatch
+):
+    """Lexical proof prose cannot authorize approval without exact line binding."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    validation = adversarial_validation()
+
+    lexical_only = dict(validation["probes"][0])
+    lexical_only["evidence"] = "scripts/ci/example.py:7 source trace showed safe"
+    missing = control(
+        adversarial_validation={
+            **validation,
+            "probes": [lexical_only, validation["probes"][1]],
+        }
+    )
+    missing_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            missing,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=missing_reasons,
+        )
+        is None
+    )
+    assert "source-line-sha256 receipt" in missing_reasons[-1]
+
+    mismatched = dict(validation["probes"][0])
+    mismatched["evidence"] = re.sub(
+        r"source-line-sha256=[0-9a-f]{64}",
+        "source-line-sha256=" + "0" * 64,
+        mismatched["evidence"],
+    )
+    invalid = control(
+        adversarial_validation={
+            **validation,
+            "probes": [mismatched, validation["probes"][1]],
+        }
+    )
+    mismatch_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            invalid,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=mismatch_reasons,
+        )
+        is None
+    )
+    assert "does not match the cited current-head line" in mismatch_reasons[-1]
+
+
+def test_adversarial_source_receipt_helpers_fail_closed_at_trust_boundaries(
+    tmp_path, monkeypatch
+):
+    """Receipt helpers reject missing roots, files, lines, and receipt counts."""
+    monkeypatch.delenv("OPENCODE_SOURCE_WORKDIR")
+    assert norm.adversarial_probe_source_line_digest("scripts/ci/example.py", 1) is None
+
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(tmp_path))
+    assert norm.adversarial_probe_source_line_digest("missing.py", 1) is None
+
+    one_line = tmp_path / "one_line.py"
+    one_line.write_text("trusted line\n", encoding="utf-8")
+    assert norm.adversarial_probe_source_line_digest("one_line.py", 2) is None
+
+    assert (
+        norm.adversarial_probe_source_receipt_error("no receipt", "one_line.py", 1)
+        == "must contain exactly one source-line-sha256 receipt"
+    )
+    receipt = "source-line-sha256=" + "0" * 64
+    assert (
+        norm.adversarial_probe_source_receipt_error(receipt, "missing.py", 1)
+        == "source-line receipt could not be verified from the trusted tree"
     )
 
 
@@ -258,6 +534,12 @@ def test_adversarial_validation_rejects_each_malformed_contract_branch(
             "line must be a positive integer",
         ),
         (
+            {**valid, "probes": [{**first_probe, "line": 999}, second_probe]},
+            "APPROVE",
+            [],
+            "exceeds the current-head file length",
+        ),
+        (
             {**valid, "probes": [{**first_probe, "evidence": ""}, second_probe]},
             "APPROVE",
             [],
@@ -319,11 +601,8 @@ def test_structural_gate_logs_adversarial_contract_failure(
         json.dumps(control(findings=None, adversarial_validation=None)),
         encoding="utf-8",
     )
-    assert norm.check_structural_approval(control_file) == 4
-    assert (
-        "NO_CONCLUSION: adversarial_validation must be an object"
-        in capsys.readouterr().err
-    )
+    assert check_structural_approval(control_file) == 4
+    assert "adversarial_validation must be an object" in capsys.readouterr().err
 
 
 def test_runtime_tool_claim_requires_trusted_workflow_receipt(
@@ -332,7 +611,8 @@ def test_runtime_tool_claim_requires_trusted_workflow_receipt(
     require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
     validation = adversarial_validation()
     validation["probes"][0]["evidence"] = (
-        "React DevTools confirmed the component did not re-render."
+        "Source trace at scripts/ci/example.py:7 and React DevTools confirmed the "
+        "component did not re-render. " + source_line_receipt("line 7")
     )
     claimed = control(adversarial_validation=validation)
 
@@ -347,18 +627,24 @@ def test_runtime_tool_claim_requires_trusted_workflow_receipt(
     )
     control_file = tmp_path / "control.json"
     control_file.write_text(json.dumps(claimed), encoding="utf-8")
-    assert norm.check_structural_approval(control_file) == 4
+    assert check_structural_approval(control_file) == 4
     assert (
         "claims react-devtools execution without a trusted workflow receipt"
         in capsys.readouterr().err
     )
 
-    receipts = tmp_path / "execution-receipts.txt"
+    receipts = tmp_path / "opencode-execution-receipts.txt"
     receipts.write_text(
         "OPENCODE_EXECUTION_RECEIPT tool=react-devtools status=passed\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_EXECUTION_RECEIPTS_FILE", str(receipts))
+    seal_artifacts(
+        tmp_path,
+        tmp_path / "opencode-changed-files.txt",
+        tmp_path / "opencode-review-evidence.md",
+        receipts,
+    )
     norm.trusted_execution_receipts.cache_clear()
     assert (
         norm.valid_control(
@@ -369,7 +655,7 @@ def test_runtime_tool_claim_requires_trusted_workflow_receipt(
         )
         is not None
     )
-    assert norm.check_structural_approval(control_file) == 0
+    assert check_structural_approval(control_file) == 0
 
 
 def test_runtime_tool_claim_gate_covers_summary_and_allows_explicit_limitations(
@@ -391,7 +677,7 @@ def test_runtime_tool_claim_gate_covers_summary_and_allows_explicit_limitations(
     )
     control_file = tmp_path / "summary-claim.json"
     control_file.write_text(json.dumps(summary_claim), encoding="utf-8")
-    assert norm.check_structural_approval(control_file) == 4
+    assert check_structural_approval(control_file) == 4
     assert (
         "review claims react-devtools execution without a trusted workflow receipt"
         in capsys.readouterr().err
@@ -413,7 +699,7 @@ def test_runtime_tool_claim_gate_covers_summary_and_allows_explicit_limitations(
 
 
 def test_runtime_tool_receipt_reader_and_claim_direction_edges(tmp_path, monkeypatch):
-    missing_receipts = tmp_path / "missing-receipts.txt"
+    missing_receipts = tmp_path / "opencode-execution-receipts.txt"
     monkeypatch.setenv("OPENCODE_EXECUTION_RECEIPTS_FILE", str(missing_receipts))
     norm.trusted_execution_receipts.cache_clear()
     assert norm.trusted_execution_receipts() == frozenset()
@@ -431,12 +717,17 @@ def test_runtime_tool_receipt_reader_and_claim_direction_edges(tmp_path, monkeyp
         == "selenium"
     )
 
-    bounded_evidence = tmp_path / "bounded-evidence.md"
+    bounded_evidence = tmp_path / "opencode-review-evidence.md"
     bounded_evidence.write_text("trusted evidence", encoding="utf-8")
     monkeypatch.setenv(
         "OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(tmp_path / "missing.md")
     )
     monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(bounded_evidence))
+    seal_artifacts(
+        tmp_path,
+        tmp_path / "opencode-changed-files.txt",
+        bounded_evidence,
+    )
     assert norm.approval_repair_evidence_file() == bounded_evidence
 
 
@@ -486,12 +777,18 @@ def test_runtime_tool_claim_allows_explicit_browser_execution_limitations(limita
 
 
 def test_every_claimed_runtime_tool_requires_its_own_receipt(tmp_path, monkeypatch):
-    receipts = tmp_path / "execution-receipts.txt"
+    receipts = tmp_path / "opencode-execution-receipts.txt"
     receipts.write_text(
         "OPENCODE_EXECUTION_RECEIPT tool=chrome status=passed\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_EXECUTION_RECEIPTS_FILE", str(receipts))
+    seal_artifacts(
+        tmp_path,
+        tmp_path / "opencode-changed-files.txt",
+        tmp_path / "opencode-review-evidence.md",
+        receipts,
+    )
     norm.trusted_execution_receipts.cache_clear()
     claim = "Chrome verified the route; Playwright captured the screenshot."
 
@@ -502,6 +799,12 @@ def test_every_claimed_runtime_tool_requires_its_own_receipt(tmp_path, monkeypat
         "OPENCODE_EXECUTION_RECEIPT tool=chrome status=passed\n"
         "OPENCODE_EXECUTION_RECEIPT tool=playwright status=observed\n",
         encoding="utf-8",
+    )
+    seal_artifacts(
+        tmp_path,
+        tmp_path / "opencode-changed-files.txt",
+        tmp_path / "opencode-review-evidence.md",
+        receipts,
     )
     norm.trusted_execution_receipts.cache_clear()
     assert norm.unreceipted_runtime_tool_claim(claim) == ""
@@ -559,9 +862,9 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
     norm.current_changed_files.cache_clear()
     assert norm.current_changed_files() == frozenset()
-    assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
+    assert not norm.mentions_actual_changed_file("scripts/ci/example.py", "")
 
-    changed_files = tmp_path / "changed-files.txt"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text(
         "\n".join(
             [
@@ -573,21 +876,22 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
 
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
     norm.current_changed_files.cache_clear()
-    assert norm.mentions_actual_changed_file(
+    assert not norm.mentions_actual_changed_file(
         "No executable changes here", "no changed files"
     )
     assert norm.mentions_verification_posture(
         "No executable changes here", "no changed files"
     )
     assert norm.mentions_full_coverage("No executable changes here", "no changed files")
-    assert norm.mentions_actual_changed_file("No changes", "no changes")
+    assert not norm.mentions_actual_changed_file("No changes", "no changes")
     assert norm.mentions_verification_posture("No changes", "no changes")
     assert norm.mentions_full_coverage("No changes", "no changes")
-    assert norm.mentions_actual_changed_file(
+    assert not norm.mentions_actual_changed_file(
         "No UI codebase changes", "No UI codebase changes"
     )
     assert norm.mentions_verification_posture(
@@ -597,6 +901,7 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(
         "No UI codebase changes", "No UI codebase changes"
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
 
     assert norm.current_changed_files() == frozenset(
@@ -618,22 +923,248 @@ def test_actual_changed_file_detection_prefers_current_head_file_list(
         "Ran scripts/ci/test_strix_quick_gate.sh.",
     )
 
-    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(tmp_path / "missing.txt"))
+    monkeypatch.setenv(
+        "OPENCODE_CHANGED_FILES_FILE",
+        str(tmp_path / "opencode-changed-files-missing.txt"),
+    )
     norm.current_changed_files.cache_clear()
     assert norm.current_changed_files() == frozenset()
-    assert norm.mentions_actual_changed_file("scripts/ci/example.py", "")
+    assert not norm.mentions_actual_changed_file("scripts/ci/example.py", "")
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        "No command was run; the output reported no result.",
+        "No test ran and no result was reported.",
+        "The probe was not executed.",
+        "No assertion passed.",
+    ],
+)
+def test_adversarial_evidence_rejects_explicit_non_execution(evidence):
+    """Proof keywords cannot turn an explicit no-execution claim into evidence."""
+    assert (
+        norm.adversarial_evidence_rejection_reason(evidence, "scripts/ci/example.py")
+        == "explicitly denies execution or an observed result"
+    )
+
+
+def test_adversarial_evidence_rejects_exact_changed_path_without_independent_proof():
+    """A changed path is location metadata, not an execution receipt."""
+    assert "must cite" in norm.adversarial_evidence_rejection_reason(
+        "scripts/ci/example.py passed.",
+        "scripts/ci/example.py",
+    )
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        r"C:\\Windows\\win.ini",
+        "C:/Windows/win.ini",
+        "C:relative.py",
+        r"..\\..\\scripts\\ci\\example.py",
+        "//server/share/file.py",
+        "/etc/passwd",
+    ],
+)
+def test_adversarial_validation_rejects_cross_platform_unsafe_paths(
+    tmp_path, monkeypatch, unsafe_path
+):
+    """Windows, UNC, absolute, and backslash traversal paths are never anchors."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    error = norm.adversarial_validation_error(
+        adversarial_validation(path=unsafe_path),
+        result="APPROVE",
+        findings=[],
+    )
+    assert "path is unsafe" in error
+
+
+def test_trusted_artifact_digest_and_identity_are_fail_closed(tmp_path, monkeypatch):
+    """Artifact tampering and stale run identity invalidate current-head evidence."""
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    assert norm.artifact_identity_error("head", "run", "attempt") == ""
+    assert norm.current_changed_files() == frozenset({"scripts/ci/example.py"})
+
+    changed_files.write_text("attacker.py\n", encoding="utf-8")
+    norm.current_changed_files.cache_clear()
+    assert norm.current_changed_files() == frozenset()
+    assert (
+        norm.valid_control(
+            control(reason="attacker.py reviewed."),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
+
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files)
+    manifest = tmp_path / norm.TRUSTED_ARTIFACT_MANIFEST
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["run_id"] = "stale-run"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    manifest.chmod(0o600)
+    anchor_manifest(manifest)
+    assert "run_id" in norm.artifact_identity_error("head", "run", "attempt")
+    assert "explicit" in norm.artifact_identity_error("head", "-", "attempt")
+
+
+def test_trusted_artifact_path_rejects_escape_symlink_and_writable_file(
+    tmp_path, monkeypatch
+):
+    """Only the exact runner-owned regular artifact with safe mode is accepted."""
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    outside = tmp_path.parent / "opencode-changed-files.txt"
+    outside.write_text("attacker.py\n", encoding="utf-8")
+    outside.chmod(0o600)
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(outside))
+    assert norm.trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE") is None
+
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    changed_files.unlink()
+    changed_files.symlink_to(outside)
+    seal_artifacts(tmp_path, changed_files)
+    assert norm.trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE") is None
+
+    changed_files.unlink()
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files)
+    changed_files.chmod(0o622)
+    assert norm.trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE") is None
+
+    monkeypatch.delenv("RUNNER_TEMP")
+    assert norm.trusted_runner_temp() is None
+    assert norm.safe_runner_artifact(changed_files, changed_files.name) is None
+    assert norm.trusted_artifact_manifest() is None
+
+
+def test_trusted_artifact_helpers_reject_malformed_sources(tmp_path, monkeypatch):
+    """Every unsafe root, manifest, file, and digest branch fails closed."""
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    manifest = tmp_path / norm.TRUSTED_ARTIFACT_MANIFEST
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "missing-root"))
+    assert norm.trusted_runner_temp() is None
+    root_file = tmp_path / "root-file"
+    root_file.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("RUNNER_TEMP", str(root_file))
+    assert norm.trusted_runner_temp() is None
+    symlink_root = tmp_path / "symlink-root"
+    symlink_root.symlink_to(tmp_path, target_is_directory=True)
+    monkeypatch.setenv("RUNNER_TEMP", str(symlink_root))
+    assert norm.trusted_runner_temp() is None
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    assert norm.safe_runner_artifact(tmp_path / "missing", "missing") is None
+    manifest.unlink()
+    assert norm.trusted_artifact_manifest() is None
+    assert "missing or unsafe" in norm.artifact_identity_error("head", "run", "attempt")
+
+    manifest.write_text("{", encoding="utf-8")
+    manifest.chmod(0o600)
+    anchor_manifest(manifest)
+    assert norm.trusted_artifact_manifest() is None
+    manifest.write_text("[]", encoding="utf-8")
+    anchor_manifest(manifest)
+    assert norm.trusted_artifact_manifest() is None
+    manifest.write_text(json.dumps({"schema": 2}), encoding="utf-8")
+    anchor_manifest(manifest)
+    assert norm.trusted_artifact_manifest() is None
+
+    seal_artifacts(tmp_path, changed_files)
+    monkeypatch.delenv("OPENCODE_ARTIFACT_MANIFEST_SHA256")
+    assert norm.trusted_artifact_manifest() is None
+    monkeypatch.setenv("OPENCODE_ARTIFACT_MANIFEST_SHA256", "not-a-digest")
+    assert norm.trusted_artifact_manifest() is None
+    monkeypatch.setenv("OPENCODE_ARTIFACT_MANIFEST_SHA256", "0" * 64)
+    assert norm.trusted_artifact_manifest() is None
+    manifest.write_bytes(b"\xff")
+    manifest.chmod(0o600)
+    anchor_manifest(manifest)
+    assert norm.trusted_artifact_manifest() is None
+
+    seal_artifacts(tmp_path, changed_files)
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE")
+    assert norm.trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE") is None
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    changed_files.write_text("", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files)
+    assert norm.trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE") is None
+
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["artifacts"] = []
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    manifest.chmod(0o600)
+    anchor_manifest(manifest)
+    assert norm.trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE") is None
+
+    seal_artifacts(tmp_path, changed_files)
+    actual_uid = norm.os.getuid()
+    monkeypatch.setattr(norm.os, "getuid", lambda: actual_uid + 1)
+    assert norm.safe_runner_artifact(changed_files, changed_files.name) is None
+
+
+def test_empty_changed_manifest_blocks_adversarial_and_material_claims(
+    tmp_path, monkeypatch
+):
+    """Missing current-head scope cannot validate a probe or trivialization claim."""
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE")
+    norm.current_changed_files.cache_clear()
+    error = norm.adversarial_validation_error(
+        adversarial_validation(),
+        result="APPROVE",
+        findings=[],
+    )
+    assert "manifest is unavailable or empty" in error
+    assert not norm.contradicts_material_changed_file_scope("simple typo fix", "")
+
+
+def test_valid_control_rejects_missing_artifact_provenance(tmp_path):
+    """An otherwise valid approval cannot pass without the run provenance manifest."""
+    (tmp_path / norm.TRUSTED_ARTIFACT_MANIFEST).unlink()
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert "trusted artifact provenance failed" in reasons[-1]
+
+
+def test_structural_gate_rejects_stale_or_identityless_invocation(tmp_path):
+    """The standalone structural mode requires an exact current-run identity."""
+    approval = tmp_path / "approval.json"
+    approval.write_text(json.dumps(control()), encoding="utf-8")
+    assert check_structural_approval(approval, run="stale-run") == 4
+    assert norm.main(["prog", "--check-structural-approval", str(approval)]) == 64
 
 
 def test_preferred_review_language_handles_unreadable_and_unknown_evidence(
     tmp_path, monkeypatch
 ):
-    evidence = tmp_path / "evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         "## Review language evidence\nPreferred review language: `Spanish`\n",
         encoding="utf-8",
     )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        "scripts/ci/opencode_review_normalize_output.py\n",
+        encoding="utf-8",
+    )
+    seal_artifacts(tmp_path, changed_files, evidence)
 
     assert norm.preferred_review_language() is None
 
@@ -642,7 +1173,7 @@ def test_preferred_review_language_handles_unreadable_and_unknown_evidence(
 
 
 def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
-    changed_files = tmp_path / "changed-files.txt"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text(
         "\n".join(
             [
@@ -653,6 +1184,7 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
 
     false_summary = (
@@ -696,21 +1228,27 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
 
     path = tmp_path / "approval.json"
     path.write_text(json.dumps(approval), encoding="utf-8")
-    assert norm.check_structural_approval(path) == 4
+    assert check_structural_approval(path) == 4
 
     changed_files.write_text("scripts/deploy.sh\n", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
+    norm.current_changed_files.cache_clear()
     assert norm.contradicts_changed_file_kinds(
         "Reviewed scripts/deploy.sh.",
         "PoC/execution: Not applicable (no executable changes).",
     )
 
     changed_files.write_text("tests/README.md\n", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
+    norm.current_changed_files.cache_clear()
     assert norm.contradicts_changed_file_kinds(
         "Reviewed tests/README.md.",
         "TDD/regression: Not applicable (no tests changed).",
     )
 
     changed_files.write_text("scripts/deploy.sh\n", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
+    norm.current_changed_files.cache_clear()
     assert not norm.contradicts_changed_file_kinds(
         "Reviewed scripts/deploy.sh.",
         "PoC/execution: bash -n scripts/deploy.sh passed.",
@@ -726,7 +1264,7 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
 def test_material_changed_file_scope_rejects_trivial_string_approval(
     tmp_path, monkeypatch
 ):
-    changed_files = tmp_path / "changed-files.txt"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text(
         "\n".join(
             [
@@ -738,6 +1276,7 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
 
     summary = (
@@ -772,9 +1311,10 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(
 
     path = tmp_path / "approval.json"
     path.write_text(json.dumps(approval), encoding="utf-8")
-    assert norm.check_structural_approval(path) == 4
+    assert check_structural_approval(path) == 4
 
     changed_files.write_text("README.md\n", encoding="utf-8")
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
     assert not norm.contradicts_material_changed_file_scope(
         approval["reason"],
@@ -785,7 +1325,7 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(
 def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     tmp_path, monkeypatch
 ):
-    changed_files = tmp_path / "changed-files.txt"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text(
         "\n".join(
             [
@@ -797,6 +1337,7 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
 
     approval = control(
@@ -823,10 +1364,10 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
 
     path = tmp_path / "approval.json"
     path.write_text(json.dumps(approval), encoding="utf-8")
-    assert norm.check_structural_approval(path) == 4
+    assert check_structural_approval(path) == 4
 
 
-def test_label_and_full_coverage_detection():
+def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
     assert norm.label_section(combined, "missing:") == ""
@@ -842,7 +1383,16 @@ def test_label_and_full_coverage_detection():
         "coverage execution evidence proves 100% docstring coverage",
         "coverage execution evidence reports docstring coverage as not applicable because no supported changed source files or package manifests were found",
     )
+    assert not norm.mentions_full_coverage("", no_source_summary)
+    assert norm.contradicts_changed_file_kinds("", no_source_summary)
+
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text("README.md\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
     assert norm.mentions_full_coverage("", no_source_summary)
+    assert not norm.contradicts_changed_file_kinds("", no_source_summary)
     suite_passed_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
         "coverage execution evidence reports supported repository test suites passed",
@@ -887,13 +1437,13 @@ def test_label_and_full_coverage_detection():
 def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
     tmp_path, monkeypatch
 ):
-    assert norm.check_structural_approval(tmp_path / "missing.json") == 65
+    assert check_structural_approval(tmp_path / "missing.json") == 65
     bad_json = tmp_path / "bad.json"
     bad_json.write_text("{", encoding="utf-8")
-    assert norm.check_structural_approval(bad_json) == 65
+    assert check_structural_approval(bad_json) == 65
     non_dict = tmp_path / "list.json"
     non_dict.write_text("[]", encoding="utf-8")
-    assert norm.check_structural_approval(non_dict) == 4
+    assert check_structural_approval(non_dict) == 4
 
     cases = [
         control(reason="No changed files"),
@@ -917,23 +1467,25 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
     for index, value in enumerate(cases):
         path = tmp_path / f"case-{index}.json"
         path.write_text(json.dumps(value), encoding="utf-8")
-        assert norm.check_structural_approval(path) == 4
+        assert check_structural_approval(path) == 4
 
-    changed_files = tmp_path / "changed-files.txt"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text("tests/actual_changed_file.py\n", encoding="utf-8")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, tmp_path / "opencode-review-evidence.md")
     norm.current_changed_files.cache_clear()
     wrong_file = tmp_path / "wrong-file.json"
     wrong_file.write_text(json.dumps(control()), encoding="utf-8")
-    assert norm.check_structural_approval(wrong_file) == 4
+    assert check_structural_approval(wrong_file) == 4
     monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE")
     norm.current_changed_files.cache_clear()
 
     request_changes = tmp_path / "request.json"
     request_changes.write_text(
-        json.dumps(control(result="REQUEST_CHANGES")), encoding="utf-8"
+        json.dumps(control(result="REQUEST_CHANGES", findings=[finding()])),
+        encoding="utf-8",
     )
-    assert norm.check_structural_approval(request_changes) == 0
+    assert check_structural_approval(request_changes) == 0
 
     generic_deflection = tmp_path / "generic-deflection.json"
     generic_deflection.write_text(
@@ -954,7 +1506,7 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
         ),
         encoding="utf-8",
     )
-    assert norm.check_structural_approval(generic_deflection) == 4
+    assert check_structural_approval(generic_deflection) == 4
 
 
 def test_valid_control_filters_shape_head_and_review_contract():
@@ -1171,10 +1723,10 @@ def test_approval_gate_rejects_prose_fix_direction_without_suggested_diff(tmp_pa
     )
 
 
-def test_valid_control_repairs_approval_summary_from_bounded_evidence(
+def test_valid_control_rejects_meaningless_approval_before_evidence_repair(
     tmp_path, monkeypatch
 ):
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         """\
 # OpenCode bounded PR review evidence
@@ -1204,28 +1756,122 @@ A\t.github/workflows/opencode-review.yml
     )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
 
     repaired = norm.valid_control(
-        control(
-            reason="Current-head review completed.", summary="No blockers were found."
+        control(reason="x", summary="y"),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert repaired is None
+
+
+def test_valid_control_accepts_model_confirms_with_bounded_current_head_receipt(
+    tmp_path, monkeypatch
+):
+    evidence = tmp_path / "opencode-review-evidence.md"
+    evidence.write_text(
+        """\
+# OpenCode bounded PR review evidence
+
+## CodeGraph evidence
+
+The workflow initialized CodeGraph before this evidence file was built.
+
+## Coverage execution evidence
+
+## Coverage Decision
+
+- Result: PASS
+- Test evidence: supported repository test suites passed
+- Docstring evidence: configured repository docstring gates passed or docstring coverage was advisory
+
+## Changed files
+
+M\tsrc/main/java/example/LogSanitizer.java
+M\tsrc/test/java/example/LogSanitizerTest.java
+""",
+        encoding="utf-8",
+    )
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        "src/main/java/example/LogSanitizer.java\n"
+        "src/test/java/example/LogSanitizerTest.java\n",
+        encoding="utf-8",
+    )
+    for path in (
+        "src/main/java/example/LogSanitizer.java",
+        "src/test/java/example/LogSanitizerTest.java",
+    ):
+        source_path = tmp_path / path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(
+            "\n".join(f"line {line}" for line in range(1, 65)),
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    monkeypatch.setenv("OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION", "true")
+    seal_artifacts(tmp_path, changed_files, evidence)
+    norm.current_changed_files.cache_clear()
+
+    candidate = control(
+        reason=(
+            "src/main/java/example/LogSanitizer.java hardens log input and adds "
+            "a regression test."
         ),
+        summary=FULL_SUMMARY.replace(
+            "scripts/ci/example.py",
+            "src/main/java/example/LogSanitizer.java",
+        ),
+        adversarial_validation={
+            "status": "passed",
+            "probes": [
+                {
+                    "path": "src/main/java/example/LogSanitizer.java",
+                    "line": 20,
+                    "hypothesis": "A line break bypasses sanitization.",
+                    "attack_or_counterexample": "Pass CR, LF, and Unicode separators.",
+                    "evidence": (
+                        "Test at src/main/java/example/LogSanitizer.java:20 confirms "
+                        "every separator is replaced. " + source_line_receipt("line 20")
+                    ),
+                    "outcome": "falsified",
+                },
+                {
+                    "path": "src/test/java/example/LogSanitizerTest.java",
+                    "line": 40,
+                    "hypothesis": "The regression test omits a control character.",
+                    "attack_or_counterexample": "Compare the test input with the sanitizer replacements.",
+                    "evidence": (
+                        "Source trace at src/test/java/example/LogSanitizerTest.java:40 "
+                        "confirms all replacements are asserted. "
+                        + source_line_receipt("line 40")
+                    ),
+                    "outcome": "falsified",
+                },
+            ],
+            "residual_risk": "Only characters outside the documented sanitizer contract remain.",
+        },
+    )
+
+    repaired = norm.valid_control(
+        candidate,
         expected_head_sha="head",
         expected_run_id="run",
         expected_run_attempt="attempt",
     )
 
     assert repaired is not None
-    assert "scripts/ci/example.py" in repaired["summary"]
-    assert "CodeGraph" in repaired["summary"]
-    assert "No blockers were found" not in repaired["summary"]
-    assert norm.mentions_verification_posture(repaired["reason"], repaired["summary"])
-    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+    assert "supported repository test suites passed" in repaired["summary"]
 
 
 def test_valid_control_repairs_summary_from_invalid_utf8_evidence(
     tmp_path, monkeypatch
 ):
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_bytes(
         b"# OpenCode bounded PR review evidence\n\n"
         b"\xea invalid byte from model transcript\n\n"
@@ -1238,12 +1884,25 @@ def test_valid_control_repairs_summary_from_invalid_utf8_evidence(
         b"## Changed files\n\n"
         b"M\tscripts/ci/opencode_review_normalize_output.py\n"
     )
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        "scripts/ci/opencode_review_normalize_output.py\n",
+        encoding="utf-8",
+    )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, changed_files, evidence)
 
     repaired = norm.valid_control(
         control(
-            reason="Current-head review completed.", summary="No blockers were found."
+            reason=(
+                "Reviewed current-head changed-file evidence in "
+                "scripts/ci/opencode_review_normalize_output.py."
+            ),
+            summary=FULL_SUMMARY.replace(
+                "scripts/ci/example.py",
+                "scripts/ci/opencode_review_normalize_output.py",
+            ),
         ),
         expected_head_sha="head",
         expected_run_id="run",
@@ -1252,15 +1911,14 @@ def test_valid_control_repairs_summary_from_invalid_utf8_evidence(
 
     assert repaired is not None
     assert "scripts/ci/opencode_review_normalize_output.py" in repaired["summary"]
-    assert "No blockers were found" not in repaired["summary"]
     assert norm.mentions_verification_posture(repaired["reason"], repaired["summary"])
     assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
 
 
-def test_valid_control_repairs_fragile_approval_reason_from_bounded_evidence(
+def test_valid_control_rejects_fragile_approval_reason_before_evidence_repair(
     tmp_path, monkeypatch
 ):
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         """\
 # OpenCode bounded PR review evidence
@@ -1293,9 +1951,10 @@ M\t.github/workflows/r.yml
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
     monkeypatch.delenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", raising=False)
-    changed_files = tmp_path / "changed-files.txt"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text(".github/workflows/r.yml\n", encoding="utf-8")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, evidence)
     norm.current_changed_files.cache_clear()
 
     repaired = norm.valid_control(
@@ -1322,18 +1981,13 @@ M\t.github/workflows/r.yml
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert ".github/workflows/r.yml" in repaired["reason"]
-    assert "no source changes" not in repaired["reason"].casefold()
-    assert "no verification needed" not in repaired["summary"].casefold()
-    assert norm.mentions_actual_changed_file(repaired["reason"], repaired["summary"])
-    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+    assert repaired is None
 
 
-def test_valid_control_repair_overrides_earlier_invalid_coverage_labels(
+def test_valid_control_rejects_invalid_coverage_labels_before_evidence_repair(
     tmp_path, monkeypatch
 ):
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         """\
 # OpenCode bounded PR review evidence
@@ -1355,8 +2009,15 @@ M\ttests/test_opencode_review_normalize_output.py
 """,
         encoding="utf-8",
     )
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        "scripts/ci/opencode_review_normalize_output.py\n"
+        "tests/test_opencode_review_normalize_output.py\n",
+        encoding="utf-8",
+    )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, changed_files, evidence)
 
     repaired = norm.valid_control(
         control(
@@ -1388,17 +2049,14 @@ Security/privacy: Not applicable.
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert "scripts/ci/opencode_review_normalize_output.py" in repaired["summary"]
-    assert "Not applicable." not in repaired["summary"]
-    assert norm.mentions_full_coverage(repaired["reason"], repaired["summary"])
+    assert repaired is None
 
 
-def test_valid_control_repair_drops_contradictory_changed_file_kind_claims(
+def test_valid_control_rejects_contradictory_changed_file_kind_claims(
     tmp_path, monkeypatch
 ):
-    evidence = tmp_path / "bounded-review-evidence.md"
-    changed_files = tmp_path / "changed-files.txt"
+    evidence = tmp_path / "opencode-review-evidence.md"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     evidence.write_text(
         """\
 # OpenCode bounded PR review evidence
@@ -1427,6 +2085,7 @@ M\tapps/desktop/src/App.test.tsx
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, evidence)
     norm.current_changed_files.cache_clear()
 
     repaired = norm.valid_control(
@@ -1459,18 +2118,12 @@ Security/privacy: Not applicable.
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert "apps/desktop/src/App.tsx" in repaired["summary"]
-    assert "no executable changes" not in repaired["summary"]
-    assert "no test changes" not in repaired["summary"]
-    assert not norm.contradicts_changed_file_kinds(
-        repaired["reason"], repaired["summary"]
-    )
+    assert repaired is None
 
 
-def test_valid_control_repair_drops_material_trivialization(tmp_path, monkeypatch):
-    evidence = tmp_path / "bounded-review-evidence.md"
-    changed_files = tmp_path / "changed-files.txt"
+def test_valid_control_rejects_material_trivialization(tmp_path, monkeypatch):
+    evidence = tmp_path / "opencode-review-evidence.md"
+    changed_files = tmp_path / "opencode-changed-files.txt"
     evidence.write_text(
         """\
 # OpenCode bounded PR review evidence
@@ -1499,6 +2152,7 @@ M\tscripts/ci/test_strix_quick_gate.sh
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files, evidence)
     norm.current_changed_files.cache_clear()
 
     repaired = norm.valid_control(
@@ -1514,20 +2168,13 @@ M\tscripts/ci/test_strix_quick_gate.sh
         expected_run_attempt="attempt",
     )
 
-    assert repaired is not None
-    assert ".github/workflows/strix.yml" in repaired["summary"]
-    assert "simple typo fix" not in repaired["summary"]
-    assert "no tests are needed" not in repaired["summary"].casefold()
-    assert not norm.contradicts_material_changed_file_scope(
-        repaired["reason"],
-        repaired["summary"],
-    )
+    assert repaired is None
 
 
 def test_valid_control_does_not_repair_unsafe_or_unproven_approval(
     tmp_path, monkeypatch
 ):
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         """\
 # OpenCode bounded PR review evidence
@@ -1548,6 +2195,7 @@ M\tscripts/ci/example.py
     )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
     kwargs = {
         "expected_head_sha": "head",
         "expected_run_id": "run",
@@ -1634,7 +2282,7 @@ M\tscripts/ci/example.py
     assert no_source_summary is not None
     assert "test coverage as not applicable" in no_source_summary
     assert "docstring coverage as not applicable" in no_source_summary
-    assert norm.mentions_full_coverage("", no_source_summary)
+    assert not norm.mentions_full_coverage("", no_source_summary)
 
     suite_passed_summary = norm.build_approval_repair_summary(
         "No blockers were found.",
@@ -1652,10 +2300,11 @@ M\tscripts/ci/example.py
     assert "docstring coverage was advisory" in suite_passed_summary
     assert norm.mentions_full_coverage("", suite_passed_summary)
 
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text("placeholder", encoding="utf-8")
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
     original_read_text = norm.Path.read_text
 
     def raise_for_evidence(path, *args, **kwargs):
@@ -1667,8 +2316,81 @@ M\tscripts/ci/example.py
     assert norm.repair_approval_summary("reason", "summary") == "summary"
 
 
-def test_approval_language_contract_runs_after_evidence_repair(tmp_path, monkeypatch):
-    evidence = tmp_path / "bounded-review-evidence.md"
+def test_approval_repair_summary_emits_korean_language_evidence(monkeypatch):
+    """Cover the trusted Korean-language repair text without model translation."""
+    monkeypatch.setattr(norm, "preferred_review_language", lambda: "korean")
+    repaired = norm.build_approval_repair_summary(
+        "scripts/ci/example.py를 검토했습니다.",
+        """\
+## Coverage execution evidence
+- Result: PASS
+- Test coverage: 100%
+- Docstring coverage: 100%
+## Changed files
+M\tscripts/ci/example.py
+""",
+    )
+    assert repaired is not None
+    assert "한국어 리뷰 언어 계약" in repaired
+
+
+def test_repair_approval_reason_fails_safe_when_evidence_is_unusable(
+    tmp_path, monkeypatch
+):
+    """Keep or conservatively repair reasons when bounded evidence degrades."""
+    evidence = tmp_path / "opencode-review-evidence.md"
+    evidence.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
+
+    monkeypatch.setattr(norm, "mentions_actual_changed_file", lambda *_args: False)
+    assert norm.repair_approval_reason("original", FULL_SUMMARY) == "original"
+
+    monkeypatch.setattr(norm, "mentions_actual_changed_file", lambda *_args: True)
+    monkeypatch.setattr(norm, "mentions_verification_posture", lambda *_args: True)
+    monkeypatch.setattr(norm, "mentions_full_coverage", lambda *_args: True)
+    monkeypatch.setattr(norm, "read_text_lossy", lambda _path: None)
+    repaired = norm.repair_approval_reason("No source changes", FULL_SUMMARY)
+    assert "the current changed files" in repaired
+
+
+@pytest.mark.parametrize(
+    ("gate_name", "first_value", "second_value"),
+    [
+        ("mentions_actual_changed_file", True, False),
+        ("mentions_verification_posture", True, False),
+        ("mentions_full_coverage", True, False),
+        ("contradicts_changed_file_kinds", False, True),
+        ("contradicts_material_changed_file_scope", False, True),
+        ("model_failure_approval_phrase", "", "model failed"),
+    ],
+)
+def test_valid_control_rechecks_every_approval_gate_after_repair(
+    monkeypatch, gate_name, first_value, second_value
+):
+    """Reject a repair that invalidates any already-checked approval invariant."""
+    values = iter((first_value, second_value))
+    monkeypatch.setattr(norm, gate_name, lambda *_args: next(values))
+    monkeypatch.setattr(
+        norm, "repair_approval_summary", lambda _reason, summary: summary
+    )
+    monkeypatch.setattr(norm, "repair_approval_reason", lambda reason, _summary: reason)
+
+    assert (
+        norm.valid_control(
+            control(),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+        )
+        is None
+    )
+
+
+def test_approval_language_contract_cannot_be_repaired_from_evidence(
+    tmp_path, monkeypatch
+):
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         """\
 ## Review language evidence
@@ -1684,8 +2406,14 @@ Preferred review language: `Korean`
 """,
         encoding="utf-8",
     )
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        ".jules/sentinel.md\nfrontend/src/components/EmailDetail.test.tsx\n",
+        encoding="utf-8",
+    )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, changed_files, evidence)
 
     reviewed = norm.valid_control(
         control(
@@ -1710,13 +2438,11 @@ Preferred review language: `Korean`
         expected_run_attempt="attempt",
     )
 
-    assert reviewed is not None
-    assert "한국어 리뷰 언어 계약" in reviewed["summary"]
-    assert ".jules/sentinel.md" in reviewed["summary"]
+    assert reviewed is None
 
 
 def test_request_changes_still_enforces_korean_language_contract(tmp_path, monkeypatch):
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         """\
 ## Review language evidence
@@ -1726,6 +2452,7 @@ Preferred review language: `Korean`
     )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
 
     assert (
         norm.valid_control(
@@ -1748,12 +2475,77 @@ def test_iter_json_objects_extracts_raw_and_embedded_json():
     assert norm.iter_json_objects('prefix {"b": 2} suffix') == [{"b": 2}]
     assert norm.iter_json_objects('prefix {"wrapper": {"control": true}} suffix') == [
         {"wrapper": {"control": True}},
-        {"control": True},
     ]
     assert norm.iter_json_objects("prefix {  } suffix") == [{}]
     assert norm.iter_json_objects("prefix {not json}") == []
     assert norm.iter_json_objects('prefix {"bad": } suffix') == []
     assert norm.iter_json_objects("no json here") == []
+
+
+@pytest.mark.parametrize("approve_first", [True, False])
+def test_main_rejects_conflicting_current_run_controls_without_rewriting(
+    tmp_path, capsys, approve_first
+):
+    """Control order cannot hide a contradictory current-run conclusion."""
+    approve = control()
+    request_changes = control(
+        result="REQUEST_CHANGES",
+        reason="A current-head defect requires a change.",
+        summary="A source-backed blocking defect was reproduced.",
+        findings=[finding()],
+    )
+    controls = [approve, request_changes]
+    if not approve_first:
+        controls.reverse()
+    original = "review prose\n" + "\n".join(json.dumps(item) for item in controls)
+    output = tmp_path / "conflicting-controls.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "expected exactly one top-level current-run control candidate" in (
+        capsys.readouterr().err
+    )
+
+
+def test_main_rejects_repeated_identical_current_run_controls(tmp_path, capsys):
+    """Repeating the same control cannot manufacture unambiguous evidence."""
+    encoded = json.dumps(control())
+    original = f"{encoded}\n{encoded}\n"
+    output = tmp_path / "duplicate-controls.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "found 2" in capsys.readouterr().err
+
+
+def test_main_rejects_nested_current_run_control_without_rewriting(tmp_path, capsys):
+    """A valid control nested in model prose is never promoted for publication."""
+    original = json.dumps({"review": "model prose", "control": control()})
+    output = tmp_path / "nested-control.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "no top-level current-run control" in capsys.readouterr().err
+
+
+def test_main_rejects_second_malformed_current_run_candidate(tmp_path, capsys):
+    """A malformed second current-run claim makes the provider stream ambiguous."""
+    malformed = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "attempt",
+        "result": "APPROVE",
+    }
+    original = f"{json.dumps(control())}\n{json.dumps(malformed)}\n"
+    output = tmp_path / "malformed-second-control.txt"
+    output.write_text(original, encoding="utf-8")
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    assert output.read_text(encoding="utf-8") == original
+    assert "found 2" in capsys.readouterr().err
 
 
 def test_escapes_html_comment_breakout(tmp_path):
@@ -1847,7 +2639,19 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
 
     approval = tmp_path / "approval.json"
     approval.write_text(json.dumps(control()), encoding="utf-8")
-    assert norm.main(["prog", "--check-structural-approval", str(approval)]) == 0
+    assert (
+        norm.main(
+            [
+                "prog",
+                "--check-structural-approval",
+                "head",
+                "run",
+                "attempt",
+                str(approval),
+            ]
+        )
+        == 0
+    )
 
     generic_failed_check = tmp_path / "generic-failed-check.json"
     generic_failed_check.write_text(
@@ -1868,7 +2672,16 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
         encoding="utf-8",
     )
     assert (
-        norm.main(["prog", "--check-structural-approval", str(generic_failed_check)])
+        norm.main(
+            [
+                "prog",
+                "--check-structural-approval",
+                "head",
+                "run",
+                "attempt",
+                str(generic_failed_check),
+            ]
+        )
         == 4
     )
     assert "non-actionable failed-check deflection" in capsys.readouterr().err
@@ -1877,13 +2690,14 @@ def test_main_normalizes_valid_output_and_reports_failures(tmp_path, capsys):
 def test_review_language_contract_rejects_english_only_korean_pr(
     tmp_path, monkeypatch, capsys
 ):
-    evidence = tmp_path / "bounded-review-evidence.md"
+    evidence = tmp_path / "opencode-review-evidence.md"
     evidence.write_text(
         "## Review language evidence\n\n- Preferred review language: `Korean`\n",
         encoding="utf-8",
     )
     norm.current_changed_files.cache_clear()
     monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, tmp_path / "opencode-changed-files.txt", evidence)
 
     assert (
         norm.valid_control(
@@ -1911,7 +2725,19 @@ def test_review_language_contract_rejects_english_only_korean_pr(
 
     approval = tmp_path / "approval.json"
     approval.write_text(json.dumps(control()), encoding="utf-8")
-    assert norm.main(["prog", "--check-structural-approval", str(approval)]) == 4
+    assert (
+        norm.main(
+            [
+                "prog",
+                "--check-structural-approval",
+                "head",
+                "run",
+                "attempt",
+                str(approval),
+            ]
+        )
+        == 4
+    )
     assert "preferred PR language" in capsys.readouterr().err
 
 
@@ -1933,3 +2759,41 @@ def test_main_normalizes_and_escapes_html_markers(tmp_path):
     assert json.loads(json_line)["summary"] == control_data["summary"]
     assert "-->" in inner
     assert "-->" not in inner.split("-->", 1)[0].strip()
+
+
+def test_main_logs_the_exact_control_rejection_reason(tmp_path, capsys):
+    output = tmp_path / "model-output.md"
+    output.write_text(
+        json.dumps(
+            control(
+                adversarial_validation={
+                    "status": "passed",
+                    "probes": [
+                        {
+                            "path": "scripts/ci/example.py",
+                            "line": 7,
+                            "hypothesis": "The stale head is accepted.",
+                            "attack_or_counterexample": "Submit a stale head.",
+                            "evidence": "Source inspection at scripts/ci/example.py:7 mentions the branch.",
+                            "outcome": "falsified",
+                        },
+                        {
+                            "path": "scripts/ci/example.py",
+                            "line": 8,
+                            "hypothesis": "The current head is rejected.",
+                            "attack_or_counterexample": "Submit the current head.",
+                            "evidence": "Focused pytest for scripts/ci/example.py:8 passed with exit code 0.",
+                            "outcome": "falsified",
+                        },
+                    ],
+                    "residual_risk": "External provider availability remains variable.",
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert norm.main(["normalizer", "head", "run", "attempt", str(output)]) == 4
+    stderr = capsys.readouterr().err
+    assert "CONTROL_REJECTED candidate=1" in stderr
+    assert "adversarial probe 1 evidence must state the observed proof result" in stderr

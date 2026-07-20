@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-13 21:10 KST
+Updated: 2026-07-14 13:35 KST
 
 ## Decision
 
@@ -21,7 +21,7 @@ Use an organization repository ruleset instead of copying workflow files into ea
   - `.github/workflows/sast-semgrep.yml`
 - Required workflow ref: `refs/heads/main`
 - Last verified workflow implementation base commit: `ef9950e6b55bf943c0295e1df3e34c94210d21cc` (`#283`)
-- Required workflow trigger support: `pull_request_target`, `push`, `workflow_run`
+- Required workflow trigger support: `pull_request`, `pull_request_target`, `push`, `workflow_run`
 
 `.github` PRs through `#283` are now in `main`. The required-workflow
 ruleset points at `.github@main`; if live organization ruleset inspection
@@ -34,16 +34,18 @@ This keeps Strix security evidence, OpenCode review evidence, and merge/update a
 
 The central `.github/workflows/opencode-review.yml` is now part of the active organization required workflow ruleset.
 
-- Required workflow trigger support: `pull_request_target`
+- Required workflow trigger support: `pull_request` (supported by GitHub ruleset workflows)
 - Stable required check job name: `opencode-review`
 - Trusted source: `ContextualWisdomLab/.github`
-- PR-head handling: checkout or fetch PR head as review data only; trusted scripts come from the central `.github` ref
+- PR-head handling: the ruleset-supported `pull_request` event executes PR coverage in the unprivileged PR context; trusted scripts still come from the central `.github` workflow source
 - Manual target support: OpenCode and Strix `workflow_dispatch` runs can still pass `target_repository` for targeted diagnostics, but required-workflow coverage comes from the organization ruleset rather than repo-local workflow copies
 - Model token posture: use the organization `STRIX_GITHUB_MODELS_TOKEN` secret for GitHub Models calls, with `github.token` as the fallback; live workflow evidence showed `github.token` alone can return 403 from `models.github.ai/inference`
-- Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; `github.token` remains the last fallback and publication failures are soft-failed
-- Coverage execution posture: privileged `pull_request_target` coverage runs only for same-repository PR heads; fork PR heads must be covered by an unprivileged PR-side check or manually trusted dispatch before approval
+- Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; the workflow token is limited to the same-repository PR context and publication failures remain visible
+- Coverage execution posture: PR-controlled package, test, build, R, Rust, and Docker inputs are never executed from `pull_request_target`; same-repository coverage runs in the ruleset-supported `pull_request` context, while cross-repository workflow dispatch remains metadata-bound and explicitly authenticated
 - Fork posture: PR heads are fetched through `refs/pull/<number>/head` when direct head-SHA fetch is not available, so review can inspect fork PR source as data without executing it in the trusted workflow context
 - Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate rechecks current-head peer checks and extends its bounded wait only while image-validation checks remain pending, logging the reason before approval
+- Model-exhaustion posture: command exit codes and deterministic checks cannot synthesize an approval. Exhaustion remains `MODEL_OUTPUT_UNAVAILABLE`; only a prior real-model approval bound to the exact current head can satisfy the review gate after all checks, alerts, and threads are revalidated.
+- Adversarial-evidence posture: every probe must cite its exact changed path and positive in-range line in the materialized current-head source tree. Unrelated paths, nonexistent lines, circular claims, and missing observed results fail closed with a concrete rejection reason.
 
 Keep the OpenCode required workflow active only while the central workflow keeps proving current-head coverage, CodeGraph initialization, bounded evidence, model review output, and approval-gate publication on the current head.
 
@@ -111,26 +113,35 @@ Do not centralize the scheduler by running a `.github` scheduled job against oth
 ## Second-reviewer (Noema) posture
 
 The org's two-reviewer merge rule needs a second approving-review identity
-independent of OpenCode. That identity is the Noema reviewer, whose judgement
-plane is the PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
-(`reviewer/noema_reviewer`, noema#9) and whose GitHub identity comes from the
-Noema GitHub App (token-exchange Worker) *or* a `NOEMA_REVIEW_TOKEN` secret.
+independent of OpenCode. That identity is `cwl-noema-review[bot]`, supplied by
+the organization-owned `cwl-noema-review` GitHub App. The central workflow
+currently runs the centrally versioned `noema_review_gate.py` judgement path and
+mints a short-lived installation token restricted to the target repository; the
+App has read-only Actions/checks/contents/status/code-scanning/Dependabot access
+and write access only to pull-request reviews.
 
-- Token posture: `noema-review.yml` now prefers a `NOEMA_REVIEW_TOKEN` secret
-  as the reviewer identity when present, skipping the OIDC app-token exchange.
-  This lets the second reviewer submit real approving reviews without deploying
-  the Noema Worker. When neither the secret nor `NOEMA_TOKEN_EXCHANGE_URL` is
-  configured, the step still emits the unconfigured notice and skips rather than
-  failing the check.
+The PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
+(`reviewer/noema_reviewer`, noema#9) is the target standalone judgement plane,
+but this credential/fail-closed rollout does not yet install or invoke that
+package. Do not raise the org approval count to two on the strength of this
+document alone: first wire its full current-head logs/SARIF/dependency/comment/
+CodeGraph manifest into this required workflow and prove an App-authored live
+review on a target-repository PR.
+
+- Token posture: `noema-review.yml` prefers a `NOEMA_REVIEW_TOKEN` emergency
+  fallback when present, otherwise mints the repository-scoped App token with
+  `actions/create-github-app-token` pinned to an immutable SHA. The OIDC Worker
+  exchange remains a compatibility fallback. If none of these identities is
+  configured, the required check fails with the exact missing-credential reason;
+  an unconfigured reviewer can never pass by skipping.
 - Honesty posture: `noema_review_gate.py` refuses to review as a primary review
   actor (`opencode-agent`, `github-actions`), so a `NOEMA_REVIEW_TOKEN` that
   resolves to one of those identities cannot manufacture a fake second review —
   it must be a distinct write-access identity.
-- Minimal admin config to activate the second reviewer: set the org/repo
-  secrets `NOEMA_REVIEW_TOKEN` (a distinct write-access token) and the LLM
-  endpoint (`NOEMA_LLM_MODEL`, `NOEMA_LLM_API_URL`, `NOEMA_LLM_API_KEY`). Until
-  then the `noema-review` check stays green-by-skip and only OpenCode approves,
-  so the classic `.github` 2-review protection keeps `.github` PRs blocked.
+- Required admin config: install `cwl-noema-review` on the organization, set
+  `NOEMA_GITHUB_APP_CLIENT_ID` plus `NOEMA_GITHUB_APP_PRIVATE_KEY`, and configure
+  `NOEMA_LLM_MODEL`, `NOEMA_LLM_API_URL`, and either `NOEMA_LLM_API_KEY` or the
+  shared `OPENAI_API_KEY`. Every missing setting is a visible failed-check reason.
 
 ## Scope
 
