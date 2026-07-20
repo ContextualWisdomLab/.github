@@ -199,6 +199,41 @@ def test_check_helpers_and_existing_noema_review():
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
 
 
+def test_existing_noema_review_rejects_mismatched_body_and_marker_heads():
+    current_head = "a" * 40
+    previous_head = "b" * 40
+    mismatched_body = review(
+        commit=current_head,
+        login="noema",
+        body=(
+            f"- Head SHA: `{previous_head}`\n"
+            f"<!-- noema-review-gate head_sha={previous_head} decision=approve -->"
+        ),
+    )
+    mismatched_marker = review(
+        commit=current_head,
+        login="noema",
+        body=(
+            f"- Head SHA: `{current_head}`\n"
+            f"<!-- noema-review-gate head_sha={previous_head} decision=approve -->"
+        ),
+    )
+    exact = review(
+        commit=current_head,
+        login="noema",
+        body=(
+            f"- Head SHA: `{current_head}`\n"
+            f"<!-- noema-review-gate head_sha={current_head} decision=approve -->"
+        ),
+    )
+    def pr(item):
+        return make_pr(headRefOid=current_head, reviews={"nodes": [item]})
+
+    assert not noema.existing_noema_review(pr(mismatched_body), "noema")
+    assert not noema.existing_noema_review(pr(mismatched_marker), "noema")
+    assert noema.existing_noema_review(pr(exact), "noema")
+
+
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "noema\n")
     assert noema.current_actor() == "noema"

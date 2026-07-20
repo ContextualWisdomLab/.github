@@ -29,6 +29,10 @@ PRIMARY_REVIEW_MARKERS = (
     "opencode-review-control-v1",
 )
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
+NOEMA_REVIEW_MARKER_HEAD_RE = re.compile(
+    r"<!--\s*noema-review-gate\b[^>]*\bhead_sha=([^\s>]+)",
+    re.IGNORECASE,
+)
 IGNORED_RUNNING_CHECKS = {
     "approve-after-primary-review",
     "noema-review",
@@ -262,11 +266,15 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     head_sha = str(pr.get("headRefOid") or "")
     marker = "<!-- noema-review-gate"
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
-        if review_commit(review) != head_sha:
+        if not review_matches_current_head(review, head_sha):
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
-        if review_author(review) == actor or marker in str(review.get("body") or ""):
+        body = str(review.get("body") or "")
+        marker_heads = NOEMA_REVIEW_MARKER_HEAD_RE.findall(body)
+        if marker_heads and any(value.lower() != head_sha.lower() for value in marker_heads):
+            continue
+        if review_author(review) == actor or marker in body:
             return True
     return False
 
