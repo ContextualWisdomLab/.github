@@ -3516,10 +3516,9 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. DeepSeek V3 has been the
-          # most reliable first-pass reviewer in the org queue, then the pool
-          # falls through to the direct GPT-5.6 Luna slot, then the full-size
-          # GPT-4.1 long-context endpoint and provider-specific GPT/o3 fallbacks.
+          # High-sensitivity review candidates only. GPT-4.1 is the first-pass
+          # long-context endpoint, then the pool falls through to DeepSeek V3,
+          # the direct GPT-5.6 Luna slot, and provider-specific GPT/o3 fallbacks.
           # The direct-OpenAI slot runs GPT-5.6 Luna: the newest family's
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
