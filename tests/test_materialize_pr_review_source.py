@@ -388,6 +388,7 @@ def test_process_termination_handles_finished_and_stubborn_producers() -> None:
 def test_tree_reader_missing_stdout_and_timeout(monkeypatch, tmp_path: Path) -> None:
     """Missing pipes and stalled enumeration terminate without materialization."""
     terminated = []
+
     class Missing:
         stdout = None
 
@@ -442,7 +443,9 @@ def test_tree_stream_record_and_exit_edge_cases(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(materializer, "MAX_TREE_RECORD_BYTES", 3)
     for payload in (b"abcd", b"abcd\0"):
         process = producer(payload, linger=True)
-        monkeypatch.setattr(materializer, "open_tree_reader", lambda *args, p=process: p)
+        monkeypatch.setattr(
+            materializer, "open_tree_reader", lambda *args, p=process: p
+        )
         with pytest.raises(ValueError, match="record-size"):
             materializer.parse_tree(
                 tmp_path,
@@ -660,7 +663,9 @@ def test_materialize_preconditions_unsupported_entry_and_batch_failure(
         )
 
     monkeypatch.setattr(materializer, "validate_git_dir", lambda *unused: git_dir)
-    monkeypatch.setattr(materializer, "validate_output_path", lambda output, unused: output)
+    monkeypatch.setattr(
+        materializer, "validate_output_path", lambda output, unused: output
+    )
 
     existing_manifest = tmp_path / "existing-manifest"
     existing_manifest.write_text("x", encoding="utf-8")
