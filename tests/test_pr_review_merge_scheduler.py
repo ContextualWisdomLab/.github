@@ -1742,9 +1742,22 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[3] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
     assert calls[4][:4] == ["gh", "api", "-X", "PUT"]
     assert calls[4][-1] == f"expected_head_sha={head_sha}"
-    assert calls[6][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[7] == [
+    active_run_calls = [
+        [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/owner/repo/actions/runs",
+            "-f",
+            f"status={status}",
+            "-F",
+            "per_page=100",
+        ]
+        for status in sched.ACTIVE_WORKFLOW_RUN_STATUSES
+    ]
+    assert calls[5:10] == active_run_calls
+    assert calls[10] == [
         "gh",
         "api",
         "-X",
@@ -1753,9 +1766,8 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         "--input",
         "-",
     ]
-    assert calls[8][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[9][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[10] == [
+    assert calls[11:16] == active_run_calls
+    assert calls[16] == [
         "gh",
         "api",
         "-X",
@@ -1780,11 +1792,8 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     )
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
-    assert calls[:2] == [
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"],
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=in_progress", "-F", "per_page=100"],
-    ]
-    assert calls[2:] == [
+    assert calls[:5] == active_run_calls
+    assert calls[5:] == [
         ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
         ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/202/rerun"],
     ]
@@ -1990,9 +1999,21 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
 
     assert [call[2] for call in calls] == ["workflow-actions-token"] * len(calls)
     assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
-    assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[3][0] == [
+    assert [call[0] for call in calls[1:6]] == [
+        [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/owner/repo/actions/runs",
+            "-f",
+            f"status={status}",
+            "-F",
+            "per_page=100",
+        ]
+        for status in sched.ACTIVE_WORKFLOW_RUN_STATUSES
+    ]
+    assert calls[6][0] == [
         "gh",
         "api",
         "-X",
@@ -2001,9 +2022,21 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
         "--input",
         "-",
     ]
-    assert calls[4][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[6][0] == [
+    assert [call[0] for call in calls[7:12]] == [
+        [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/owner/repo/actions/runs",
+            "-f",
+            f"status={status}",
+            "-F",
+            "per_page=100",
+        ]
+        for status in sched.ACTIVE_WORKFLOW_RUN_STATUSES
+    ]
+    assert calls[12][0] == [
         "gh",
         "api",
         "-X",
@@ -2300,7 +2333,7 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
             "GET",
             "repos/ContextualWisdomLab/.github/actions/runs",
         ]:
-            if "status=queued" in args:
+            if "status=pending" in args:
                 return json.dumps({"workflow_runs": [current_dispatch]})
             return json.dumps({"workflow_runs": []})
         if "/actions/runs" in " ".join(args):
@@ -2477,7 +2510,7 @@ def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
     ) == []
 
 
-def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(monkeypatch):
+def test_cancel_stale_pr_runs_force_cancels_all_active_old_heads(monkeypatch):
     calls = []
     head_sha = "a" * 40
     stale_same_pr = {
@@ -2510,6 +2543,12 @@ def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(mon
         "head_sha": "older-running-head",
         "pull_requests": [{"number": 1}],
     }
+    stale_pending = {
+        "id": 9006,
+        "name": "Required OpenCode Review",
+        "head_sha": "older-pending-head",
+        "pull_requests": [{"number": 1}],
+    }
 
     def fake_run(args, stdin=None):
         calls.append(args)
@@ -2518,8 +2557,10 @@ def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(mon
                 runs = [stale_same_pr, current_same_pr, stale_other_pr, stale_strix]
             elif "status=in_progress" in args:
                 runs = [stale_in_progress]
-            else:  # pragma: no cover - the assertion below exposes new states
-                raise AssertionError(args)
+            elif "status=pending" in args:
+                runs = [stale_pending]
+            else:
+                runs = []
             return json.dumps({"workflow_runs": runs})
         return ""
 
@@ -2533,10 +2574,11 @@ def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(mon
         dry_run=False,
     )
 
-    assert run_ids == ["9001", "9004", "9005"]
+    assert run_ids == ["9001", "9004", "9005", "9006"]
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9004/force-cancel"] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9005/force-cancel"] in calls
+    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9006/force-cancel"] in calls
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert any("status=in_progress" in " ".join(call) for call in calls)

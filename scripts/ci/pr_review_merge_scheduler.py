@@ -120,6 +120,13 @@ DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+ACTIVE_WORKFLOW_RUN_STATUSES = (
+    "queued",
+    "in_progress",
+    "pending",
+    "waiting",
+    "requested",
+)
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
@@ -1888,7 +1895,9 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
-def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
+def active_workflow_runs(
+    repo: str, statuses: Sequence[str] = ACTIVE_WORKFLOW_RUN_STATUSES
+) -> list[dict[str, Any]]:
     """Return active workflow runs for a repository."""
     runs: list[dict[str, Any]] = []
     for status in statuses:
@@ -1921,7 +1930,7 @@ def stale_pr_run_ids(
     pr: dict[str, Any],
     *,
     workflow: str | None = None,
-    statuses: Sequence[str] = ("queued", "in_progress"),
+    statuses: Sequence[str] = ACTIVE_WORKFLOW_RUN_STATUSES,
 ) -> list[str]:
     """Return active run ids for older heads of the same pull request."""
     head = str(pr.get("headRefOid") or "").lower()
@@ -1954,7 +1963,7 @@ def active_review_run_refs(
     run_title: str,
     workflow_aliases: frozenset[str],
     dispatch_workflow_paths: frozenset[str],
-    statuses: Sequence[str] = ("queued", "in_progress"),
+    statuses: Sequence[str] = ACTIVE_WORKFLOW_RUN_STATUSES,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Return repository-qualified current and stale review workflow runs.
 
@@ -2011,7 +2020,7 @@ def active_opencode_run_refs(
     repo: str,
     workflow: str,
     pr: dict[str, Any],
-    statuses: Sequence[str] = ("queued", "in_progress"),
+    statuses: Sequence[str] = ACTIVE_WORKFLOW_RUN_STATUSES,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Return repository-qualified current and stale OpenCode run references.
 
@@ -2036,7 +2045,7 @@ def active_opencode_run_ids(
     repo: str,
     workflow: str,
     pr: dict[str, Any],
-    statuses: Sequence[str] = ("queued", "in_progress"),
+    statuses: Sequence[str] = ACTIVE_WORKFLOW_RUN_STATUSES,
 ) -> tuple[list[str], list[str]]:
     """Return current-head and stale OpenCode run ids for one pull request.
 
