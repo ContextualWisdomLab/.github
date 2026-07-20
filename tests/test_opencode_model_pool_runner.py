@@ -653,8 +653,9 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert (
-        "OpenCode github-models/openai/gpt-5 runtime cap selected 3s instead of 9s "
-        "because this installation has returned a constrained request-body limit for that endpoint."
+        "OpenCode github-models/openai/gpt-5 provider-specific queue cap selected "
+        "3s instead of 9s so a constrained or non-responsive endpoint cannot "
+        "monopolize the organization review queue."
     ) in result.stdout
     attempt_budget = re.search(
         r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
@@ -665,6 +666,49 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     run_timeout, remaining_budget = map(int, attempt_budget.groups())
     assert run_timeout == 3
     assert run_timeout <= remaining_budget <= 30
+
+
+def test_github_deepseek_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
+    """A silent GitHub DeepSeek endpoint cannot consume the whole review job."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS": "2",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
+        },
+        model_candidates="github-models/deepseek/deepseek-v3-0324",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode github-models/deepseek/deepseek-v3-0324 provider-specific "
+        "queue cap selected 2s instead of 9s so a constrained or non-responsive "
+        "endpoint cannot monopolize the organization review queue."
+    ) in result.stdout
+    assert re.search(
+        r"OpenCode github-models/deepseek/deepseek-v3-0324 attempt 1/1 "
+        r"using 2s run timeout with \d+s retry budget remaining\.",
+        result.stdout,
+    )
+
+
+def test_timeout_skips_second_attempt_for_same_model(tmp_path: Path) -> None:
+    """A silent endpoint falls through while response validation remains retryable."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "3",
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "1",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "10",
+        },
+        model_candidates="github-models/openai/gpt-4.1",
+    )
+
+    assert result.returncode == 1
+    assert "attempt 1/2 timed out after 1s" in result.stdout
+    assert "skipping remaining attempts for this model" in result.stdout
+    assert "attempt 2/2" not in result.stdout
 
 
 def test_github_models_openai_prompt_references_evidence_without_inlining(

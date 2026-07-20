@@ -346,6 +346,9 @@ cap_model_run_timeout() {
 	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
 		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
 		;;
+	github-models/deepseek/*)
+		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS 600)"
+		;;
 	*)
 		printf '%s\n' "$run_timeout_seconds"
 		return 0
@@ -413,7 +416,8 @@ run_one_model_attempt() {
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
 		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
 		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
-			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
+			printf 'OpenCode %s attempt %s/%s timed out after %ss; skipping remaining attempts for this model and falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
+			return 2
 		fi
 		if is_fatal_provider_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
@@ -548,7 +552,7 @@ main() {
 				uncapped_run_timeout="$OPENCODE_RUN_TIMEOUT_SECONDS"
 				OPENCODE_RUN_TIMEOUT_SECONDS="$(cap_model_run_timeout "$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS")"
 				if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -lt "$uncapped_run_timeout" ]; then
-					printf 'OpenCode %s runtime cap selected %ss instead of %ss because this installation has returned a constrained request-body limit for that endpoint.\n' \
+					printf 'OpenCode %s provider-specific queue cap selected %ss instead of %ss so a constrained or non-responsive endpoint cannot monopolize the organization review queue.\n' \
 						"$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$uncapped_run_timeout"
 				fi
 				export OPENCODE_RUN_TIMEOUT_SECONDS

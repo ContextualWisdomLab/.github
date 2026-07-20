@@ -3542,56 +3542,54 @@ jobs:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. DeepSeek V3 has been the
-          # most reliable first-pass reviewer in the org queue, then the pool
-          # falls through to the direct GPT-5.6 Luna slot, then the full-size
-          # GPT-4.1 long-context endpoint and provider-specific GPT/o3 fallbacks.
+          # High-sensitivity review candidates only. The live #579 review run
+          # showed GPT-4.1 returning an almost-valid control block in 21s while
+          # two DeepSeek candidates consumed 90m each without provider output.
+          # Lead with the responsive long-context endpoint, then fall through
+          # to direct OpenAI and bounded provider-specific fallbacks.
           # The direct-OpenAI slot runs GPT-5.6 Luna: the newest family's
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
-          # One attempt per model, then fall through to the next model. Retrying
-          # the SAME model 5x let a rate-limited/hung leader consume the whole
-          # step, so the pool never reached a healthy fallback model.
-          OPENCODE_MODEL_ATTEMPTS: "1"
-          # Preserve reviews that legitimately need tens of minutes to inspect a
-          # large repository. Changed-file count is not a repository-complexity
-          # proxy, so every cadence class gets 90 minutes per candidate while the
-          # bounded provider-pool watchdog remains the outer guard.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-4.1 openai/gpt-5.6-luna github-models/deepseek/deepseek-v3-0324 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          # A responsive model gets one bounded format retry: #579 produced a
+          # substantive control block that failed only one adversarial receipt
+          # field. Fatal provider errors still skip the second attempt.
+          OPENCODE_MODEL_ATTEMPTS: "2"
+          OPENCODE_RUN_TIMEOUT_SECONDS: "1800"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"
-          # Keep cycling through the high-sensitivity candidate catalog until
-          # the retry budget or step timeout is exhausted; a single invalid
-          # cycle can be all provider formatting noise rather than review
-          # evidence.
-          OPENCODE_POOL_MAX_CYCLES: "0"
+          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"
+          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "3900"
+          # Two attempts across the full catalog are the bounded run. A later
+          # scheduler heartbeat owns a new same-head retry after exhaustion.
+          OPENCODE_POOL_MAX_CYCLES: "1"
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
-          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
-          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "3600"
+          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "1800"
+          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "3600"
+          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a
           # full medium/large cadence slot after the long-context candidate.
           OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"
-          OPENCODE_DYNAMIC_MAX_CYCLES: "0"
+          # GitHub Models DeepSeek endpoints returned no provider detail for
+          # 90m twice in #579. Preserve them as fallbacks without queue capture.
+          OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS: "600"
+          OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "1800"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "3600"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
