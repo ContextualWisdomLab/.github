@@ -127,6 +127,8 @@ GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
+EXTERNAL_HEAD_UPDATE_RE = re.compile(r"head repo ([^\s]+) is external and not writable")
+EXTERNAL_HEAD_MERGE_RE = re.compile(r"head repo ([^\s]+) is external; fork or external PR heads are excluded")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "base branch policy prohibits the merge",
     "is not mergeable",
@@ -2970,7 +2972,7 @@ def last_push_approval_restamp_summary(decisions: list[Decision]) -> list[str]:
 
 def parse_external_head_update_reason(reason: str) -> str | None:
     """Extract the external head repository from non-mutable update guidance."""
-    match = re.search(r"head repo ([^\s]+) is external and not writable", reason)
+    match = EXTERNAL_HEAD_UPDATE_RE.search(reason)
     if not match:
         return None
     return match.group(1)
@@ -2978,7 +2980,7 @@ def parse_external_head_update_reason(reason: str) -> str | None:
 
 def parse_external_head_merge_reason(reason: str) -> str | None:
     """Extract the external head repository from merge-exclusion guidance."""
-    match = re.search(r"head repo ([^\s]+) is external; fork or external PR heads are excluded", reason)
+    match = EXTERNAL_HEAD_MERGE_RE.search(reason)
     if not match:
         return None
     return match.group(1)
