@@ -349,6 +349,46 @@ def test_gh_graphql_retries_transient_gateway_errors(monkeypatch):
     assert sleeps == [1, 2]
 
 
+def test_gh_graphql_retries_truncated_cli_json_errors(monkeypatch):
+    """A truncated GitHub response must retry before falling back to REST."""
+    calls = []
+    sleeps = []
+
+    def fake_run(args, stdin=None):
+        calls.append((args, stdin))
+        if len(calls) < 4:
+            raise RuntimeError(
+                "Command failed (1): gh api graphql\nunexpected end of JSON input"
+            )
+        return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=25)
+
+    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
+    assert len(calls) == 4
+    assert sleeps == [1, 2, 4]
+
+
+def test_gh_graphql_retries_truncated_success_stdout(monkeypatch):
+    """Invalid JSON on stdout is transient even when gh exits successfully."""
+    responses = [
+        '{"data":{"repository":',
+        '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}',
+    ]
+    sleeps = []
+
+    monkeypatch.setattr(sched, "run", lambda args, stdin=None: responses.pop(0))
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=25)
+
+    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
+    assert sleeps == [1]
+
+
 def test_gh_graphql_retries_transient_http2_stream_cancel(monkeypatch):
     calls = []
     sleeps = []

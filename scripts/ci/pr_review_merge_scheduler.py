@@ -643,6 +643,8 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "temporary failure",
     "timeout",
     "received from peer",
+    "unexpected end of JSON input",
+    "GitHub GraphQL returned invalid JSON",
 )
 
 
@@ -663,15 +665,20 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
     for attempt in range(1, max_attempts + 1):  # pragma: no branch - last failed attempt always raises
         try:
             return json.loads(run_github_read(cmd, stdin=query))
-        except RuntimeError as exc:
-            if attempt >= max_attempts or not is_transient_github_api_error(exc):
-                raise
-            delay = min(2 ** (attempt - 1), 8)
-            print(
-                f"Transient GitHub GraphQL error on attempt {attempt}/{max_attempts}; retrying in {delay}s",
-                file=sys.stderr,
+        except json.JSONDecodeError as exc:
+            failure = RuntimeError(
+                f"GitHub GraphQL returned invalid JSON: {exc.msg}"
             )
-            time.sleep(delay)
+        except RuntimeError as exc:
+            failure = exc
+        if attempt >= max_attempts or not is_transient_github_api_error(failure):
+            raise failure
+        delay = min(2 ** (attempt - 1), 8)
+        print(
+            f"Transient GitHub GraphQL error on attempt {attempt}/{max_attempts}; retrying in {delay}s",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
 
 
 def github_resource_inaccessible(exc: RuntimeError) -> bool:
