@@ -511,8 +511,8 @@ def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
     assert "python3 -m pytest tests/test_docstrings.py" in measure
 
 
-def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
-    """pnpm workspaces must not activate PR-selected tooling or fall back to npm."""
+def test_opencode_coverage_prefers_exact_preinstalled_declared_pnpm_before_npm():
+    """pnpm workspaces must use the exact pinned runner and never fall back to npm."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     measure_start = workflow.index(
         "      - name: Measure test and docstring evidence\n"
@@ -530,8 +530,11 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     assert 'corepack prepare "$spec" --activate' not in measure_step
     assert "not preinstalled in the pinned sandbox image" in measure_step
     assert "or fall back to npm" in measure_step
-    assert "ensure_corepack_runner pnpm" in select_function
-    assert "ensure_corepack_runner yarn" in select_function
+    assert "ensure_preinstalled_package_runner pnpm" in select_function
+    assert "ensure_preinstalled_package_runner yarn" in select_function
+    assert 'actual_version="$("$runner" --version 2>/dev/null || true)"' in measure_step
+    assert 'requested_runtime_version="${requested_version%%+*}"' in measure_step
+    assert 'if [ "$actual_version" != "$requested_runtime_version" ]; then' in measure_step
     assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
         "elif command -v npm"
     )
@@ -543,6 +546,18 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     declared_pnpm_block = select_function[declared_pnpm_start:declared_pnpm_end]
     assert "printf '%s\\n' \"pnpm\"" in declared_pnpm_block
     assert "return" in declared_pnpm_block
+
+
+def test_opencode_coverage_image_pins_node_and_pnpm_artifacts():
+    """The trusted sandbox must provide the exact Node and pnpm versions Naruon declares."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    assert "node-v22.14.0-linux-x64.tar.xz" in workflow
+    assert "69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec" in workflow
+    assert "pnpm/-/pnpm-11.5.3.tgz" in workflow
+    assert "238d639a47712278bb72e8b6db2c297ac1ccd80dd7642f7c933b73aebde7b51f" in workflow
+    assert 'test "$(node --version)" = "v22.14.0"' in workflow
+    assert 'test "$(pnpm --version)" = "11.5.3"' in workflow
+    assert "corepack prepare" not in workflow
 
 
 def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():

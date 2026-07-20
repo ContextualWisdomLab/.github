@@ -123,6 +123,7 @@ def adversarial_rejection_reason(body: str) -> str | None:
             str(probe["evidence"]),
             str(probe["path"]),
             probe.get("line") if isinstance(probe.get("line"), int) else None,
+            require_location_citation=False,
         )
         if evidence_error:
             return f"adversarial-validation probe evidence {evidence_error}"

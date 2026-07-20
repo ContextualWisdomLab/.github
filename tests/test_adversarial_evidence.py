@@ -86,6 +86,19 @@ def test_requires_the_exact_probe_path_and_line_when_line_is_supplied():
     )
 
 
+def test_structurally_bound_location_does_not_require_prose_duplication():
+    """Trusted structured callers may bind path/line outside the prose field."""
+    assert (
+        evidence.adversarial_evidence_rejection_reason(
+            f"Focused regression command passed with exit code 0. {SOURCE_RECEIPT}",
+            ".github/workflows/review.yml",
+            42,
+            require_location_citation=False,
+        )
+        is None
+    )
+
+
 def test_path_only_citation_rejects_longer_path_substrings():
     """A filename embedded inside another path is not an exact citation."""
     assert "exact probe path" in evidence.adversarial_evidence_rejection_reason(

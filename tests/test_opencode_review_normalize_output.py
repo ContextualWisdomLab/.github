@@ -957,6 +957,25 @@ def test_adversarial_evidence_rejects_exact_changed_path_without_independent_pro
     )
 
 
+def test_structured_probe_accepts_observed_evidence_without_repeated_path():
+    """Path, line, and digest remain bound even when prose omits the location."""
+    value = adversarial_validation()
+    for index, probe in enumerate(value["probes"], start=7):
+        probe["evidence"] = (
+            "Focused regression command passed with exit code 0. "
+            + source_line_receipt(f"line {index}")
+        )
+
+    assert (
+        norm.adversarial_validation_error(
+            value,
+            result="APPROVE",
+            findings=[],
+        )
+        == ""
+    )
+
+
 @pytest.mark.parametrize(
     "unsafe_path",
     [

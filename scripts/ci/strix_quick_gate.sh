@@ -199,6 +199,11 @@ PY
 }
 
 has_strix_report_failure_signal() {
+	local report_dirs_snapshot=""
+	if [ "${1:-}" = "--since-snapshot" ]; then
+		report_dirs_snapshot="$2"
+		shift 2
+	fi
 	local report_root
 	local report_log
 	for report_root in "$@"; do
@@ -206,11 +211,55 @@ has_strix_report_failure_signal() {
 			continue
 		fi
 		while IFS= read -r -d '' report_log; do
+			if [ -n "$report_dirs_snapshot" ] && report_path_predates_snapshot "$report_log" "$report_dirs_snapshot"; then
+				continue
+			fi
 			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
 				return 0
 			fi
-		done < <(find "$report_root" -type f -name '*.log' -print0)
+		# gate-attempts contains this wrapper's own captured console output. It is
+		# evidence for reviewers, not a Strix-emitted report: scanning it would
+		# turn benign phrases such as "timeout disabled" into false failures.
+		done < <(
+			find "$report_root" \
+				-type d -name gate-attempts -prune -o \
+				-type f -name '*.log' -print0
+		)
 	done
+	return 1
+}
+
+capture_report_dirs_snapshot() {
+	local output_file="$1"
+	shift
+	: >"$output_file"
+	local report_root report_dir
+	for report_root in "$@"; do
+		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+			continue
+		fi
+		for report_dir in "$report_root"/*; do
+			if [ -d "$report_dir" ] && [ ! -L "$report_dir" ]; then
+				printf '%s\n' "$report_dir" >>"$output_file"
+			fi
+		done
+	done
+}
+
+report_path_predates_snapshot() {
+	local candidate="$1"
+	local snapshot_file="$2"
+	if [ -z "$snapshot_file" ] || [ ! -f "$snapshot_file" ] || [ -L "$snapshot_file" ]; then
+		return 1
+	fi
+	local existing
+	while IFS= read -r existing; do
+		case "$candidate" in
+		"$existing" | "$existing"/*)
+			return 0
+			;;
+		esac
+	done <"$snapshot_file"
 	return 1
 }
 
@@ -1179,7 +1228,8 @@ pull_request_scope_context_files() {
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
 	for changed_file in "$@"; do
-		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
+		# Callers pass only the cache produced by normalize_changed_files_cache.
+		normalized_changed_file="$changed_file"
 		case "$normalized_changed_file" in
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then
@@ -1291,6 +1341,17 @@ changed_file_list_contains() {
 	return 1
 }
 
+normalized_changed_file_list_contains() {
+	local candidate="$1"
+	local normalized_changed_file
+	for normalized_changed_file in "${NORMALIZED_CHANGED_FILES[@]}"; do
+		if [ "$normalized_changed_file" = "$candidate" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
 build_pull_request_scope_dir() {
 	local scope_dir
 	scope_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-pr-scope.XXXXXX")"
@@ -1300,22 +1361,13 @@ build_pull_request_scope_dir() {
 	copy_changed_file_into_scope() {
 		local changed_file="$1"
 		local relative_path
-		relative_path="$(normalize_changed_file_path "$changed_file")" || {
-			echo "ERROR: pull request changed file path is unsafe: $changed_file" >&2
+		if ! normalized_changed_file_list_contains "$changed_file"; then
+			echo "ERROR: pull request changed file path was not validated: $changed_file" >&2
 			return 2
-		}
+		fi
+		relative_path="$changed_file"
 		local dst_path
-		dst_path="$(
-			python3 - "$scope_dir" "$relative_path" <<'PY'
-from pathlib import Path
-import sys
-
-scope_root = Path(sys.argv[1]).resolve(strict=True)
-relative_path = Path(sys.argv[2])
-dst_path = scope_root / relative_path
-print(dst_path)
-PY
-		)"
+		dst_path="$scope_dir/$relative_path"
 		mkdir -p -- "$(dirname -- "$dst_path")"
 		local copy_rc=1
 		local head_sha_for_copy
@@ -1342,27 +1394,16 @@ PY
 	copy_trusted_context_file_into_scope() {
 		local context_file="$1"
 		local relative_path
-		relative_path="$(normalize_changed_file_path "$context_file")" || {
-			echo "ERROR: pull request context file path is unsafe: $context_file" >&2
-			return 2
-		}
+		# context_file comes exclusively from the central, literal allowlist in
+		# pull_request_scope_context_files; it is never PR-controlled input.
+		relative_path="$context_file"
 		local dst_path
-		dst_path="$(
-			python3 - "$scope_dir" "$relative_path" <<'PY'
-from pathlib import Path
-import sys
-
-scope_root = Path(sys.argv[1]).resolve(strict=True)
-relative_path = Path(sys.argv[2])
-dst_path = scope_root / relative_path
-print(dst_path)
-PY
-		)"
+		dst_path="$scope_dir/$relative_path"
 		if [ -e "$dst_path" ]; then
 			return 0
 		fi
 		local changed_context_rc=0
-		changed_file_list_contains "$relative_path" || changed_context_rc=$?
+		normalized_changed_file_list_contains "$relative_path" || changed_context_rc=$?
 		case "$changed_context_rc" in
 		0)
 			mkdir -p -- "$(dirname -- "$dst_path")"
@@ -1400,17 +1441,7 @@ PY
 	copy_scope_support_file() {
 		local relative_path="$1"
 		local dst_path
-		dst_path="$(
-			python3 - "$scope_dir" "$relative_path" <<'PY'
-from pathlib import Path
-import sys
-
-scope_root = Path(sys.argv[1]).resolve(strict=True)
-relative_path = Path(sys.argv[2])
-dst_path = scope_root / relative_path
-print(dst_path)
-PY
-		)"
+		dst_path="$scope_dir/$relative_path"
 		if [ -e "$dst_path" ]; then
 			return 0
 		fi
@@ -1428,7 +1459,10 @@ PY
 		local include_opencode_normalizer=0
 		local changed_file relative_path
 		for changed_file in "$@"; do
-			relative_path="$(normalize_changed_file_path "$changed_file")" || return 2
+			if ! normalized_changed_file_list_contains "$changed_file"; then
+				return 2
+			fi
+			relative_path="$changed_file"
 			case "$relative_path" in
 			scripts/ci/strix_quick_gate.sh | scripts/ci/test_strix_quick_gate.sh)
 				include_strix_model_utils=1
@@ -1674,7 +1708,7 @@ PY
 			printf "Using narrowed target path %s for pull request Strix scan with %s scannable changed file(s).\n" "$narrowed_target" "$total_files" >&2
 		else
 			local build_scope_rc=0
-			build_pull_request_scope_dir "${CHANGED_FILES[@]}" || build_scope_rc=$?
+			build_pull_request_scope_dir "${NORMALIZED_CHANGED_FILES[@]}" || build_scope_rc=$?
 			if [ "$build_scope_rc" -eq 0 ]; then
 				TARGET_PATH="$LAST_PULL_REQUEST_SCOPE_DIR"
 				TARGET_PATH_IS_INTERNAL_PR_SCOPE=1
@@ -1688,7 +1722,7 @@ PY
 		return 0
 	fi
 	local build_scope_rc=0
-	build_pull_request_scope_dir "${CHANGED_FILES[@]}" || build_scope_rc=$?
+	build_pull_request_scope_dir "${NORMALIZED_CHANGED_FILES[@]}" || build_scope_rc=$?
 	if [ "$build_scope_rc" -ne 0 ]; then
 		return 2
 	fi
@@ -1970,6 +2004,9 @@ evaluate_pull_request_findings() {
 	local run_dir vulnerabilities_dir vuln_file line severity rank
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+		if [ "$(basename -- "$run_dir")" = "gate-attempts" ]; then
 			continue
 		fi
 		if is_preexisting_report_dir "$run_dir"; then
@@ -2339,6 +2376,12 @@ run_strix_once() {
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
+	local attempt_report_dirs_snapshot
+	attempt_report_dirs_snapshot="$(mktemp "$STRIX_RUNTIME_DIR/report-dirs-before.XXXXXX")"
+	capture_report_dirs_snapshot \
+		"$attempt_report_dirs_snapshot" \
+		"$ACTIVE_REPORTS_DIR" \
+		"${resolved_target_path%/}/strix_runs"
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
@@ -2570,7 +2613,9 @@ PY
 
 	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
-	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
+	if has_strix_report_failure_signal \
+		--since-snapshot "$attempt_report_dirs_snapshot" \
+		"$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
 		echo "Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." | tee -a "$STRIX_LOG" >&2
 	fi
@@ -2584,7 +2629,7 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
-		if has_blocking_vulnerability_reports; then
+		if has_blocking_vulnerability_reports "$attempt_report_dirs_snapshot"; then
 			echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
 			return 1
 		fi
@@ -2963,6 +3008,9 @@ latest_strix_report_dir() {
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
 			continue
 		fi
+		if [ "$(basename -- "$run_dir")" = "gate-attempts" ]; then
+			continue
+		fi
 
 		if is_preexisting_report_dir "$run_dir"; then
 			continue
@@ -3072,6 +3120,7 @@ has_only_below_threshold_vulnerabilities() {
 }
 
 has_blocking_vulnerability_reports() {
+	local report_dirs_snapshot="${1:-}"
 	local threshold_rank
 	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
 
@@ -3080,7 +3129,13 @@ has_blocking_vulnerability_reports() {
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
 			continue
 		fi
+		if [ "$(basename -- "$run_dir")" = "gate-attempts" ]; then
+			continue
+		fi
 		if is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+		if [ -n "$report_dirs_snapshot" ] && report_path_predates_snapshot "$run_dir" "$report_dirs_snapshot"; then
 			continue
 		fi
 

@@ -682,21 +682,21 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 300' "opencode review target contains evidence, the bounded long-review pool, publication, and cleanup overhead"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool preserves full-hour candidates within a bounded provider-pool window"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model stage keeps an outer safety timeout above the bounded provider-pool budget"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 34' "opencode fast approval publication is bounded around the dynamic image and package/GPU check wait"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review preserves legitimate full-hour provider sessions"
-	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "0"' "opencode model pool keeps cycling until the bounded retry budget or step timeout is exhausted"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "1800"' "opencode primary review bounds each responsive provider session"
+	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "3600"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
+	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "1"' "opencode model pool performs one bounded catalog cycle before scheduler-owned retry"
 	assert_file_not_contains "$workflow_file" 'opencode-exhausted-retry:' "opencode model exhaustion retries stay owned by the least-privilege central scheduler"
 	assert_file_not_contains "$workflow_file" 'RETRY_DISPATCH_TOKEN' "opencode does not retain a recursive write-token dispatch path"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model pool only runs after coverage evidence passed"
 	assert_file_contains "$workflow_file" "id: opencode_review_model_pool" "opencode DeepSeek V3 fallback still runs after a primary model timeout or step failure when coverage evidence passed"
 	assert_file_contains "$workflow_file" "always()" "opencode fallback chain uses always() so failed model steps cannot skip every fallback"
-	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode fallback tries the catalog promptly instead of spending the entire review on one model"
+	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "2"' "opencode fallback permits one format retry while timeout and fatal failures skip the second attempt"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review includes a broad catalog fallback pool"
 	assert_file_not_contains "$workflow_file" "steps.opencode_review_model_pool.outcome == 'success'" "opencode approval gate still runs after model pool failure to publish a reason"
-	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review starts with DeepSeek V3 before full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-4.1 openai/gpt-5.6-luna github-models/deepseek/deepseek-v3-0324 github-models/openai/gpt-5" "opencode review starts with the responsive GPT-4.1 endpoint before bounded fallbacks"
 	assert_file_contains "$workflow_file" "The publish gate re-runs source-backed validation against PR-head data" "opencode review publish gate validates model output against inert PR-head blobs"
 	assert_file_contains "$workflow_file" '"openai/o3"' "opencode config declares OpenAI o3 fallback"
 	assert_file_contains "$workflow_file" '"openai/o4-mini"' "opencode config declares OpenAI o4-mini fallback"
@@ -838,12 +838,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "configured max cycle count" "opencode model pool exits before the job timeout after configured cycles"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500' "opencode model pool keeps a bounded default retry budget unless the workflow explicitly disables it"
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
-	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary and fallback paths avoid multi-attempt stalls on one model"
-	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode catalog fallback tries each model once before moving on"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog fallback preserves legitimate full-hour provider sessions"
+	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "2"' "opencode primary and fallback paths permit one format retry without retrying timeout-class failures"
+	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "2"' "opencode catalog fallback retries only responsive invalid-control output before moving on"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "1800"' "opencode catalog fallback bounds provider sessions within the queue budget"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
-	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries DeepSeek V3 before OpenAI fallbacks"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-4.1 openai/gpt-5.6-luna github-models/deepseek/deepseek-v3-0324 github-models/openai/gpt-5" "opencode review tries responsive GPT-4.1 before direct and DeepSeek fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1" "opencode review keeps DeepSeek reasoning fallback coverage after OpenAI candidates"
 	assert_file_contains "$workflow_file" "coverage-source-tree:" "opencode workflow materializes coverage source before running PR-head tests"
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
@@ -891,7 +891,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "tail -n 180" "coverage evidence keeps the tail of long failed logs where compiler and test errors usually appear"
 	assert_file_not_contains "$workflow_file" 'sed -n '\''1,220p'\'' "$log_file"' "coverage evidence must not hide failed-command reasons by keeping only the first lines"
 	assert_file_contains "$workflow_file" "declared_package_manager()" "coverage evidence reads packageManager before selecting a JavaScript package runner"
-	assert_file_contains "$workflow_file" "ensure_corepack_runner pnpm" "coverage evidence activates pnpm through corepack for pnpm workspaces"
+	assert_file_contains "$workflow_file" "ensure_preinstalled_package_runner pnpm" "coverage evidence uses only the exact preinstalled pnpm version for pnpm workspaces"
+	assert_file_contains "$workflow_file" "node-v22.14.0-linux-x64.tar.xz" "coverage evidence pins a Node version compatible with the pinned pnpm release"
+	assert_file_contains "$workflow_file" "69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec" "coverage evidence verifies the pinned Node archive digest"
+	assert_file_contains "$workflow_file" "pnpm/-/pnpm-11.5.3.tgz" "coverage evidence downloads the reviewed exact pnpm package"
+	assert_file_contains "$workflow_file" "238d639a47712278bb72e8b6db2c297ac1ccd80dd7642f7c933b73aebde7b51f" "coverage evidence verifies the pinned pnpm archive digest"
 	assert_file_contains "$workflow_file" "or fall back to npm" "coverage evidence logs package-runner activation failures instead of silently using npm"
 	assert_file_not_contains "$workflow_file" '@latest' "coverage evidence refuses mutable package-manager toolchains"
 	assert_file_contains "$workflow_file" "npm ci --ignore-scripts" "coverage dependency installation suppresses npm lifecycle hooks"
@@ -1160,7 +1164,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}' "opencode manual dispatch uses the cross-repo approval token for target PR evidence lookups with app-token fallback"
 	assert_file_contains "$workflow_file" 'repos/${GH_REPOSITORY}' "opencode review workflow uses env-backed repository context in shell commands"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review starts the central model pool"
-	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review starts with DeepSeek V3 before full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "github-models/openai/gpt-4.1 openai/gpt-5.6-luna github-models/deepseek/deepseek-v3-0324 github-models/openai/gpt-5" "opencode review starts with responsive GPT-4.1 before bounded full-size fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528" "opencode review keeps a reachable DeepSeek R1 reasoning fallback model"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324" "opencode review has a reachable DeepSeek V3 fallback model"
 	assert_file_contains "$workflow_file" "github-models/openai/gpt-5" "opencode review still has a bounded GPT-5 fallback model"
@@ -5692,7 +5696,7 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/hallucination-primary" \
 			"vertex_ai/fallback-one vertex_ai/fallback-two" \
 			"1" \
-			"Strix quick scan failed with a non-recoverable error." \
+			"Unable to map Strix findings to changed files; failing closed for pull request." \
 			"1" \
 			"vertex_ai/hallucination-primary" \
 			"<unset>"
@@ -5702,7 +5706,7 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/hallucination-primary" \
 			"vertex_ai/fallback-one vertex_ai/fallback-two" \
 			"1" \
-			"Strix quick scan failed with a non-recoverable error." \
+			"Unable to map Strix findings to changed files; failing closed for pull request." \
 			"1" \
 			"vertex_ai/hallucination-primary" \
 			"<unset>" \
@@ -6039,6 +6043,68 @@ run_filtered_gate_case_if_requested() {
 			"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
 			"ls-tree" \
 			"1"
+		;;
+	timeout-disabled-success)
+		run_gate_case "timeout-disabled-success" \
+			"vertex_ai/timeout-disabled-primary" \
+			"" \
+			"0" \
+			"scan ok with timeout disabled" \
+			"1" \
+			"vertex_ai/timeout-disabled-primary" \
+			"<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"0"
+		;;
+	nonrecoverable)
+		run_gate_case "nonrecoverable" \
+			"openai/gpt-4o-mini" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/gpt-4o-mini" \
+			"https://example.invalid"
+		;;
+	pr-large-scope-full-set)
+		local large_pr_changed_files=""
+		local large_pr_index large_pr_path
+		for large_pr_index in $(seq 1 38); do
+			large_pr_path="backend/large-scope/file-$large_pr_index.py"
+			if [ -n "$large_pr_changed_files" ]; then
+				large_pr_changed_files+=$'\n'
+			fi
+			large_pr_changed_files+="$large_pr_path"
+		done
+		run_gate_case "pr-large-scope-full-set" \
+			"openai/gpt-4o-mini" \
+			"" \
+			"0" \
+			"scan ok with large full PR scope" \
+			"1" \
+			"openai/gpt-4o-mini" \
+			"https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"$large_pr_changed_files" \
+			"" \
+			"12"
 		;;
 	pull-request-target-changed-file-list-diff-failure)
 		run_pull_request_target_aborts_on_pr_head_blob_failure_case \
@@ -8914,11 +8980,11 @@ run_gate_case "provider-prefix-required-resource-path-primary-implicit-default-p
 run_gate_case "provider-prefix-required-resource-path-primary-explicit-empty-default-provider" \
 	"projects/p1/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
 	"vertex_ai/fallback-one" \
+	"2" \
+	"Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." \
 	"0" \
-	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/gemini-2.5-pro'." \
-	"1" \
-	"vertex_ai/gemini-2.5-pro" \
-	"<unset>" \
+	"" \
+	"" \
 	""
 
 run_gate_case "provider-prefix-resource-path-primary-notfound-fallback-success" \
@@ -9734,7 +9800,7 @@ run_gate_case "vertex-primary-hallucinated-endpoint-fallback-success" \
 	"vertex_ai/hallucination-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"vertex_ai/hallucination-primary" \
 	"<unset>"
@@ -9908,7 +9974,7 @@ run_gate_case "multi-severity-low-then-critical" \
 	"vertex_ai/multi-severity-primary" \
 	"" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"vertex_ai/multi-severity-primary" \
 	"<unset>"
@@ -9926,7 +9992,7 @@ run_gate_case "medium-vuln-default-threshold" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -10025,7 +10091,7 @@ run_gate_case "critical-vuln-at-threshold" \
 	"vertex_ai/critical-vuln-primary" \
 	"" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"vertex_ai/critical-vuln-primary" \
 	"<unset>"
@@ -10041,17 +10107,16 @@ run_gate_case "malformed-severity-marker-nonrecoverable" \
 
 # Bug 7: Model disagreement — primary produces CRITICAL, fallback produces LOW.
 # The CRITICAL from the earlier report must NOT be ignored.
-# Both models produce NOT_FOUND errors, so the gate exhausts fallbacks and
-# reports "Configured Vertex model and fallback models were unavailable."
-# The key assertion is exit 1: the CRITICAL finding is NOT downgraded to pass.
+# The first model's CRITICAL report is authoritative, so the gate must block
+# immediately without spending provider capacity on a fallback model.
 run_gate_case "model-disagreement-critical-in-earlier-report" \
 	"vertex_ai/model-a" \
 	"vertex_ai/model-b" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
-	"2" \
-	"vertex_ai/model-a|vertex_ai/model-b" \
-	"<unset>|<unset>"
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
+	"1" \
+	"vertex_ai/model-a" \
+	"<unset>"
 
 # Bug 4: deepseek/models/deepseek-r1 must NOT be rewritten to vertex_ai/deepseek-r1
 run_gate_case "nonvertex-slash-model-not-rewritten" \
@@ -10072,7 +10137,7 @@ run_gate_case "target-path-src-default-source-dirs" \
 	"vertex_ai/hallucination-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"vertex_ai/hallucination-primary" \
 	"<unset>" \

@@ -70,6 +70,8 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         "OPENCODE_ARTIFACT_MANIFEST_SHA256",
         hashlib.sha256(manifest.read_bytes()).hexdigest(),
     )
+    opencode_review_normalize_output.current_changed_files.cache_clear()
+    opencode_review_normalize_output.trusted_execution_receipts.cache_clear()
 
 
 def valid_body(head: str = HEAD) -> str:
@@ -163,6 +165,20 @@ def test_extract_adversarial_evidence_uses_last_parseable_block():
     body = "## Adversarial validation\n```json\nnot-json\n```\n" + valid_body()
     assert gate.extract_adversarial_evidence(body)["status"] == "passed"
     assert gate.extract_adversarial_evidence("none") is None
+
+
+def test_reusable_approval_accepts_structurally_bound_location():
+    """Published evidence need not duplicate structured path and line in prose."""
+    evidence = gate.extract_adversarial_evidence(valid_body())
+    assert evidence is not None
+    for probe, source_line in zip(evidence["probes"], SOURCE_LINES, strict=True):
+        probe["evidence"] = (
+            "Focused regression command passed with exit code 0. "
+            "source-line-sha256=" + hashlib.sha256(source_line).hexdigest()
+        )
+    body = f"## Adversarial validation\n```json\n{json.dumps(evidence)}\n```"
+
+    assert gate.adversarial_rejection_reason(body) is None
 
 
 def test_extract_control_payload_rejects_ambiguous_and_malformed_blocks():

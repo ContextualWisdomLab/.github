@@ -729,6 +729,7 @@ def adversarial_validation_error(
             probe_evidence,
             path,
             line,
+            require_location_citation=False,
         )
         if evidence_error:
             return f"adversarial probe {index} evidence {evidence_error}"

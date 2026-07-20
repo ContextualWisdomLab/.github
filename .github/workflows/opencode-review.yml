@@ -573,8 +573,6 @@ jobs:
               libxml2-dev \
               mesa-vulkan-drivers \
               libvulkan1 \
-              nodejs \
-              npm \
               pkg-config \
               python3 \
               python3-pip \
@@ -585,7 +583,25 @@ jobs:
               rustc \
               util-linux \
               vulkan-tools \
+              xz-utils \
             && rm -rf /var/lib/apt/lists/*
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node.tar.xz \
+              https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz \
+            && echo '69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec  /tmp/node.tar.xz' | sha256sum -c - \
+            && tar -xJf /tmp/node.tar.xz --strip-components=1 -C /usr/local \
+            && rm -f /tmp/node.tar.xz \
+            && test "$(node --version)" = "v22.14.0" \
+            && test "$(npm --version)" = "10.9.2"
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/pnpm.tgz \
+              https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz \
+            && echo '238d639a47712278bb72e8b6db2c297ac1ccd80dd7642f7c933b73aebde7b51f  /tmp/pnpm.tgz' | sha256sum -c - \
+            && mkdir -p /opt/pnpm-11.5.3 \
+            && tar -xzf /tmp/pnpm.tgz --strip-components=1 -C /opt/pnpm-11.5.3 \
+            && chmod 0755 /opt/pnpm-11.5.3/bin/pnpm.mjs /opt/pnpm-11.5.3/bin/pnpx.mjs \
+            && ln -s /opt/pnpm-11.5.3/bin/pnpm.mjs /usr/local/bin/pnpm \
+            && ln -s /opt/pnpm-11.5.3/bin/pnpx.mjs /usr/local/bin/pnpx \
+            && rm -f /tmp/pnpm.tgz \
+            && test "$(pnpm --version)" = "11.5.3"
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
               https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
             && echo '967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7  /tmp/cargo-llvm-cov.tar.gz' | sha256sum -c - \
@@ -965,20 +981,30 @@ jobs:
             fi
           }
 
-          ensure_corepack_runner() {
+          ensure_preinstalled_package_runner() {
             local runner="$1"
             local spec="$2"
+            local requested_version requested_runtime_version actual_version
 
             if ! [[ "$spec" =~ ^${runner}@[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9._+-]+)?$ ]]; then
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
-            if command -v "$runner" >/dev/null 2>&1; then
-              return 0
+            if ! command -v "$runner" >/dev/null 2>&1; then
+              printf 'Coverage package runner %s at exact specification %s is not preinstalled in the pinned sandbox image; central review will not activate PR-selected package-manager code outside an untrusted command boundary or fall back to npm.\n' "$runner" "$spec" >&2
+              return 1
             fi
 
-            printf 'Coverage package runner %s at exact specification %s is not preinstalled in the pinned sandbox image; central review will not activate PR-selected package-manager code outside an untrusted command boundary or fall back to npm.\n' "$runner" "$spec" >&2
-            return 1
+            requested_version="${spec#${runner}@}"
+            # Corepack permits an integrity/build suffix (for example
+            # +sha512.<digest>), while the executable reports only semver.
+            requested_runtime_version="${requested_version%%+*}"
+            actual_version="$("$runner" --version 2>/dev/null || true)"
+            if [ "$actual_version" != "$requested_runtime_version" ]; then
+              printf 'Coverage package runner %s version mismatch: requested %s but pinned sandbox provides %s; refusing mutable activation or npm fallback.\n' "$runner" "$requested_runtime_version" "${actual_version:-<unavailable>}" >&2
+              return 1
+            fi
+            return 0
           }
 
           select_package_runner() {
@@ -989,24 +1015,24 @@ jobs:
             declared_spec="$(declared_package_manager_spec)"
             case "$declared_runner" in
               pnpm)
-                ensure_corepack_runner pnpm "$declared_spec" && printf '%s\n' "pnpm"
+                ensure_preinstalled_package_runner pnpm "$declared_spec" && printf '%s\n' "pnpm"
                 return
                 ;;
               yarn)
-                ensure_corepack_runner yarn "$declared_spec" && printf '%s\n' "yarn"
+                ensure_preinstalled_package_runner yarn "$declared_spec" && printf '%s\n' "yarn"
                 return
                 ;;
               npm)
-                command -v npm >/dev/null 2>&1 && printf '%s\n' "npm"
+                ensure_preinstalled_package_runner npm "$declared_spec" && printf '%s\n' "npm"
                 return
                 ;;
             esac
 
             if [ -f pnpm-lock.yaml ]; then
-              ensure_corepack_runner pnpm "$declared_spec" && printf '%s\n' "pnpm"
+              ensure_preinstalled_package_runner pnpm "$declared_spec" && printf '%s\n' "pnpm"
               return
             elif [ -f yarn.lock ]; then
-              ensure_corepack_runner yarn "$declared_spec" && printf '%s\n' "yarn"
+              ensure_preinstalled_package_runner yarn "$declared_spec" && printf '%s\n' "yarn"
               return
             elif command -v npm >/dev/null 2>&1; then
               printf '%s\n' "npm"
