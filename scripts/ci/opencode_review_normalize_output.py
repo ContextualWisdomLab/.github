@@ -1341,6 +1341,7 @@ def valid_control(
         return reject("APPROVE cannot contain findings")
     if result == "REQUEST_CHANGES" and not findings:
         return reject("REQUEST_CHANGES requires at least one finding")
+    value = repair_adversarial_probe_evidence_bindings(value)
     adversarial_error = adversarial_validation_error(
         value.get("adversarial_validation"),
         result=result,

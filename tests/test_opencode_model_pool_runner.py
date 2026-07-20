@@ -156,6 +156,63 @@ def test_normalizer_binds_only_a_verified_structured_probe_location(
     )
 
 
+def test_valid_control_repairs_probe_bindings_before_adversarial_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production validator must apply the bounded repair before validation."""
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(normalizer, "artifact_identity_error", lambda *args: "")
+    monkeypatch.setattr(
+        normalizer,
+        "repair_adversarial_probe_evidence_bindings",
+        lambda value: {
+            **value,
+            "adversarial_validation": {"status": "repaired-before-validation"},
+        },
+    )
+
+    def capture_validation(value, *, result, findings):
+        captured["value"] = value
+        captured["result"] = result
+        captured["findings"] = findings
+        return "expected integration stop"
+
+    monkeypatch.setattr(
+        normalizer,
+        "adversarial_validation_error",
+        capture_validation,
+    )
+    rejection_reasons: list[str] = []
+    control = {
+        "head_sha": "head",
+        "run_id": "run",
+        "run_attempt": "1",
+        "result": "APPROVE",
+        "reason": "reviewed current-head evidence",
+        "summary": "verified current-head evidence",
+        "findings": [],
+        "adversarial_validation": {"status": "raw"},
+    }
+
+    assert (
+        normalizer.valid_control(
+            control,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="1",
+            rejection_reasons=rejection_reasons,
+        )
+        is None
+    )
+    assert captured == {
+        "value": {"status": "repaired-before-validation"},
+        "result": "APPROVE",
+        "findings": [],
+    }
+    assert rejection_reasons[-1] == "expected integration stop"
+
+
 def test_normalizer_probe_binding_repair_remains_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
