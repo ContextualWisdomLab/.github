@@ -108,7 +108,10 @@ def prepare_probe_binding_artifacts(
     source_path = source_root / "scripts" / "ci" / "example.py"
     runner_temp.mkdir()
     source_path.parent.mkdir(parents=True)
-    source_path.write_text("return False\n", encoding="utf-8")
+    source_path.write_text(
+        "return False\nraise SystemExit(1)\nraise SystemExit(1)\n",
+        encoding="utf-8",
+    )
     changed_files = runner_temp / "opencode-changed-files.txt"
     changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
     manifest_digest = seal_artifacts(
@@ -154,6 +157,67 @@ def test_normalizer_binds_only_a_verified_structured_probe_location(
     assert repaired["adversarial_validation"]["probes"][0]["evidence"] == (
         f"{path}:{line} {evidence}"
     )
+
+
+def test_normalizer_rebinds_structured_location_to_unique_receipted_citation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A unique cited changed line may repair redundant structured location drift."""
+    path, line, _ = prepare_probe_binding_artifacts(tmp_path, monkeypatch)
+    cited_line = 2
+    receipt = "source-line-sha256=" + hashlib.sha256(
+        b"raise SystemExit(1)"
+    ).hexdigest()
+    evidence = (
+        f"Source trace at {path}:{cited_line} rejected malformed input with exit code 1; "
+        f"{receipt}"
+    )
+    value = {
+        "adversarial_validation": {
+            "probes": [
+                {
+                    "path": path,
+                    "line": line,
+                    "evidence": evidence,
+                }
+            ]
+        }
+    }
+
+    repaired = normalizer.repair_adversarial_probe_evidence_bindings(value)
+
+    assert repaired is not value
+    repaired_probe = repaired["adversarial_validation"]["probes"][0]
+    assert repaired_probe["path"] == path
+    assert repaired_probe["line"] == cited_line
+    assert repaired_probe["evidence"] == evidence
+
+
+def test_normalizer_does_not_rebind_ambiguous_receipted_citations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two cited lines with the same trusted bytes remain ambiguous and fail closed."""
+    path, line, _ = prepare_probe_binding_artifacts(tmp_path, monkeypatch)
+    receipt = "source-line-sha256=" + hashlib.sha256(
+        b"raise SystemExit(1)"
+    ).hexdigest()
+    evidence = (
+        f"Source traces at {path}:2 and {path}:3 rejected malformed input with exit code 1; "
+        f"{receipt}"
+    )
+    value = {
+        "adversarial_validation": {
+            "probes": [
+                {
+                    "path": path,
+                    "line": line,
+                    "evidence": evidence,
+                }
+            ]
+        }
+    }
+
+    assert normalizer.repair_adversarial_probe_evidence_bindings(value) is value
 
 
 def test_normalizer_probe_binding_repair_remains_fail_closed(
