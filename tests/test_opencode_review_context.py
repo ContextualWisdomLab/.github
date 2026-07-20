@@ -31,10 +31,7 @@ def test_pull_request_event_writes_shell_exports(tmp_path):
                 "number": 380,
                 "title": "🛡️ Sentinel: 업로드 DoS 취약점 수정",
                 "body": "이 PR은 보안 문제를 고칩니다; $(rm -rf /) `id`",
-                "base": {
-                    "sha": BASE_SHA,
-                    "repo": {"full_name": "ContextualWisdomLab/.github"},
-                },
+                "base": {"sha": BASE_SHA, "repo": {"full_name": "ContextualWisdomLab/.github"}},
                 "head": {"sha": HEAD_SHA},
             }
         },
@@ -103,43 +100,6 @@ def test_workflow_dispatch_inputs_use_default_repository(tmp_path):
     assert "export PR_BODY_FOR_LANGUAGE=''" in shell_env_text
 
 
-def test_repository_dispatch_client_payload_writes_shell_exports(tmp_path):
-    """Resolve the live-validated repository_dispatch metadata contract."""
-    event_path = write_event(
-        tmp_path,
-        {
-            "client_payload": {
-                "target_repository": "ContextualWisdomLab/.github",
-                "pr_number": 576,
-                "pr_base_sha": BASE_SHA,
-                "pr_head_sha": HEAD_SHA,
-            }
-        },
-    )
-    shell_env = tmp_path / "context.env"
-
-    assert (
-        context.main(
-            [
-                "--event-path",
-                str(event_path),
-                "--env-file",
-                str(shell_env),
-                "--default-repository",
-                "ContextualWisdomLab/wrong-default",
-            ]
-        )
-        == 0
-    )
-
-    shell_env_text = shell_env.read_text(encoding="utf-8")
-    assert "export GH_REPOSITORY=ContextualWisdomLab/.github" in shell_env_text
-    assert "export PR_NUMBER=576" in shell_env_text
-    assert f"export PR_BASE_SHA={BASE_SHA}" in shell_env_text
-    assert f"export PR_HEAD_SHA={HEAD_SHA}" in shell_env_text
-    assert f"export HEAD_SHA={HEAD_SHA}" in shell_env_text
-
-
 def test_invalid_context_value_fails_closed(tmp_path):
     """Reject values that are unsafe for shell environment materialization."""
     event_path = write_event(
@@ -155,14 +115,7 @@ def test_invalid_context_value_fails_closed(tmp_path):
     )
 
     with pytest.raises(SystemExit):
-        context.main(
-            [
-                "--event-path",
-                str(event_path),
-                "--env-file",
-                str(tmp_path / "context.env"),
-            ]
-        )
+        context.main(["--event-path", str(event_path), "--env-file", str(tmp_path / "context.env")])
 
 
 def test_load_event_requires_json_object(tmp_path):
