@@ -1,5 +1,6 @@
 coverage==7.14.3
 interrogate==1.7.0
+numpy==2.5.1
 pytest==9.1.1
 pytest-cov==7.1.0
 uv==0.11.25
