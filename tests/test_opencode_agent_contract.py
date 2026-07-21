@@ -185,18 +185,18 @@ def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow
-    assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 2
-    assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 2
+    assert workflow.count("JOB_CONTEXT_JSON: ${{ toJSON(job) }}") == 3
+    assert workflow.count("GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}") == 3
     assert (
         workflow.count(
             'job_context.get("workflow_sha") or github_context.get("workflow_sha")'
         )
-        == 2
+        == 3
     )
-    assert workflow.count('workflow_ref.split("@", 1)[1]') == 2
+    assert workflow.count('workflow_ref.split("@", 1)[1]') == 3
     assert (
         workflow.count("Trusted OpenCode workflow ref resolved to an invalid value.")
-        == 2
+        == 3
     )
 
 
@@ -273,6 +273,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert (
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in source_job
     )
+    assert "Checkout trusted replay guard" in source_job
+    assert "persist-credentials: false" in source_job
+    assert "ref: ${{ steps.coverage_source_trusted.outputs.ref }}" in source_job
 
     coverage_start = workflow.index("  coverage-evidence:\n")
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
@@ -318,6 +321,14 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'ls-tree -r -z --full-tree "$treeish" |' in step
     assert 'done < <(git -C "$fetch_dir" ls-tree' not in step
     assert "100644 | 100755" in step
+    assert "TRUSTED_REPLAY_GUARD: ${{ github.workspace }}/trusted-replay-guard/" in step
+    assert '/usr/bin/python3 -I "$TRUSTED_REPLAY_GUARD"' in step
+    assert '--repo-root "$fetch_dir"' in step
+    assert '--base-sha "$PR_BASE_SHA"' in step
+    assert '--head-sha "$PR_HEAD_SHA"' in step
+    assert step.index('/usr/bin/python3 -I "$TRUSTED_REPLAY_GUARD"') < step.index(
+        'rm -rf -- "$fetch_dir/.git"'
+    )
     assert 'rm -f -- "$COVERAGE_BASE_WORKDIR/.git"' in step
     assert 'rm -rf -- "$fetch_dir/.git"' in step
     assert "Coverage source export retained forbidden Git metadata" in step
@@ -354,8 +365,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "COVERAGE_BASE_SHA=%s" in coverage_job
     assert "COVERAGE_HEAD_SHA=%s" in coverage_job
     assert 'diff --name-only "$COVERAGE_BASE_SHA" "$COVERAGE_HEAD_SHA"' in coverage_job
-    assert '--base-sha "$COVERAGE_BASE_SHA"' in coverage_job
-    assert '--head-sha "$COVERAGE_HEAD_SHA"' in coverage_job
+    assert "pr_head_replay_guard.py" not in coverage_job
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
     assert "docker.io/library/ubuntu@sha256:" in measure_step
