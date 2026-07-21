@@ -1974,15 +1974,17 @@ escape_workflow_command_message() {
 # other PR-head blob this script copies as scanner input) and fall back to the
 # checkout. Emits raw lines; comment/blank filtering happens in the matcher.
 accepted_risk_declaration_lines() {
-	local head_sha
+	local head_sha accepted_risks_path accepted_risks_file
+	accepted_risks_path="$(normalize_changed_file_path "$STRIX_ACCEPTED_RISKS_PATH" 2>/dev/null)" || return 0
 	head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
 	if [ -n "$head_sha" ] &&
 		is_valid_git_commit_sha "$head_sha" &&
 		git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null 2>&1; then
-		git show "$head_sha:$STRIX_ACCEPTED_RISKS_PATH" 2>/dev/null && return 0
+		git show "$head_sha:$accepted_risks_path" 2>/dev/null && return 0
 	fi
-	if [ -f "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" ] && [ ! -L "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" ]; then
-		cat -- "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" 2>/dev/null || true
+	accepted_risks_file="$REPO_ROOT/$accepted_risks_path"
+	if [ -f "$accepted_risks_file" ] && [ ! -L "$accepted_risks_file" ]; then
+		cat -- "$accepted_risks_file" 2>/dev/null || true
 	fi
 }
 

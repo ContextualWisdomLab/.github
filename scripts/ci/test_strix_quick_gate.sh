@@ -206,6 +206,7 @@ EOF
 				'"$(sed -n '/^extract_max_severity_rank()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^extract_finding_title()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^escape_workflow_command_message()/,/^}/p' "$GATE_SCRIPT")"'
+				'"$(sed -n '/^normalize_changed_file_path()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^accepted_risk_declaration_lines()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^vulnerability_file_is_accepted_risk()/,/^}/p' "$GATE_SCRIPT")"'
 				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/med_match.md"  2>/dev/null && echo "MED_MATCH=accepted"  || echo "MED_MATCH=blocked"
@@ -226,12 +227,39 @@ EOF
 			set -euo pipefail
 			trim_whitespace() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf "%s" "$s"; }
 			is_valid_git_commit_sha() { [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]; }
+			'"$(sed -n '/^normalize_changed_file_path()/,/^}/p' "$GATE_SCRIPT")"'
 			'"$(sed -n '/^accepted_risk_declaration_lines()/,/^}/p' "$GATE_SCRIPT")"'
 			accepted_risk_declaration_lines >/dev/null
 		' 2>"$git_stderr"
 	if [ -s "$git_stderr" ]; then
 		record_failure "accepted-risk checkout fallback leaked git diagnostics outside a repository: $(cat "$git_stderr")"
 	fi
+
+	local outside_secret="$tmp_dir-outside-secret.txt"
+	printf '%s\n' 'OUTSIDE_ACCEPTED_RISK_SECRET' >"$outside_secret"
+	ln -s "$outside_secret" "$tmp_dir/.security/outside-link.txt"
+	local unsafe_path unsafe_output unsafe_stderr="$tmp_dir/unsafe-stderr.txt"
+	for unsafe_path in "$outside_secret" "../${outside_secret##*/}" ".security/outside-link.txt"; do
+		: >"$unsafe_stderr"
+		unsafe_output="$(
+			REPO_ROOT="$tmp_dir" STRIX_ACCEPTED_RISKS_PATH="$unsafe_path" \
+				bash -c '
+					set -euo pipefail
+					trim_whitespace() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf "%s" "$s"; }
+					is_valid_git_commit_sha() { [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]; }
+					'"$(sed -n '/^normalize_changed_file_path()/,/^}/p' "$GATE_SCRIPT")"'
+					'"$(sed -n '/^accepted_risk_declaration_lines()/,/^}/p' "$GATE_SCRIPT")"'
+					accepted_risk_declaration_lines
+				' 2>"$unsafe_stderr"
+		)"
+		if [ -n "$unsafe_output" ]; then
+			record_failure "unsafe accepted-risk path produced output: $unsafe_path"
+		fi
+		if [ -s "$unsafe_stderr" ]; then
+			record_failure "unsafe accepted-risk path leaked diagnostics: $unsafe_path: $(cat "$unsafe_stderr")"
+		fi
+	done
+	rm -f "$outside_secret"
 	rm -rf "$tmp_dir"
 }
 
