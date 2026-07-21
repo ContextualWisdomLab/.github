@@ -248,12 +248,13 @@ jobs:
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          COVERAGE_BASE_WORKDIR: ${{ runner.temp }}/opencode-coverage-base
           COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-source.tar
         run: |
           set -euo pipefail
           fetch_dir="${RUNNER_TEMP}/opencode-coverage-fetch"
-          rm -rf "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR" "$COVERAGE_SOURCE_ARCHIVE"
+          rm -rf "$fetch_dir" "$COVERAGE_BASE_WORKDIR" "$COVERAGE_SOURCE_WORKDIR" "$COVERAGE_SOURCE_ARCHIVE"
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::Coverage merge tree materialization requires a GitHub token."
             exit 1
@@ -290,27 +291,72 @@ jobs:
             echo "::error::Coverage merge tree could not be materialized for base ${PR_BASE_SHA} and head ${PR_HEAD_SHA}; resolve merge conflicts or rerun after GitHub can synthesize the PR merge commit."
             exit 1
           fi
-          mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
+
+          validate_coverage_tree_modes() {
+            local treeish="$1"
+            local indexed_entry indexed_mode
+            while IFS= read -r -d '' indexed_entry; do
+              indexed_mode="${indexed_entry%% *}"
+              case "$indexed_mode" in
+                100644 | 100755) ;;
+                *)
+                  printf '::error::Coverage source tree %s contains non-regular tracked entry mode %s; refusing cross-job artifact materialization.\n' "$treeish" "$indexed_mode"
+                  exit 1
+                  ;;
+              esac
+            done < <(git -C "$fetch_dir" ls-tree -r -z --full-tree "$treeish")
+          }
+          validate_coverage_tree_modes "$PR_BASE_SHA"
+          validate_coverage_tree_modes HEAD
+
+          # BEGIN_COVERAGE_SOURCE_EXPORT
+          # Export both snapshots without transferring the target repository's
+          # Git object database into the central repository artifact namespace.
+          git -C "$fetch_dir" worktree add --detach "$COVERAGE_BASE_WORKDIR" "$PR_BASE_SHA"
+          rm -f -- "$COVERAGE_BASE_WORKDIR/.git"
+          rm -rf -- "$fetch_dir/.git"
           mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
-          git -C "$COVERAGE_SOURCE_WORKDIR" status --short
-          # Only the current merged source tree may cross the repository boundary.
-          # The fetch repository contains target history, including deleted files,
-          # so remove its metadata before producing the same-run artifact.
-          rm -rf "$COVERAGE_SOURCE_WORKDIR/.git"
-          tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
-          if tar -tf "$COVERAGE_SOURCE_ARCHIVE" | awk '
-            {
-              member = $0
-              sub(/^\.\//, "", member)
-              if (member == ".git" || member ~ /(^|\/)\.git(\/|$)/) {
-                found = 1
-              }
-            }
-            END { exit(found ? 0 : 1) }
-          '; then
-            echo "::error::Coverage source archive unexpectedly contains Git metadata."
-            exit 1
-          fi
+          for source_tree in "$COVERAGE_BASE_WORKDIR" "$COVERAGE_SOURCE_WORKDIR"; do
+            if [ -e "$source_tree/.git" ] || [ -L "$source_tree/.git" ]; then
+              echo "::error::Coverage source export retained forbidden Git metadata at ${source_tree}/.git."
+              exit 1
+            fi
+            if find -P "$source_tree" -mindepth 1 -type l -print -quit | grep -q .; then
+              echo "::error::Coverage source export contains a symbolic link; refusing cross-job artifact materialization."
+              exit 1
+            fi
+          done
+          tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$RUNNER_TEMP" \
+            "$(basename "$COVERAGE_BASE_WORKDIR")" \
+            "$(basename "$COVERAGE_SOURCE_WORKDIR")"
+          python3 -I - "$COVERAGE_SOURCE_ARCHIVE" <<'PY'
+          from pathlib import Path, PurePosixPath
+          import sys
+          import tarfile
+
+          archive = Path(sys.argv[1])
+          if not archive.is_file() or archive.is_symlink():
+              raise SystemExit(
+                  f"Coverage source archive is not a regular non-symlink file: {archive}"
+              )
+          with tarfile.open(archive, mode="r:") as bundle:
+              for member in bundle.getmembers():
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(
+                          f"Coverage source archive contains an unsafe path: {member.name!r}"
+                      )
+                  if ".git" in path.parts:
+                      raise SystemExit(
+                          f"Coverage source archive contains forbidden Git metadata: {member.name!r}"
+                      )
+                  if not (member.isfile() or member.isdir()):
+                      raise SystemExit(
+                          "Coverage source archive contains a forbidden non-regular "
+                          f"member: {member.name!r}"
+                      )
+          PY
+          # END_COVERAGE_SOURCE_EXPORT
 
       - name: Upload materialized pull request merge tree
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -408,12 +454,14 @@ jobs:
           COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
         run: |
           set -euo pipefail
+          artifact_extract_dir="${RUNNER_TEMP}/opencode-coverage-extracted"
+          rm -rf "$artifact_extract_dir"
+          mkdir -p "$artifact_extract_dir"
           rm -rf "$COVERAGE_SOURCE_WORKDIR"
-          mkdir -p "$COVERAGE_SOURCE_WORKDIR"
           # The archive contains pull-request-controlled paths. Validate every
           # member before extraction so a symlink, hardlink, device, FIFO, or
           # traversal path cannot redirect a later trusted host-side parser.
-          python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR" <<'PY'
+          python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$artifact_extract_dir" <<'PY'
           import os
           from pathlib import Path, PurePosixPath
           import sys
@@ -429,12 +477,24 @@ jobs:
           with tarfile.open(archive, mode="r:*") as bundle:
               members = bundle.getmembers()
               seen: set[str] = set()
+              allowed_roots = {
+                  "opencode-coverage-base",
+                  "opencode-coverage-source",
+              }
               for member in members:
                   path = PurePosixPath(member.name)
                   normalized = path.as_posix()
                   if path.is_absolute() or ".." in path.parts:
                       raise SystemExit(
                           f"Coverage source archive contains an unsafe path: {member.name!r}"
+                      )
+                  if not path.parts or path.parts[0] not in allowed_roots:
+                      raise SystemExit(
+                          f"Coverage source archive contains an unexpected root: {member.name!r}"
+                      )
+                  if ".git" in path.parts:
+                      raise SystemExit(
+                          f"Coverage source archive contains forbidden Git metadata: {member.name!r}"
                       )
                   if normalized in seen:
                       raise SystemExit(
@@ -453,6 +513,39 @@ jobs:
                       )
               bundle.extractall(destination, members=members, filter="data")
           PY
+          coverage_base_tree="${artifact_extract_dir}/opencode-coverage-base"
+          coverage_head_tree="${artifact_extract_dir}/opencode-coverage-source"
+          for source_tree in "$coverage_base_tree" "$coverage_head_tree"; do
+            if [ ! -d "$source_tree" ] || [ -L "$source_tree" ]; then
+              echo "::error::Coverage source artifact did not contain both regular base/head snapshot directories."
+              exit 1
+            fi
+          done
+
+          # Reconstruct only the two snapshots needed for diff-aware coverage.
+          # Synthetic Git metadata is created locally in this job and is never
+          # uploaded to the central repository artifact namespace.
+          git init "$COVERAGE_SOURCE_WORKDIR"
+          git -C "$COVERAGE_SOURCE_WORKDIR" config user.name "github-actions[bot]"
+          git -C "$COVERAGE_SOURCE_WORKDIR" config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          cp -a -- "$coverage_base_tree/." "$COVERAGE_SOURCE_WORKDIR/"
+          git -C "$COVERAGE_SOURCE_WORKDIR" add --all --force
+          git -C "$COVERAGE_SOURCE_WORKDIR" commit --allow-empty --no-gpg-sign \
+            -m "coverage base snapshot"
+          coverage_base_sha="$(git -C "$COVERAGE_SOURCE_WORKDIR" rev-parse HEAD)"
+          find "$COVERAGE_SOURCE_WORKDIR" -mindepth 1 -maxdepth 1 ! -name .git \
+            -exec rm -rf -- {} +
+          cp -a -- "$coverage_head_tree/." "$COVERAGE_SOURCE_WORKDIR/"
+          git -C "$COVERAGE_SOURCE_WORKDIR" add --all --force
+          git -C "$COVERAGE_SOURCE_WORKDIR" commit --allow-empty --no-gpg-sign \
+            -m "coverage head snapshot"
+          coverage_head_sha="$(git -C "$COVERAGE_SOURCE_WORKDIR" rev-parse HEAD)"
+          {
+            printf 'COVERAGE_BASE_SHA=%s\n' "$coverage_base_sha"
+            printf 'COVERAGE_HEAD_SHA=%s\n' "$coverage_head_sha"
+          } >>"$GITHUB_ENV"
+          rm -rf "$artifact_extract_dir"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
 
       - name: Enforce post-merge stale agent replay guard
@@ -473,8 +566,8 @@ jobs:
           replay_status=0
           python3 "$GITHUB_WORKSPACE/scripts/ci/pr_head_replay_guard.py" \
             --repo-root "$COVERAGE_SOURCE_WORKDIR" \
-            --base-sha "$PR_BASE_SHA" \
-            --head-sha "$PR_HEAD_SHA" >"$replay_report" 2>&1 || replay_status=$?
+            --base-sha "$COVERAGE_BASE_SHA" \
+            --head-sha "$COVERAGE_HEAD_SHA" >"$replay_report" 2>&1 || replay_status=$?
           cat "$replay_report"
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
@@ -502,7 +595,7 @@ jobs:
           # files, so a syntax error in a changed file that no test imports (or
           # in a language with no wired-in runner) could otherwise be approved.
           changed_files_file="${RUNNER_TEMP}/opencode-syntax-changed-files.txt"
-          if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --name-only "$PR_BASE_SHA" HEAD >"$changed_files_file" 2>/dev/null; then
+          if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff --name-only "$COVERAGE_BASE_SHA" "$COVERAGE_HEAD_SHA" >"$changed_files_file" 2>/dev/null; then
             : >"$changed_files_file"
           fi
           syntax_report="${RUNNER_TEMP}/opencode-syntax-report.txt"
@@ -656,6 +749,8 @@ jobs:
               --env COVERAGE_SOURCE_WORKDIR=/work \
               --env PR_BASE_SHA="$PR_BASE_SHA" \
               --env PR_HEAD_SHA="$PR_HEAD_SHA" \
+              --env COVERAGE_BASE_SHA="$COVERAGE_BASE_SHA" \
+              --env COVERAGE_HEAD_SHA="$COVERAGE_HEAD_SHA" \
               --env RUNNER_TEMP=/secure-output \
               --env GITHUB_OUTPUT=/secure-output/github-output \
               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
@@ -846,10 +941,10 @@ jobs:
           }
 
           changed_files_for_coverage() {
-            if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] \
-              && trusted_git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
-              && trusted_git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
-              trusted_git diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
+            if [ -n "${COVERAGE_BASE_SHA:-}" ] && [ -n "${COVERAGE_HEAD_SHA:-}" ] \
+              && trusted_git rev-parse --verify --quiet "$COVERAGE_BASE_SHA^{commit}" >/dev/null \
+              && trusted_git rev-parse --verify --quiet "$COVERAGE_HEAD_SHA^{commit}" >/dev/null; then
+              trusted_git diff --name-only --find-renames "$COVERAGE_BASE_SHA" "$COVERAGE_HEAD_SHA"
             else
               trusted_git ls-files
             fi
@@ -1217,8 +1312,8 @@ jobs:
             run_and_capture "JavaScript/TypeScript coverage threshold" \
               python3 "$GITHUB_WORKSPACE/scripts/ci/javascript_coverage_gate.py" \
               --repo-root . \
-              --base-sha "$PR_BASE_SHA" \
-              --head-sha "$PR_HEAD_SHA" \
+              --base-sha "$COVERAGE_BASE_SHA" \
+              --head-sha "$COVERAGE_HEAD_SHA" \
               --summary-list "$summary_list"
           }
 
@@ -1631,9 +1726,17 @@ jobs:
           python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py" \
             "$coverage_output_file" "$summary_output_file"
 
-          coverage_output_delimiter="$(python3 -I -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+          coverage_output_delimiter="$(/usr/bin/python3 -I -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+          if ! [[ "$coverage_output_delimiter" =~ ^coverage_[0-9a-f]{48}$ ]]; then
+            echo "::error::Trusted coverage output delimiter generation returned an unsafe value."
+            exit 1
+          fi
           while grep -Fqx "$coverage_output_delimiter" "$summary_output_file"; do
-            coverage_output_delimiter="$(python3 -I -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+            coverage_output_delimiter="$(/usr/bin/python3 -I -c 'import os; print("coverage_" + os.urandom(24).hex())')"
+            if ! [[ "$coverage_output_delimiter" =~ ^coverage_[0-9a-f]{48}$ ]]; then
+              echo "::error::Trusted coverage output delimiter generation returned an unsafe value."
+              exit 1
+            fi
           done
           {
             printf 'coverage_summary<<%s\n' "$coverage_output_delimiter"
@@ -1643,13 +1746,23 @@ jobs:
           printf 'Published compact coverage decision output after sanitization (%s bytes); full command logs remain in the job log and step summary.\n' \
             "$(wc -c <"$summary_output_file" | tr -d ' ')"
 
-          coverage_log_stop_token="$(python3 -I -c 'import os; print("coverage-log-" + os.urandom(24).hex())')"
+          # BEGIN_COVERAGE_LOG_REPLAY
+          coverage_log_stop_token="$(/usr/bin/python3 -I -c 'import os; print("coverage-log-" + os.urandom(24).hex())')"
+          if ! [[ "$coverage_log_stop_token" =~ ^coverage-log-[0-9a-f]{48}$ ]]; then
+            echo "::error::Trusted coverage log stop-token generation returned an unsafe value."
+            exit 1
+          fi
           while grep -Fq "$coverage_log_stop_token" "$summary_file"; do
-            coverage_log_stop_token="$(python3 -I -c 'import os; print("coverage-log-" + os.urandom(24).hex())')"
+            coverage_log_stop_token="$(/usr/bin/python3 -I -c 'import os; print("coverage-log-" + os.urandom(24).hex())')"
+            if ! [[ "$coverage_log_stop_token" =~ ^coverage-log-[0-9a-f]{48}$ ]]; then
+              echo "::error::Trusted coverage log stop-token generation returned an unsafe value."
+              exit 1
+            fi
           done
           printf '::stop-commands::%s\n' "$coverage_log_stop_token"
           cat "$summary_file"
           printf '\n::%s::\n' "$coverage_log_stop_token"
+          # END_COVERAGE_LOG_REPLAY
           # No process running pull-request code may survive into the trusted
           # publication phase. The result is copied from a root-only tmpfs only
           # after every low-privilege process has been terminated.
@@ -1880,6 +1993,7 @@ jobs:
           git cat-file -e "${PR_HEAD_SHA}^{commit}"
           rm -rf "$OPENCODE_SOURCE_WORKDIR"
           git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
+          # BEGIN_PR_WORKTREE_ENTRY_VALIDATION
           while IFS= read -r -d '' indexed_entry; do
             indexed_mode="${indexed_entry%% *}"
             case "$indexed_mode" in
@@ -1894,6 +2008,7 @@ jobs:
             echo "::error::PR worktree contains a symbolic link; refusing trusted review processing."
             exit 1
           fi
+          # END_PR_WORKTREE_ENTRY_VALIDATION
           git -C "$OPENCODE_SOURCE_WORKDIR" status --short
 
       - name: Configure git identity for OpenCode action

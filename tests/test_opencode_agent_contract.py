@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -311,6 +312,19 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
     assert "Coverage merge tree could not be materialized" in step
     assert "PR_HEAD_SHA:" in step
+    assert 'validate_coverage_tree_modes "$PR_BASE_SHA"' in step
+    assert "validate_coverage_tree_modes HEAD" in step
+    assert 'ls-tree -r -z --full-tree "$treeish"' in step
+    assert "100644 | 100755" in step
+    assert 'rm -f -- "$COVERAGE_BASE_WORKDIR/.git"' in step
+    assert 'rm -rf -- "$fetch_dir/.git"' in step
+    assert "Coverage source export retained forbidden Git metadata" in step
+    assert "Coverage source archive contains forbidden Git metadata" in step
+    assert step.index('rm -rf -- "$fetch_dir/.git"') < step.index(
+        'tar -cf "$COVERAGE_SOURCE_ARCHIVE"'
+    )
+    assert '"$(basename "$COVERAGE_BASE_WORKDIR")"' in step
+    assert '"$(basename "$COVERAGE_SOURCE_WORKDIR")"' in step
 
     measure_start = workflow.index(
         "      - name: Measure test and docstring evidence\n"
@@ -322,9 +336,23 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "secrets." not in measure_step
     assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
     assert (
-        'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
+        'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$artifact_extract_dir"'
+        in coverage_job
     )
+    assert '"opencode-coverage-base"' in coverage_job
+    assert '"opencode-coverage-source"' in coverage_job
     assert "member.isfile() or member.isdir()" in workflow
+    assert "Coverage source archive contains an unexpected root" in coverage_job
+    assert "Coverage source archive contains forbidden Git metadata" in coverage_job
+    assert 'git init "$COVERAGE_SOURCE_WORKDIR"' in coverage_job
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" add --all --force' in coverage_job
+    assert "coverage base snapshot" in coverage_job
+    assert "coverage head snapshot" in coverage_job
+    assert "COVERAGE_BASE_SHA=%s" in coverage_job
+    assert "COVERAGE_HEAD_SHA=%s" in coverage_job
+    assert 'diff --name-only "$COVERAGE_BASE_SHA" "$COVERAGE_HEAD_SHA"' in coverage_job
+    assert '--base-sha "$COVERAGE_BASE_SHA"' in coverage_job
+    assert '--head-sha "$COVERAGE_HEAD_SHA"' in coverage_job
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
     assert "docker.io/library/ubuntu@sha256:" in measure_step
@@ -429,13 +457,12 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
 def test_coverage_source_artifact_excludes_git_history(tmp_path):
     """The cross-job source archive must not carry target repository history."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    package_start = workflow.index(
-        '          git -C "$COVERAGE_SOURCE_WORKDIR" status --short\n'
-    )
-    package_end = workflow.index("\n\n      - name:", package_start)
-    package_script = textwrap.dedent(workflow[package_start:package_end])
+    export_start = workflow.index("          # BEGIN_COVERAGE_SOURCE_EXPORT\n")
+    export_start = workflow.index("\n", export_start) + 1
+    export_end = workflow.index("          # END_COVERAGE_SOURCE_EXPORT", export_start)
+    export_script = textwrap.dedent(workflow[export_start:export_end])
 
-    repo = tmp_path / "source"
+    repo = tmp_path / "fetch"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(
@@ -454,15 +481,27 @@ def test_coverage_source_artifact_excludes_git_history(tmp_path):
     (repo / ".env").unlink()
     (repo / "safe.txt").write_text("current source\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "current source"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "safe base"], cwd=repo, check=True)
+    base_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    (repo / "safe.txt").write_text("current head source\n", encoding="utf-8")
+    subprocess.run(["git", "add", "safe.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "current head"], cwd=repo, check=True)
 
-    archive = tmp_path / "source.tar"
+    base_worktree = tmp_path / "opencode-coverage-base"
+    source_worktree = tmp_path / "opencode-coverage-source"
+    archive = tmp_path / "opencode-coverage-source.tar"
     result = subprocess.run(
-        ["bash", "-c", "set -euo pipefail\n" + package_script],
+        ["bash", "-c", "set -euo pipefail\n" + export_script],
         env={
             **os.environ,
-            "COVERAGE_SOURCE_WORKDIR": str(repo),
+            "COVERAGE_BASE_WORKDIR": str(base_worktree),
+            "COVERAGE_SOURCE_WORKDIR": str(source_worktree),
             "COVERAGE_SOURCE_ARCHIVE": str(archive),
+            "PR_BASE_SHA": base_sha,
+            "RUNNER_TEMP": str(tmp_path),
+            "fetch_dir": str(repo),
         },
         text=True,
         capture_output=True,
@@ -471,9 +510,11 @@ def test_coverage_source_artifact_excludes_git_history(tmp_path):
 
     assert result.returncode == 0, result.stderr
     with tarfile.open(archive) as bundle:
-        names = [name.removeprefix("./") for name in bundle.getnames()]
-    assert "safe.txt" in names
-    assert not any(name == ".git" or name.startswith(".git/") for name in names)
+        names = [name.removeprefix("./").rstrip("/") for name in bundle.getnames()]
+    assert "opencode-coverage-base/safe.txt" in names
+    assert "opencode-coverage-source/safe.txt" in names
+    assert not any(".git" in name.split("/") for name in names)
+    assert b"deleted-history" not in archive.read_bytes()
 
 
 def test_opencode_repository_dispatch_authorization_is_fail_closed():
@@ -1620,7 +1661,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     )
     assert 'cat "$summary_output_file"' in coverage_job
     assert "Published compact coverage decision output" in coverage_job
-    assert 'coverage_log_stop_token="$(python3 -I -c' in coverage_job
+    assert 'coverage_log_stop_token="$(/usr/bin/python3 -I -c' in coverage_job
+    assert (
+        '[[ "$coverage_log_stop_token" =~ ^coverage-log-[0-9a-f]{48}$ ]]'
+        in coverage_job
+    )
+    assert (
+        '[[ "$coverage_output_delimiter" =~ ^coverage_[0-9a-f]{48}$ ]]' in coverage_job
+    )
+    assert "# BEGIN_COVERAGE_LOG_REPLAY" in coverage_job
+    assert "# END_COVERAGE_LOG_REPLAY" in coverage_job
     assert 'grep -Fq "$coverage_log_stop_token" "$summary_file"' in coverage_job
     assert (
         "printf '::stop-commands::%s\\n' \"$coverage_log_stop_token\"" in coverage_job
@@ -1748,15 +1798,16 @@ def test_coverage_log_replay_disables_runner_commands_and_retries_token_collisio
 ):
     """Untrusted coverage bytes stay inside a collision-free stop-command envelope."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    replay_start = workflow.index('          coverage_log_stop_token="$(python3 -I -c')
-    replay_end = workflow.index(
-        "          # No process running pull-request code", replay_start
-    )
+    replay_start = workflow.index("          # BEGIN_COVERAGE_LOG_REPLAY\n")
+    replay_start = workflow.index("\n", replay_start) + 1
+    replay_end = workflow.index("          # END_COVERAGE_LOG_REPLAY", replay_start)
     replay = textwrap.dedent(workflow[replay_start:replay_end])
 
+    collision_token = "coverage-log-" + "a" * 48
+    safe_token = "coverage-log-" + "b" * 48
     summary = tmp_path / "coverage-evidence.md"
     summary.write_text(
-        "coverage-log-collision\n"
+        f"{collision_token}\n"
         "::set-output name=coverage_summary::ATTACKER\n"
         "::add-path::/tmp/attacker\n",
         encoding="utf-8",
@@ -1770,16 +1821,22 @@ def test_coverage_log_replay_disables_runner_commands_and_retries_token_collisio
         'count="$(cat "$FAKE_COUNTER" 2>/dev/null || printf 0)"\n'
         'printf "%s" "$((count + 1))" >"$FAKE_COUNTER"\n'
         'if [ "$count" -eq 0 ]; then\n'
-        "  printf '%s\\n' coverage-log-collision\n"
+        f"  printf '%s\\n' {collision_token}\n"
         "else\n"
-        "  printf '%s\\n' coverage-log-safe\n"
+        f"  printf '%s\\n' {safe_token}\n"
         "fi\n",
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
 
+    # Replace the absolute trusted interpreter only inside this test harness so
+    # the collision-retry branch can be deterministic. The production contract
+    # itself must remain immune to PATH-prepended executables.
+    replay_with_fixture = replay.replace(
+        "/usr/bin/python3", shlex.quote(str(fake_python))
+    )
     result = subprocess.run(
-        ["bash", "-c", "set -euo pipefail\n" + replay],
+        ["bash", "-c", "set -euo pipefail\n" + replay_with_fixture],
         env={
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -1793,25 +1850,25 @@ def test_coverage_log_replay_disables_runner_commands_and_retries_token_collisio
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert lines[0] == "::stop-commands::coverage-log-safe"
+    assert lines[0] == f"::stop-commands::{safe_token}"
     assert "::set-output name=coverage_summary::ATTACKER" in lines[1:-1]
     assert "::add-path::/tmp/attacker" in lines[1:-1]
-    assert lines[-1] == "::coverage-log-safe::"
+    assert lines[-1] == f"::{safe_token}::"
     assert counter.read_text(encoding="utf-8") == "2"
 
 
 def test_materialized_pr_worktree_rejects_symlinks_before_trusted_readers(tmp_path):
-    """A tracked symlink cannot escape the PR worktree into runner credentials."""
+    """Tracked and untracked symlinks cannot escape into runner credentials."""
     if not hasattr(os, "symlink"):
         pytest.skip("symlinks are unavailable")
 
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
     validation_start = workflow.index(
-        "          while IFS= read -r -d '' indexed_entry; do"
+        "          # BEGIN_PR_WORKTREE_ENTRY_VALIDATION\n"
     )
+    validation_start = workflow.index("\n", validation_start) + 1
     validation_end = workflow.index(
-        '          git -C "$OPENCODE_SOURCE_WORKDIR" status --short',
-        validation_start,
+        "          # END_PR_WORKTREE_ENTRY_VALIDATION", validation_start
     )
     validation = textwrap.dedent(workflow[validation_start:validation_end])
 
@@ -1854,6 +1911,18 @@ def test_materialized_pr_worktree_rejects_symlinks_before_trusted_readers(tmp_pa
         check=False,
     )
     assert clean.returncode == 0, clean.stderr
+
+    (clean_worktree / "untracked-credential-link").symlink_to(outside)
+    untracked_rejected = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + validation],
+        env={**os.environ, "OPENCODE_SOURCE_WORKDIR": str(clean_worktree)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert untracked_rejected.returncode == 1
+    assert "PR worktree contains a symbolic link" in untracked_rejected.stdout
+    assert outside.read_text(encoding="utf-8") == "synthetic-secret\n"
 
     malicious_worktree = tmp_path / "malicious-worktree"
     subprocess.run(
