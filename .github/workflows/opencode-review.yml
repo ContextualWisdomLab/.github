@@ -293,17 +293,20 @@ jobs:
           mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
           mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
-          if [ -f "$COVERAGE_SOURCE_WORKDIR/Cargo.toml" ] && [ -f "$COVERAGE_SOURCE_WORKDIR/Cargo.lock" ] \
-            && command -v cargo >/dev/null 2>&1; then
-            # Pre-fetch the locked crate graph into the tree-local CARGO_HOME that the
-            # network-isolated coverage sandbox already uses, so `cargo llvm-cov` can
-            # compile Rust coverage offline. `cargo fetch` downloads content-addressed
-            # crates without executing any build scripts, and a failed prefetch keeps
-            # the same fail-closed sandbox behavior: the offline build surfaces the
-            # missing dependencies for this head.
-            if ! CARGO_HOME="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo" \
-              cargo fetch --locked --manifest-path "$COVERAGE_SOURCE_WORKDIR/Cargo.toml"; then
-              echo "::warning::Locked cargo prefetch failed; offline Rust coverage will surface the missing dependencies for this head."
+          if [ -f "$COVERAGE_SOURCE_WORKDIR/Cargo.toml" ] && [ -f "$COVERAGE_SOURCE_WORKDIR/Cargo.lock" ]; then
+            if command -v cargo >/dev/null 2>&1; then
+              # Pre-fetch the locked crate graph into the tree-local CARGO_HOME that the
+              # network-isolated coverage sandbox already uses, so `cargo llvm-cov` can
+              # compile Rust coverage offline. `cargo fetch` downloads content-addressed
+              # crates without executing any build scripts, and a failed prefetch keeps
+              # the same fail-closed sandbox behavior: the offline build surfaces the
+              # missing dependencies for this head.
+              if ! CARGO_HOME="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo" \
+                cargo fetch --locked --manifest-path "$COVERAGE_SOURCE_WORKDIR/Cargo.toml"; then
+                echo "::warning::Locked cargo prefetch failed; offline Rust coverage will surface the missing dependencies for this head."
+              fi
+            else
+              echo "::warning::cargo is unavailable on this runner, so the locked crate graph was not pre-fetched; offline Rust coverage for this head will fail with missing dependencies."
             fi
           fi
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
@@ -1367,6 +1370,12 @@ jobs:
             # the tree-local CARGO_HOME so missing dependencies fail fast with a
             # clear offline error instead of a network timeout.
             export CARGO_NET_OFFLINE=true
+            # Coverage always measures with the trusted image toolchain: a
+            # repository rust-toolchain(.toml) requesting any other channel would
+            # make the rustup proxy attempt a download the offline sandbox cannot
+            # perform. The env override takes precedence over directory overrides,
+            # keeping toolchain selection deterministic and offline-safe.
+            export RUSTUP_TOOLCHAIN=1.94.1
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
           }
