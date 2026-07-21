@@ -1626,7 +1626,13 @@ jobs:
           printf 'Published compact coverage decision output after sanitization (%s bytes); full command logs remain in the job log and step summary.\n' \
             "$(wc -c <"$summary_output_file" | tr -d ' ')"
 
+          coverage_log_stop_token="$(python3 -I -c 'import os; print("coverage-log-" + os.urandom(24).hex())')"
+          while grep -Fq "$coverage_log_stop_token" "$summary_file"; do
+            coverage_log_stop_token="$(python3 -I -c 'import os; print("coverage-log-" + os.urandom(24).hex())')"
+          done
+          printf '::stop-commands::%s\n' "$coverage_log_stop_token"
           cat "$summary_file"
+          printf '\n::%s::\n' "$coverage_log_stop_token"
           # No process running pull-request code may survive into the trusted
           # publication phase. The result is copied from a root-only tmpfs only
           # after every low-privilege process has been terminated.
@@ -1857,6 +1863,20 @@ jobs:
           git cat-file -e "${PR_HEAD_SHA}^{commit}"
           rm -rf "$OPENCODE_SOURCE_WORKDIR"
           git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
+          while IFS= read -r -d '' indexed_entry; do
+            indexed_mode="${indexed_entry%% *}"
+            case "$indexed_mode" in
+              100644 | 100755) ;;
+              *)
+                printf '::error::PR worktree contains non-regular tracked entry mode %s; refusing trusted review processing.\n' "$indexed_mode"
+                exit 1
+                ;;
+            esac
+          done < <(git -C "$OPENCODE_SOURCE_WORKDIR" ls-files -s -z)
+          if find -P "$OPENCODE_SOURCE_WORKDIR" -mindepth 1 -type l -print -quit | grep -q .; then
+            echo "::error::PR worktree contains a symbolic link; refusing trusted review processing."
+            exit 1
+          fi
           git -C "$OPENCODE_SOURCE_WORKDIR" status --short
 
       - name: Configure git identity for OpenCode action
@@ -2090,6 +2110,7 @@ jobs:
           CODEGRAPH_BIN="${CODEGRAPH_TRUSTED_ROOT}/node_modules/.bin/codegraph"
           test -x "$CODEGRAPH_BIN"
           printf 'Using trusted CodeGraph CLI version %s.\n' "$("$CODEGRAPH_BIN" --version)"
+          rm -rf -- "$OPENCODE_SOURCE_WORKDIR/.codegraph"
           cd "$OPENCODE_SOURCE_WORKDIR"
           "$CODEGRAPH_BIN" init -i
           codegraph_status="$(mktemp)"

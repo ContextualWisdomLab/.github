@@ -329,7 +329,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "docker.io/library/ubuntu@sha256:" in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
-    assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
+    assert (
+        'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"'
+        in measure_step
+    )
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
@@ -406,9 +409,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "uv run --no-project" not in measure_step
     assert "uv run --no-build" not in measure_step
     assert "python3 -m coverage run -m pytest tests" in measure_step
-    trusted_requirements = Path(
-        "requirements-opencode-review-ci-hashes.txt"
-    ).read_text(encoding="utf-8")
+    trusted_requirements = Path("requirements-opencode-review-ci-hashes.txt").read_text(
+        encoding="utf-8"
+    )
     assert "pytest-cov==7.1.0" in trusted_requirements
     assert (
         "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
@@ -496,9 +499,9 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
 def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
     """Use only the trusted image toolchain during networkless PR execution."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    measure = workflow.split(
-        "      - name: Measure test and docstring evidence\n", 1
-    )[1].split("\n      - name:", 1)[0]
+    measure = workflow.split("      - name: Measure test and docstring evidence\n", 1)[
+        1
+    ].split("\n      - name:", 1)[0]
 
     assert "verify_trusted_python_test_toolchain()" in measure
     assert "PR-selected dependency manifests are never resolved" in measure
@@ -1566,6 +1569,18 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     )
     assert 'cat "$summary_output_file"' in coverage_job
     assert "Published compact coverage decision output" in coverage_job
+    assert 'coverage_log_stop_token="$(python3 -I -c' in coverage_job
+    assert 'grep -Fq "$coverage_log_stop_token" "$summary_file"' in coverage_job
+    assert (
+        "printf '::stop-commands::%s\\n' \"$coverage_log_stop_token\"" in coverage_job
+    )
+    assert 'cat "$summary_file"' in coverage_job
+    assert "printf '\\n::%s::\\n' \"$coverage_log_stop_token\"" in coverage_job
+    assert (
+        coverage_job.index("printf '::stop-commands::%s\\n'")
+        < coverage_job.index('cat "$summary_file"')
+        < coverage_job.index("printf '\\n::%s::\\n'")
+    )
     assert "actions: read" in coverage_job
     assert "contents: read" not in coverage_job
     assert 'GITHUB_TOKEN: ""' in coverage_job
@@ -1617,6 +1632,13 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     ) < target_job.index(
         "Exchange OpenCode app token for target repository review reads"
     )
+    materialize_step = target_job.split(
+        "      - name: Materialize pull request head for OpenCode review data", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert 'git -C "$OPENCODE_SOURCE_WORKDIR" ls-files -s -z' in materialize_step
+    assert "100644 | 100755" in materialize_step
+    assert 'find -P "$OPENCODE_SOURCE_WORKDIR" -mindepth 1 -type l' in materialize_step
+    assert "refusing trusted review processing" in materialize_step
     codegraph_step = target_job.split(
         "      - name: Initialize CodeGraph index for OpenCode", 1
     )[1].split("\n      - name:", 1)[0]
@@ -1639,6 +1661,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert '"$CODEGRAPH_BIN" --version' in codegraph_step
     assert 'cat "$codegraph_status" >&2' in codegraph_step
     assert 'cat "$codegraph_raw" >&2' in codegraph_step
+    assert 'rm -rf -- "$OPENCODE_SOURCE_WORKDIR/.codegraph"' in codegraph_step
     assert "CodeGraph status failed; approval evidence is incomplete." in codegraph_step
     assert (
         "CodeGraph changed-scope exploration failed; approval evidence is incomplete."
@@ -1667,6 +1690,138 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         "Merge scheduler follow-up skipped after approval because no mutation credential was available"
         in workflow
     )
+
+
+def test_coverage_log_replay_disables_runner_commands_and_retries_token_collision(
+    tmp_path,
+):
+    """Untrusted coverage bytes stay inside a collision-free stop-command envelope."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    replay_start = workflow.index('          coverage_log_stop_token="$(python3 -I -c')
+    replay_end = workflow.index(
+        "          # No process running pull-request code", replay_start
+    )
+    replay = textwrap.dedent(workflow[replay_start:replay_end])
+
+    summary = tmp_path / "coverage-evidence.md"
+    summary.write_text(
+        "coverage-log-collision\n"
+        "::set-output name=coverage_summary::ATTACKER\n"
+        "::add-path::/tmp/attacker\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    counter = tmp_path / "counter"
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        'count="$(cat "$FAKE_COUNTER" 2>/dev/null || printf 0)"\n'
+        'printf "%s" "$((count + 1))" >"$FAKE_COUNTER"\n'
+        'if [ "$count" -eq 0 ]; then\n'
+        "  printf '%s\\n' coverage-log-collision\n"
+        "else\n"
+        "  printf '%s\\n' coverage-log-safe\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + replay],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_COUNTER": str(counter),
+            "summary_file": str(summary),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == "::stop-commands::coverage-log-safe"
+    assert "::set-output name=coverage_summary::ATTACKER" in lines[1:-1]
+    assert "::add-path::/tmp/attacker" in lines[1:-1]
+    assert lines[-1] == "::coverage-log-safe::"
+    assert counter.read_text(encoding="utf-8") == "2"
+
+
+def test_materialized_pr_worktree_rejects_symlinks_before_trusted_readers(tmp_path):
+    """A tracked symlink cannot escape the PR worktree into runner credentials."""
+    if not hasattr(os, "symlink"):
+        pytest.skip("symlinks are unavailable")
+
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    validation_start = workflow.index(
+        "          while IFS= read -r -d '' indexed_entry; do"
+    )
+    validation_end = workflow.index(
+        '          git -C "$OPENCODE_SOURCE_WORKDIR" status --short',
+        validation_start,
+    )
+    validation = textwrap.dedent(workflow[validation_start:validation_end])
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Trust Boundary Test"], cwd=repo, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "trust@example.invalid"],
+        cwd=repo,
+        check=True,
+    )
+    (repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+    subprocess.run(["git", "add", "safe.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    base_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+
+    outside = tmp_path / "runner-credential"
+    outside.write_text("synthetic-secret\n", encoding="utf-8")
+    (repo / "credential-link").symlink_to(outside)
+    subprocess.run(["git", "add", "credential-link"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "symlink head"], cwd=repo, check=True)
+
+    clean_worktree = tmp_path / "clean-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(clean_worktree), base_sha],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+    clean = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + validation],
+        env={**os.environ, "OPENCODE_SOURCE_WORKDIR": str(clean_worktree)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert clean.returncode == 0, clean.stderr
+
+    malicious_worktree = tmp_path / "malicious-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(malicious_worktree), "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+    rejected = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + validation],
+        env={**os.environ, "OPENCODE_SOURCE_WORKDIR": str(malicious_worktree)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert rejected.returncode == 1
+    assert "refusing trusted review processing" in rejected.stdout
+    assert outside.read_text(encoding="utf-8") == "synthetic-secret\n"
 
 
 def test_opencode_pending_peer_checks_hold_blocks_required_workflow_until_approval():
