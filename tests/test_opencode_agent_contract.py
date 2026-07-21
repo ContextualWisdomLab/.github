@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import textwrap
 from pathlib import Path
 
@@ -423,6 +424,56 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     target_condition = target_job.split("    runs-on:", 1)[0]
     assert "github.event_name == 'repository_dispatch'" in target_condition
     assert "github.event_name == 'pull_request_target'" not in target_condition
+
+
+def test_coverage_source_artifact_excludes_git_history(tmp_path):
+    """The cross-job source archive must not carry target repository history."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    package_start = workflow.index(
+        '          git -C "$COVERAGE_SOURCE_WORKDIR" status --short\n'
+    )
+    package_end = workflow.index("\n\n      - name:", package_start)
+    package_script = textwrap.dedent(workflow[package_start:package_end])
+
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Artifact Boundary Test"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "artifact@example.invalid"],
+        cwd=repo,
+        check=True,
+    )
+    (repo / ".env").write_text("PRIVATE_TOKEN=deleted-history\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".env"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "historical secret"], cwd=repo, check=True)
+    (repo / ".env").unlink()
+    (repo / "safe.txt").write_text("current source\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "current source"], cwd=repo, check=True)
+
+    archive = tmp_path / "source.tar"
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + package_script],
+        env={
+            **os.environ,
+            "COVERAGE_SOURCE_WORKDIR": str(repo),
+            "COVERAGE_SOURCE_ARCHIVE": str(archive),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    with tarfile.open(archive) as bundle:
+        names = [name.removeprefix("./") for name in bundle.getnames()]
+    assert "safe.txt" in names
+    assert not any(name == ".git" or name.startswith(".git/") for name in names)
 
 
 def test_opencode_repository_dispatch_authorization_is_fail_closed():

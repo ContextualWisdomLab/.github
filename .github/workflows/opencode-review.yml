@@ -293,7 +293,24 @@ jobs:
           mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
           mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
+          # Only the current merged source tree may cross the repository boundary.
+          # The fetch repository contains target history, including deleted files,
+          # so remove its metadata before producing the same-run artifact.
+          rm -rf "$COVERAGE_SOURCE_WORKDIR/.git"
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
+          if tar -tf "$COVERAGE_SOURCE_ARCHIVE" | awk '
+            {
+              member = $0
+              sub(/^\.\//, "", member)
+              if (member == ".git" || member ~ /(^|\/)\.git(\/|$)/) {
+                found = 1
+              }
+            }
+            END { exit(found ? 0 : 1) }
+          '; then
+            echo "::error::Coverage source archive unexpectedly contains Git metadata."
+            exit 1
+          fi
 
       - name: Upload materialized pull request merge tree
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
