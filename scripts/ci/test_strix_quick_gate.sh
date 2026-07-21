@@ -170,7 +170,7 @@ assert_strix_accepted_risk_suppression_wired() {
 	assert_file_contains "$GATE_SCRIPT" "HIGH/CRITICAL findings are never suppressible" "accepted-risk logging states HIGH/CRITICAL are never suppressible"
 	# Wired into every finding-blocking verdict path, not just one.
 	local wired_count
-	wired_count="$(grep -c 'if vulnerability_file_is_accepted_risk "\$vuln_file"; then' "$GATE_SCRIPT")"
+	wired_count="$(grep -c 'if vulnerability_file_is_accepted_risk "\$vuln_file"; then' "$GATE_SCRIPT" || true)"
 	if [ "$wired_count" -lt 3 ]; then
 		record_failure "accepted-risk skip wired into only $wired_count verdict paths (expected >= 3)"
 	fi
@@ -192,6 +192,7 @@ EOF
 	printf 'Title: Sensitive data stored unencrypted in Expo SQLite\nSeverity: MEDIUM\n' >"$tmp_dir/med_match.md"
 	printf 'Title: Sensitive data stored unencrypted in Expo SQLite\nSeverity: HIGH\n' >"$tmp_dir/high_match.md"
 	printf 'Title: SQL injection in login handler\nSeverity: MEDIUM\n' >"$tmp_dir/med_nomatch.md"
+	printf 'Severity: MEDIUM\nEvidence: no title field\n' >"$tmp_dir/med_untitled.md"
 
 	local out
 	out="$(
@@ -210,11 +211,27 @@ EOF
 				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/med_match.md"  2>/dev/null && echo "MED_MATCH=accepted"  || echo "MED_MATCH=blocked"
 				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/high_match.md" 2>/dev/null && echo "HIGH_MATCH=accepted" || echo "HIGH_MATCH=blocked"
 				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/med_nomatch.md" 2>/dev/null && echo "MED_NOMATCH=accepted" || echo "MED_NOMATCH=blocked"
+				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/med_untitled.md" 2>/dev/null && echo "MED_UNTITLED=accepted" || echo "MED_UNTITLED=blocked"
 			'
 	)"
 	case "$out" in *"MED_MATCH=accepted"*) ;; *) record_failure "documented MEDIUM accepted-risk was not suppressed (out=$out)" ;; esac
 	case "$out" in *"HIGH_MATCH=blocked"*) ;; *) record_failure "HIGH finding was suppressed despite title match (out=$out)" ;; esac
 	case "$out" in *"MED_NOMATCH=blocked"*) ;; *) record_failure "undeclared MEDIUM finding did not block (out=$out)" ;; esac
+	case "$out" in *"MED_UNTITLED=blocked"*) ;; *) record_failure "untitled MEDIUM finding crashed or was suppressed (out=$out)" ;; esac
+
+	local git_stderr="$tmp_dir/git-stderr.txt"
+	PR_HEAD_SHA=0000000000000000000000000000000000000000 \
+		REPO_ROOT="$tmp_dir" STRIX_ACCEPTED_RISKS_PATH=".security/strix-accepted-risks.txt" \
+		bash -c '
+			set -euo pipefail
+			trim_whitespace() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf "%s" "$s"; }
+			is_valid_git_commit_sha() { [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]; }
+			'"$(sed -n '/^accepted_risk_declaration_lines()/,/^}/p' "$GATE_SCRIPT")"'
+			accepted_risk_declaration_lines >/dev/null
+		' 2>"$git_stderr"
+	if [ -s "$git_stderr" ]; then
+		record_failure "accepted-risk checkout fallback leaked git diagnostics outside a repository: $(cat "$git_stderr")"
+	fi
 	rm -rf "$tmp_dir"
 }
 

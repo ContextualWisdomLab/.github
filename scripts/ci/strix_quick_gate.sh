@@ -1978,7 +1978,7 @@ accepted_risk_declaration_lines() {
 	head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
 	if [ -n "$head_sha" ] &&
 		is_valid_git_commit_sha "$head_sha" &&
-		git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null; then
+		git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null 2>&1; then
 		git show "$head_sha:$STRIX_ACCEPTED_RISKS_PATH" 2>/dev/null && return 0
 	fi
 	if [ -f "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" ] && [ ! -L "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" ]; then
@@ -1989,10 +1989,9 @@ accepted_risk_declaration_lines() {
 # First "Title:" value of a finding report (used to match acceptance entries).
 extract_finding_title() {
 	local source_path="$1"
-	grep -Ei '^[[:space:]]*Title[[:space:]]*:' "$source_path" 2>/dev/null |
-		head -n 1 |
+	grep -Eim 1 '^[[:space:]]*Title[[:space:]]*:' "$source_path" 2>/dev/null |
 		sed -E 's/^[[:space:]]*[Tt]itle[[:space:]]*:[[:space:]]*//' |
-		sed -E 's/[[:space:]]+$//'
+		sed -E 's/[[:space:]]+$//' || true
 }
 
 # Returns 0 when a finding is a documented accepted risk: severity is at or below
