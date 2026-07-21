@@ -2001,9 +2001,15 @@ extract_finding_title() {
 # so it is auditable in the required check output.
 vulnerability_file_is_accepted_risk() {
 	local vuln_file="$1"
-	local finding_rank suppressible_rank
+	local finding_rank suppressible_rank medium_rank
 	finding_rank="$(extract_max_severity_rank "$vuln_file")"
 	suppressible_rank="$(severity_rank "$STRIX_MAX_SUPPRESSIBLE_SEVERITY")"
+	medium_rank="$(severity_rank MEDIUM)"
+	# Environment overrides may narrow accepted risk, but can never make HIGH or
+	# CRITICAL findings suppressible. Unknown ceilings remain fail-closed at -1.
+	if [ "$suppressible_rank" -gt "$medium_rank" ]; then
+		suppressible_rank="$medium_rank"
+	fi
 	# Never suppress unknown-severity or above-cap (HIGH/CRITICAL) findings.
 	if [ "$finding_rank" -lt 0 ] || [ "$finding_rank" -gt "$suppressible_rank" ]; then
 		return 1

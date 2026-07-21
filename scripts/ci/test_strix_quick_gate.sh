@@ -196,7 +196,7 @@ EOF
 
 	local out
 	out="$(
-		REPO_ROOT="$tmp_dir" STRIX_MAX_SUPPRESSIBLE_SEVERITY=MEDIUM \
+		REPO_ROOT="$tmp_dir" STRIX_MAX_SUPPRESSIBLE_SEVERITY=CRITICAL \
 			STRIX_ACCEPTED_RISKS_PATH=".security/strix-accepted-risks.txt" \
 			bash -c '
 				set -uo pipefail
