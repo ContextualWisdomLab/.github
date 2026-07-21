@@ -183,7 +183,7 @@ assert_strix_pr_scope_includes_sql_migration_context() {
 assert_strix_pr_scope_migration_siblings_functional() {
 	# A migration-only diff must resolve schema references from sibling migrations,
 	# not report a phantom "relation does not exist" finding. Enumerate the context
-	# a two-migration directory produces when only the second file is changed.
+	# a three-migration directory produces when the second and third files change.
 	local tmp_dir
 	tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-migration-context.XXXXXX")"
 	(
