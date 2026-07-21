@@ -737,6 +737,7 @@ def rest_strix_workflow_name(
     check: dict[str, Any],
     *,
     expected_head_sha: str,
+    actions_runs_by_id: dict[str, Any] | None = None,
 ) -> str | None:
     """Prove REST-fallback Strix provenance from the Actions run API."""
 
@@ -752,10 +753,15 @@ def rest_strix_workflow_name(
     run_id = actions_run_id_from_details_url(details_url)
     if run_id is None:
         return None
-    try:
-        run = gh_api_json(f"repos/{repo}/actions/runs/{run_id}")
-    except (RuntimeError, TypeError, ValueError):
-        return None
+    if actions_runs_by_id is not None and run_id in actions_runs_by_id:
+        run = actions_runs_by_id[run_id]
+    else:
+        try:
+            run = gh_api_json(f"repos/{repo}/actions/runs/{run_id}")
+        except (RuntimeError, TypeError, ValueError):
+            run = None
+        if actions_runs_by_id is not None:
+            actions_runs_by_id[run_id] = run
     if not isinstance(run, dict):
         return None
     workflow_name = run.get("name")
@@ -778,6 +784,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
+    actions_runs_by_id: dict[str, Any] = {}
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
         str(pr.get("mergeable_state") or "").upper(),
@@ -809,6 +816,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
                             repo,
                             check,
                             expected_head_sha=head.get("sha"),
+                            actions_runs_by_id=actions_runs_by_id,
                         ),
                     )
                     for check in (checks.get("check_runs") or [])

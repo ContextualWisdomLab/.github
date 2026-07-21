@@ -577,6 +577,14 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
                     "details_url": "https://github.com/owner/repo/actions/runs/10/job/20",
                     "app": {"slug": "github-actions"},
                 },
+                {
+                    "name": "strix",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "started_at": "2026-06-30T00:00:02Z",
+                    "details_url": "https://github.com/owner/repo/actions/runs/10/job/21",
+                    "app": {"slug": "github-actions"},
+                },
             ]
         },
         "repos/owner/repo/actions/runs/10": {
@@ -629,6 +637,10 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     assert node["reviews"]["nodes"][0]["commit"]["oid"] == "abc123"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["status"] == "COMPLETED"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] == "SUCCESS"
+    assert [
+        context["checkSuite"]["workflowRun"]["workflow"]["name"]
+        for context in node["statusCheckRollup"]["contexts"]["nodes"][1:]
+    ] == ["Strix Security Scan", "Strix Security Scan"]
     assert sched.strix_evidence_state(node) == "complete"
 
 
