@@ -14,14 +14,20 @@ TRUSTED_SAJU_WHEELS = {
 
 def test_saju_caldav_dependencies_are_exact_hash_locked_wheels() -> None:
     source = Path("requirements-opencode-review-ci.txt").read_text(encoding="utf-8")
-    lock = Path("requirements-opencode-review-ci-hashes.txt").read_text(encoding="utf-8")
+    lock = Path("requirements-opencode-review-ci-hashes.txt").read_text(
+        encoding="utf-8"
+    )
 
     for package, version in TRUSTED_SAJU_WHEELS.items():
         requirement = f"{package}=={version}"
         assert requirement in source
-        locked_requirement = lock.split(requirement, 1)[1].split("\n", 1)[0]
+        assert requirement in lock, (
+            f"{requirement} is missing from the hashed dependency lock"
+        )
+        locked_section = lock.split(requirement, 1)[1]
+        locked_requirement = locked_section.split("\n", 1)[0]
         assert locked_requirement.rstrip().endswith("\\")
-        assert "--hash=sha256:" in lock.split(requirement, 1)[1].split("\n# via", 1)[0]
+        assert "--hash=sha256:" in locked_section.split("\n# via", 1)[0]
 
     assert "lunar-python==" not in source
     assert "lunar-python==" not in lock
