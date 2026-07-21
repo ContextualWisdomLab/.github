@@ -5976,12 +5976,6 @@ run_filtered_gate_case_if_requested() {
 			"github_models/openai/o3"
 		;;
 	openai-direct-github-models-fallback-ratelimit-skip)
-		# openai_direct primary quota-fails (retries 3x, as openai_direct is not
-		# subject to the GitHub Models skip); first github_models fallback
-		# immediately hits GitHub Models rate limit.  The gate must detect GitHub
-		# Models is active via STRIX_GITHUB_MODELS_API_BASE_FILE and skip
-		# same-model retries, moving to the second fallback in one step
-		# (5 strix calls total: 3 primary retries + 1 gpt-5-chat skip + 1 o3).
 		run_gate_case "openai-direct-github-models-fallback-ratelimit-skip" \
 			"openai_direct/gpt-5.6-luna" \
 			"" \
