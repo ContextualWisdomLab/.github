@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2024-11-24 - Update pyasn1 to patch denial-of-service vulnerabilities
+**Vulnerability:** The CI dependencies (specifically `requirements-strix-ci-hashes.txt`) pinned `pyasn1` to version `0.6.3`, which contained two quadratic/exponential parsing vulnerabilities (CVE-2026-59885, CVE-2026-59886) that can lead to Denial-of-Service when processing attacker-controlled payload arcs/exponents.
+**Learning:** Hard-pinned dependencies in CI scripts are prone to silently rotting and accumulating severe vulnerabilities, surfacing only when an explicit dependency audit runs and blocks the pipeline.
+**Prevention:** Regularly run `pip-audit` to detect CVEs proactively before CI enforces an abrupt block. When `pip-audit` catches a vulnerability, ensure both the version and the expected SHA256 hashes are simultaneously updated.
