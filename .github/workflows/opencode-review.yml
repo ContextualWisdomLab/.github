@@ -324,6 +324,11 @@ jobs:
               "${PR_HEAD_SHA:-<empty>}"
             exit 1
           fi
+          target_visibility="$(gh api "repos/${TARGET_REPOSITORY}" --jq .visibility)"
+          if [ "$target_visibility" != "public" ]; then
+            echo "::error::Cross-repository coverage artifacts require a public target repository; ${TARGET_REPOSITORY} reported visibility=${target_visibility:-unknown}."
+            exit 1
+          fi
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
           git init "$fetch_dir"
@@ -341,7 +346,6 @@ jobs:
             echo "::error::Coverage merge tree could not be materialized for base ${PR_BASE_SHA} and head ${PR_HEAD_SHA}; resolve merge conflicts or rerun after GitHub can synthesize the PR merge commit."
             exit 1
           fi
-
           validate_coverage_tree_modes() {
             local treeish="$1"
             local indexed_entry indexed_mode
@@ -373,7 +377,8 @@ jobs:
             --repo-root "$fetch_dir" \
             --base-sha "$PR_BASE_SHA" \
             --head-sha "$PR_HEAD_SHA" >"$replay_report" 2>&1 || replay_status=$?
-          cat "$replay_report"
+          printf 'Replay guard completed with status %s and captured %s bytes of bounded evidence.\n' \
+            "$replay_status" "$(wc -c <"$replay_report" | tr -d ' ')"
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
               printf '## PR head replay guard\n\n```text\n'
@@ -2295,15 +2300,17 @@ jobs:
           codegraph_raw="$(mktemp)"
           changed_scope="$(git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" | sed -n '1,80p' | tr '\n' ' ')"
           if ! "$CODEGRAPH_BIN" status >"$codegraph_status" 2>&1; then
-            cat "$codegraph_status" >&2
+            printf 'CodeGraph status command failed; captured %s bytes without replaying PR-derived log content.\n' \
+              "$(wc -c <"$codegraph_status" | tr -d ' ')" >&2
             echo "::error::CodeGraph status failed; approval evidence is incomplete."
             rm -f "$codegraph_status" "$codegraph_raw"
             exit 1
           fi
           if ! timeout 120s "$CODEGRAPH_BIN" explore \
             "Review the blast radius, call paths, security boundaries, and focused tests for these current-head changed files: ${changed_scope}" \
-            >"$codegraph_raw" 2>&1; then
-            cat "$codegraph_raw" >&2
+              >"$codegraph_raw" 2>&1; then
+            printf 'CodeGraph exploration command failed; captured %s bytes without replaying PR-derived log content.\n' \
+              "$(wc -c <"$codegraph_raw" | tr -d ' ')" >&2
             echo "::error::CodeGraph changed-scope exploration failed; approval evidence is incomplete."
             rm -f "$codegraph_status" "$codegraph_raw"
             exit 1
@@ -2316,7 +2323,8 @@ jobs:
           } >"$CODEGRAPH_EVIDENCE_FILE"
           rm -f "$codegraph_status" "$codegraph_raw"
           test -s "$CODEGRAPH_EVIDENCE_FILE"
-          cat "$CODEGRAPH_EVIDENCE_FILE"
+          printf 'Captured bounded CodeGraph evidence (%s bytes) without replaying PR-derived log content.\n' \
+            "$(wc -c <"$CODEGRAPH_EVIDENCE_FILE" | tr -d ' ')"
 
       - name: Prepare bounded OpenCode review evidence
         timeout-minutes: 12

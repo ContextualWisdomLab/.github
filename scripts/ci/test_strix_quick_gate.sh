@@ -87,6 +87,16 @@ assert_file_not_contains() {
 	fi
 }
 
+assert_file_not_matches() {
+	local file_path="$1"
+	local pattern="$2"
+	local message="$3"
+
+	if [ -f "$file_path" ] && grep -Eq -- "$pattern" "$file_path"; then
+		record_failure "$message (unexpected pattern '$pattern')"
+	fi
+}
+
 seal_opencode_test_artifacts() {
 	local runner_temp="$1"
 	local head_sha="$2"
@@ -593,8 +603,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'locked_version" != "4.0.4"' "opencode review verifies both nested installed and locked picomatch evidence"
 	assert_file_contains "$workflow_file" '"$CODEGRAPH_BIN" explore' "opencode review precomputes structural evidence outside the model process"
 	assert_file_contains "$workflow_file" '"$CODEGRAPH_BIN" --version' "opencode review logs the exact trusted CodeGraph version"
-	assert_file_contains "$workflow_file" 'cat "$codegraph_status" >&2' "opencode review exposes CodeGraph status failures in the job log"
-	assert_file_contains "$workflow_file" 'cat "$codegraph_raw" >&2' "opencode review exposes CodeGraph exploration failures in the job log"
+	assert_file_not_contains "$workflow_file" 'cat "$codegraph_status" >&2' "opencode review does not replay PR-derived CodeGraph status bytes as workflow commands"
+	assert_file_not_contains "$workflow_file" 'cat "$codegraph_raw" >&2' "opencode review does not replay PR-derived CodeGraph exploration bytes as workflow commands"
+	assert_file_not_matches "$workflow_file" '^[[:space:]]{10}cat "\$CODEGRAPH_EVIDENCE_FILE"[[:space:]]*$' "opencode review does not replay assembled PR-derived CodeGraph evidence into the command channel"
+	assert_file_contains "$workflow_file" 'CodeGraph status command failed; captured %s bytes without replaying PR-derived log content.' "opencode review reports bounded CodeGraph status failure metadata"
+	assert_file_contains "$workflow_file" 'CodeGraph exploration command failed; captured %s bytes without replaying PR-derived log content.' "opencode review reports bounded CodeGraph exploration failure metadata"
+	assert_file_contains "$workflow_file" 'Captured bounded CodeGraph evidence (%s bytes) without replaying PR-derived log content.' "opencode review reports bounded CodeGraph success metadata"
 	assert_file_not_contains "$workflow_file" "serve --mcp" "opencode review must not fetch or launch CodeGraph again for MCP"
 	assert_file_not_contains "$workflow_file" "https://mcp.deepwiki.com/mcp" "opencode review does not expose remote MCP to the model"
 	assert_file_not_contains "$workflow_file" "@upstash/context7-mcp@3.1.0" "opencode review does not install Context7 at runtime"

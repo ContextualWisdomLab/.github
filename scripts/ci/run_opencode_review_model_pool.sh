@@ -498,9 +498,6 @@ main() {
 		fi
 	fi
 	deadline=0
-	if [ "$budget_seconds" -gt 0 ]; then
-		deadline=$((SECONDS + budget_seconds))
-	fi
 	: >"$OPENCODE_OUTPUT_FILE"
 	cd "$OPENCODE_REVIEW_WORKDIR"
 	read -r -a model_candidates <<<"${OPENCODE_MODEL_CANDIDATES:-}"
@@ -528,6 +525,12 @@ main() {
 			opencode_json_file="${candidate_output_file}.jsonl"
 			opencode_export_file="${candidate_output_file}.session.json"
 			write_prompt "$model_candidate" "$prompt_file"
+			# The retry budget measures provider attempts. Trusted local prompt
+			# preparation can be slower on a busy runner and must not exhaust the
+			# budget before the first provider is invoked.
+			if [ "$deadline" -eq 0 ] && [ "$budget_seconds" -gt 0 ]; then
+				deadline=$((SECONDS + budget_seconds))
+			fi
 			for attempt in $(seq 1 "$attempts"); do
 				now="$SECONDS"
 				if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then

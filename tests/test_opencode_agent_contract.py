@@ -311,6 +311,13 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"'
         in step
     )
+    assert (
+        'target_visibility="$(gh api "repos/${TARGET_REPOSITORY}" --jq .visibility)"'
+        in step
+    )
+    assert (
+        "Cross-repository coverage artifacts require a public target repository" in step
+    )
     assert "Coverage fetch could not authenticate" in step
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
     assert "Coverage merge tree could not be materialized" in step
@@ -338,6 +345,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert '"$(basename "$COVERAGE_BASE_WORKDIR")"' in step
     assert '"$(basename "$COVERAGE_SOURCE_WORKDIR")"' in step
+    assert 'cat "$replay_report"' not in step.split(
+        'if [ -n "${GITHUB_STEP_SUMMARY:-}" ]', 1
+    )[0]
+    assert "Replay guard completed with status" in step
 
     measure_start = workflow.index(
         "      - name: Measure test and docstring evidence\n"
@@ -368,6 +379,17 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "pr_head_replay_guard.py" not in coverage_job
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
+    prepare_start = workflow.index(
+        "      - name: Prepare pull request merge tree for coverage measurement\n"
+    )
+    prepare_end = workflow.index("\n      - name:", prepare_start + 1)
+    prepare_step = workflow[prepare_start:prepare_end]
+    assert 'git init "$COVERAGE_SOURCE_WORKDIR"' in prepare_step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" add --all --force' in prepare_step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" commit --allow-empty --no-gpg-sign' in prepare_step
+    assert prepare_step.index("bundle.extractall") < prepare_step.index(
+        'git init "$COVERAGE_SOURCE_WORKDIR"'
+    )
     assert "docker.io/library/ubuntu@sha256:" in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
@@ -1775,8 +1797,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert '"$CODEGRAPH_BIN" init -i' in codegraph_step
     assert '"$CODEGRAPH_BIN" status' in codegraph_step
     assert '"$CODEGRAPH_BIN" --version' in codegraph_step
-    assert 'cat "$codegraph_status" >&2' in codegraph_step
-    assert 'cat "$codegraph_raw" >&2' in codegraph_step
+    assert 'cat "$codegraph_status" >&2' not in codegraph_step
+    assert 'cat "$codegraph_raw" >&2' not in codegraph_step
+    assert 'cat "$CODEGRAPH_EVIDENCE_FILE"' not in codegraph_step
+    assert "CodeGraph status command failed; captured" in codegraph_step
+    assert "CodeGraph exploration command failed; captured" in codegraph_step
+    assert "Captured bounded CodeGraph evidence" in codegraph_step
     assert 'rm -rf -- "$OPENCODE_SOURCE_WORKDIR/.codegraph"' in codegraph_step
     assert "CodeGraph status failed; approval evidence is incomplete." in codegraph_step
     assert (
@@ -1872,6 +1898,45 @@ def test_coverage_log_replay_disables_runner_commands_and_retries_token_collisio
     assert counter.read_text(encoding="utf-8") == "2"
 
 
+def test_coverage_log_replay_rejects_unsafe_stop_token(tmp_path):
+    """A compromised PATH generator cannot inject a workflow command token."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    replay_start = workflow.index("          # BEGIN_COVERAGE_LOG_REPLAY\n")
+    replay_end = workflow.index("          # END_COVERAGE_LOG_REPLAY\n", replay_start)
+    replay = textwrap.dedent(workflow[replay_start:replay_end])
+
+    summary = tmp_path / "coverage-evidence.md"
+    summary.write_text("safe log\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'coverage-log-safe\\n::set-output name=pwned::yes\\n'\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    replay_with_fixture = replay.replace(
+        "/usr/bin/python3", shlex.quote(str(fake_python))
+    )
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + replay_with_fixture],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "summary_file": str(summary),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "stop-token generation returned an unsafe value" in result.stdout
+    assert "::stop-commands::" not in result.stdout
+
+
 def test_materialized_pr_worktree_rejects_symlinks_before_trusted_readers(tmp_path):
     """Tracked and untracked symlinks cannot escape into runner credentials."""
     if not hasattr(os, "symlink"):
@@ -1927,7 +1992,8 @@ def test_materialized_pr_worktree_rejects_symlinks_before_trusted_readers(tmp_pa
     )
     assert clean.returncode == 0, clean.stderr
 
-    (clean_worktree / "untracked-credential-link").symlink_to(outside)
+    untracked_link = clean_worktree / "untracked-credential-link"
+    untracked_link.symlink_to(outside)
     untracked_rejected = subprocess.run(
         ["bash", "-c", "set -euo pipefail\n" + validation],
         env={**os.environ, "OPENCODE_SOURCE_WORKDIR": str(clean_worktree)},
@@ -1938,6 +2004,7 @@ def test_materialized_pr_worktree_rejects_symlinks_before_trusted_readers(tmp_pa
     assert untracked_rejected.returncode == 1
     assert "PR worktree contains a symbolic link" in untracked_rejected.stdout
     assert outside.read_text(encoding="utf-8") == "synthetic-secret\n"
+    untracked_link.unlink()
 
     malicious_worktree = tmp_path / "malicious-worktree"
     subprocess.run(

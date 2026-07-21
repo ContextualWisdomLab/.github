@@ -608,6 +608,17 @@ def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> Non
     assert "retry budget remaining." in result.stdout
 
 
+def test_review_retry_budget_starts_after_trusted_prompt_preparation() -> None:
+    """Trusted preflight work cannot consume the provider-attempt retry budget."""
+    runner = RUNNER.read_text(encoding="utf-8")
+    main = runner[runner.index("main() {") :]
+    prompt = main.index('write_prompt "$model_candidate" "$prompt_file"')
+    deadline = main.index("deadline=$((SECONDS + budget_seconds))")
+    first_budget_check = main.index('if [ "$deadline" -gt 0 ]', prompt)
+
+    assert prompt < deadline < first_budget_check
+
+
 def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -> None:
     """Large PR cadence caps queue time without converting unlimited cycles to one cycle."""
     changed_files = [f"backend/changed_{index}.py" for index in range(21)]
