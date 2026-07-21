@@ -3767,6 +3767,9 @@ jobs:
           # larger. Keep the exact runtime failure visible without spending a
           # full medium/large cadence slot after the long-context candidate.
           OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"
+          # Bound GitHub Models DeepSeek endpoints that return no usable provider
+          # detail so they cannot consume an entire 90-minute cadence slot.
+          OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS: "300"
           OPENCODE_DYNAMIC_MAX_CYCLES: "0"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
