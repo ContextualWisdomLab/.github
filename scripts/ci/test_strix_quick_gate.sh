@@ -176,7 +176,7 @@ assert_strix_pr_scope_includes_deployment_context() {
 assert_strix_pr_scope_includes_sql_migration_context() {
 	assert_file_contains "$GATE_SCRIPT" "*/migrations/*.sql | migrations/*.sql" "strix gate recognizes SQL migration files for sibling context"
 	assert_file_contains "$GATE_SCRIPT" "sql_migration_dirs+=(\"\$migration_dir\")" "strix gate collects each touched migrations directory"
-	assert_file_contains "$GATE_SCRIPT" "git ls-tree -r --name-only \"\$head_sha_for_migration_context\" -- \"\$migration_context_dir/\"" "strix gate enumerates sibling migrations from the PR head"
+	assert_file_contains "$GATE_SCRIPT" "git -c core.quotepath=false ls-tree -r --name-only \"\$head_sha_for_migration_context\" -- \"\$migration_context_dir/\"" "strix gate enumerates sibling migrations from the PR head without quoting non-ASCII paths"
 	assert_file_contains "$GATE_SCRIPT" "fails open" "strix gate migration context enumeration is documented as fail-open"
 }
 
@@ -191,9 +191,10 @@ assert_strix_pr_scope_migration_siblings_functional() {
 		git init -q
 		git config user.email ci@example.com
 		git config user.name ci
-		mkdir -p server/db/migrations
-		printf 'CREATE TABLE t (id int);\n' >server/db/migrations/0001_init.sql
-		printf 'ALTER TABLE t ADD COLUMN c text;\n' >server/db/migrations/0002_add_col.sql
+		mkdir -p "server/db with space/migrations"
+		printf 'CREATE TABLE t (id int);\n' >"server/db with space/migrations/0001_기초.sql"
+		printf 'ALTER TABLE t ADD COLUMN c text;\n' >"server/db with space/migrations/0002_add_col.sql"
+		printf 'ALTER TABLE t ADD COLUMN d text;\n' >"server/db with space/migrations/0003_add_second_col.sql"
 		git add -A
 		git commit -qm base
 		head_sha="$(git rev-parse HEAD)"
@@ -207,10 +208,15 @@ assert_strix_pr_scope_migration_siblings_functional() {
 				is_valid_git_commit_sha() { [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]; }
 				normalize_changed_file_path() { printf "%s" "$1"; }
 				'"$(sed -n "/^pull_request_scope_context_files()/,/^}/p" "$GATE_SCRIPT")"'
-				pull_request_scope_context_files server/db/migrations/0002_add_col.sql
+				pull_request_scope_context_files \
+					"server/db with space/migrations/0002_add_col.sql" \
+					"server/db with space/migrations/0003_add_second_col.sql"
 			' >"$tmp_dir/out.txt"
 	)
-	assert_file_contains "$tmp_dir/out.txt" "server/db/migrations/0001_init.sql" "strix gate supplies the base migration as context for a later migration diff"
+	assert_file_contains "$tmp_dir/out.txt" "server/db with space/migrations/0001_기초.sql" "strix gate preserves spaces and non-ASCII sibling migration paths"
+	local sibling_count
+	sibling_count="$(grep -Fc "server/db with space/migrations/0001_기초.sql" "$tmp_dir/out.txt" || true)"
+	assert_equals "1" "$sibling_count" "strix gate deduplicates a migration directory containing spaces"
 	rm -rf "$tmp_dir"
 }
 

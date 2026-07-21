@@ -1215,7 +1215,7 @@ pull_request_scope_context_files() {
 		*/migrations/*.sql | migrations/*.sql)
 			local migration_dir="${normalized_changed_file%/*}"
 			local seen_migration_dir=0 known_migration_dir
-			for known_migration_dir in ${sql_migration_dirs[@]+"${sql_migration_dirs[@]}"}; do
+			for known_migration_dir in "${sql_migration_dirs[@]}"; do
 				if [ "$known_migration_dir" = "$migration_dir" ]; then
 					seen_migration_dir=1
 					break
@@ -1306,12 +1306,12 @@ VERSION
 EOF
 	fi
 
-	# Emit sibling SQL migrations from the PR head so cross-migration schema
-	# references resolve during the scan. Enumeration is read-only (git ls-tree of
-	# the migrations directory at PR head) and fails open: when the head SHA is
-	# unavailable or invalid, no context is added and the base changed-file scan is
-	# unaffected. Emitted paths flow through the same trusted PR-head copy path as
-	# every other context file, so no untrusted content or executable bit is added.
+	# Enumerate sibling SQL migrations from the PR-head tree so cross-migration
+	# schema references resolve during the scan. Enumeration is read-only and
+	# fails open: when the head SHA is unavailable or invalid, no context is added
+	# and the base changed-file scan is unaffected. Changed migrations are copied
+	# from PR-head blobs; unchanged siblings come from the trusted materialized
+	# checkout. Both paths are normalized and supplied only as scanner context.
 	if [ "${#sql_migration_dirs[@]}" -gt 0 ]; then
 		local head_sha_for_migration_context migration_context_dir
 		head_sha_for_migration_context="$(trim_whitespace "${PR_HEAD_SHA:-}")"
@@ -1319,7 +1319,7 @@ EOF
 			is_valid_git_commit_sha "$head_sha_for_migration_context" &&
 			git rev-parse --verify --quiet "$head_sha_for_migration_context^{commit}" >/dev/null; then
 			for migration_context_dir in "${sql_migration_dirs[@]}"; do
-				git ls-tree -r --name-only "$head_sha_for_migration_context" -- "$migration_context_dir/" 2>/dev/null |
+				git -c core.quotepath=false ls-tree -r --name-only "$head_sha_for_migration_context" -- "$migration_context_dir/" 2>/dev/null |
 					grep -E '\.sql$' || true
 			done
 		fi
