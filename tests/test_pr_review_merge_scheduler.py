@@ -661,6 +661,23 @@ def test_rest_strix_workflow_provenance_fails_closed(monkeypatch):
     assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
     assert calls == ["repos/owner/repo/actions/runs/10"]
 
+    check["details_url"] = None
+    assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
+
+    check["details_url"] = "https://github.com/owner/repo/actions/runs/not-a-run/job/20"
+    assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
+
+    check["details_url"] = "https://github.com/owner/repo/actions/runs/11/job/20"
+    monkeypatch.setattr(
+        sched,
+        "gh_api_json",
+        lambda path: (_ for _ in ()).throw(RuntimeError("Actions run lookup failed")),
+    )
+    assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
+
+    monkeypatch.setattr(sched, "gh_api_json", lambda path: [])
+    assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
+
 
 def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):
     def deny_graphql(*args, **kwargs):
@@ -671,6 +688,35 @@ def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):
 
     assert sched.github_resource_inaccessible(RuntimeError("Resource not accessible by integration"))
     assert sched.fetch_pr("owner/repo", 77) == [{"number": 77, "repo": "owner/repo"}]
+
+
+def test_fetch_pr_for_merge_revalidation_requires_live_graphql_pr(monkeypatch):
+    calls = []
+
+    def live_graphql(query, **fields):
+        calls.append((query, fields))
+        return {"data": {"repository": {"pullRequest": {"number": 77}}}}
+
+    monkeypatch.setattr(sched, "gh_graphql", live_graphql)
+
+    assert sched.fetch_pr_for_merge_revalidation("owner/repo", 77) == {"number": 77}
+    assert calls == [
+        (
+            sched.PR_BY_NUMBER_QUERY,
+            {"owner": "owner", "name": "repo", "number": 77},
+        )
+    ]
+
+    with pytest.raises(ValueError, match="invalid pull request number"):
+        sched.fetch_pr_for_merge_revalidation("owner/repo", 0)
+
+    monkeypatch.setattr(
+        sched,
+        "gh_graphql",
+        lambda *args, **kwargs: {"data": {"repository": {"pullRequest": None}}},
+    )
+    with pytest.raises(RuntimeError, match="disappeared before merge-state revalidation"):
+        sched.fetch_pr_for_merge_revalidation("owner/repo", 77)
 
 
 def test_rest_api_wrapper_and_fetch_pr_rest(monkeypatch):
@@ -1865,6 +1911,15 @@ def test_merge_mutations_revalidate_all_live_security_evidence(monkeypatch):
     for label, mutation in (
         ("head changed", lambda pr: pr.update(headRefOid="c" * 40)),
         ("base changed", lambda pr: pr.update(baseRefOid="d" * 40)),
+        ("base branch changed", lambda pr: pr.update(baseRefName="develop")),
+        ("draft changed", lambda pr: pr.update(isDraft=True)),
+        (
+            "head repository changed",
+            lambda pr: pr.update(
+                isCrossRepository=True,
+                headRepository={"nameWithOwner": "fork/repo"},
+            ),
+        ),
         (
             "thread changed",
             lambda pr: pr.update(
@@ -1900,7 +1955,50 @@ def test_merge_mutations_revalidate_all_live_security_evidence(monkeypatch):
                 }
             ),
         ),
+        (
+            "checks failed",
+            lambda pr: pr.update(
+                statusCheckRollup={
+                    "contexts": {
+                        "nodes": [
+                            strix_check(),
+                            {
+                                "__typename": "CheckRun",
+                                "name": "tests",
+                                "status": "COMPLETED",
+                                "conclusion": "FAILURE",
+                                "checkSuite": {
+                                    "workflowRun": {"workflow": {"name": "Repository CI"}}
+                                },
+                            },
+                        ]
+                    }
+                }
+            ),
+        ),
+        (
+            "checks require action",
+            lambda pr: pr.update(
+                statusCheckRollup={
+                    "contexts": {
+                        "nodes": [
+                            strix_check(),
+                            {
+                                "__typename": "CheckRun",
+                                "name": "manual-gate",
+                                "status": "COMPLETED",
+                                "conclusion": "ACTION_REQUIRED",
+                                "checkSuite": {
+                                    "workflowRun": {"workflow": {"name": "Repository CI"}}
+                                },
+                            },
+                        ]
+                    }
+                }
+            ),
+        ),
         ("policy changed", lambda pr: pr.update(mergeStateStatus="BLOCKED")),
+        ("unsafe policy state", lambda pr: pr.update(mergeStateStatus="BEHIND")),
     ):
         candidate = json.loads(json.dumps(safe))
         mutation(candidate)
@@ -1950,6 +2048,65 @@ def test_approved_pr_never_merges_without_provenanced_successful_strix():
     running_decision = inspect(running, merge_mode="direct_or_auto")
     assert running_decision.action == "wait"
     assert "Strix evidence is running" in running_decision.reason
+
+
+def test_approved_pr_strix_and_peer_check_wait_boundaries(monkeypatch):
+    approved_without_strix = make_pr(
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+
+    auto_merge_missing = inspect(
+        {**approved_without_strix, "autoMergeRequest": {"enabledAt": "now"}},
+        merge_mode="direct_or_auto",
+    )
+    assert auto_merge_missing.action == "disable_auto_merge"
+    assert "Strix evidence is missing" in auto_merge_missing.reason
+
+    dispatch_limited = inspect(
+        approved_without_strix,
+        merge_mode="direct_or_auto",
+        review_dispatch_allowed=False,
+    )
+    assert dispatch_limited.action == "wait"
+    assert "review dispatch limit reached" in dispatch_limited.reason
+
+    with monkeypatch.context() as env:
+        env.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "central/review")
+        env.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
+        env.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
+        env.delenv("GITHUB_REPOSITORY", raising=False)
+        cross_repo_wait = inspect(approved_without_strix, merge_mode="direct_or_auto")
+    assert cross_repo_wait.action == "wait"
+    assert "cross-repository repository-dispatch credential" in cross_repo_wait.reason
+
+    peer_check = {
+        "__typename": "CheckRun",
+        "name": "tests",
+        "status": "IN_PROGRESS",
+        "checkSuite": {"workflowRun": {"workflow": {"name": "Repository CI"}}},
+    }
+    approved_with_running_peer = approved_pr(
+        statusCheckRollup={"contexts": {"nodes": [strix_check(), peer_check]}},
+    )
+    running_wait = inspect(approved_with_running_peer, merge_mode="direct_or_auto")
+    assert running_wait.action == "wait"
+    assert running_wait.reason == "current-head check(s) still running: tests"
+
+    running_auto_merge = inspect(
+        {**approved_with_running_peer, "autoMergeRequest": {"enabledAt": "now"}},
+        merge_mode="direct_or_auto",
+    )
+    assert running_auto_merge.action == "disable_auto_merge"
+    assert "wait for all peer checks before re-enabling auto-merge" in running_auto_merge.reason
+
+    unapproved_failed_strix = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": [strix_check(conclusion="FAILURE")]}
+        },
+    )
+    failed_before_review = inspect(unapproved_failed_strix)
+    assert failed_before_review.action == "block"
+    assert "fix the reported security findings before OpenCode dispatch" in failed_before_review.reason
 
 
 def test_last_push_approval_restamp_creates_same_tree_child(monkeypatch):
