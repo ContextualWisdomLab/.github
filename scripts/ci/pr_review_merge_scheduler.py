@@ -157,6 +157,12 @@ DETERMINISTIC_APPROVAL_MARKERS = (
     "did not emit a usable current-head control block",
 )
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
+TRUSTED_GITHUB_CLI = "/usr/bin/gh"
+GITHUB_CLI = TRUSTED_GITHUB_CLI
+SCHEDULER_WORKFLOW_NAMES = {
+    "PR Review Merge Scheduler",
+    "Required PR Review Merge Scheduler",
+}
 
 
 @dataclass
@@ -641,7 +647,7 @@ def is_transient_github_api_error(exc: RuntimeError) -> bool:
 
 def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
     """Run a GitHub GraphQL query through gh and decode the JSON response."""
-    cmd = ["gh", "api", "graphql", "-F", "query=@-"]
+    cmd = [GITHUB_CLI, "api", "graphql", "-F", "query=@-"]
     for key, value in fields.items():
         flag = "-F" if isinstance(value, int) else "-f"
         cmd.extend([flag, f"{key}={value}"])
@@ -660,6 +666,15 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
             time.sleep(delay)
 
 
+def gh_graphql_mutation(query: str, **fields: str | int) -> dict[str, Any]:
+    """Run a GitHub GraphQL mutation with the scheduler mutation credential."""
+    cmd = [GITHUB_CLI, "api", "graphql", "-F", "query=@-"]
+    for key, value in fields.items():
+        flag = "-F" if isinstance(value, int) else "-f"
+        cmd.extend([flag, f"{key}={value}"])
+    return json.loads(run(cmd, stdin=query))
+
+
 def github_resource_inaccessible(exc: RuntimeError) -> bool:
     """Return whether GitHub denied an API read for the current integration token."""
 
@@ -669,7 +684,7 @@ def github_resource_inaccessible(exc: RuntimeError) -> bool:
 def gh_api_json(path: str) -> Any:
     """Run a GitHub REST API request through gh and decode the JSON response."""
 
-    return json.loads(run_github_read(["gh", "api", path]))
+    return json.loads(run_github_read([GITHUB_CLI, "api", path]))
 
 
 def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
@@ -826,11 +841,24 @@ def fetch_pr(repo: str, number: int) -> list[dict[str, Any]]:
     return prs
 
 
+def fetch_pr_for_merge_revalidation(repo: str, number: int) -> dict[str, Any]:
+    """Fetch full live GraphQL evidence without a fail-open REST fallback."""
+    repo = validate_github_repository(repo)
+    if not isinstance(number, int) or number <= 0:
+        raise ValueError(f"invalid pull request number: {number!r}")
+    owner, name = split_repo(repo)
+    payload = gh_graphql(PR_BY_NUMBER_QUERY, owner=owner, name=name, number=number)
+    pr = ((payload.get("data") or {}).get("repository") or {}).get("pullRequest")
+    if not isinstance(pr, dict):
+        raise RuntimeError(f"PR #{number} disappeared before merge-state revalidation")
+    return pr
+
+
 def fetch_rest_mergeable_state(repo: str, number: int) -> str:
     """Fetch and normalize GitHub REST mergeable_state for one pull request."""
     raw_state = run(
         [
-            "gh",
+            GITHUB_CLI,
             "api",
             f"repos/{repo}/pulls/{number}",
             "--jq",
@@ -857,7 +885,7 @@ def fetch_compare_branch_freshness(repo: str, pr: dict[str, Any]) -> dict[str, A
     return json.loads(
         run(
             [
-                "gh",
+                GITHUB_CLI,
                 "api",
                 f"repos/{repo}/compare/{base}...{head}",
             ]
@@ -931,6 +959,45 @@ def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
     return contexts.get("nodes") or []
 
 
+def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the latest same-name CheckRun for each workflow provenance."""
+    latest: dict[tuple[str, str], tuple[datetime | None, int, dict[str, Any]]] = {}
+    for index, node in enumerate(context_nodes(pr)):
+        if node.get("__typename") != "CheckRun":
+            continue
+        workflow_name = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow_name, node.get("name") or "check-run")
+        candidate = (parse_github_datetime(node.get("startedAt")), index, node)
+        previous = latest.get(key)
+        if previous is None or (
+            candidate[0] or datetime.min.replace(tzinfo=timezone.utc),
+            candidate[1],
+        ) >= (
+            previous[0] or datetime.min.replace(tzinfo=timezone.utc),
+            previous[1],
+        ):
+            latest[key] = candidate
+    return [node for _, _, node in sorted(latest.values(), key=lambda item: item[1])]
+
+
+def latest_matching_check_run(pr: dict[str, Any], predicate: Any) -> dict[str, Any] | None:
+    """Return the latest provenanced CheckRun satisfying a predicate."""
+    matches = [node for node in latest_check_runs(pr) if predicate(node)]
+    if not matches:
+        return None
+    return max(
+        enumerate(matches),
+        key=lambda item: (
+            parse_github_datetime(item[1].get("startedAt"))
+            or datetime.min.replace(tzinfo=timezone.utc),
+            item[0],
+        ),
+    )[1]
+
+
 def is_opencode_context(node: dict[str, Any]) -> bool:
     """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
@@ -943,17 +1010,14 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
 
 
 def is_strix_context(node: dict[str, Any]) -> bool:
-    """Return whether a check or status context belongs to Strix evidence."""
-    if node.get("__typename") == "CheckRun":
-        workflow = (
-            ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
-            or {}
-        )
-        workflow_name = workflow.get("name")
-        return workflow_name in {"Strix Security Scan", "Strix"} or (
-            node.get("name") == "strix" and workflow_name is None
-        )
-    return (node.get("context") or "") in {"strix", "Strix Security Scan"}
+    """Return whether a CheckRun is exact trusted Strix workflow evidence."""
+    if node.get("__typename") != "CheckRun" or node.get("name") != "strix":
+        return False
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+        or {}
+    )
+    return workflow.get("name") in {"Strix Security Scan", "Strix"}
 
 
 def actions_job_id_from_details_url(value: str | None) -> str | None:
@@ -966,13 +1030,8 @@ def actions_job_id_from_details_url(value: str | None) -> str | None:
 
 def matching_actions_job_id(pr: dict[str, Any], predicate: Any) -> str | None:
     """Return the latest matching check-run job id, if GitHub exposed one."""
-    for node in reversed(context_nodes(pr)):
-        if node.get("__typename") != "CheckRun" or not predicate(node):
-            continue
-        job_id = actions_job_id_from_details_url(node.get("detailsUrl"))
-        if job_id:
-            return job_id
-    return None
+    node = latest_matching_check_run(pr, predicate)
+    return actions_job_id_from_details_url(node.get("detailsUrl")) if node else None
 
 
 def parse_github_datetime(value: str | None) -> datetime | None:
@@ -1051,18 +1110,15 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
 
 
 def strix_evidence_state(pr: dict[str, Any]) -> str:
-    """Return missing, running, or complete for current-head Strix evidence."""
-    found = False
-    for node in context_nodes(pr):
-        if not is_strix_context(node):
-            continue
-        found = True
-        status = (node.get("status") or node.get("state") or "").upper()
-        if status in RUNNING_CHECK_STATES:
-            return "running"
-        if node.get("__typename") == "CheckRun" and status != "COMPLETED":
-            return "running"
-    return "complete" if found else "missing"
+    """Return missing, running, failed, or complete for trusted Strix evidence."""
+    node = latest_matching_check_run(pr, is_strix_context)
+    if node is None:
+        return "missing"
+    status = (node.get("status") or "").upper()
+    if status in RUNNING_CHECK_STATES or status != "COMPLETED":
+        return "running"
+    conclusion = (node.get("conclusion") or "").upper()
+    return "complete" if conclusion == "SUCCESS" else "failed"
 
 
 def unresolved_thread_count(pr: dict[str, Any]) -> int:
@@ -1083,7 +1139,7 @@ def outdated_thread_ids(pr: dict[str, Any]) -> list[str]:
 
 def resolve_review_thread(thread_id: str) -> None:
     """Resolve one GitHub review thread by GraphQL node ID."""
-    gh_graphql(RESOLVE_REVIEW_THREAD_MUTATION, threadId=thread_id)
+    gh_graphql_mutation(RESOLVE_REVIEW_THREAD_MUTATION, threadId=thread_id)
 
 
 def resolve_outdated_review_threads(pr: dict[str, Any], *, dry_run: bool) -> int:
@@ -1236,7 +1292,7 @@ def dismiss_pull_request_review(
     try:
         run(
             [
-                "gh",
+                GITHUB_CLI,
                 "api",
                 "-X",
                 "PUT",
@@ -1247,7 +1303,7 @@ def dismiss_pull_request_review(
         )
         live_state = run_github_read(
             [
-                "gh",
+                GITHUB_CLI,
                 "api",
                 f"repos/{repo}/pulls/{number}/reviews/{review_id}",
                 "--jq",
@@ -1289,7 +1345,7 @@ def dismiss_stale_opencode_approvals(
     number = str(int(pr["number"]))
     expected_head = validate_git_sha(pr["headRefOid"])
     live_head = run_github_read(
-        ["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
+        [GITHUB_CLI, "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
     ).strip()
     if live_head != expected_head:
         raise RuntimeError(
@@ -1337,7 +1393,7 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
     number = str(int(pr["number"]))
     expected_head = validate_git_sha(pr["headRefOid"])
     live_head = run_github_read(
-        ["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
+        [GITHUB_CLI, "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
     ).strip()
     if live_head != expected_head:
         raise RuntimeError(
@@ -1352,7 +1408,7 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
         )
         run(
             [
-                "gh",
+                GITHUB_CLI,
                 "api",
                 "-X",
                 "PUT",
@@ -1367,63 +1423,44 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return failing check or status context names from the PR rollup."""
     failed: list[str] = []
-    latest_check_runs: dict[
-        tuple[str, str],
-        tuple[datetime | None, int, dict[str, Any]],
-    ] = {}
-    status_contexts: list[dict[str, Any]] = []
-    for index, node in enumerate(context_nodes(pr)):
-        if node.get("__typename") != "CheckRun":
-            status_contexts.append(node)
-            continue
-        workflow = (
-            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
-            or ""
-        )
-        key = (workflow, node.get("name") or "check-run")
-        started_at = parse_github_datetime(node.get("startedAt"))
-        previous = latest_check_runs.get(key)
-        if previous is None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        previous_started_at, previous_index, _ = previous
-        if started_at is None and previous_started_at is not None:
-            continue
-        if previous_started_at is None and started_at is not None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
-            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
-            previous_index,
-        ):
-            latest_check_runs[key] = (started_at, index, node)
-
-    successful_status_contexts = {
-        node.get("context")
-        for node in status_contexts
-        if (node.get("state") or "").upper() == "SUCCESS"
-    }
-    for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
+    for node in latest_check_runs(pr):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
-            if is_strix_context(node) and "strix" in successful_status_contexts:
-                continue
-            if is_opencode_context(node) and "opencode-review" in successful_status_contexts:
-                continue
             failed.append(node.get("name") or "check-run")
-    for node in status_contexts:
+    for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun":
+            continue
         state = (node.get("state") or "").upper()
         if state in {"FAILURE", "ERROR"}:
             failed.append(node.get("context") or "status-context")
     return failed
 
 
+def running_status_checks(pr: dict[str, Any]) -> list[str]:
+    """Return active peer checks, excluding this scheduler's own live job."""
+    running: list[str] = []
+    for node in latest_check_runs(pr):
+        workflow_name = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        name = node.get("name") or "check-run"
+        if workflow_name in SCHEDULER_WORKFLOW_NAMES or name == "cancel-closed-pr-runs":
+            continue
+        if (node.get("status") or "").upper() in RUNNING_CHECK_STATES:
+            running.append(name)
+    for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun":
+            continue
+        if (node.get("state") or "").upper() in RUNNING_CHECK_STATES:
+            running.append(node.get("context") or "status-context")
+    return running
+
+
 def action_required_checks(pr: dict[str, Any]) -> list[str]:
     """Return check-run names that need explicit GitHub Actions approval or unblocking."""
     required: list[str] = []
-    for node in context_nodes(pr):
-        if node.get("__typename") != "CheckRun":
-            continue
+    for node in latest_check_runs(pr):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in ACTION_REQUIRED_CONCLUSIONS:
             required.append(node.get("name") or "check-run")
@@ -1440,6 +1477,69 @@ def workflow_action_required_reason(checks: list[str]) -> str:
     )
 
 
+def revalidate_merge_mutation_state(
+    repo: str,
+    inspected_pr: dict[str, Any],
+    *,
+    action: str,
+) -> dict[str, Any]:
+    """Re-fetch and fail closed if merge-relevant live evidence became unsafe."""
+    repo = validate_github_repository(repo)
+    number = int(inspected_pr["number"])
+    expected_head = validate_git_sha(inspected_pr["headRefOid"])
+    expected_base = validate_git_sha(inspected_pr["baseRefOid"])
+    live = fetch_pr_for_merge_revalidation(repo, number)
+
+    blockers: list[str] = []
+    if live.get("headRefOid") != expected_head:
+        blockers.append(f"head changed from {expected_head} to {live.get('headRefOid') or '<missing>'}")
+    if live.get("baseRefOid") != expected_base:
+        blockers.append(f"base changed from {expected_base} to {live.get('baseRefOid') or '<missing>'}")
+    if live.get("baseRefName") != inspected_pr.get("baseRefName"):
+        blockers.append("base branch changed")
+    if live.get("isDraft"):
+        blockers.append("PR became draft")
+    if not same_repository_head(repo, live):
+        blockers.append("PR head is no longer in the target repository")
+    unresolved = unresolved_thread_count(live)
+    if unresolved:
+        blockers.append(f"{unresolved} active review thread(s) are unresolved")
+    if has_current_head_changes_requested(live):
+        blockers.append("current-head OpenCode review requests changes")
+    if not has_current_head_approval(live):
+        blockers.append("current-head OpenCode approval is absent")
+
+    strix_state = strix_evidence_state(live)
+    if strix_state != "complete":
+        blockers.append(f"trusted same-head Strix evidence is {strix_state}")
+    failed_checks = failed_status_checks(live)
+    if failed_checks:
+        blockers.append(f"failed check(s): {', '.join(failed_checks[:5])}")
+    action_required = action_required_checks(live)
+    if action_required:
+        blockers.append(f"action-required check(s): {', '.join(action_required[:5])}")
+    running_checks = running_status_checks(live)
+    if running_checks:
+        blockers.append(f"running check(s): {', '.join(running_checks[:5])}")
+
+    inspected_state = (inspected_pr.get("mergeStateStatus") or "").upper()
+    live_state = (live.get("mergeStateStatus") or "").upper()
+    if live_state != inspected_state:
+        blockers.append(
+            f"merge policy state changed from {inspected_state or '<missing>'} "
+            f"to {live_state or '<missing>'}"
+        )
+    if live_state in {"BEHIND", "DIRTY", "CONFLICTING", "DRAFT", "UNKNOWN"}:
+        blockers.append(f"live merge policy state is {live_state}")
+
+    if blockers:
+        raise RuntimeError(
+            f"PR #{number} live state changed or became unsafe before {action}; "
+            + "; ".join(blockers)
+        )
+    return live
+
+
 def run_head_guarded_merge(
     repo: str,
     number: str,
@@ -1448,7 +1548,7 @@ def run_head_guarded_merge(
     auto: bool,
 ) -> None:
     """Run a head-guarded merge using an allowed repository merge method."""
-    args = ["gh", "pr", "merge", number, "--repo", repo]
+    args = [GITHUB_CLI, "pr", "merge", number, "--repo", repo]
     if auto:
         args.append("--auto")
     args.extend(["--squash", "--match-head-commit", head])
@@ -1466,7 +1566,7 @@ def run_head_guarded_merge(
         f"PR #{number}: squash is disabled; retrying {mode} with a merge commit "
         f"at guarded head {head}. GitHub reason: {reason}"
     )
-    merge_args = ["gh", "pr", "merge", number, "--repo", repo]
+    merge_args = [GITHUB_CLI, "pr", "merge", number, "--repo", repo]
     if auto:
         merge_args.append("--auto")
     merge_args.extend(["--merge", "--match-head-commit", head])
@@ -1479,7 +1579,8 @@ def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
     require_github_actions_mutation_actor("enable-auto-merge")
-    head = validate_git_sha(pr["headRefOid"])
+    live = revalidate_merge_mutation_state(repo, pr, action="enable-auto-merge")
+    head = validate_git_sha(live["headRefOid"])
     run_head_guarded_merge(repo, number, head, auto=True)
 
 
@@ -1489,7 +1590,8 @@ def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
     require_github_actions_mutation_actor("direct-merge")
-    head = validate_git_sha(pr["headRefOid"])
+    live = revalidate_merge_mutation_state(repo, pr, action="direct merge")
+    head = validate_git_sha(live["headRefOid"])
     run_head_guarded_merge(repo, number, head, auto=False)
 
 
@@ -1522,7 +1624,7 @@ def disable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
     require_github_actions_mutation_actor("disable-auto-merge")
-    run(["gh", "pr", "merge", number, "--repo", repo, "--disable-auto"])
+    run([GITHUB_CLI, "pr", "merge", number, "--repo", repo, "--disable-auto"])
 
 
 def disable_auto_merge_decision(
@@ -1546,7 +1648,7 @@ def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     head = validate_git_sha(pr["headRefOid"])
     run(
         [
-            "gh",
+            GITHUB_CLI,
             "api",
             "-X",
             "PUT",
@@ -1615,19 +1717,19 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
     number = str(int(pr["number"]))
     head = validate_git_sha(pr["headRefOid"])
     head_ref = validate_git_ref(pr["headRefName"])
-    live_head = run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]).strip()
+    live_head = run([GITHUB_CLI, "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]).strip()
     if live_head != head:
         raise RuntimeError(
             "PR head changed before last-push approval head refresh; "
             f"expected {head}, observed {live_head or '<missing>'}"
         )
 
-    current_commit = json.loads(run(["gh", "api", f"repos/{repo}/git/commits/{head}"]))
+    current_commit = json.loads(run([GITHUB_CLI, "api", f"repos/{repo}/git/commits/{head}"]))
     tree = current_commit.get("tree") or {}
     tree_sha = validate_git_sha(str(tree.get("sha") or ""))
     created_commit = json.loads(
         run(
-            ["gh", "api", "-X", "POST", f"repos/{repo}/git/commits", "--input", "-"],
+            [GITHUB_CLI, "api", "-X", "POST", f"repos/{repo}/git/commits", "--input", "-"],
             stdin=json.dumps(
                 {
                     "message": LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
@@ -1639,7 +1741,7 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
     )
     new_head = validate_git_sha(str(created_commit.get("sha") or ""))
     run(
-        ["gh", "api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{head_ref}", "--input", "-"],
+        [GITHUB_CLI, "api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{head_ref}", "--input", "-"],
         stdin=json.dumps({"sha": new_head, "force": False}),
     )
     return new_head
@@ -1821,7 +1923,7 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     if dry_run:
         return
     require_github_actions_control_actor(action)
-    run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
+    run_github_actions([GITHUB_CLI, "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
 def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
@@ -1831,7 +1933,7 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
         payload = json.loads(
             run_github_actions(
                 [
-                    "gh",
+                    GITHUB_CLI,
                     "api",
                     "--method",
                     "GET",
@@ -1987,7 +2089,7 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
         try:
             run_github_actions(
                 [
-                    "gh",
+                    GITHUB_CLI,
                     "api",
                     "-X",
                     "POST",
@@ -2073,7 +2175,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     dispatch_repo = repository_dispatch_target(target_repo)
     run_github_dispatch(
         [
-            "gh",
+            GITHUB_CLI,
             "api",
             "-X",
             "POST",
@@ -2128,7 +2230,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
     dispatch_repo = repository_dispatch_target(target_repo)
     run_github_dispatch(
         [
-            "gh",
+            GITHUB_CLI,
             "api",
             "-X",
             "POST",
@@ -2446,6 +2548,47 @@ def inspect_pr(
             )
         return decide("wait", reason)
 
+    if current_head_approved:
+        approved_strix_state = strix_evidence_state(pr)
+        if approved_strix_state != "complete":
+            reason = f"trusted same-head Strix evidence is {approved_strix_state}"
+            if pr.get("autoMergeRequest"):
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason=f"{reason}; require a successful provenanced Strix CheckRun before re-enabling auto-merge",
+                    )
+                )
+            if approved_strix_state == "missing" and trigger_reviews:
+                if not review_dispatch_allowed:
+                    return decide("wait", f"{reason}; review dispatch limit reached")
+                wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
+                if wait_reason:
+                    return decide("wait", f"{reason}; {wait_reason}")
+                dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+                return decide(
+                    "security_dispatch",
+                    f"{reason}; same-head Strix dispatched before merge consideration",
+                )
+            action = "block" if approved_strix_state == "failed" else "wait"
+            return decide(action, f"{reason}; direct merge and auto-merge are withheld")
+
+        running_checks = running_status_checks(pr)
+        if running_checks:
+            reason = f"current-head check(s) still running: {', '.join(running_checks[:5])}"
+            if pr.get("autoMergeRequest"):
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason=f"{reason}; wait for all peer checks before re-enabling auto-merge",
+                    )
+                )
+            return decide("wait", reason)
+
     merge_before_update = current_head_can_attempt_merge(pr, merge_state) and (
         merge_state == "CLEAN" or merge_mode in {"direct", "direct_or_auto"}
     )
@@ -2682,6 +2825,11 @@ def inspect_pr(
             )
         if strix_state == "running":
             return decide("wait", "same-head Strix evidence is still running")
+        if strix_state == "failed":
+            return decide(
+                "block",
+                "trusted same-head Strix evidence failed; fix the reported security findings before OpenCode dispatch",
+            )
         # Legacy trusted-base Strix self-test sentinel while this scheduler rollout lands:
         # same-head Strix and OpenCode dispatched
         if not review_dispatch_allowed:
@@ -3188,7 +3336,19 @@ def self_test() -> None:
                 }
             ]
         },
-        "statusCheckRollup": {"contexts": {"nodes": []}},
+        "statusCheckRollup": {
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "strix",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "Strix Security Scan"}}},
+                    }
+                ]
+            }
+        },
     }
     assert has_current_head_approval(sample)
     assert not has_current_head_changes_requested(sample)
@@ -3568,6 +3728,7 @@ def self_test() -> None:
                         "name": "strix",
                         "status": "COMPLETED",
                         "conclusion": "SUCCESS",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "Strix Security Scan"}}},
                     }
                 ]
             }
@@ -3718,6 +3879,11 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--base-branch is required")
     if not args.project_flow:
         raise SystemExit("--project-flow is required")
+    try:
+        args.repo = validate_github_repository(args.repo)
+        args.base_branch = validate_git_ref(args.base_branch)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if args.pr_number < 0:
         raise SystemExit("--pr-number must not be negative")
     if args.review_dispatch_limit < -1:
