@@ -3425,6 +3425,31 @@ REPORT
 			;;
 		esac
 		;;
+	openai-direct-github-models-fallback-ratelimit-skip)
+		# Primary openai_direct fails; first github_models fallback hits GitHub
+		# Models rate limit.  The gate must detect the GitHub Models API base via
+		# STRIX_GITHUB_MODELS_API_BASE_FILE and skip same-model retries of the
+		# rate-limited fallback, moving directly to the second fallback.
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5.6-luna)
+			echo "Error getting response: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details.', 'type': 'insufficient_quota', 'code': 'insufficient_quota'}}"
+			echo "openai.RateLimitError: Error code: 429"
+			exit 1
+			;;
+		openai/gpt-5-chat)
+			echo "RateLimitError: Too many requests. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)."
+			exit 1
+			;;
+		openai/o3)
+			echo "scan ok with second GitHub Models fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5536,7 +5561,8 @@ PY
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
 		)
 	fi
-	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
+	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ] ||
+		[ "$scenario" = "openai-direct-github-models-fallback-ratelimit-skip" ]; then
 		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
 		printf '%s' 'github-models-fallback-token' >"$tmp_dir/github_models_key.txt"
 		env_cmd+=(STRIX_GITHUB_MODELS_API_BASE_FILE="$tmp_dir/github_models_api_base.txt")
@@ -5730,6 +5756,17 @@ PY
 			"$output_log" \
 			"Retrying model 'openai/gpt-5' due to rate limit" \
 			"scenario=$scenario does not sleep in same-model retry after GitHub Models rate limiting"
+	fi
+
+	if [ "$scenario" = "openai-direct-github-models-fallback-ratelimit-skip" ]; then
+		assert_file_contains \
+			"$output_log" \
+			"GitHub Models rate limit detected for model 'github_models/openai/gpt-5-chat'; skipping same-model retry and moving directly to fallback models or current-head neutral classification." \
+			"scenario=$scenario logs why same-model retry was skipped for cross-provider fallback"
+		assert_file_not_contains \
+			"$output_log" \
+			"Retrying model 'github_models/openai/gpt-5-chat' due to rate limit" \
+			"scenario=$scenario does not retry rate-limited cross-provider fallback model"
 	fi
 
 	if [ "$scenario" = "pr-changed-scope-full-set" ]; then
@@ -5937,6 +5974,42 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/openai/o3"
+		;;
+	openai-direct-github-models-fallback-ratelimit-skip)
+		# openai_direct primary quota-fails (retries 3x, as openai_direct is not
+		# subject to the GitHub Models skip); first github_models fallback
+		# immediately hits GitHub Models rate limit.  The gate must detect GitHub
+		# Models is active via STRIX_GITHUB_MODELS_API_BASE_FILE and skip
+		# same-model retries, moving to the second fallback in one step
+		# (5 strix calls total: 3 primary retries + 1 gpt-5-chat skip + 1 o3).
+		run_gate_case "openai-direct-github-models-fallback-ratelimit-skip" \
+			"openai_direct/gpt-5.6-luna" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+			"5" \
+			"openai/gpt-5.6-luna|openai/gpt-5.6-luna|openai/gpt-5.6-luna|openai/gpt-5-chat|openai/o3" \
+			"<unset>|<unset>|<unset>|https://models.github.ai/inference|https://models.github.ai/inference" \
+			"vertex_ai" \
+			"" \
+			"" \
+			"2" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"github_models/openai/gpt-5-chat github_models/openai/o3"
 		;;
 	gemini-timeout-fallback-success)
 		run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
@@ -12010,6 +12083,41 @@ run_gate_case "openai-direct-quota-github-models-fallback-success" \
 	"" \
 	"" \
 	"github_models/openai/o3"
+
+# Direct-OpenAI primary hits a quota/rate-limit error (retries 3x, as
+# openai_direct is not subject to the GitHub Models skip), then the first
+# github_models fallback immediately hits a GitHub Models rate limit.
+# The gate must detect GitHub Models is active via STRIX_GITHUB_MODELS_API_BASE_FILE
+# (not LLM_API_BASE_FILE, which is unset for openai_direct) and skip same-model retries
+# of the rate-limited fallback, moving directly to the second fallback (5 calls total).
+run_gate_case "openai-direct-github-models-fallback-ratelimit-skip" \
+	"openai_direct/gpt-5.6-luna" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+	"5" \
+	"openai/gpt-5.6-luna|openai/gpt-5.6-luna|openai/gpt-5.6-luna|openai/gpt-5-chat|openai/o3" \
+	"<unset>|<unset>|<unset>|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"vertex_ai" \
+	"" \
+	"" \
+	"2" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"github_models/openai/gpt-5-chat github_models/openai/o3"
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
 	"vertex_ai/missing-primary" \

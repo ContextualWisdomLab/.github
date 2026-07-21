@@ -2808,12 +2808,25 @@ is_vertex_not_found_error() {
 }
 
 github_models_api_base_is_active() {
-	if [ -z "$LLM_API_BASE_FILE" ]; then
+	local api_base_file="${LLM_API_BASE_FILE:-}"
+	local api_base_file_label="LLM_API_BASE_FILE"
+	# Cross-provider fallback: when the primary scan uses direct-OpenAI,
+	# LLM_API_BASE_FILE is not set, but github_models/* fallback models
+	# route through the GitHub Models endpoint supplied by
+	# STRIX_GITHUB_MODELS_API_BASE_FILE.  Recognise either source so that
+	# github_models_rate_limit_should_skip_same_model_retry correctly skips
+	# same-model retries for rate-limited cross-provider fallback models.
+	if [ -z "$api_base_file" ] && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+		api_base_file="$STRIX_GITHUB_MODELS_API_BASE_FILE"
+		api_base_file_label="STRIX_GITHUB_MODELS_API_BASE_FILE"
+	fi
+
+	if [ -z "$api_base_file" ]; then
 		return 1
 	fi
 
 	local resolved_llm_api_base_file
-	if ! resolved_llm_api_base_file="$(resolve_trusted_input_file "LLM_API_BASE_FILE" "$LLM_API_BASE_FILE" 2>/dev/null)"; then
+	if ! resolved_llm_api_base_file="$(resolve_trusted_input_file "$api_base_file_label" "$api_base_file" 2>/dev/null)"; then
 		return 1
 	fi
 
