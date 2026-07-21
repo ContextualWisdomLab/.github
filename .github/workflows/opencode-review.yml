@@ -295,16 +295,17 @@ jobs:
           validate_coverage_tree_modes() {
             local treeish="$1"
             local indexed_entry indexed_mode
-            while IFS= read -r -d '' indexed_entry; do
-              indexed_mode="${indexed_entry%% *}"
-              case "$indexed_mode" in
-                100644 | 100755) ;;
-                *)
-                  printf '::error::Coverage source tree %s contains non-regular tracked entry mode %s; refusing cross-job artifact materialization.\n' "$treeish" "$indexed_mode"
-                  exit 1
-                  ;;
-              esac
-            done < <(git -C "$fetch_dir" ls-tree -r -z --full-tree "$treeish")
+            git -C "$fetch_dir" ls-tree -r -z --full-tree "$treeish" |
+              while IFS= read -r -d '' indexed_entry; do
+                indexed_mode="${indexed_entry%% *}"
+                case "$indexed_mode" in
+                  100644 | 100755) ;;
+                  *)
+                    printf '::error::Coverage source tree %s contains non-regular tracked entry mode %s; refusing cross-job artifact materialization.\n' "$treeish" "$indexed_mode"
+                    exit 1
+                    ;;
+                esac
+              done
           }
           validate_coverage_tree_modes "$PR_BASE_SHA"
           validate_coverage_tree_modes HEAD
@@ -329,7 +330,7 @@ jobs:
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$RUNNER_TEMP" \
             "$(basename "$COVERAGE_BASE_WORKDIR")" \
             "$(basename "$COVERAGE_SOURCE_WORKDIR")"
-          python3 -I - "$COVERAGE_SOURCE_ARCHIVE" <<'PY'
+          /usr/bin/python3 -I - "$COVERAGE_SOURCE_ARCHIVE" <<'PY'
           from pathlib import Path, PurePosixPath
           import sys
           import tarfile
@@ -461,7 +462,7 @@ jobs:
           # The archive contains pull-request-controlled paths. Validate every
           # member before extraction so a symlink, hardlink, device, FIFO, or
           # traversal path cannot redirect a later trusted host-side parser.
-          python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$artifact_extract_dir" <<'PY'
+          /usr/bin/python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$artifact_extract_dir" <<'PY'
           import os
           from pathlib import Path, PurePosixPath
           import sys
@@ -1994,16 +1995,17 @@ jobs:
           rm -rf "$OPENCODE_SOURCE_WORKDIR"
           git worktree add --detach "$OPENCODE_SOURCE_WORKDIR" "$PR_HEAD_SHA"
           # BEGIN_PR_WORKTREE_ENTRY_VALIDATION
-          while IFS= read -r -d '' indexed_entry; do
-            indexed_mode="${indexed_entry%% *}"
-            case "$indexed_mode" in
-              100644 | 100755) ;;
-              *)
-                printf '::error::PR worktree contains non-regular tracked entry mode %s; refusing trusted review processing.\n' "$indexed_mode"
-                exit 1
-                ;;
-            esac
-          done < <(git -C "$OPENCODE_SOURCE_WORKDIR" ls-files -s -z)
+          git -C "$OPENCODE_SOURCE_WORKDIR" ls-files -s -z |
+            while IFS= read -r -d '' indexed_entry; do
+              indexed_mode="${indexed_entry%% *}"
+              case "$indexed_mode" in
+                100644 | 100755) ;;
+                *)
+                  printf '::error::PR worktree contains non-regular tracked entry mode %s; refusing trusted review processing.\n' "$indexed_mode"
+                  exit 1
+                  ;;
+              esac
+            done
           if find -P "$OPENCODE_SOURCE_WORKDIR" -mindepth 1 -type l -print -quit | grep -q .; then
             echo "::error::PR worktree contains a symbolic link; refusing trusted review processing."
             exit 1

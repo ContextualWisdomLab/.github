@@ -315,6 +315,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'validate_coverage_tree_modes "$PR_BASE_SHA"' in step
     assert "validate_coverage_tree_modes HEAD" in step
     assert 'ls-tree -r -z --full-tree "$treeish"' in step
+    assert 'ls-tree -r -z --full-tree "$treeish" |' in step
+    assert 'done < <(git -C "$fetch_dir" ls-tree' not in step
     assert "100644 | 100755" in step
     assert 'rm -f -- "$COVERAGE_BASE_WORKDIR/.git"' in step
     assert 'rm -rf -- "$fetch_dir/.git"' in step
@@ -336,9 +338,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "secrets." not in measure_step
     assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
     assert (
-        'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$artifact_extract_dir"'
+        '/usr/bin/python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$artifact_extract_dir"'
         in coverage_job
     )
+    assert '/usr/bin/python3 -I - "$COVERAGE_SOURCE_ARCHIVE" <<' in source_job
     assert '"opencode-coverage-base"' in coverage_job
     assert '"opencode-coverage-source"' in coverage_job
     assert "member.isfile() or member.isdir()" in workflow
@@ -1737,6 +1740,8 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         "      - name: Materialize pull request head for OpenCode review data", 1
     )[1].split("\n      - name:", 1)[0]
     assert 'git -C "$OPENCODE_SOURCE_WORKDIR" ls-files -s -z' in materialize_step
+    assert 'git -C "$OPENCODE_SOURCE_WORKDIR" ls-files -s -z |' in materialize_step
+    assert 'done < <(git -C "$OPENCODE_SOURCE_WORKDIR" ls-files' not in materialize_step
     assert "100644 | 100755" in materialize_step
     assert 'find -P "$OPENCODE_SOURCE_WORKDIR" -mindepth 1 -type l' in materialize_step
     assert "refusing trusted review processing" in materialize_step
