@@ -24,12 +24,19 @@ SHORT_FINE_GRAINED_TOKEN_BODY = ("A" * 7) + TOKEN_SEPARATOR + ("e" * 7)
 
 @pytest.fixture(autouse=True)
 def _use_test_github_cli(monkeypatch):
-    """Keep argv assertions portable while production pins the trusted CLI path."""
+    """Keep argv assertions portable while Actions pins the trusted CLI path."""
     monkeypatch.setattr(sched, "GITHUB_CLI", "gh")
 
 
 def fake_github_token(prefix, body):
     return f"{prefix}{TOKEN_SEPARATOR}{body}"
+
+
+def test_github_cli_is_pinned_only_inside_actions():
+    assert sched.github_cli_for_environment("true") == sched.TRUSTED_GITHUB_CLI
+    assert sched.github_cli_for_environment("TRUE") == sched.TRUSTED_GITHUB_CLI
+    assert sched.github_cli_for_environment(None) == "gh"
+    assert sched.github_cli_for_environment("false") == "gh"
 
 
 def fake_fine_grained_github_token(body):

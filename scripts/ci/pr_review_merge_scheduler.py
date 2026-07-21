@@ -159,7 +159,15 @@ DETERMINISTIC_APPROVAL_MARKERS = (
 )
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
 TRUSTED_GITHUB_CLI = "/usr/bin/gh"
-GITHUB_CLI = TRUSTED_GITHUB_CLI
+
+
+def github_cli_for_environment(github_actions: str | None) -> str:
+    """Pin gh inside Actions while retaining portable local inspection."""
+
+    return TRUSTED_GITHUB_CLI if (github_actions or "").lower() == "true" else "gh"
+
+
+GITHUB_CLI = github_cli_for_environment(os.environ.get("GITHUB_ACTIONS"))
 SCHEDULER_WORKFLOW_NAMES = {
     "PR Review Merge Scheduler",
     "Required PR Review Merge Scheduler",
