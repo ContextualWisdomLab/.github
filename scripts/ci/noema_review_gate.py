@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import argparse
 import base64
 import ipaddress
@@ -338,17 +339,19 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
     if not paths:
         return "Changed file context unavailable: PR reported no changed files."
     sections: list[str] = []
-    for path in paths[:MAX_CONTEXT_FILES]:
+    def _fetch(path: str) -> str:
         try:
             content = fetch_head_file_content(repo, path, head_sha)
         except RuntimeError as exc:
             reason = scrub_sensitive_data(str(exc)) or "unknown error"
-            sections.append(f"### {path}\nUnavailable from head content API: {reason}")
-            continue
+            return f"### {path}\nUnavailable from head content API: {reason}"
         if not content:
-            sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
-            continue
-        sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
+            return f"### {path}\nNo UTF-8 text content available from head content API."
+        return f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONTEXT_FILES) as executor:
+        for result in executor.map(_fetch, paths[:MAX_CONTEXT_FILES]):
+            sections.append(result)
     if len(paths) > MAX_CONTEXT_FILES:
         sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)
