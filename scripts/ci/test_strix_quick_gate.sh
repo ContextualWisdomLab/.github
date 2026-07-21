@@ -5773,6 +5773,18 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"https://attacker.invalid/v1"
 		;;
+	github-models-empty-api-base-file-rejected)
+		run_gate_case "github-models-empty-api-base-file-rejected" \
+			"openai/gpt-5" \
+			"" \
+			"2" \
+			"GitHub Models Strix scans require a non-empty LLM_API_BASE_FILE" \
+			"0" \
+			"" \
+			"" \
+			"openai" \
+			"   "
+		;;
 	notfound-high-log-low-artifact)
 		run_gate_case "notfound-high-log-low-artifact" \
 			"vertex_ai/notfound-high-log-low-primary" \
@@ -11754,6 +11766,17 @@ run_gate_case "github-models-openai-gpt-requires-api-base" \
 	"" \
 	"openai" \
 	""
+
+run_gate_case "github-models-empty-api-base-file-rejected" \
+	"openai/gpt-5" \
+	"" \
+	"2" \
+	"GitHub Models Strix scans require a non-empty LLM_API_BASE_FILE" \
+	"0" \
+	"" \
+	"" \
+	"openai" \
+	"   "
 
 run_gate_case "direct-openai-gpt-does-not-require-github-models-api-base" \
 	"openai_direct/gpt-5.4" \

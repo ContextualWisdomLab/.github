@@ -2278,6 +2278,10 @@ resolved_llm_api_base_for_model() {
 	llm_api_base_value="${llm_api_base_value%%:generateContent*}"
 	llm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
 	if [ -z "$llm_api_base_value" ]; then
+		if is_github_models_model "$model"; then
+			echo "ERROR: GitHub Models Strix scans require a non-empty LLM_API_BASE_FILE selecting the pinned GitHub Models inference endpoint." >&2
+			return 2
+		fi
 		return 0
 	fi
 	if [[ "$llm_api_base_value" =~ [[:space:][:cntrl:]] ]]; then
