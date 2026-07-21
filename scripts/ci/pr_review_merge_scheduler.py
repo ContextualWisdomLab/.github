@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 
 PULL_REQUEST_FIELDS_FRAGMENT = """\
@@ -127,6 +127,7 @@ GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
+ACTIONS_RUN_DETAILS_URL_RE = re.compile(r"/actions/runs/(\d+)(?:[/?#]|$)")
 EXTERNAL_HEAD_UPDATE_RE = re.compile(r"head repo ([^\s]+) is external and not writable")
 EXTERNAL_HEAD_MERGE_RE = re.compile(r"head repo ([^\s]+) is external; fork or external PR heads are excluded")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
@@ -701,7 +702,7 @@ def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
+def rest_check_node(check: dict[str, Any], *, workflow_name: str | None = None) -> dict[str, Any]:
     """Convert a REST check-run payload into the GraphQL status rollup shape."""
 
     return {
@@ -711,8 +712,48 @@ def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
         "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
         "startedAt": check.get("started_at"),
         "detailsUrl": check.get("details_url"),
-        "checkSuite": {"workflowRun": {"workflow": {}}},
+        "checkSuite": {
+            "workflowRun": {
+                "workflow": {"name": workflow_name} if workflow_name else None,
+            }
+        },
     }
+
+
+def rest_strix_workflow_name(
+    repo: str,
+    check: dict[str, Any],
+    *,
+    expected_head_sha: str,
+) -> str | None:
+    """Prove REST-fallback Strix provenance from the Actions run API."""
+
+    if check.get("name") != "strix" or ((check.get("app") or {}).get("slug")) != "github-actions":
+        return None
+    details_url = check.get("details_url")
+    if not isinstance(details_url, str):
+        return None
+    parsed = urlparse(details_url)
+    expected_prefix = f"/{repo}/actions/runs/".lower()
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com" or not parsed.path.lower().startswith(expected_prefix):
+        return None
+    run_id = actions_run_id_from_details_url(details_url)
+    if run_id is None:
+        return None
+    try:
+        run = gh_api_json(f"repos/{repo}/actions/runs/{run_id}")
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if not isinstance(run, dict):
+        return None
+    workflow_name = run.get("name")
+    if (
+        str(run.get("id")) != run_id
+        or run.get("head_sha") != expected_head_sha
+        or workflow_name not in {"Strix Security Scan", "Strix"}
+    ):
+        return None
+    return workflow_name
 
 
 def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
@@ -750,7 +791,14 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [
-                    rest_check_node(check)
+                    rest_check_node(
+                        check,
+                        workflow_name=rest_strix_workflow_name(
+                            repo,
+                            check,
+                            expected_head_sha=head.get("sha"),
+                        ),
+                    )
                     for check in (checks.get("check_runs") or [])
                 ]
             }
@@ -1025,6 +1073,14 @@ def actions_job_id_from_details_url(value: str | None) -> str | None:
     if not value:
         return None
     match = ACTIONS_JOB_DETAILS_URL_RE.search(value)
+    return match.group(1) if match else None
+
+
+def actions_run_id_from_details_url(value: str | None) -> str | None:
+    """Return a GitHub Actions run id from a check-run details URL."""
+    if not value:
+        return None
+    match = ACTIONS_RUN_DETAILS_URL_RE.search(value)
     return match.group(1) if match else None
 
 

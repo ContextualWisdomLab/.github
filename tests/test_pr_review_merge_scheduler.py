@@ -556,8 +556,21 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
                     "conclusion": "success",
                     "started_at": "2026-06-30T00:00:00Z",
                     "details_url": "https://github.com/owner/repo/actions/runs/1/job/2",
-                }
+                },
+                {
+                    "name": "strix",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "started_at": "2026-06-30T00:00:01Z",
+                    "details_url": "https://github.com/owner/repo/actions/runs/10/job/20",
+                    "app": {"slug": "github-actions"},
+                },
             ]
+        },
+        "repos/owner/repo/actions/runs/10": {
+            "id": 10,
+            "name": "Strix Security Scan",
+            "head_sha": "abc123",
         },
         "repos/owner/repo/pulls/42/files?per_page=20": [
             {"filename": "scripts/ci/pr_review_merge_scheduler.py"},
@@ -592,6 +605,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         "repos/owner/repo/pulls/42/reviews?per_page=100",
         "repos/owner/repo/commits/abc123/check-runs?per_page=100",
         "repos/owner/repo/pulls/42/files?per_page=20",
+        "repos/owner/repo/actions/runs/10",
     ]
     assert node["number"] == 42
     assert node["mergeStateStatus"] == "CLEAN"
@@ -603,6 +617,37 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     assert node["reviews"]["nodes"][0]["commit"]["oid"] == "abc123"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["status"] == "COMPLETED"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] == "SUCCESS"
+    assert sched.strix_evidence_state(node) == "complete"
+
+
+def test_rest_strix_workflow_provenance_fails_closed(monkeypatch):
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        return {
+            "id": 10,
+            "name": "Strix Security Scan",
+            "head_sha": "other-head",
+        }
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    check = {
+        "name": "strix",
+        "details_url": "https://github.com/owner/repo/actions/runs/10/job/20",
+        "app": {"slug": "github-actions"},
+    }
+    assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
+    assert calls == ["repos/owner/repo/actions/runs/10"]
+
+    check["app"] = {"slug": "untrusted-app"}
+    assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
+    assert calls == ["repos/owner/repo/actions/runs/10"]
+
+    check["app"] = {"slug": "github-actions"}
+    check["details_url"] = "https://example.invalid/owner/repo/actions/runs/10/job/20"
+    assert sched.rest_strix_workflow_name("owner/repo", check, expected_head_sha="current-head") is None
+    assert calls == ["repos/owner/repo/actions/runs/10"]
 
 
 def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):
@@ -947,6 +992,9 @@ def test_context_review_and_check_helpers():
     assert sched.actions_job_id_from_details_url(None) is None
     assert sched.actions_job_id_from_details_url("https://github.com/owner/repo/actions/runs/123/job/456?pr=1") == "456"
     assert sched.actions_job_id_from_details_url("https://github.com/owner/repo/actions/runs/123") is None
+    assert sched.actions_run_id_from_details_url(None) is None
+    assert sched.actions_run_id_from_details_url("https://github.com/owner/repo/actions/runs/123/job/456?pr=1") == "123"
+    assert sched.actions_run_id_from_details_url("https://github.com/owner/repo/checks/123") is None
     check_jobs = make_pr(
         statusCheckRollup={
             "contexts": {
