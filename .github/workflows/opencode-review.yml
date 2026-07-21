@@ -519,7 +519,7 @@ jobs:
 
           # The runner worker retains an Actions runtime token in an ancestor
           # environment even after shell variables are unset. Execute all
-          # pull-request-controlled tests in a separate PID namespace with a
+          # pull-request-controlled tests in Docker's default private PID namespace with a
           # read-only trusted tree and no host Docker socket. The image is
           # pinned to the reviewed linux/amd64 manifest digest.
           if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" != "1" ]; then
@@ -541,10 +541,78 @@ jobs:
             mkdir -p "$sandbox_result_dir"
             chmod 0700 "$sandbox_result_dir"
 
+            # Build the coverage tool image before the pull-request tree is
+            # mounted anywhere. The networked build context contains only this
+            # trusted Dockerfile plus the reviewed, hash-pinned CI requirements
+            # from the default-branch checkout; it never contains PR-controlled
+            # source, dependency manifests, credentials, or runner command files.
+            coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
+            trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
+            if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
+              echo "::error::Trusted coverage requirements must be a regular non-symlink file."
+              exit 1
+            fi
+            sudo rm -rf "$coverage_build_dir"
+            mkdir -p "$coverage_build_dir"
+            chmod 0700 "$coverage_build_dir"
+            install -m 0644 "$trusted_ci_requirements" \
+              "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
+            cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
+          FROM docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update \
+            && apt-get install --no-install-recommends -y \
+              ca-certificates \
+              cargo \
+              curl \
+              git \
+              jq \
+              libcurl4-openssl-dev \
+              libssl-dev \
+              libxml2-dev \
+              mesa-vulkan-drivers \
+              libvulkan1 \
+              nodejs \
+              npm \
+              pkg-config \
+              python3 \
+              python3-pip \
+              python3-venv \
+              r-base \
+              r-cran-covr \
+              r-cran-testthat \
+              rustc \
+              util-linux \
+              vulkan-tools \
+            && rm -rf /var/lib/apt/lists/*
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
+              https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
+            && echo '967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7  /tmp/cargo-llvm-cov.tar.gz' | sha256sum -c - \
+            && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
+            && chmod 0755 /usr/local/bin/cargo-llvm-cov \
+            && rm -f /tmp/cargo-llvm-cov.tar.gz
+          COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
+          RUN python3 -m pip install \
+              --break-system-packages \
+              --disable-pip-version-check \
+              --require-hashes \
+              --only-binary=:all: \
+              -r /tmp/requirements-opencode-review-ci-hashes.txt \
+            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
+          DOCKERFILE
+            if ! docker build --pull --no-cache --network=default \
+              --tag "$coverage_tool_image" \
+              --file "$coverage_build_dir/Dockerfile" \
+              "$coverage_build_dir"; then
+              echo "::error::Trusted coverage tool image build failed before PR execution."
+              exit 1
+            fi
+            sudo rm -rf "$coverage_build_dir"
+
             sandbox_status=0
-            docker run --rm --init \
+            docker run --rm --init --network=none \
               --name "opencode-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-              --pid private \
               --pids-limit 2048 \
               --memory 14g \
               --cpus 4 \
@@ -574,7 +642,7 @@ jobs:
               --env RUNNER_TEMP=/secure-output \
               --env GITHUB_OUTPUT=/secure-output/github-output \
               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
-              docker.io/library/ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf \
+              "$coverage_tool_image" \
               /bin/bash /trusted-measure-step.sh || sandbox_status=$?
 
             sandbox_output="${sandbox_result_dir}/github-output"
@@ -597,41 +665,21 @@ jobs:
             exit 0
           fi
 
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install --no-install-recommends -y \
-            ca-certificates \
-            cargo \
-            curl \
-            git \
-            jq \
-            libcurl4-openssl-dev \
-            libssl-dev \
-            libxml2-dev \
-            nodejs \
-            npm \
-            python3 \
-            python3-pip \
-            python3-venv \
-            r-base \
-            r-cran-covr \
-            r-cran-testthat \
-            rustc \
-            util-linux
-          rm -rf /var/lib/apt/lists/*
-          python3 -m pip install \
-            --break-system-packages \
-            --disable-pip-version-check \
-            --require-hashes \
-            --only-binary=:all: \
-            -r /trusted/requirements-opencode-review-ci-hashes.txt
-
           # Use a fixed nobody-like identity that cannot traverse the host-owned
           # /out bind mount. This prevents even a daemonized test process from
           # racing trusted result publication.
           export OPENCODE_SANDBOX_UID=65532
           export OPENCODE_SANDBOX_GID=65532
-          chown -R --no-dereference "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work
+          # Keep repository-local Git metadata outside the untrusted test
+          # identity's write boundary. The source tree itself stays writable so
+          # package managers and tests can create ordinary build artifacts.
+          chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work
+          find /work -mindepth 1 -maxdepth 1 ! -name .git \
+            -exec chown -R --no-dereference "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" {} +
+          if [ -e /work/.git ] || [ -L /work/.git ]; then
+            chown -R root:root /work/.git
+            chmod -R go-w /work/.git
+          fi
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chmod 0700 "$RUNNER_TEMP"
@@ -700,7 +748,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -746,7 +794,7 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}" \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -762,17 +810,31 @@ jobs:
             rm -f "$log_file"
           }
 
+          trusted_git() {
+            env -i \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              HOME=/tmp \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
+              git \
+                -c safe.directory=/work \
+                -c core.fsmonitor=false \
+                -c core.hooksPath=/dev/null \
+                -c core.quotePath=false \
+                "$@"
+          }
+
           has_tracked_files() {
-            git -c core.quotePath=false ls-files "$@" | awk 'NF { found=1 } END { exit found ? 0 : 1 }'
+            trusted_git ls-files "$@" | awk 'NF { found=1 } END { exit found ? 0 : 1 }'
           }
 
           changed_files_for_coverage() {
             if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] \
-              && git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
-              && git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
-              git -c core.quotePath=false diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
+              && trusted_git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
+              && trusted_git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
+              trusted_git diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
             else
-              git -c core.quotePath=false ls-files
+              trusted_git ls-files
             fi
           }
 
@@ -781,7 +843,7 @@ jobs:
             changed_list="$(mktemp)"
             tracked_list="$(mktemp)"
             changed_files_for_coverage >"$changed_list"
-            git -c core.quotePath=false ls-files "$@" >"$tracked_list"
+            trusted_git ls-files "$@" >"$tracked_list"
             awk 'NR==FNR { changed[$0]=1; next } ($0 in changed) { found=1 } END { exit found ? 0 : 1 }' \
               "$changed_list" "$tracked_list"
             local rc=$?
@@ -790,7 +852,7 @@ jobs:
           }
 
           tracked_python_projects_with_tests() {
-            git -c core.quotePath=false ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
+            trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
               | while IFS= read -r pyproject_file; do
                   project_dir="$(dirname "$pyproject_file")"
                   if [ "$project_dir" = "." ]; then
@@ -803,117 +865,9 @@ jobs:
               | sort -u
           }
 
-          pyproject_has_dev_dependency_group() {
-            python3 -I - "$1" <<'PY'
-          import sys
-          import tomllib
-
-          with open(sys.argv[1], "rb") as fh:
-              data = tomllib.load(fh)
-          raise SystemExit(0 if "dev" in data.get("dependency-groups", {}) else 1)
-          PY
-          }
-
-          pyproject_has_dev_optional_extra() {
-            python3 -I - "$1" <<'PY'
-          import sys
-          import tomllib
-
-          with open(sys.argv[1], "rb") as fh:
-              data = tomllib.load(fh)
-          optional = data.get("project", {}).get("optional-dependencies", {})
-          raise SystemExit(0 if "dev" in optional else 1)
-          PY
-          }
-
-          pyproject_has_no_selected_dependencies() {
-            python3 -I - "$1" "$2" <<'PY'
-          import sys
-          import tomllib
-
-          with open(sys.argv[1], "rb") as fh:
-              data = tomllib.load(fh)
-
-          selection = sys.argv[2]
-          project = data.get("project", {})
-          dynamic = project.get("dynamic", [])
-          if not isinstance(dynamic, list):
-              raise SystemExit(2)
-          if "dependencies" in dynamic:
-              raise SystemExit(1)
-
-          dependencies = project.get("dependencies", [])
-          if not isinstance(dependencies, list):
-              raise SystemExit(2)
-          selected = list(dependencies)
-
-          if selection == "group-dev":
-              group = data.get("dependency-groups", {}).get("dev", [])
-              if not isinstance(group, list):
-                  raise SystemExit(2)
-              selected.extend(group)
-          elif selection == "extra-dev":
-              if "optional-dependencies" in dynamic:
-                  raise SystemExit(1)
-              extra = project.get("optional-dependencies", {}).get("dev", [])
-              if not isinstance(extra, list):
-                  raise SystemExit(2)
-              selected.extend(extra)
-          elif selection != "runtime":
-              raise SystemExit(2)
-
-          raise SystemExit(0 if not selected else 1)
-          PY
-          }
-
-          run_python_uv_lock_check() {
-            local project_dir="$1"
-            if [ -f "${project_dir}/uv.lock" ]; then
-              run_and_capture "Python uv lockfile consistency (${project_dir})" \
-                bash -c 'cd "$1" && uv lock --check' bash "$project_dir"
-            fi
-          }
-
-          install_python_project_dependencies() {
-            if [ -f requirements.txt ]; then
-              run_and_capture "Python project dependencies (requirements.txt)" \
-                uv run --no-project --no-build --with-requirements requirements.txt python -c 'import sys; print("binary-only requirements resolved with", sys.executable)'
-            fi
-
-            while IFS= read -r project_dir; do
-              pyproject_file="${project_dir}/pyproject.toml"
-              if [ -f "$pyproject_file" ]; then
-                run_python_uv_lock_check "$project_dir"
-                if pyproject_has_dev_dependency_group "$pyproject_file"; then
-                  dependency_selection="group-dev"
-                elif pyproject_has_dev_optional_extra "$pyproject_file"; then
-                  dependency_selection="extra-dev"
-                else
-                  dependency_selection="runtime"
-                fi
-
-                if pyproject_has_no_selected_dependencies "$pyproject_file" "$dependency_selection"; then
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    python3 -c 'print("No selected runtime/dev dependencies are declared; safe dependency materialization is not applicable.")'
-                elif [ "$dependency_selection" = "group-dev" ]; then
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --group dev --no-build --no-install-project
-                elif [ "$dependency_selection" = "extra-dev" ]; then
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --extra dev --no-build --no-install-project
-                else
-                  run_and_capture "Python project dependencies (${project_dir})" \
-                    uv sync --project "$project_dir" --no-build --no-install-project
-                fi
-                if [ -f "${project_dir}/requirements.txt" ]; then
-                  run_and_capture "Python project dependencies (${project_dir}/requirements.txt in uv env)" \
-                    bash -c 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
-                fi
-              elif [ "$project_dir" != "." ] && [ -f "${project_dir}/requirements.txt" ]; then
-                run_and_capture "Python project dependencies (${project_dir}/requirements.txt)" \
-                  bash -c 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt python -c "import sys; print(\"binary-only requirements resolved with\", sys.executable)"' bash "$project_dir"
-              fi
-            done < <(tracked_python_projects_with_tests)
+          verify_trusted_python_test_toolchain() {
+            run_and_capture "Trusted offline Python test toolchain" \
+              python3 -I -c 'import coverage, interrogate, pytest, pytest_cov; print("trusted offline Python test toolchain imports passed")'
           }
 
           configured_python_ci_test_commands() {
@@ -937,22 +891,16 @@ jobs:
                       --project-dir "$project_dir" \
                       --command-json "$configured_command_json"
                 done <<<"$configured_commands_json"
-            elif [ -f "${project_dir}/pyproject.toml" ]; then
-              run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with coverage coverage report --show-missing' bash "$project_dir"
-            elif [ -f "${project_dir}/requirements.txt" ]; then
-              run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with-requirements requirements.txt --with coverage coverage report --show-missing' bash "$project_dir"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest tests && uv run --no-build --with coverage coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'PYTHONPATH=. uv run --no-build --with coverage --with pytest coverage run -m pytest && uv run --no-build --with coverage coverage report --show-missing'
+                  bash -c 'PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
               elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -983,7 +931,7 @@ jobs:
                       manifest="${candidate_dir}/package.json"
                     fi
                     if [ -f "$manifest" ] \
-                      && git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
+                      && trusted_git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1; then
                       printf '%s\n' "$candidate_dir"
                       break
                     fi
@@ -1070,16 +1018,8 @@ jobs:
             while IFS= read -r project_dir; do
               if [ -f "${project_dir}/tests/test_docstrings.py" ]; then
                 measured_projects=1
-                if [ -f "${project_dir}/pyproject.toml" ]; then
-                  run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build pytest tests/test_docstrings.py' bash "$project_dir"
-                elif [ -f "${project_dir}/requirements.txt" ]; then
-                  run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' bash "$project_dir"
-                else
-                  run_and_capture "Python docstring coverage (${project_dir})" \
-                    bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
-                fi
+                run_and_capture "Python docstring coverage (${project_dir})" \
+                  bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
             [ "$measured_projects" -eq 1 ]
@@ -1269,8 +1209,7 @@ jobs:
             if command -v Rscript >/dev/null 2>&1 && dpkg -s libcurl4-openssl-dev libssl-dev libxml2-dev >/dev/null 2>&1; then
               return 0
             fi
-            run_and_capture "R runtime and signed distribution coverage packages" \
-              bash -c 'sudo apt-get update && sudo apt-get install -y r-base r-cran-covr r-cran-testthat libcurl4-openssl-dev libssl-dev libxml2-dev'
+            return 1
           }
 
           run_r_test_coverage() {
@@ -1327,10 +1266,6 @@ jobs:
             # coverage command still runs and reports any uncovered GPU lines
             # exactly as before, so Rust repositories without GPU code are
             # unaffected and no gate is weakened.
-            if ! ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
-              run_and_capture "Software Vulkan adapter (Mesa lavapipe) for GPGPU coverage" \
-                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools || true'
-            fi
             if ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
               lvp_icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1)"
               export VK_ICD_FILENAMES="$lvp_icd"
@@ -1362,10 +1297,6 @@ jobs:
             if ! find . -name tauri.conf.json -not -path '*/node_modules/*' -not -path '*/target/*' -print -quit 2>/dev/null | grep -q .; then
               return 0
             fi
-            if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
-              run_and_capture "Tauri Linux system libraries (WebKitGTK/GTK3) for desktop coverage" \
-                bash -c 'sudo apt-get update && sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev || true'
-            fi
             if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
               append "### Tauri desktop coverage dependencies"
               append ""
@@ -1392,8 +1323,15 @@ jobs:
               failures=$((failures + 1))
               return 1
             fi
-            if [ ! -x /work/.opencode-sandbox-home/.cargo/bin/cargo-llvm-cov ]; then
-              run_and_capture "Rust coverage tooling (cargo-llvm-cov 0.8.7)" cargo install cargo-llvm-cov --version 0.8.7 --locked
+            if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
+              append "### Rust coverage toolchain"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: the trusted offline coverage image is missing cargo-llvm-cov 0.8.7."
+              append "- Fix: rebuild the trusted coverage image before rerunning current-head evidence."
+              append ""
+              failures=$((failures + 1))
+              return 1
             fi
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
@@ -1509,6 +1447,7 @@ jobs:
 
           implementation_changed_files="$(mktemp /tmp/implementation-changed-files.XXXXXX)"
           changed_files_for_coverage >"$implementation_changed_files"
+          chmod 0444 "$implementation_changed_files"
           run_and_capture "Implementation completeness scan" \
             python3 "$GITHUB_WORKSPACE/scripts/ci/implementation_completeness_scan.py" \
               --repo-root . \
@@ -1519,7 +1458,11 @@ jobs:
 
           if has_changed_tracked_files '*.py'; then
             measured_any=1
-            install_python_project_dependencies
+            # PR-selected dependency manifests are never resolved in the
+            # networkless execution phase. The trusted image supplies the
+            # pinned review toolchain; missing project imports fail in pytest
+            # with the exact dependency name instead of reaching the network.
+            verify_trusted_python_test_toolchain
             run_python_test_coverage
 
             if run_python_docstring_coverage; then

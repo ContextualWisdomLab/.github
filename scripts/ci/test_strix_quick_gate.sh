@@ -532,7 +532,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'R_LIBS_USER="/work/.opencode-r-library"' "opencode R coverage isolates the package library inside the untrusted worktree"
 	assert_file_not_contains "$workflow_file" 'install.packages(' "opencode R coverage never installs PR-selected mutable packages"
 	assert_file_contains "$workflow_file" "libcurl4-openssl-dev libssl-dev libxml2-dev" "opencode R coverage installs system headers required by covr dependencies"
-	assert_file_contains "$workflow_file" "r-cran-covr r-cran-testthat" "opencode R coverage uses signed distribution packages instead of mutable CRAN resolution"
+	assert_file_contains "$workflow_file" "r-cran-covr" "opencode R coverage uses the signed distribution covr package instead of mutable CRAN resolution"
+	assert_file_contains "$workflow_file" "r-cran-testthat" "opencode R coverage uses the signed distribution testthat package instead of mutable CRAN resolution"
 	assert_file_contains "$workflow_file" "R package testthat suite" "opencode R package coverage requires package testthat evidence"
 	assert_file_contains "$workflow_file" "testthat unavailable in coverage runner; deferring to required peer R CMD check evidence." "opencode R package tests defer only when testthat cannot be installed in the coverage runner"
 	assert_file_contains "$workflow_file" "covr package_coverage unavailable after package tests; treating missing-line report as advisory." "opencode R package coverage does not block on covr installation reproduction after tests pass"
@@ -558,7 +559,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" '--pids-limit 2048' "opencode coverage isolates pull-request process ancestry and bounds process use"
 	assert_file_contains "$workflow_file" '--cap-drop ALL' "opencode coverage drops container capabilities before executing pull-request code"
 	assert_file_contains "$workflow_file" 'setpriv' "opencode coverage executes pull-request commands under the non-root source owner"
-	assert_file_contains "$workflow_file" 'python3 -I - "$1"' "opencode trusted metadata parsers ignore PR-controlled Python module shadowing"
+	assert_file_contains "$workflow_file" "python3 -I -c 'import coverage, interrogate, pytest, pytest_cov" "opencode trusted tool verification ignores PR-controlled Python module shadowing"
 	assert_file_contains "$workflow_file" 'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"' "opencode trusted output sanitizer runs in isolated Python mode"
 	assert_file_contains "$workflow_file" 'CARGO_HOME=/work/.opencode-sandbox-home/.cargo' "opencode Rust tooling stays in the low-privilege sandbox home"
 	assert_file_contains "$REPO_ROOT/scripts/ci/pr_review_merge_scheduler.py" '"pr_head_ref":' "central scheduler repository_dispatch carries the PR head branch required by current-head code-scanning verification"
@@ -872,14 +873,20 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage evidence logs an actionable merge-tree failure reason"
 	assert_file_contains "$workflow_file" "--require-hashes" "coverage tooling installs from a hash-pinned lock"
 	assert_file_contains "$workflow_file" "--only-binary=:all:" "coverage tooling installs only binary packages from the pinned lock"
-	assert_file_contains "$workflow_file" "-r /trusted/requirements-opencode-review-ci-hashes.txt" "coverage sandbox installs the trusted hash lock rather than PR-controlled requirements"
+	assert_file_contains "$workflow_file" 'trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"' "coverage tooling sources its hash lock from the trusted default-branch checkout"
+	assert_file_contains "$workflow_file" '"$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"' "coverage tooling copies the trusted hash lock into the isolated build context"
+	assert_file_contains "$workflow_file" "-r /tmp/requirements-opencode-review-ci-hashes.txt" "coverage image installs the trusted hash lock rather than PR-controlled requirements"
 	assert_file_contains "$workflow_file" 'GITHUB_ENV=/dev/null' "PR-controlled coverage commands cannot write runner environment command files"
 	assert_file_contains "$workflow_file" 'GITHUB_PATH=/dev/null' "PR-controlled coverage commands cannot extend later-step PATH"
 	assert_file_contains "$workflow_file" 'GITHUB_OUTPUT=/dev/null' "PR-controlled coverage commands cannot forge trusted step outputs"
 	assert_file_contains "$workflow_file" 'BASH_ENV=/dev/null' "PR-controlled coverage commands cannot persist shell startup hooks"
-	assert_file_contains "$workflow_file" 'UV_NO_BUILD: "1"' "coverage wheel-only policy is scoped to the dependency-consuming measure step"
-	assert_file_contains "$workflow_file" 'uv run --no-project --no-build --with-requirements' "requirements resolution rejects PR-controlled source builds"
-	assert_file_contains "$workflow_file" 'uv run --no-build --with coverage' "coverage resolution rejects PR-controlled source builds"
+	assert_file_contains "$workflow_file" 'UV_NO_BUILD: "1"' "coverage preserves the no-build policy for any repository-configured uv test command"
+	assert_file_not_contains "$workflow_file" 'uv sync --project' "networkless coverage never resolves PR-selected pyproject dependencies"
+	assert_file_not_contains "$workflow_file" 'uv run --no-project' "networkless coverage never resolves PR-selected requirements files"
+	assert_file_not_contains "$workflow_file" 'uv run --no-build' "networkless coverage uses the trusted preinstalled Python toolchain directly"
+	assert_file_contains "$workflow_file" 'chmod 0444 "$implementation_changed_files"' "the sandbox identity can read but cannot rewrite the root-generated changed-file list"
+	assert_file_contains "$workflow_file" "verify_trusted_python_test_toolchain()" "coverage verifies all pinned Python review tools before executing PR tests"
+	assert_file_contains "$workflow_file" "import coverage, interrogate, pytest, pytest_cov" "the trusted image supplies the complete pinned Python review toolchain"
 	assert_file_contains "$workflow_file" 'ref: ${{ steps.trusted_source.outputs.ref }}' "OpenCode review checks out validated central trusted scripts for same-head validation"
 	assert_file_contains "$workflow_file" 'COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || '\''skipped'\'' }}' "opencode approval receives the coverage-evidence job conclusion"
 	assert_file_contains "$workflow_file" 'PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}' "coverage evidence receives the live validated PR base SHA for changed-file scoped measurement"
@@ -895,18 +902,19 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "npm ci --ignore-scripts" "coverage dependency installation suppresses npm lifecycle hooks"
 	assert_file_contains "$workflow_file" "pnpm install --frozen-lockfile --ignore-scripts" "coverage dependency installation suppresses pnpm lifecycle hooks"
 	assert_file_contains "$workflow_file" "yarn install --immutable --mode=skip-builds" "coverage dependency installation suppresses Yarn build hooks"
-	assert_file_contains "$workflow_file" "--no-build --no-install-project" "coverage dependency installation refuses PR-controlled Python build backends"
+	assert_file_contains "$workflow_file" "PR-selected dependency manifests are never resolved" "coverage refuses PR-controlled Python dependency resolution entirely"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_PATH=%s' "Strix workflow captures the pinned installation executable before scanning"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_SHA256=%s' "Strix workflow pins the installed executable digest before scanning"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_ROOT=%s' "Strix workflow pins the installed executable root before scanning"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'umask 022' "Strix workflow creates the credential-bearing executable without group/world write access"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'chmod go-w -- "$strix_executable"' "Strix workflow normalizes the resolved executable before hashing"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'chmod go-w -- "$strix_scripts_root" "$strix_executable"' "Strix workflow normalizes the installation root and resolved executable before hashing"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must name the trusted installed Strix executable' "Strix gate requires an explicit trusted executable path"
 	assert_file_contains "$GATE_SCRIPT" 'did not match the pinned SHA-256 digest' "Strix gate rejects executable substitution after trusted installation"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must be outside the untrusted scan target' "Strix executable cannot come from the scan target"
 	assert_file_not_contains "$GATE_SCRIPT" 'shutil.which("strix")' "Strix gate never resolves its credential-bearing executable through inherited PATH"
 	assert_file_not_contains "$workflow_file" "https://sh.rustup.rs" "coverage refuses a mutable Rust network installer"
-	assert_file_contains "$workflow_file" "cargo install cargo-llvm-cov --version 0.8.7 --locked" "coverage pins cargo-llvm-cov"
+	assert_file_contains "$workflow_file" "cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz" "coverage pins the official cargo-llvm-cov 0.8.7 Linux asset"
+	assert_file_contains "$workflow_file" "967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7" "coverage verifies the official cargo-llvm-cov 0.8.7 asset digest"
 	assert_file_contains "$workflow_file" "Run merge scheduler after approval" "opencode approval runs the merge scheduler after current-head review publication"
 	assert_file_contains "$workflow_file" "python3 scripts/ci/pr_review_merge_scheduler.py" "opencode approval directly executes the trusted central merge scheduler when required workflows are not repo-local dispatch targets"
 	assert_file_contains "$workflow_file" "--require-opencode-app" "opencode approval reuse and post-publication follow-up reject GitHub Actions-authored review evidence"
@@ -954,21 +962,15 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "workspace.metadata.opencode.coverage.minimum_lines" "opencode coverage evidence supports virtual-workspace Rust coverage baselines"
 	assert_file_contains "$workflow_file" "scripts/ci/rust_coverage_threshold.py" "opencode coverage evidence uses the tested trusted Rust threshold parser"
 	assert_file_contains "$workflow_file" '--fail-under-lines "$threshold"' "opencode coverage evidence enforces the resolved Rust line coverage threshold"
-	assert_file_contains "$workflow_file" "Python project dependencies (requirements.txt)" "opencode coverage evidence records repository Python dependency installation"
-	assert_file_contains "$workflow_file" "uv run --no-project --no-build --with-requirements requirements.txt" "opencode coverage evidence resolves wheel-only repository Python requirements before pytest"
 	assert_file_contains "$workflow_file" "'requirements.txt' '*/requirements.txt'" "opencode coverage evidence discovers nested requirements-only Python test projects"
-	assert_file_contains "$workflow_file" "Python project dependencies (\${project_dir}/requirements.txt)" "opencode coverage evidence installs nested requirements-only Python project dependencies"
-	assert_file_contains "$workflow_file" "Python uv lockfile consistency (\${project_dir})" "opencode coverage evidence logs uv lockfile drift before installing uv-managed Python dependencies"
-	assert_file_contains "$workflow_file" "uv lock --check" "opencode coverage evidence rejects stale uv lockfiles before pytest"
-	assert_file_contains "$workflow_file" "uv sync --project" "opencode coverage evidence installs uv-managed Python project dependencies before pytest"
-	assert_file_contains "$workflow_file" 'cd "$1" && uv run --no-project --no-build --with-requirements requirements.txt' "opencode coverage evidence resolves requirements without executing a PR project backend"
-	assert_file_contains "$workflow_file" "--extra dev" "opencode coverage evidence installs pyproject optional dev extras when repositories do not use dependency-groups"
 	assert_file_contains "$workflow_file" "configured_python_ci_test_commands()" "opencode coverage evidence prefers repository-configured CI pytest commands before falling back to the full tests tree"
 	assert_file_contains "$workflow_file" 'safe_pytest_command.py" discover' "opencode coverage evidence discovers default CI workflow pytest commands through the trusted shell-free parser"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/safe_pytest_command.py" "RUNNER_EXECUTABLES" "configured pytest evidence cannot invoke uv, poetry, or pipenv dependency resolution"
 	assert_file_contains "$workflow_file" "Python configured CI test suite" "opencode coverage evidence labels repository-configured pytest evidence separately"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --no-build pytest tests' "opencode coverage evidence runs uv-managed Python project tests without source builds"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with coverage --with pytest coverage run -m pytest tests' "opencode coverage evidence runs requirements-only Python project coverage without source builds"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. uv run --no-build --with-requirements requirements.txt --with pytest python -m pytest tests/test_docstrings.py' "opencode coverage evidence runs requirements-only Python docstring tests without source builds"
+	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. python3 -m coverage run -m pytest tests' "opencode coverage runs Python tests with the trusted preinstalled toolchain"
+	assert_file_contains "$workflow_file" 'python3 -m coverage report --show-missing' "opencode coverage preserves the missing-line report with the trusted toolchain"
+	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' "opencode docstring tests use the trusted preinstalled pytest"
+	assert_file_contains "$workflow_file" "missing project imports fail in pytest" "unavailable project dependencies fail closed with their import error"
 	assert_file_contains "$workflow_file" "JavaScript/TypeScript dependencies (npm ci, lifecycle hooks disabled)" "opencode coverage evidence installs npm workspace dependencies without lifecycle hooks before JS coverage"
 	assert_file_contains "$workflow_file" "coverage/coverage-summary.json" "opencode coverage evidence reads JS coverage summaries instead of trusting test exit codes"
 	assert_file_contains "$workflow_file" "coverage/coverage-final.json" "opencode coverage evidence supports Vitest Istanbul final coverage files"
@@ -5369,6 +5371,23 @@ PY
 			STRIX_EXECUTABLE_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
 		)
 	fi
+	if [ "$scenario" = "pr-executable-root-group-writable" ]; then
+		local fake_strix_sha256
+		fake_strix_sha256="$(python3 - "$fake_strix" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+		env_cmd+=(
+			IS_PR_EVIDENCE_RUN="true"
+			STRIX_EXECUTABLE_ROOT="$bin_dir"
+			STRIX_EXECUTABLE_SHA256="$fake_strix_sha256"
+		)
+		chmod 0775 "$bin_dir"
+	fi
 	if [ "$scenario" = "pr-executable-group-writable" ]; then
 		chmod 0775 "$fake_strix"
 	fi
@@ -5659,6 +5678,16 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"1" \
 			"must not be group/world writable" \
+			"0" \
+			"" \
+			""
+		;;
+	pr-executable-root-group-writable)
+		run_gate_case "pr-executable-root-group-writable" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"pinned Strix installation root must not be group/world writable" \
 			"0" \
 			"" \
 			""
@@ -6039,6 +6068,19 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"Container build manifest changed; materialized full PR-head blob scope"
 		;;
+	repository-dispatch-pr-scope-uses-head-blob)
+		run_pull_request_target_head_scope_case \
+			"repository-dispatch-pr-scope-uses-head-blob" \
+			"backend/db/models.py" \
+			"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+			"HEAD_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+			"0" \
+			"0" \
+			"__PR_SCOPE__" \
+			"0" \
+			"Materialized PR-head changed-file scope" \
+			"repository_dispatch"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -6062,6 +6104,7 @@ run_pull_request_target_head_scope_case() {
 	local target_path="${7-.}"
 	local expected_full_head_scope="${8-$disable_pr_scoping}"
 	local expected_scope_message="${9-}"
+	local github_event_name="${10-pull_request_target}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -6180,7 +6223,8 @@ EOF
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
-			GITHUB_EVENT_NAME="pull_request_target" \
+			GITHUB_EVENT_NAME="$github_event_name" \
+			PR_NUMBER="123" \
 			PR_BASE_SHA="$base_sha" \
 			PR_HEAD_SHA="$head_sha" \
 			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
@@ -8596,6 +8640,18 @@ run_pull_request_target_head_scope_case \
 	"__PR_SCOPE__"
 
 run_pull_request_target_head_scope_case \
+	"repository-dispatch-pr-scope-uses-head-blob" \
+	"backend/db/models.py" \
+	"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_DISPATCH_CONTENT_SHOULD_BE_SCANNED" \
+	"0" \
+	"0" \
+	"__PR_SCOPE__" \
+	"0" \
+	"Materialized PR-head changed-file scope" \
+	"repository_dispatch"
+
+run_pull_request_target_head_scope_case \
 	"pull-request-target-added-file-uses-head-blob" \
 	"src/new_module.py" \
 	"__ABSENT__" \
@@ -8782,6 +8838,15 @@ run_gate_case "pr-executable-group-writable" \
 	"" \
 	"1" \
 	"must not be group/world writable" \
+	"0" \
+	"" \
+	""
+
+run_gate_case "pr-executable-root-group-writable" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"pinned Strix installation root must not be group/world writable" \
 	"0" \
 	"" \
 	""

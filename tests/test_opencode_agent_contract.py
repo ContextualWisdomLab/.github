@@ -3,7 +3,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
@@ -332,29 +331,73 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
     assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
-    assert "python3 -I - \"$COVERAGE_SOURCE_ARCHIVE\" \"$COVERAGE_SOURCE_WORKDIR\"" in workflow
+    assert (
+        'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
+    )
     assert "member.isfile() or member.isdir()" in workflow
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
     assert "docker.io/library/ubuntu@sha256:" in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
+    assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
+    assert "The networked build context contains only this" in measure_step
+    assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
+    assert "docker build --pull --no-cache --network=default" in measure_step
+    assert '"$coverage_build_dir"' in measure_step
+    assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
+        "docker run --rm --init --network=none"
+    )
     assert "--cap-drop ALL" in measure_step
-    assert "--pid private" in measure_step
+    # Docker already creates a private PID namespace by default. Passing the
+    # unsupported literal `private` makes hosted-runner Docker exit 125 before
+    # any coverage evidence can run.
+    assert "--pid private" not in measure_step
+    assert "--pid host" not in measure_step
+    assert "Docker's default private PID namespace" in measure_step
     assert 'measure_step_script="$(realpath "$0")"' in measure_step
-    assert 'source=${measure_step_script},target=/trusted-measure-step.sh,readonly' in measure_step
+    assert (
+        "source=${measure_step_script},target=/trusted-measure-step.sh,readonly"
+        in measure_step
+    )
     assert "target=/trusted,readonly" in measure_step
     assert "target=/work" in measure_step
     assert "/var/run/docker.sock" not in measure_step
     assert "OPENCODE_SANDBOX_UID=65532" in measure_step
-    assert 'chown -R --no-dereference' in measure_step
+    assert 'chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work' in measure_step
+    assert "find /work -mindepth 1 -maxdepth 1 ! -name .git" in measure_step
+    assert "chown -R root:root /work/.git" in measure_step
+    assert "chmod -R go-w /work/.git" in measure_step
+    assert "trusted_git()" in measure_step
+    assert "GIT_CONFIG_NOSYSTEM=1" in measure_step
+    assert "GIT_CONFIG_GLOBAL=/dev/null" in measure_step
+    assert "-c safe.directory=/work" in measure_step
+    assert "-c core.fsmonitor=false" in measure_step
+    assert "-c core.hooksPath=/dev/null" in measure_step
+    assert "git -c core.quotePath=false ls-files" not in measure_step
     assert 'setpriv \\\n              --reuid "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'pkill -KILL -u "$OPENCODE_SANDBOX_UID"' in measure_step
-    assert 'python3 -I - "$1"' in measure_step
+    assert 'chmod 0444 "$implementation_changed_files"' in measure_step
+    assert "verify_trusted_python_test_toolchain()" in measure_step
+    assert "import coverage, interrogate, pytest, pytest_cov" in measure_step
     assert "python3 -I -c 'import pytest_cov'" in measure_step
-    assert 'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"' in measure_step
+    assert (
+        'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"'
+        in measure_step
+    )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
-    assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' in measure_step
+    assert "docker run --rm --init --network=none" in measure_step
+    sandbox_runtime = measure_step.split(
+        "          export OPENCODE_SANDBOX_UID=65532", 1
+    )[1]
+    assert "apt-get" not in sandbox_runtime
+    assert "cargo install" not in sandbox_runtime
+    assert "command -v cargo-llvm-cov" in sandbox_runtime
+    assert (
+        'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+        in measure_step
+    )
+    assert 'PATH="/work/.opencode-sandbox-home/.cargo/bin:${PATH}"' not in measure_step
     assert "cargo llvm-cov --version" not in measure_step
     assert "emit_captured_log()" in measure_step
     assert 'append_command "$@"' in measure_step
@@ -370,13 +413,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "workspace.metadata.opencode.coverage.minimum_lines" in measure_step
     assert "scripts/ci/rust_coverage_threshold.py" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
-    assert "run_python_uv_lock_check()" in measure_step
-    assert "pyproject_has_no_selected_dependencies()" in measure_step
-    assert "Python uv lockfile consistency (${project_dir})" in measure_step
-    assert "uv lock --check" in measure_step
-    assert measure_step.index(
-        'run_python_uv_lock_check "$project_dir"'
-    ) < measure_step.index('uv sync --project "$project_dir" --group dev')
+    assert "uv sync --project" not in measure_step
+    assert "uv run --no-project" not in measure_step
+    assert "uv run --no-build" not in measure_step
+    assert "python3 -m coverage run -m pytest tests" in measure_step
+    trusted_requirements = Path(
+        "requirements-opencode-review-ci-hashes.txt"
+    ).read_text(encoding="utf-8")
+    assert "pytest-cov==7.1.0" in trusted_requirements
+    assert (
+        "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
+        in trusted_requirements
+    )
 
     target_start = workflow.index("  opencode-review-target:\n")
     target_job = workflow[target_start:]
@@ -456,101 +504,22 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "contents: write" not in workflow
 
 
-def test_opencode_empty_pyproject_dependency_probe_is_fail_closed(tmp_path):
-    """Skip only declaratively empty dependency sets without running build hooks."""
+def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
+    """Use only the trusted image toolchain during networkless PR execution."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
-    function = workflow.split(
-        "          pyproject_has_no_selected_dependencies() {\n", 1
-    )[1].split("\n          PY\n          }", 1)[0]
-    probe = textwrap.dedent(function.split("<<'PY'\n", 1)[1])
-    pyproject = tmp_path / "pyproject.toml"
+    measure = workflow.split(
+        "      - name: Measure test and docstring evidence\n", 1
+    )[1].split("\n      - name:", 1)[0]
 
-    def run(source: str, selection: str) -> subprocess.CompletedProcess[str]:
-        pyproject.write_text(textwrap.dedent(source), encoding="utf-8")
-        return subprocess.run(
-            [sys.executable, "-", str(pyproject), selection],
-            input=probe,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    assert (
-        run(
-            """
-        [project]
-        name = "empty"
-        dynamic = ["version"]
-        dependencies = []
-        """,
-            "runtime",
-        ).returncode
-        == 0
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "runtime"
-        version = "1.0.0"
-        dependencies = ["pydantic>=2"]
-        """,
-            "runtime",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "group"
-        version = "1.0.0"
-        dependencies = []
-
-        [dependency-groups]
-        dev = ["pytest>=8"]
-        """,
-            "group-dev",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "dynamic"
-        version = "1.0.0"
-        dynamic = ["dependencies"]
-        """,
-            "runtime",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "dynamic-extra"
-        version = "1.0.0"
-        dynamic = ["optional-dependencies"]
-        dependencies = []
-        """,
-            "extra-dev",
-        ).returncode
-        == 1
-    )
-    assert (
-        run(
-            """
-        [project]
-        name = "malformed"
-        version = "1.0.0"
-        dependencies = "pytest"
-        """,
-            "runtime",
-        ).returncode
-        == 2
-    )
+    assert "verify_trusted_python_test_toolchain()" in measure
+    assert "PR-selected dependency manifests are never resolved" in measure
+    assert "missing project imports fail in pytest" in measure
+    assert "uv sync --project" not in measure
+    assert "uv run --no-project" not in measure
+    assert "uv run --no-build" not in measure
+    assert "python3 -m coverage run -m pytest tests" in measure
+    assert "python3 -m coverage report --show-missing" in measure
+    assert "python3 -m pytest tests/test_docstrings.py" in measure
 
 
 def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
@@ -637,7 +606,7 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
     measure_end = workflow.index("\n      - name:", measure_start + 1)
     measure_step = workflow[measure_start:measure_end]
 
-    changed_start = measure_step.index("          changed_files_for_coverage() {\n")
+    changed_start = measure_step.index("          trusted_git() {\n")
     changed_end = measure_step.index(
         "\n\n          has_changed_tracked_files()", changed_start
     )
@@ -1592,7 +1561,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     coverage_end = workflow.index("\n  opencode-review-target:", coverage_start)
     coverage_job = workflow[coverage_start:coverage_end]
     syntax_step = coverage_job.index("      - name: Enforce changed-file syntax gate\n")
-    measure_step = coverage_job.index("      - name: Measure test and docstring evidence\n")
+    measure_step = coverage_job.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
     measure = coverage_job[measure_step:]
     target_start = coverage_end + 1
     target_job = workflow[target_start:]
@@ -1621,18 +1592,23 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert measure.count("GITHUB_OUTPUT=/dev/null") == 2
     assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 2
     assert measure.count("BASH_ENV=/dev/null") == 2
-    assert "uv run --no-project --no-build --with-requirements" in measure
-    assert "uv run --no-build --with coverage" in measure
-    assert (
-        'uv sync --project "$project_dir" --group dev --no-build --no-install-project'
-        in coverage_job
-    )
+    assert "uv sync --project" not in measure
+    assert "uv run --no-project" not in measure
+    assert "uv run --no-build" not in measure
+    assert "Trusted offline Python test toolchain" in measure
+    assert "python3 -m coverage run -m pytest tests" in measure
+    assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci --ignore-scripts" in coverage_job
     assert "pnpm install --frozen-lockfile --ignore-scripts" in coverage_job
     assert "yarn install --immutable --mode=skip-builds" in coverage_job
     assert 'corepack prepare "${runner}@latest"' not in coverage_job
     assert "https://sh.rustup.rs" not in coverage_job
-    assert "cargo install cargo-llvm-cov --version 0.8.7 --locked" in coverage_job
+    assert "cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz" in coverage_job
+    assert (
+        "967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7"
+        in coverage_job
+    )
+    assert "sha256sum -c -" in coverage_job
     assert "install.packages(" not in coverage_job
 
     target_condition = target_job.split("    runs-on:", 1)[0]
@@ -1829,9 +1805,7 @@ def test_opencode_approve_review_publication_failure_fails_closed():
 
     assert "APPROVE_PUBLICATION_FAILED" in workflow
     assert "APPROVE_PUBLICATION_SKIPPED" not in workflow
-    assert (
-        "OpenCode approve review publication failed for head" in workflow
-    )
+    assert "OpenCode approve review publication failed for head" in workflow
     assert (
         "skipping non-authoritative overview comment mutation so the required approval check can finish promptly"
         in workflow
@@ -1855,10 +1829,7 @@ def test_opencode_approve_review_publication_failure_fails_closed():
     assert "the pull request advanced from event head" in workflow
     assert "This pull request has been updated since you started reviewing" in workflow
     assert "Central fast approval published APPROVE review" in workflow
-    assert (
-        "an unpublished approval cannot satisfy review governance"
-        in workflow
-    )
+    assert "an unpublished approval cannot satisfy review governance" in workflow
     assert re.search(
         r'if \[ "\$event" = "APPROVE" \]; then[\s\S]{0,1600}return 1',
         workflow,
