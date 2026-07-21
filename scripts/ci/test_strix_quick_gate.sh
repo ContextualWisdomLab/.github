@@ -5724,7 +5724,7 @@ run_filtered_gate_case_if_requested() {
 		run_gate_case "pr-executable-integrity-mismatch" \
 			"vertex_ai/ready-primary" \
 			"" \
-			"1" \
+			"2" \
 			"did not match the pinned SHA-256 digest" \
 			"0" \
 			"" \
@@ -5734,7 +5734,7 @@ run_filtered_gate_case_if_requested() {
 		run_gate_case "pr-executable-group-writable" \
 			"vertex_ai/ready-primary" \
 			"" \
-			"1" \
+			"2" \
 			"must not be group/world writable" \
 			"0" \
 			"" \
@@ -5744,7 +5744,7 @@ run_filtered_gate_case_if_requested() {
 		run_gate_case "pr-executable-root-group-writable" \
 			"vertex_ai/ready-primary" \
 			"" \
-			"1" \
+			"2" \
 			"pinned Strix installation root must not be group/world writable" \
 			"0" \
 			"" \
@@ -5754,7 +5754,7 @@ run_filtered_gate_case_if_requested() {
 		run_gate_case "missing-executable-integrity" \
 			"vertex_ai/ready-primary" \
 			"" \
-			"1" \
+			"2" \
 			"every Strix invocation requires a pinned executable root and SHA-256 digest" \
 			"0" \
 			"" \
@@ -9011,7 +9011,7 @@ run_gate_case "success-with-critical-report" \
 run_gate_case "pr-executable-integrity-mismatch" \
 	"vertex_ai/ready-primary" \
 	"" \
-	"1" \
+	"2" \
 	"did not match the pinned SHA-256 digest" \
 	"0" \
 	"" \
@@ -9020,7 +9020,7 @@ run_gate_case "pr-executable-integrity-mismatch" \
 run_gate_case "pr-executable-group-writable" \
 	"vertex_ai/ready-primary" \
 	"" \
-	"1" \
+	"2" \
 	"must not be group/world writable" \
 	"0" \
 	"" \
@@ -9029,7 +9029,7 @@ run_gate_case "pr-executable-group-writable" \
 run_gate_case "pr-executable-root-group-writable" \
 	"vertex_ai/ready-primary" \
 	"" \
-	"1" \
+	"2" \
 	"pinned Strix installation root must not be group/world writable" \
 	"0" \
 	"" \
@@ -9038,7 +9038,7 @@ run_gate_case "pr-executable-root-group-writable" \
 run_gate_case "missing-executable-integrity" \
 	"vertex_ai/ready-primary" \
 	"" \
-	"1" \
+	"2" \
 	"every Strix invocation requires a pinned executable root and SHA-256 digest" \
 	"0" \
 	"" \

@@ -2590,6 +2590,10 @@ PY
 		fi
 	fi
 	preserve_attempt_log "$model" "$rc"
+	if [ "$rc" -eq 127 ]; then
+		printf "Strix executable integrity validation failed; treating this as a configuration failure.\n" >&2
+		return 2
+	fi
 
 	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
