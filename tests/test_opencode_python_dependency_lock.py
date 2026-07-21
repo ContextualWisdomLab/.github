@@ -27,7 +27,7 @@ def test_saju_caldav_dependencies_are_exact_hash_locked_wheels() -> None:
         locked_section = lock.split(requirement, 1)[1]
         locked_requirement = locked_section.split("\n", 1)[0]
         assert locked_requirement.rstrip().endswith("\\")
-        assert "--hash=sha256:" in locked_section.split("\n# via", 1)[0]
+        assert "--hash=sha256:" in locked_section.split("\n    # via", 1)[0]
 
     assert "lunar-python==" not in source
     assert "lunar-python==" not in lock
