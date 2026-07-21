@@ -6081,6 +6081,13 @@ run_filtered_gate_case_if_requested() {
 			"Materialized PR-head changed-file scope" \
 			"repository_dispatch"
 		;;
+	pull-request-target-git-legal-punctuation-uses-head-blob)
+		run_pull_request_target_head_scope_case \
+			"pull-request-target-git-legal-punctuation-uses-head-blob" \
+			"src/Ugly, but legal, path for a project (long)/module.py" \
+			"BASE_LEGAL_PUNCTUATION_SHOULD_NOT_BE_SCANNED" \
+			"HEAD_LEGAL_PUNCTUATION_SHOULD_BE_SCANNED"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -8662,6 +8669,12 @@ run_pull_request_target_head_scope_case \
 	"src/unsafe name.py" \
 	"BASE_CONTENT_WITH_SPACE_SHOULD_NOT_BE_SCANNED" \
 	"HEAD_CONTENT_WITH_SPACE_SHOULD_BE_SCANNED"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-git-legal-punctuation-uses-head-blob" \
+	"src/Ugly, but legal, path for a project (long)/module.py" \
+	"BASE_LEGAL_PUNCTUATION_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_LEGAL_PUNCTUATION_SHOULD_BE_SCANNED"
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-nextjs-bracket-route-uses-head-blob" \

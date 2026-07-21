@@ -405,13 +405,13 @@ if "\\" in relative_path_str:
 normalized = posixpath.normpath(relative_path_str)
 if normalized in (".", "") or normalized.startswith("../") or normalized == "..":
     raise SystemExit(1)
-# '@' is required for Apple/Tauri retina asset names (128x128@2x.png) and '+'
-# for SvelteKit's mandatory route files (+page.svelte, +layout.ts). Preserve
-# the existing ASCII allowlist and additionally accept only Unicode letters,
-# combining marks, and numbers. This supports internationalized repository
-# paths without admitting controls, separators, bidi formatting, shell
-# metacharacters, or Unicode punctuation that could resemble a path boundary.
-allowed_ascii = frozenset("_.@+/ []-")
+# '@' is required for Apple/Tauri retina asset names (128x128@2x.png), '+' for
+# SvelteKit's mandatory route files (+page.svelte, +layout.ts), and comma plus
+# parentheses for legal package fixture paths. Preserve the bounded ASCII
+# allowlist and additionally accept only Unicode letters, combining marks, and
+# numbers. This supports legitimate repository paths without admitting
+# controls, alternate separators, bidi formatting, or pathspec syntax.
+allowed_ascii = frozenset("_.@+/ [],()-")
 if not all(
     (character.isascii() and (character.isalnum() or character in allowed_ascii))
     or (
