@@ -4,4 +4,4 @@ protobuf<7.0.0
 cryptography==49.0.0
 python-multipart==0.0.31
 # CVE-2026-59886: univ.Real big-exponent DoS; fixed in 0.6.4
-pyasn1>=0.6.4
+pyasn1==0.6.4
