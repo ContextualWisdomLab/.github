@@ -1182,6 +1182,7 @@ pull_request_scope_context_files() {
 	local needs_frontend_email_api_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
+	local -a sql_migration_dirs=()
 	for changed_file in "$@"; do
 		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
 		case "$normalized_changed_file" in
@@ -1201,6 +1202,28 @@ pull_request_scope_context_files() {
 		# or VERSION context.
 		.github/workflows/* | Dockerfile | Dockerfile.* | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml)
 			needs_deployment_context=1
+			;;
+		esac
+		# A single SQL migration references schema objects (tables, columns) that its
+		# sibling migrations create. Diff-scoping one migration in isolation makes the
+		# scanner report phantom "relation does not exist" / "table does not exist"
+		# findings — a false positive whose PoC depends only on files excluded from the
+		# scope. Collect each touched migrations directory so the whole ordered set is
+		# supplied from the PR head as read-only context. Generic across repositories;
+		# no project-specific paths are hard-coded.
+		case "$normalized_changed_file" in
+		*/migrations/*.sql | migrations/*.sql)
+			local migration_dir="${normalized_changed_file%/*}"
+			local seen_migration_dir=0 known_migration_dir
+			for known_migration_dir in ${sql_migration_dirs[@]+"${sql_migration_dirs[@]}"}; do
+				if [ "$known_migration_dir" = "$migration_dir" ]; then
+					seen_migration_dir=1
+					break
+				fi
+			done
+			if [ "$seen_migration_dir" -eq 0 ]; then
+				sql_migration_dirs+=("$migration_dir")
+			fi
 			;;
 		esac
 	done
@@ -1281,6 +1304,25 @@ docker-compose.yml
 render.yaml
 VERSION
 EOF
+	fi
+
+	# Emit sibling SQL migrations from the PR head so cross-migration schema
+	# references resolve during the scan. Enumeration is read-only (git ls-tree of
+	# the migrations directory at PR head) and fails open: when the head SHA is
+	# unavailable or invalid, no context is added and the base changed-file scan is
+	# unaffected. Emitted paths flow through the same trusted PR-head copy path as
+	# every other context file, so no untrusted content or executable bit is added.
+	if [ "${#sql_migration_dirs[@]}" -gt 0 ]; then
+		local head_sha_for_migration_context migration_context_dir
+		head_sha_for_migration_context="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+		if [ -n "$head_sha_for_migration_context" ] &&
+			is_valid_git_commit_sha "$head_sha_for_migration_context" &&
+			git rev-parse --verify --quiet "$head_sha_for_migration_context^{commit}" >/dev/null; then
+			for migration_context_dir in "${sql_migration_dirs[@]}"; do
+				git ls-tree -r --name-only "$head_sha_for_migration_context" -- "$migration_context_dir/" 2>/dev/null |
+					grep -E '\.sql$' || true
+			done
+		fi
 	fi
 }
 

@@ -173,6 +173,47 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "scripts/ci/test_*.sh" "strix gate excludes large CI self-test harnesses from PR scan targets"
 }
 
+assert_strix_pr_scope_includes_sql_migration_context() {
+	assert_file_contains "$GATE_SCRIPT" "*/migrations/*.sql | migrations/*.sql" "strix gate recognizes SQL migration files for sibling context"
+	assert_file_contains "$GATE_SCRIPT" "sql_migration_dirs+=(\"\$migration_dir\")" "strix gate collects each touched migrations directory"
+	assert_file_contains "$GATE_SCRIPT" "git ls-tree -r --name-only \"\$head_sha_for_migration_context\" -- \"\$migration_context_dir/\"" "strix gate enumerates sibling migrations from the PR head"
+	assert_file_contains "$GATE_SCRIPT" "fails open" "strix gate migration context enumeration is documented as fail-open"
+}
+
+assert_strix_pr_scope_migration_siblings_functional() {
+	# A migration-only diff must resolve schema references from sibling migrations,
+	# not report a phantom "relation does not exist" finding. Enumerate the context
+	# a two-migration directory produces when only the second file is changed.
+	local tmp_dir
+	tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-migration-context.XXXXXX")"
+	(
+		cd "$tmp_dir"
+		git init -q
+		git config user.email ci@example.com
+		git config user.name ci
+		mkdir -p server/db/migrations
+		printf 'CREATE TABLE t (id int);\n' >server/db/migrations/0001_init.sql
+		printf 'ALTER TABLE t ADD COLUMN c text;\n' >server/db/migrations/0002_add_col.sql
+		git add -A
+		git commit -qm base
+		head_sha="$(git rev-parse HEAD)"
+
+		# shellcheck source=/dev/null
+		REPO_ROOT="$tmp_dir" PR_HEAD_SHA="$head_sha" \
+			bash -c '
+				set -euo pipefail
+				REPO_ROOT="'"$tmp_dir"'"
+				trim_whitespace() { printf "%s" "$1"; }
+				is_valid_git_commit_sha() { [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]; }
+				normalize_changed_file_path() { printf "%s" "$1"; }
+				'"$(sed -n "/^pull_request_scope_context_files()/,/^}/p" "$GATE_SCRIPT")"'
+				pull_request_scope_context_files server/db/migrations/0002_add_col.sql
+			' >"$tmp_dir/out.txt"
+	)
+	assert_file_contains "$tmp_dir/out.txt" "server/db/migrations/0001_init.sql" "strix gate supplies the base migration as context for a later migration diff"
+	rm -rf "$tmp_dir"
+}
+
 assert_strix_workflow_pr_trigger_hardened() {
 	local workflow_file="$REPO_ROOT/.github/workflows/strix.yml"
 
@@ -8836,6 +8877,10 @@ EOF
 assert_strix_workflow_pr_trigger_hardened
 
 assert_strix_pr_scope_includes_deployment_context
+
+assert_strix_pr_scope_includes_sql_migration_context
+
+assert_strix_pr_scope_migration_siblings_functional
 
 assert_strix_gpt54_model_guard_cases
 
