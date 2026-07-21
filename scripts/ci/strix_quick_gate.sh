@@ -206,7 +206,8 @@ has_strix_report_failure_signal() {
 			continue
 		fi
 		while IFS= read -r -d '' report_log; do
-			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
+			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING)([^[:alpha:]]|$)' "$report_log" ||
+				grep -Eiv 'timeout[[:space:]]+disabled' "$report_log" | grep -Eiq '(^|[^[:alpha:]])Timeout([^[:alpha:]]|$)'; then
 				return 0
 			fi
 		done < <(find "$report_root" -type f -name '*.log' -print0)
@@ -718,7 +719,7 @@ is_github_models_api_compatible_model() {
 is_github_models_api_base() {
 	local api_base="$1"
 	case "$api_base" in
-	https://models.github.ai | https://models.github.ai/*)
+	https://models.github.ai/inference | https://models.github.ai/inference/)
 		return 0
 		;;
 	*)
@@ -1945,6 +1946,9 @@ extract_max_severity_rank() {
 vulnerability_file_is_below_threshold() {
 	local vuln_file="$1"
 	local threshold_rank report_rank
+	if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+		return 1
+	fi
 	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
 	report_rank="$(extract_max_severity_rank "$vuln_file")"
 	[ "$report_rank" -ge 0 ] && [ "$report_rank" -lt "$threshold_rank" ]
@@ -2103,9 +2107,9 @@ evaluate_pull_request_findings() {
 	fi
 
 	if [ "$found_baseline_threshold_finding" -eq 1 ]; then
-		PR_FINDINGS_DECISION="allow_baseline"
-		echo "Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." >&2
-		return 0
+		PR_FINDINGS_DECISION="block_baseline_unproven"
+		echo "Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." >&2
+		return 1
 	fi
 
 	return 1
@@ -2146,6 +2150,7 @@ fail_unmapped_threshold_report() {
 	fi
 	PR_FINDINGS_DECISION="block_unmapped"
 	echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+	echo "Strix quick scan failed with a non-recoverable error." >&2
 	return 0
 }
 
@@ -2215,6 +2220,29 @@ has_distinct_fallback_model_for_model() {
 	return 1
 }
 
+report_no_distinct_fallback_model() {
+	local model="$1"
+	local fallback_models_raw fallback_config_name
+	local fallback_models=()
+	local candidate_raw candidate
+	local configured_fallback_count=0
+
+	fallback_models_raw="$(fallback_models_raw_for_model "$model")"
+	fallback_models_raw="${fallback_models_raw//$'\r'/ }"
+	fallback_models_raw="${fallback_models_raw//$'\n'/ }"
+	read -r -a fallback_models <<<"$fallback_models_raw"
+	for candidate_raw in "${fallback_models[@]}"; do
+		candidate="$(normalize_model "$candidate_raw")"
+		[ -n "$candidate" ] && configured_fallback_count=$((configured_fallback_count + 1))
+	done
+	fallback_config_name="$(fallback_models_config_name_for_model "$model")"
+	if [ "$configured_fallback_count" -eq 0 ]; then
+		echo "ERROR: No fallback models configured ($fallback_config_name is empty). Configure distinct models." >&2
+	else
+		echo "ERROR: All configured fallback models are the same as the primary model" >&2
+	fi
+}
+
 resolved_llm_api_base_for_model() {
 	local model="$1"
 
@@ -2260,7 +2288,11 @@ resolved_llm_api_base_for_model() {
 		echo "ERROR: LLM_API_BASE must be an https URL when configured." >&2
 		return 2
 	fi
-	if is_github_models_api_base "$llm_api_base_value" && ! is_github_models_api_compatible_model "$model"; then
+	if ! is_github_models_api_base "$llm_api_base_value"; then
+		echo "ERROR: LLM_API_BASE must use the pinned GitHub Models inference endpoint; arbitrary provider hosts are forbidden." >&2
+		return 2
+	fi
+	if ! is_github_models_api_compatible_model "$model"; then
 		echo "ERROR: LLM_API_BASE may route through GitHub Models only when STRIX_LLM uses a GitHub Models-compatible model." >&2
 		return 2
 	fi
@@ -2355,7 +2387,6 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_PATH="$STRIX_EXECUTABLE_PATH" \
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
-	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
 	python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" <<'PY'
 import hashlib
 import hmac
@@ -2377,7 +2408,6 @@ log_path.write_text("", encoding="utf-8")
 process_timeout = None if timeout_seconds == 0 else timeout_seconds
 child_env = {}
 for key in (
-    "PATH",
     "HOME",
     "TMPDIR",
     "TMP",
@@ -2397,6 +2427,7 @@ for key in (
     value = os.environ.get(key)
     if value:
         child_env[key] = value
+child_env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 child_env["PYTHONWARNINGS"] = "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
 child_env["NPM_CONFIG_IGNORE_SCRIPTS"] = "true"
 child_env["npm_config_ignore_scripts"] = "true"
@@ -2462,32 +2493,28 @@ if resolved_strix_path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
     sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must not be group/world writable.\n")
     raise SystemExit(127)
 
-require_integrity = os.environ.get("STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY", "").lower() in {
-    "1", "true", "yes", "on"
-}
-if require_integrity:
-    configured_root = os.environ.get("STRIX_CHILD_EXECUTABLE_ROOT", "")
-    configured_digest = os.environ.get("STRIX_CHILD_EXECUTABLE_SHA256", "").lower()
-    if not configured_root or len(configured_digest) != 64 or any(
-        char not in "0123456789abcdef" for char in configured_digest
-    ):
-        sys.stderr.write(
-            "ERROR: trusted PR evidence requires a pinned Strix executable root and SHA-256 digest.\n"
-        )
-        raise SystemExit(127)
-    try:
-        resolved_root = pathlib.Path(configured_root).resolve(strict=True)
-        resolved_strix_path.relative_to(resolved_root)
-    except (OSError, ValueError):
-        sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be inside the pinned installation root.\n")
-        raise SystemExit(127)
-    if not resolved_root.is_dir() or resolved_root.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        sys.stderr.write("ERROR: the pinned Strix installation root must not be group/world writable.\n")
-        raise SystemExit(127)
-    actual_digest = hashlib.sha256(resolved_strix_path.read_bytes()).hexdigest()
-    if not hmac.compare_digest(actual_digest, configured_digest):
-        sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH did not match the pinned SHA-256 digest.\n")
-        raise SystemExit(127)
+configured_root = os.environ.get("STRIX_CHILD_EXECUTABLE_ROOT", "")
+configured_digest = os.environ.get("STRIX_CHILD_EXECUTABLE_SHA256", "").lower()
+if not configured_root or len(configured_digest) != 64 or any(
+    char not in "0123456789abcdef" for char in configured_digest
+):
+    sys.stderr.write(
+        "ERROR: every Strix invocation requires a pinned executable root and SHA-256 digest.\n"
+    )
+    raise SystemExit(127)
+try:
+    resolved_root = pathlib.Path(configured_root).resolve(strict=True)
+    resolved_strix_path.relative_to(resolved_root)
+except (OSError, ValueError):
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must be inside the pinned installation root.\n")
+    raise SystemExit(127)
+if not resolved_root.is_dir() or resolved_root.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    sys.stderr.write("ERROR: the pinned Strix installation root must not be group/world writable.\n")
+    raise SystemExit(127)
+actual_digest = hashlib.sha256(resolved_strix_path.read_bytes()).hexdigest()
+if not hmac.compare_digest(actual_digest, configured_digest):
+    sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH did not match the pinned SHA-256 digest.\n")
+    raise SystemExit(127)
 resolved_strix_bin = str(resolved_strix_path)
 
 try:
@@ -2937,6 +2964,10 @@ has_detected_infrastructure_error() {
 		return 0
 	fi
 
+	if is_vertex_not_found_error; then
+		return 0
+	fi
+
 	# Generic strix non-zero exit with known transport/connection errors
 	# that don't fall into the specific categories above.
 	# Use LLM_PROVIDER_ONLY_REGEX (not PROVIDER_CONTEXT_REGEX) to avoid
@@ -3037,6 +3068,11 @@ has_only_below_threshold_vulnerabilities() {
 		done
 	done
 
+	# The per-attempt log is also security evidence. A failed provider call can
+	# emit a higher-severity finding than a partial markdown report, so the
+	# threshold decision must consider both streams before allowing continuation.
+	update_max_severity_from_stream "$STRIX_LOG"
+
 	if [ "$found_any_vuln_file" -eq 0 ]; then
 		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
 		return 1
@@ -3104,12 +3140,6 @@ has_blocking_vulnerability_reports() {
 }
 
 fail_reported_vulnerabilities_before_fallback_success() {
-	case "$PR_FINDINGS_DECISION" in
-	allow_baseline)
-		return 1
-		;;
-	esac
-
 	if has_blocking_vulnerability_reports; then
 		echo "Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." >&2
 		echo "Strix quick scan failed with a non-recoverable error." >&2
@@ -3196,21 +3226,54 @@ vulnerability_file_has_absent_endpoint_finding() {
 	local source_dirs_raw="${STRIX_SOURCE_DIRS:-.}"
 	local resolved_target_root=""
 	local resolved_dirs=()
+	local source_dir_entries=()
 	local dir_entry
 	if ! resolved_target_root="$(resolve_current_target_path "$TARGET_PATH" 2>/dev/null)"; then
 		return 1
 	fi
 
-	# Disable globbing so that entries like "*" or "[" in STRIX_SOURCE_DIRS
-	# are not expanded by pathname expansion during word-splitting.
-	set -f
-	for dir_entry in $source_dirs_raw; do
-		local candidate="${resolved_target_root%/}/$dir_entry"
-		if [ -d "$candidate" ] && [ ! -L "$candidate" ]; then
-			resolved_dirs+=("$candidate")
+	if [[ "$source_dirs_raw" =~ [[:cntrl:]] ]]; then
+		echo "ERROR: STRIX_SOURCE_DIRS must not contain control characters." >&2
+		return 1
+	fi
+	read -r -a source_dir_entries <<<"$source_dirs_raw"
+	for dir_entry in "${source_dir_entries[@]}"; do
+		local resolved_source_dir
+		if ! resolved_source_dir="$(python3 - "$resolved_target_root" "$dir_entry" <<'PY'
+from pathlib import Path, PurePosixPath
+import os
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+raw = sys.argv[2]
+relative = PurePosixPath(raw)
+if not raw or relative.is_absolute() or ".." in relative.parts:
+    raise SystemExit(1)
+
+candidate = root.joinpath(*relative.parts)
+probe = root
+for part in relative.parts:
+    if part in {"", "."}:
+        continue
+    probe = probe / part
+    if probe.is_symlink():
+        raise SystemExit(1)
+
+resolved = candidate.resolve(strict=True)
+try:
+    resolved.relative_to(root)
+except ValueError:
+    raise SystemExit(1)
+if not resolved.is_dir() or os.path.commonpath((str(root), str(resolved))) != str(root):
+    raise SystemExit(1)
+print(resolved)
+PY
+)"; then
+			echo "ERROR: STRIX_SOURCE_DIRS entry '$dir_entry' must resolve to a non-symlink directory inside the scan target." >&2
+			return 1
 		fi
+		resolved_dirs+=("$resolved_source_dir")
 	done
-	set +f
 
 	if [ "${#resolved_dirs[@]}" -eq 0 ]; then
 		return 1
@@ -3849,8 +3912,14 @@ run_current_target_scan() {
 
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-		if is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
-			strict_primary_provider_fallback=1
+		if is_model_retryable_error "$PRIMARY_MODEL"; then
+			if has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
+				strict_primary_provider_fallback=1
+			else
+				report_no_distinct_fallback_model "$PRIMARY_MODEL"
+				echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
+				return 1
+			fi
 		else
 			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
 			return 1
@@ -3868,7 +3937,7 @@ run_current_target_scan() {
 	fi
 
 	case "$PR_FINDINGS_DECISION" in
-	block_changed | block_unmapped | block_manifest_unverified)
+	block_changed | block_unmapped | block_manifest_unverified | block_baseline_unproven)
 		if [ "$strict_primary_provider_fallback" -eq 1 ]; then
 			fail_reported_vulnerabilities_before_fallback_success || true
 		fi
@@ -3944,7 +4013,7 @@ run_current_target_scan() {
 		fi
 
 		case "$PR_FINDINGS_DECISION" in
-		block_changed | block_unmapped | block_manifest_unverified)
+		block_changed | block_unmapped | block_manifest_unverified | block_baseline_unproven)
 			if [ "$strict_fallback_provider_signal" -eq 1 ]; then
 				fail_reported_vulnerabilities_before_fallback_success || true
 			fi
@@ -3978,18 +4047,7 @@ run_current_target_scan() {
 	fi
 
 	if [ "$fallback_tried" -eq 0 ]; then
-		local fallback_config_name
-		fallback_config_name="$(fallback_models_config_name_for_model "$PRIMARY_MODEL")"
-		local configured_fallback_count=0
-		for candidate_raw in "${FALLBACK_MODELS[@]}"; do
-			candidate="$(normalize_model "$candidate_raw")"
-			[ -n "$candidate" ] && configured_fallback_count=$((configured_fallback_count + 1))
-		done
-		if [ "$configured_fallback_count" -eq 0 ]; then
-			echo "ERROR: No fallback models configured ($fallback_config_name is empty). Configure distinct models." >&2
-		else
-			echo "ERROR: All configured fallback models are the same as the primary model" >&2
-		fi
+		report_no_distinct_fallback_model "$PRIMARY_MODEL"
 		return 1
 	fi
 

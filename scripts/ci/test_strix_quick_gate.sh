@@ -25,9 +25,9 @@ unset LITELLM_API_KEY
 unset LITELLM_MASTER_KEY
 unset GEMINI_API_KEY
 unset GOOGLE_APPLICATION_CREDENTIALS
-if ! python3 -c 'import pathlib' >/dev/null 2>&1; then
-	export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
-fi
+# Prefer stable system/package-manager runtimes over mutable version-manager
+# shims while the test suite exercises PATH-hijack defenses.
+export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 
 record_failure() {
 	echo "FAIL: $1" >&2
@@ -42,6 +42,16 @@ assert_equals() {
 	if [ "$expected" != "$actual" ]; then
 		record_failure "$message (expected='$expected' actual='$actual')"
 	fi
+}
+
+sha256_file() {
+	python3 - "$1" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
 }
 
 print_assertion_source() {
@@ -449,7 +459,8 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 
 assert_absent_endpoint_search_uses_canonical_target_path() {
 	assert_file_contains "$GATE_SCRIPT" 'resolved_target_root="$(resolve_current_target_path "$TARGET_PATH" 2>/dev/null)"' "absent-endpoint search resolves canonical target root"
-	assert_file_contains "$GATE_SCRIPT" 'candidate="${resolved_target_root%/}/$dir_entry"' "absent-endpoint search uses canonical target root"
+	assert_file_contains "$GATE_SCRIPT" 'resolved.relative_to(root)' "absent-endpoint search enforces the canonical target boundary"
+	assert_file_contains "$GATE_SCRIPT" 'if probe.is_symlink()' "absent-endpoint search rejects symlink path components"
 	assert_file_not_contains "$GATE_SCRIPT" 'candidate="${TARGET_PATH%/}/$dir_entry"' "absent-endpoint search avoids relative target path roots"
 }
 
@@ -909,8 +920,11 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'umask 022' "Strix workflow creates the credential-bearing executable without group/world write access"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'chmod go-w -- "$strix_scripts_root" "$strix_executable"' "Strix workflow normalizes the installation root and resolved executable before hashing"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must name the trusted installed Strix executable' "Strix gate requires an explicit trusted executable path"
+	assert_file_contains "$GATE_SCRIPT" 'every Strix invocation requires a pinned executable root and SHA-256 digest' "Strix gate requires executable integrity outside PR evidence mode too"
 	assert_file_contains "$GATE_SCRIPT" 'did not match the pinned SHA-256 digest' "Strix gate rejects executable substitution after trusted installation"
 	assert_file_contains "$GATE_SCRIPT" 'STRIX_EXECUTABLE_PATH must be outside the untrusted scan target' "Strix executable cannot come from the scan target"
+	assert_file_contains "$GATE_SCRIPT" 'child_env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' "Strix child shebang resolution uses a fixed system PATH"
+	assert_file_not_contains "$GATE_SCRIPT" 'child_env["PATH"] = os.environ.get("PATH"' "Strix child never inherits an attacker-extended PATH"
 	assert_file_not_contains "$GATE_SCRIPT" 'shutil.which("strix")' "Strix gate never resolves its credential-bearing executable through inherited PATH"
 	assert_file_not_contains "$workflow_file" "https://sh.rustup.rs" "coverage refuses a mutable Rust network installer"
 	assert_file_contains "$workflow_file" "cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz" "coverage pins the official cargo-llvm-cov 0.8.7 Linux asset"
@@ -3080,7 +3094,7 @@ run_gate_case() {
 	local raw_llm_api_base_override="${10-__DEFAULT__}"
 	local initial_llm_api_base="${11-}"
 
-	local raw_llm_api_base="https://example.invalid/generateContent"
+	local raw_llm_api_base=""
 	if [ "$raw_llm_api_base_override" != "__DEFAULT__" ]; then
 		raw_llm_api_base="$raw_llm_api_base_override"
 	elif [ "$default_provider" = "openai" ]; then
@@ -3198,7 +3212,7 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
 case "${FAKE_STRIX_SCENARIO:?}" in
-success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
+success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable|missing-executable-integrity)
 		echo "scan ok"
 		exit 0
 		;;
@@ -3639,7 +3653,7 @@ REPORT
 			;;
 		esac
 		;;
-	github-models-fallback-provider-signal-tries-next | github-models-fallback-baseline-vulnerability-before-next-success-continues | github-models-fallback-changed-vulnerability-before-next-success-blocks | github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
+	github-models-fallback-provider-signal-tries-next | github-models-fallback-baseline-vulnerability-before-next-success-blocks | github-models-fallback-changed-vulnerability-before-next-success-blocks | github-models-fallback-dockerfile-test-baseline-before-next-success-blocks)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
 			echo "LLM CONNECTION FAILED"
@@ -3648,7 +3662,7 @@ REPORT
 			exit 1
 			;;
 		openai/deepseek/deepseek-r1-0528)
-			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-baseline-vulnerability-before-next-success-continues" ]; then
+			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-baseline-vulnerability-before-next-success-blocks" ]; then
 				mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities"
 				cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities/vuln-0001.md" <<'EOS'
 Severity: CRITICAL
@@ -3662,7 +3676,7 @@ Severity: CRITICAL
 Location 1:
 sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java:12
 EOS
-			elif [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" ]; then
+			elif [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-dockerfile-test-baseline-before-next-success-blocks" ]; then
 				mkdir -p "$STRIX_REPORTS_DIR/fake-pr-dockerfile-test-provider-signal/vulnerabilities"
 				cat >"$STRIX_REPORTS_DIR/fake-pr-dockerfile-test-provider-signal/vulnerabilities/vuln-0001.md" <<'EOS'
 Severity: MEDIUM
@@ -4159,12 +4173,32 @@ EOS
 			;;
 		esac
 		;;
-	nonvertex-slash-model-not-rewritten)
-		if [ "${STRIX_LLM:-}" = "deepseek/models/deepseek-r1" ]; then
-			echo "scan ok with deepseek model passthrough"
+	notfound-high-log-low-artifact)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-notfound-partial/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-notfound-partial/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: LOW
+EOS
+		echo "Severity: HIGH"
+		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+		echo '"status": "NOT_FOUND"'
+		echo "Penetration test failed after emitting a HIGH log-only finding"
+		exit 1
+		;;
+	source-dirs-relative-escape)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-source-dir-escape/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-source-dir-escape/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: HIGH
+Endpoint: /api/outside-secret
+EOS
+		echo "litellm.exceptions.Timeout: provider timed out after a partial report"
+		exit 1
+		;;
+	nonvertex-slash-model-not-rewritten-as-vertex)
+		if [ "${STRIX_LLM:-}" = "openai/deepseek/models/deepseek-r1" ]; then
+			echo "scan ok with non-Vertex deepseek GitHub Models routing"
 			exit 0
 		fi
-		echo "Error: deepseek model was rewritten (${STRIX_LLM:-})" >&2
+		echo "Error: deepseek model routing was corrupted (${STRIX_LLM:-})" >&2
 		exit 33
 		;;
 	preserve-existing-api-base)
@@ -5021,6 +5055,8 @@ EOS
 esac
 EOF
 	chmod +x "$fake_strix"
+	local fake_strix_sha256
+	fake_strix_sha256="$(sha256_file "$fake_strix")"
 
 	cat >"$fake_gh" <<'EOF'
 #!/usr/bin/env bash
@@ -5101,6 +5137,10 @@ EOF
 		echo 'GET /api/hidden-secret' >"$repo_root_dir/.git/refs/leaked.txt"
 		mkdir -p "$repo_root_dir/node_modules/fake-pkg"
 		echo 'GET /api/hidden-secret' >"$repo_root_dir/node_modules/fake-pkg/index.js"
+	elif [ "$scenario" = "source-dirs-relative-escape" ]; then
+		mkdir -p "$workspace_dir/outside"
+		echo 'GET /api/outside-secret' >"$workspace_dir/outside/routes.txt"
+		echo 'print("changed")' >"$repo_root_dir/src/routes.py"
 	elif [ "$scenario" = "pr-stale-source-claim-fallback-success" ]; then
 		mkdir -p "$repo_root_dir/backend/db"
 		cat >"$repo_root_dir/backend/db/models.py" <<'EOS'
@@ -5221,7 +5261,7 @@ EOS
 		touch "$repo_root_dir/docker-compose.yml"
 		touch "$repo_root_dir/render.yaml"
 		echo '0.0.0' >"$repo_root_dir/VERSION"
-	elif [ "$scenario" = "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" ]; then
+	elif [ "$scenario" = "github-models-fallback-dockerfile-test-baseline-before-next-success-blocks" ]; then
 		mkdir -p "$repo_root_dir/.github/workflows"
 		cat >"$repo_root_dir/.github/workflows/build-ci-image.yml" <<'EOS'
 name: Build CI image
@@ -5335,6 +5375,8 @@ PY
 	local env_cmd=(
 		PATH="$untrusted_bin_dir:$bin_dir:$PATH"
 		STRIX_EXECUTABLE_PATH="$fake_strix"
+		STRIX_EXECUTABLE_ROOT="$bin_dir"
+		STRIX_EXECUTABLE_SHA256="$fake_strix_sha256"
 		FAKE_STRIX_PATH_HIJACK_LOG="$path_hijack_log"
 		STRIX_INPUT_FILE_ROOT="$tmp_dir"
 		GITHUB_EVENT_NAME=""
@@ -5372,15 +5414,6 @@ PY
 		)
 	fi
 	if [ "$scenario" = "pr-executable-root-group-writable" ]; then
-		local fake_strix_sha256
-		fake_strix_sha256="$(python3 - "$fake_strix" <<'PY'
-import hashlib
-from pathlib import Path
-import sys
-
-print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
-PY
-)"
 		env_cmd+=(
 			IS_PR_EVIDENCE_RUN="true"
 			STRIX_EXECUTABLE_ROOT="$bin_dir"
@@ -5390,6 +5423,19 @@ PY
 	fi
 	if [ "$scenario" = "pr-executable-group-writable" ]; then
 		chmod 0775 "$fake_strix"
+	fi
+	if [ "$scenario" = "missing-executable-integrity" ]; then
+		local integrity_env_cmd=()
+		local integrity_env_pair
+		for integrity_env_pair in "${env_cmd[@]}"; do
+			case "$integrity_env_pair" in
+			STRIX_EXECUTABLE_ROOT=* | STRIX_EXECUTABLE_SHA256=*)
+				continue
+				;;
+			esac
+			integrity_env_cmd+=("$integrity_env_pair")
+		done
+		env_cmd=("${integrity_env_cmd[@]}")
 	fi
 	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
 		env_cmd+=(
@@ -5662,6 +5708,18 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/ready-primary" \
 			"<unset>"
 		;;
+	nonvertex-slash-model-not-rewritten-as-vertex)
+		run_gate_case "nonvertex-slash-model-not-rewritten-as-vertex" \
+			"deepseek/models/deepseek-r1" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"scan ok with non-Vertex deepseek GitHub Models routing" \
+			"1" \
+			"openai/deepseek/models/deepseek-r1" \
+			"https://models.github.ai/inference" \
+			"vertex_ai" \
+			"https://models.github.ai/inference"
+		;;
 	pr-executable-integrity-mismatch)
 		run_gate_case "pr-executable-integrity-mismatch" \
 			"vertex_ai/ready-primary" \
@@ -5691,6 +5749,61 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"" \
 			""
+		;;
+	missing-executable-integrity)
+		run_gate_case "missing-executable-integrity" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"every Strix invocation requires a pinned executable root and SHA-256 digest" \
+			"0" \
+			"" \
+			""
+		;;
+	reject-arbitrary-api-base)
+		run_gate_case "reject-arbitrary-api-base" \
+			"openai/gpt-4o-mini" \
+			"" \
+			"2" \
+			"LLM_API_BASE must use the pinned GitHub Models inference endpoint; arbitrary provider hosts are forbidden." \
+			"0" \
+			"" \
+			"" \
+			"vertex_ai" \
+			"" \
+			"https://attacker.invalid/v1"
+		;;
+	notfound-high-log-low-artifact)
+		run_gate_case "notfound-high-log-low-artifact" \
+			"vertex_ai/notfound-high-log-low-primary" \
+			"vertex_ai/notfound-high-log-low-primary" \
+			"1" \
+			"Strix scan failed after provider infrastructure or failure-signal output; failing closed." \
+			"1" \
+			"vertex_ai/notfound-high-log-low-primary" \
+			"<unset>"
+		;;
+	source-dirs-relative-escape)
+		run_gate_case_allow_provider_signal "source-dirs-relative-escape" \
+			"vertex_ai/source-dir-escape-primary" \
+			"vertex_ai/source-dir-escape-primary" \
+			"1" \
+			"STRIX_SOURCE_DIRS entry '../outside' must resolve to a non-symlink directory inside the scan target." \
+			"1" \
+			"vertex_ai/source-dir-escape-primary" \
+			"<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"../outside" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"src/routes.py"
 		;;
 	vertex-primary-hallucinated-endpoint-fallback-success)
 		run_gate_case "vertex-primary-hallucinated-endpoint-fallback-success" \
@@ -5806,7 +5919,7 @@ run_filtered_gate_case_if_requested() {
 			"REGEX:Strix quick scan succeeded with fallback model 'gemini/fallback-one' in [0-9]+s\\." \
 			"2" \
 			"gemini/timeout-fallback-primary|gemini/fallback-one" \
-			"https://example.invalid|https://example.invalid" \
+			"<unset>|<unset>" \
 			"vertex_ai" \
 			"__DEFAULT__" \
 			"" \
@@ -5921,15 +6034,15 @@ run_filtered_gate_case_if_requested() {
 	total-timeout)
 		run_total_timeout_case
 		;;
-	github-models-fallback-baseline-vulnerability-before-next-success-continues)
-		run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
+	github-models-fallback-baseline-vulnerability-before-next-success-blocks)
+		run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-blocks" \
 			"openai/gpt-5" \
 			"" \
-			"0" \
-			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
-			"3" \
-			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+			"1" \
+			"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
 			"openai" \
 			"https://models.github.ai/inference" \
 			"" \
@@ -5983,15 +6096,15 @@ run_filtered_gate_case_if_requested() {
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
 		;;
-	github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
-		run_gate_case "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" \
+	github-models-fallback-dockerfile-test-baseline-before-next-success-blocks)
+		run_gate_case "github-models-fallback-dockerfile-test-baseline-before-next-success-blocks" \
 			"openai/gpt-5" \
 			"" \
-			"0" \
-			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
-			"3" \
-			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+			"1" \
+			"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
 			"openai" \
 			"https://models.github.ai/inference" \
 			"" \
@@ -6229,6 +6342,8 @@ EOF
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="$github_event_name" \
 			PR_NUMBER="123" \
@@ -6353,6 +6468,8 @@ EOS
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6461,6 +6578,8 @@ EOF
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6600,6 +6719,8 @@ EOF
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -6638,6 +6759,8 @@ EOF
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request" \
 			STRIX_TEST_CHANGED_FILES_OVERRIDE="$(printf '%s\n%s' '../outside.py' "$changed_file")" \
@@ -6846,6 +6969,8 @@ EOF
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7039,6 +7164,8 @@ EOF
 		env -u GITHUB_EVENT_PATH \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7137,6 +7264,8 @@ EOF
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7271,6 +7400,8 @@ EOF
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			REAL_GIT_PATH="$real_git" \
 			FAKE_GIT_FAIL_COMMAND="$fake_git_fail_command" \
@@ -7365,6 +7496,8 @@ EOF
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7452,6 +7585,8 @@ EOF
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7526,6 +7661,8 @@ EOF
 		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
@@ -7598,6 +7735,8 @@ EOF
 		env -u STRIX_TEST_PR_SCA_STATUS_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			GITHUB_EVENT_PATH="$event_payload_file" \
@@ -7682,6 +7821,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE -u STRIX_INPUT_FILE_ROOT \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CHILD_PID_FILE="$child_pid_file" \
@@ -7761,6 +7902,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE -u STRIX_INPUT_FILE_ROOT \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			STRIX_INPUT_FILE_ROOT="$allowed_input_dir" \
 			RUNNER_TEMP="$allowed_input_dir" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
@@ -7813,6 +7956,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE -u STRIX_INPUT_FILE_ROOT \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CALL_COUNT_FILE="$call_count_file" \
@@ -7886,6 +8031,8 @@ EOF
 	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 		PATH="$tmp_dir:$PATH" \
 		STRIX_EXECUTABLE_PATH="$fake_strix" \
+		STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+		STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 		STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 		STRIX_DISABLE_PR_SCOPING="0" \
 		STRIX_LLM_FILE="$strix_llm_file" \
@@ -7931,6 +8078,8 @@ EOF
 	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 		PATH="$tmp_dir:$PATH" \
 		STRIX_EXECUTABLE_PATH="$fake_strix" \
+		STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+		STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 		STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 		STRIX_TARGET_PATH="-" \
 		STRIX_DISABLE_PR_SCOPING="0" \
@@ -7985,6 +8134,8 @@ EOF
 	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 		PATH="$tmp_dir:$PATH" \
 		STRIX_EXECUTABLE_PATH="$fake_strix" \
+		STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+		STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 		STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 		STRIX_DISABLE_PR_SCOPING="0" \
 		STRIX_LLM_FILE="$strix_llm_file" \
@@ -8036,6 +8187,8 @@ EOF
 	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 		PATH="$tmp_dir:$PATH" \
 		STRIX_EXECUTABLE_PATH="$fake_strix" \
+		STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+		STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 		STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 		STRIX_DISABLE_PR_SCOPING="0" \
 		STRIX_LLM_FILE="$strix_llm_file" \
@@ -8079,6 +8232,8 @@ EOF
 	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 		PATH="$tmp_dir:$PATH" \
 		STRIX_EXECUTABLE_PATH="$fake_strix" \
+		STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+		STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 		STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 		STRIX_DISABLE_PR_SCOPING="0" \
 		STRIX_LLM_FILE="$strix_llm_file" \
@@ -8135,6 +8290,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE -u STRIX_INPUT_FILE_ROOT \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			RUNNER_TEMP="$allowed_input_dir" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
 			STRIX_DISABLE_PR_SCOPING="0" \
@@ -8192,6 +8349,8 @@ EOF
 		env -u GITHUB_EVENT_PATH -u STRIX_INPUT_FILE_ROOT \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			RUNNER_TEMP="$allowed_input_dir" \
 			GITHUB_EVENT_NAME="pull_request" \
 			STRIX_TEST_CHANGED_FILES_OVERRIDE=$'src/one.py\nsrc/two.py' \
@@ -8266,6 +8425,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE -u STRIX_INPUT_FILE_ROOT \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			RUNNER_TEMP="$allowed_input_dir" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
 			STRIX_DISABLE_PR_SCOPING="0" \
@@ -8311,9 +8472,9 @@ printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
 	chmod +x "$fake_strix"
-	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'openai/gpt-5' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
-	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+	printf '%s' 'https://models.github.ai/inference' >"$llm_api_base_file"
 
 	set +e
 	(
@@ -8321,6 +8482,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			RUNNER_TEMP="$inherited_runner_temp" \
 			STRIX_INPUT_FILE_ROOT="$explicit_input_root" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
@@ -8370,9 +8533,9 @@ echo "Error: transport timeout"
 exit 1
 EOF
 	chmod +x "$fake_strix"
-	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'openai/gpt-5' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
-	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+	printf '%s' 'https://models.github.ai/inference' >"$llm_api_base_file"
 
 	set +e
 	(
@@ -8380,6 +8543,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			STRIX_LLM_FILE="$strix_llm_file" \
@@ -8426,9 +8591,9 @@ echo "Error: transport timeout"
 exit 1
 EOF
 	chmod +x "$fake_strix"
-	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'openai/gpt-5' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
-	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+	printf '%s' 'https://models.github.ai/inference' >"$llm_api_base_file"
 
 	set +e
 	(
@@ -8436,6 +8601,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			STRIX_LLM_FILE="$strix_llm_file" \
@@ -8476,9 +8643,9 @@ printf '%s\n' called >>"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
 	chmod +x "$fake_strix"
-	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'openai/gpt-5' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
-	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+	printf '%s' 'https://models.github.ai/inference' >"$llm_api_base_file"
 
 	set +e
 	(
@@ -8486,6 +8653,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			STRIX_EXECUTABLE_ROOT="$(dirname "$fake_strix")" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$fake_strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
@@ -8529,9 +8698,9 @@ printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
 	chmod +x "$fake_strix"
-	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'openai/gpt-5' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
-	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+	printf '%s' 'https://models.github.ai/inference' >"$llm_api_base_file"
 
 	set +e
 	(
@@ -8539,6 +8708,8 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$bin_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_EXECUTABLE_ROOT="$bin_dir" \
+			STRIX_EXECUTABLE_SHA256="$(sha256_file "$bin_dir/strix")" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
 			STRIX_LLM_FILE="$strix_llm_file" \
@@ -8864,6 +9035,15 @@ run_gate_case "pr-executable-root-group-writable" \
 	"" \
 	""
 
+run_gate_case "missing-executable-integrity" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"every Strix invocation requires a pinned executable root and SHA-256 digest" \
+	"0" \
+	"" \
+	""
+
 run_gate_case "runtime-env-forwarding" \
 	"gemini/gemini-pro-3.1-preview" \
 	"" \
@@ -8897,10 +9077,10 @@ run_gate_case "nonrecoverable" \
 	"openai/gpt-4o-mini" \
 	"vertex_ai/fallback-one" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
+	"Strix scan failed after provider infrastructure or failure-signal output; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid"
+	"<unset>"
 
 run_gate_case "provider-prefix-required" \
 	"gemini-2.5-pro" \
@@ -8932,11 +9112,11 @@ run_gate_case "provider-prefix-required-resource-path-primary-implicit-default-p
 run_gate_case "provider-prefix-required-resource-path-primary-explicit-empty-default-provider" \
 	"projects/p1/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
 	"vertex_ai/fallback-one" \
+	"2" \
+	"Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." \
 	"0" \
-	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/gemini-2.5-pro'." \
-	"1" \
-	"vertex_ai/gemini-2.5-pro" \
-	"<unset>" \
+	"" \
+	"" \
 	""
 
 run_gate_case "provider-prefix-resource-path-primary-notfound-fallback-success" \
@@ -8985,7 +9165,7 @@ run_gate_case "nonvertex-slash-model-passthrough" \
 	"scan ok with non-vertex slash model passthrough" \
 	"1" \
 	"foo/bar" \
-	"https://example.invalid"
+	"<unset>"
 
 run_gate_case "primary-duplicate-in-fallback" \
 	"missing-primary" \
@@ -9085,7 +9265,7 @@ run_gate_case_allow_provider_signal "vertex-primary-api-connection-retry-same-mo
 	"scan ok after same-model api connection retry" \
 	"2" \
 	"gemini/retry-api-connection-primary|gemini/retry-api-connection-primary" \
-	"https://example.invalid|https://example.invalid" \
+	"<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -9224,14 +9404,14 @@ run_gate_case "github-models-fallback-provider-signal-tries-next" \
 	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 	"1"
 
-run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
+run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-blocks" \
 	"openai/gpt-5" \
 	"" \
-	"0" \
-	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
-	"3" \
-	"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
 	"openai" \
 	"https://models.github.ai/inference" \
 	"" \
@@ -9284,14 +9464,14 @@ run_gate_case "github-models-fallback-changed-vulnerability-before-next-success-
 	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 	"1"
 
-run_gate_case "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" \
+run_gate_case "github-models-fallback-dockerfile-test-baseline-before-next-success-blocks" \
 	"openai/gpt-5" \
 	"" \
-	"0" \
-	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
-	"3" \
-	"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
 	"openai" \
 	"https://models.github.ai/inference" \
 	"" \
@@ -9321,7 +9501,7 @@ run_gate_case_allow_provider_signal "gemini-high-demand-retry-same-model-success
 	"scan ok after same-model high-demand retry" \
 	"2" \
 	"gemini/retry-high-demand-primary|gemini/retry-high-demand-primary" \
-	"https://example.invalid|https://example.invalid" \
+	"<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -9334,7 +9514,7 @@ run_gate_case_allow_provider_signal "gemini-timeout-direct-fallback-success" \
 	"REGEX:Strix quick scan succeeded with fallback model 'gemini/fallback-one' in [0-9]+s\\." \
 	"2" \
 	"gemini/retry-timeout-primary|gemini/fallback-one" \
-	"https://example.invalid|https://example.invalid" \
+	"<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -9347,7 +9527,7 @@ run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
 	"REGEX:Strix quick scan succeeded with fallback model 'gemini/fallback-one' in [0-9]+s\\." \
 	"2" \
 	"gemini/timeout-fallback-primary|gemini/fallback-one" \
-	"https://example.invalid|https://example.invalid" \
+	"<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -9360,7 +9540,7 @@ run_gate_case_allow_provider_signal "gemini-generic-fallback-success" \
 	"REGEX:Strix quick scan succeeded with fallback model 'gemini/fallback-one' in [0-9]+s\\." \
 	"2" \
 	"gemini/timeout-fallback-primary|gemini/fallback-one" \
-	"https://example.invalid|https://example.invalid" \
+	"<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -9389,7 +9569,7 @@ run_gate_case_allow_provider_signal "gemini-zero-findings-timeout-fallback-allow
 	"Strix reported zero vulnerabilities before provider infrastructure failure; failing closed because provider infrastructure failures are not clean scan evidence." \
 	"2" \
 	"gemini/zero-timeout-primary|gemini/fallback-one" \
-	"https://example.invalid|https://example.invalid" \
+	"<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -9410,7 +9590,7 @@ run_gate_case_allow_provider_signal "pr-scope-zero-finding-does-not-leak" \
 	"Strix reported zero vulnerabilities before provider infrastructure failure; failing closed because provider infrastructure failures are not clean scan evidence." \
 	"1" \
 	"gemini/scope-zero-leak-primary" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -9433,7 +9613,7 @@ run_gate_case "service-unavailable-no-llm-marker-nonrecoverable" \
 	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"custom/service-unavailable-primary" \
-	"https://example.invalid" \
+	"<unset>" \
 	"custom" \
 	"__DEFAULT__" \
 	"" \
@@ -9947,7 +10127,7 @@ run_gate_case "medium-vuln-default-threshold" \
 	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10057,29 +10237,38 @@ run_gate_case "malformed-severity-marker-nonrecoverable" \
 	"vertex_ai/malformed-severity-primary" \
 	"<unset>"
 
-# Bug 7: Model disagreement — primary produces CRITICAL, fallback produces LOW.
-# The CRITICAL from the earlier report must NOT be ignored.
-# Both models produce NOT_FOUND errors, so the gate exhausts fallbacks and
-# reports "Configured Vertex model and fallback models were unavailable."
-# The key assertion is exit 1: the CRITICAL finding is NOT downgraded to pass.
+# Bug 7: A primary model's unmapped CRITICAL report must fail closed before a
+# later fallback can downgrade or contradict it.
 run_gate_case "model-disagreement-critical-in-earlier-report" \
 	"vertex_ai/model-a" \
 	"vertex_ai/model-b" \
 	"1" \
 	"Strix quick scan failed with a non-recoverable error." \
-	"2" \
-	"vertex_ai/model-a|vertex_ai/model-b" \
-	"<unset>|<unset>"
+	"1" \
+	"vertex_ai/model-a" \
+	"<unset>"
 
-# Bug 4: deepseek/models/deepseek-r1 must NOT be rewritten to vertex_ai/deepseek-r1
-run_gate_case "nonvertex-slash-model-not-rewritten" \
+run_gate_case "notfound-high-log-low-artifact" \
+	"vertex_ai/notfound-high-log-low-primary" \
+	"vertex_ai/notfound-high-log-low-primary" \
+	"1" \
+	"Strix scan failed after provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/notfound-high-log-low-primary" \
+	"<unset>"
+
+# Bug 4: deepseek/models/deepseek-r1 must NOT be rewritten to vertex_ai/deepseek-r1.
+# The GitHub Models child process still receives its required openai/ compatibility wrapper.
+run_gate_case "nonvertex-slash-model-not-rewritten-as-vertex" \
 	"deepseek/models/deepseek-r1" \
 	"vertex_ai/fallback-one" \
 	"0" \
-	"scan ok with deepseek model passthrough" \
+	"scan ok with non-Vertex deepseek GitHub Models routing" \
 	"1" \
-	"deepseek/models/deepseek-r1" \
-	"https://example.invalid"
+	"openai/deepseek/models/deepseek-r1" \
+	"https://models.github.ai/inference" \
+	"vertex_ai" \
+	"https://models.github.ai/inference"
 
 # Regression: STRIX_TARGET_PATH=<dir>/src with default STRIX_SOURCE_DIRS (now ".")
 # must resolve to <dir>/src/. (i.e. <dir>/src itself), NOT <dir>/src/src.
@@ -10124,14 +10313,35 @@ run_gate_case "multi-source-dirs-existing-endpoint" \
 	"" \
 	"src api"
 
-run_gate_case "preserve-existing-api-base" \
-	"openai/gpt-4o-mini" \
+run_gate_case_allow_provider_signal "source-dirs-relative-escape" \
+	"vertex_ai/source-dir-escape-primary" \
+	"vertex_ai/source-dir-escape-primary" \
+	"1" \
+	"STRIX_SOURCE_DIRS entry '../outside' must resolve to a non-symlink directory inside the scan target." \
+	"1" \
+	"vertex_ai/source-dir-escape-primary" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
 	"" \
 	"0" \
-	"scan ok with preserved api base" \
-	"1" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"../outside" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"src/routes.py"
+
+run_gate_case "reject-arbitrary-api-base" \
 	"openai/gpt-4o-mini" \
-	"https://preexisting.invalid" \
+	"" \
+	"2" \
+	"LLM_API_BASE must use the pinned GitHub Models inference endpoint; arbitrary provider hosts are forbidden." \
+	"0" \
+	"" \
+	"" \
 	"vertex_ai" \
 	"" \
 	"https://preexisting.invalid"
@@ -10208,7 +10418,7 @@ run_gate_case "bare-timeout-no-provider-marker" \
 	"" \
 	"1" \
 	"custom/bare-timeout-model" \
-	"https://example.invalid" \
+	"<unset>" \
 	"custom" \
 	"__DEFAULT__" \
 	"" \
@@ -10239,7 +10449,7 @@ run_gate_case "httpx-read-timeout-no-provider-marker" \
 	"non-recoverable error" \
 	"1" \
 	"custom/httpx-timeout-no-ctx" \
-	"https://example.invalid" \
+	"<unset>" \
 	"custom" \
 	"__DEFAULT__" \
 	"" \
@@ -10270,7 +10480,7 @@ run_gate_case "httpcore-read-timeout-no-provider-marker" \
 	"non-recoverable error" \
 	"1" \
 	"custom/httpcore-timeout-no-ctx" \
-	"https://example.invalid" \
+	"<unset>" \
 	"custom" \
 	"__DEFAULT__" \
 	"" \
@@ -10383,7 +10593,7 @@ run_gate_case "pr-changed-scope-bounded" \
 	"scan ok with bounded changed-file scope" \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10404,7 +10614,7 @@ run_gate_case "pr-python-scope-context" \
 	"scan ok with python dependency scope" \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10425,7 +10635,7 @@ run_gate_case "pr-changed-scope-full" \
 	"Scoped pull request Strix scan to 3 changed file(s)." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10446,7 +10656,7 @@ run_gate_case "pr-changed-scope-full-set" \
 	"scan ok with full configured PR scope" \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10478,7 +10688,7 @@ run_gate_case "pr-large-scope-full-set" \
 	"scan ok with large full PR scope" \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10501,7 +10711,7 @@ run_gate_case "pr-changed-scope-includes-ci-dependency" \
 	"scan ok with CI support dependency" \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10543,7 +10753,7 @@ run_gate_case "pr-deployment-scope-entrypoint-context" \
 	"scan ok with deployment entrypoint context" \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10581,11 +10791,11 @@ run_gate_case "pr-empty-diff-skip" \
 run_gate_case "pr-baseline-critical-unchanged" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10602,11 +10812,11 @@ run_gate_case "pr-baseline-critical-unchanged" \
 run_gate_case "pr-baseline-critical-absolute-target" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10623,11 +10833,11 @@ run_gate_case "pr-baseline-critical-absolute-target" \
 run_gate_case "pr-baseline-critical-extensionless-dockerfile-target" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10644,11 +10854,11 @@ run_gate_case "pr-baseline-critical-extensionless-dockerfile-target" \
 run_gate_case "pr-baseline-critical-subdir-target" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10668,11 +10878,11 @@ run_gate_case "pr-baseline-critical-subdir-target" \
 run_gate_case "pr-baseline-critical-subdir-boxed-target" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10692,11 +10902,11 @@ run_gate_case "pr-baseline-critical-subdir-boxed-target" \
 run_gate_case "pr-baseline-critical-subdir-endpoint" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10716,11 +10926,11 @@ run_gate_case "pr-baseline-critical-subdir-endpoint" \
 run_gate_case "pr-baseline-critical-subdir-endpoint-bare-filename" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10740,11 +10950,11 @@ run_gate_case "pr-baseline-critical-subdir-endpoint-bare-filename" \
 run_gate_case "pr-baseline-critical-subdir-narrative-backticked-file" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10768,7 +10978,7 @@ run_gate_case "pr-critical-relative-path-escape-subdir-narrative-backticked-file
 	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10792,7 +11002,7 @@ run_gate_case "pr-critical-changed" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10809,11 +11019,11 @@ run_gate_case "pr-critical-changed" \
 run_gate_case "pr-changed-file-nonintersecting-line" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10833,7 +11043,7 @@ run_gate_case "pr-critical-changed-bracketed-next-route" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10854,7 +11064,7 @@ run_gate_case "pr-critical-changed-xml-file-location" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10875,7 +11085,7 @@ run_gate_case "pr-critical-changed-xml-file-location-space" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10892,11 +11102,11 @@ run_gate_case "pr-critical-changed-xml-file-location-space" \
 run_gate_case "pr-baseline-critical-narrative-backticked-service-file" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix threshold finding claims only unchanged files, but report-selected locations are not trusted PR attribution evidence; failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10917,7 +11127,7 @@ run_gate_case "pr-critical-unmapped-arbitrary-backticked-service-file" \
 	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10938,7 +11148,7 @@ run_gate_case "pr-critical-changed-absolute-target" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -10959,7 +11169,7 @@ run_gate_case "pr-critical-changed-internal-dotdir-target" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11001,7 +11211,7 @@ run_gate_case "pr-critical-changed-subdir-target" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11025,7 +11235,7 @@ run_gate_case "pr-critical-changed-subdir-endpoint" \
 	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11049,7 +11259,7 @@ run_gate_case "pr-critical-path-escape-subdir-target" \
 	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11073,7 +11283,7 @@ run_gate_case "pr-critical-unmapped" \
 	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11094,7 +11304,7 @@ run_gate_case "pr-critical-unmapped-narrative-target" \
 	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11115,7 +11325,7 @@ run_gate_case "pr-critical-unmapped-other-workspace-repo" \
 	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11136,7 +11346,7 @@ run_gate_case "pr-critical-manifest-only-pom" \
 	"Strix changed-manifest threshold finding requires package and CVE remediation; pull-request-controlled SCA workflow results cannot override model evidence, so the scan is failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11157,7 +11367,7 @@ run_gate_case "pr-critical-manifest-only-pom-test-override" \
 	"Strix changed-manifest threshold finding requires package and CVE remediation; pull-request-controlled SCA workflow results cannot override model evidence, so the scan is failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11182,7 +11392,7 @@ run_gate_case "pr-critical-manifest-only-pom-same-head-different-pr" \
 	"Strix changed-manifest threshold finding requires package and CVE remediation; pull-request-controlled SCA workflow results cannot override model evidence, so the scan is failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11209,7 +11419,7 @@ run_gate_case "pr-critical-manifest-only-pom-current-pr-authoritative" \
 	"Strix changed-manifest threshold finding requires package and CVE remediation; pull-request-controlled SCA workflow results cannot override model evidence, so the scan is failing closed." \
 	"1" \
 	"openai/gpt-4o-mini" \
-	"https://example.invalid" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
@@ -11492,6 +11702,12 @@ assert_normalized_model \
 	"projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
 	"vertex_ai" \
 	"vertex_ai/gemini-2.5-pro"
+
+assert_normalized_model \
+	"non-vertex-slash-model-passthrough" \
+	"deepseek/models/deepseek-r1" \
+	"vertex_ai" \
+	"deepseek/models/deepseek-r1"
 
 assert_model_requires_vertex_auth "explicit-vertex" "vertex_ai/gemini-2.5-pro" "gemini" "0"
 assert_model_requires_vertex_auth "explicit-vertex-beta" "vertex_ai_beta/gemini-2.5-pro" "gemini" "0"
