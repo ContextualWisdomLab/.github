@@ -293,15 +293,18 @@ jobs:
           mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
           mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
-          if [ -f "$COVERAGE_SOURCE_WORKDIR/Cargo.toml" ] && [ -f "$COVERAGE_SOURCE_WORKDIR/Cargo.lock" ]; then
-            # Pre-fetch the locked crate graph into the tree-local CARGO_HOME that the
-            # network-isolated coverage sandbox already uses, so `cargo llvm-cov` can
-            # compile Rust coverage offline. Prefer the same pinned toolchain the
-            # sandbox measures with so lockfile parsing and cache layout cannot
-            # drift from the runner's default cargo. `cargo fetch` downloads
-            # content-addressed crates without executing any build scripts, and a
-            # failed prefetch keeps the same fail-closed sandbox behavior: the
-            # offline build surfaces the missing dependencies for this head.
+          # Pre-fetch every locked crate graph in the merge tree (root and nested
+          # workspaces alike, matching the sandbox's nested-manifest coverage
+          # discovery) into the tree-local CARGO_HOME that the network-isolated
+          # coverage sandbox already uses, so `cargo llvm-cov` can compile Rust
+          # coverage offline. Prefer the same pinned toolchain the sandbox
+          # measures with so lockfile parsing and cache layout cannot drift from
+          # the runner's default cargo. `cargo fetch` downloads content-addressed
+          # crates without executing any build scripts, and a failed prefetch
+          # keeps the same fail-closed sandbox behavior: the offline build
+          # surfaces the missing dependencies for this head.
+          prefetch_manifests="$(git -C "$COVERAGE_SOURCE_WORKDIR" ls-files 'Cargo.toml' '*/Cargo.toml')"
+          if [ -n "$prefetch_manifests" ]; then
             prefetch_cargo=()
             if command -v rustup >/dev/null 2>&1 \
               && rustup toolchain install 1.94.1 --profile minimal --no-self-update >/dev/null 2>&1; then
@@ -310,10 +313,19 @@ jobs:
               prefetch_cargo=(cargo)
             fi
             if [ "${#prefetch_cargo[@]}" -eq 0 ]; then
-              echo "::warning::cargo is unavailable on this runner, so the locked crate graph was not pre-fetched; offline Rust coverage for this head will fail with missing dependencies."
-            elif ! CARGO_HOME="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo" \
-              "${prefetch_cargo[@]}" fetch --locked --manifest-path "$COVERAGE_SOURCE_WORKDIR/Cargo.toml"; then
-              echo "::warning::Locked cargo prefetch failed; offline Rust coverage will surface the missing dependencies for this head."
+              echo "::warning::cargo is unavailable on this runner, so no locked crate graph was pre-fetched; offline Rust coverage for this head will fail with missing dependencies."
+            else
+              while IFS= read -r prefetch_manifest; do
+                [ -n "$prefetch_manifest" ] || continue
+                prefetch_dir="$(dirname "$prefetch_manifest")"
+                if [ ! -f "$COVERAGE_SOURCE_WORKDIR/$prefetch_dir/Cargo.lock" ]; then
+                  continue
+                fi
+                if ! CARGO_HOME="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo" \
+                  "${prefetch_cargo[@]}" fetch --locked --manifest-path "$COVERAGE_SOURCE_WORKDIR/$prefetch_manifest"; then
+                  echo "::warning::Locked cargo prefetch failed for ${prefetch_manifest}; offline Rust coverage will surface the missing dependencies for this head."
+                fi
+              done <<<"$prefetch_manifests"
             fi
           fi
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
