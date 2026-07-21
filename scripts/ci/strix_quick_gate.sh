@@ -45,6 +45,13 @@ STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
 STRIX_FAIL_ON_PROVIDER_SIGNAL="${STRIX_FAIL_ON_PROVIDER_SIGNAL:-0}"
+# Highest severity a scanned repository may document as an accepted risk. Findings
+# above this rank (HIGH, CRITICAL) are NEVER suppressible — genuine high-severity
+# issues always fail the gate. The scanned repo declares specific accepted findings
+# in .security/strix-accepted-risks.txt (one per line: SEVERITY | title-substring |
+# reason); each acceptance is logged as a ::warning for audit and requires a reason.
+STRIX_MAX_SUPPRESSIBLE_SEVERITY="${STRIX_MAX_SUPPRESSIBLE_SEVERITY:-MEDIUM}"
+STRIX_ACCEPTED_RISKS_PATH="${STRIX_ACCEPTED_RISKS_PATH:-.security/strix-accepted-risks.txt}"
 RUN_START_EPOCH=0
 TOTAL_TIMEOUT_EXCEEDED=0
 ATTEMPT_LOG_SEQUENCE=0
@@ -1950,6 +1957,80 @@ vulnerability_file_is_below_threshold() {
 	[ "$report_rank" -ge 0 ] && [ "$report_rank" -lt "$threshold_rank" ]
 }
 
+# Read the scanned repo's accepted-risk declaration. Prefer the PR-head blob
+# (trusted, immutable for this run) and fall back to the checkout. Emits raw
+# lines; comment/blank filtering happens in the matcher.
+accepted_risk_declaration_lines() {
+	local head_sha
+	head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+	if [ -n "$head_sha" ] &&
+		is_valid_git_commit_sha "$head_sha" &&
+		git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null; then
+		git show "$head_sha:$STRIX_ACCEPTED_RISKS_PATH" 2>/dev/null && return 0
+	fi
+	if [ -f "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" ] && [ ! -L "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" ]; then
+		cat -- "$REPO_ROOT/$STRIX_ACCEPTED_RISKS_PATH" 2>/dev/null || true
+	fi
+}
+
+# First "Title:" value of a finding report (used to match acceptance entries).
+extract_finding_title() {
+	local source_path="$1"
+	grep -Ei '^[[:space:]]*Title[[:space:]]*:' "$source_path" 2>/dev/null |
+		head -n 1 |
+		sed -E 's/^[[:space:]]*[Tt]itle[[:space:]]*:[[:space:]]*//' |
+		sed -E 's/[[:space:]]+$//'
+}
+
+# Returns 0 when a finding is a documented accepted risk: severity is at or below
+# STRIX_MAX_SUPPRESSIBLE_SEVERITY (HIGH/CRITICAL never qualify), the finding title
+# contains a declared entry's substring, the declared entry's own severity cap is
+# respected, and the entry carries a non-empty reason. Every acceptance is logged
+# so it is auditable in the required check output.
+vulnerability_file_is_accepted_risk() {
+	local vuln_file="$1"
+	local finding_rank suppressible_rank
+	finding_rank="$(extract_max_severity_rank "$vuln_file")"
+	suppressible_rank="$(severity_rank "$STRIX_MAX_SUPPRESSIBLE_SEVERITY")"
+	# Never suppress unknown-severity or above-cap (HIGH/CRITICAL) findings.
+	if [ "$finding_rank" -lt 0 ] || [ "$finding_rank" -gt "$suppressible_rank" ]; then
+		return 1
+	fi
+
+	local finding_title
+	finding_title="$(extract_finding_title "$vuln_file")"
+	if [ -z "$finding_title" ]; then
+		return 1
+	fi
+
+	local entry_line entry_severity entry_substring entry_reason entry_rank
+	while IFS= read -r entry_line; do
+		case "$entry_line" in
+		'' | '#'*) continue ;;
+		esac
+		IFS='|' read -r entry_severity entry_substring entry_reason <<<"$entry_line"
+		entry_severity="$(trim_whitespace "$entry_severity")"
+		entry_substring="$(trim_whitespace "$entry_substring")"
+		entry_reason="$(trim_whitespace "$entry_reason")"
+		# A malformed or reasonless entry never suppresses (fail closed on the entry).
+		if [ -z "$entry_severity" ] || [ -z "$entry_substring" ] || [ -z "$entry_reason" ]; then
+			continue
+		fi
+		entry_rank="$(severity_rank "$entry_severity")"
+		# The entry may not claim a cap above the global suppressible ceiling, and the
+		# finding must be at or below the entry's own declared severity.
+		if [ "$entry_rank" -lt 0 ] || [ "$entry_rank" -gt "$suppressible_rank" ] || [ "$finding_rank" -gt "$entry_rank" ]; then
+			continue
+		fi
+		if [[ "${finding_title,,}" == *"${entry_substring,,}"* ]]; then
+			echo "::warning title=Strix accepted risk::Suppressing documented accepted-risk finding (${entry_severity}) '${finding_title}' — reason: ${entry_reason}. HIGH/CRITICAL findings are never suppressible; see ${STRIX_ACCEPTED_RISKS_PATH}." >&2
+			return 0
+		fi
+	done < <(accepted_risk_declaration_lines)
+
+	return 1
+}
+
 evaluate_pull_request_findings() {
 	PR_FINDINGS_DECISION="not_applicable"
 	if ! is_pull_request_event; then
@@ -1986,6 +2067,11 @@ evaluate_pull_request_findings() {
 			found_any_vuln_file=1
 			if vulnerability_file_is_retryable_model_inconsistency "$vuln_file"; then
 				found_retryable_model_inconsistency=1
+				continue
+			fi
+			# Documented accepted risk (<= MEDIUM, with reason) — logged and skipped so it
+			# does not block, while HIGH/CRITICAL and undeclared findings still fail closed.
+			if vulnerability_file_is_accepted_risk "$vuln_file"; then
 				continue
 			fi
 			rank="$(extract_max_severity_rank "$vuln_file")"
@@ -2039,7 +2125,13 @@ evaluate_pull_request_findings() {
 		done
 	done
 
-	if [ "$found_baseline_threshold_finding" -eq 0 ] && [ "$found_changed_manifest_only_threshold_finding" -eq 0 ]; then
+	# Console-log re-derivation is a fallback for when Strix wrote NO per-finding
+	# reports. When per-finding reports existed and were all below threshold,
+	# accepted, or retryable, do not resurrect them from the aggregate console log —
+	# the structured per-finding files are authoritative and already evaluated above.
+	if [ "$found_baseline_threshold_finding" -eq 0 ] &&
+		[ "$found_changed_manifest_only_threshold_finding" -eq 0 ] &&
+		[ "$found_any_vuln_file" -eq 0 ]; then
 		rank="$(extract_max_severity_rank "$STRIX_LOG")"
 		if [ "$rank" -lt 0 ]; then
 			if [ "$found_retryable_model_inconsistency" -eq 1 ]; then
@@ -2124,6 +2216,9 @@ has_unmapped_threshold_report() {
 		fi
 		for vuln_file in "$vulnerabilities_dir"/*.md; do
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			if vulnerability_file_is_accepted_risk "$vuln_file"; then
 				continue
 			fi
 			rank="$(extract_max_severity_rank "$vuln_file")"
@@ -3090,6 +3185,9 @@ has_blocking_vulnerability_reports() {
 				continue
 			fi
 			if vulnerability_file_is_retryable_model_inconsistency "$vuln_file"; then
+				continue
+			fi
+			if vulnerability_file_is_accepted_risk "$vuln_file"; then
 				continue
 			fi
 

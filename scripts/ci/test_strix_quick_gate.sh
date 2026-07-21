@@ -164,6 +164,56 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "scripts/ci/test_*.sh" "strix gate excludes large CI self-test harnesses from PR scan targets"
 }
 
+assert_strix_accepted_risk_suppression_wired() {
+	assert_file_contains "$GATE_SCRIPT" "STRIX_MAX_SUPPRESSIBLE_SEVERITY=\"\${STRIX_MAX_SUPPRESSIBLE_SEVERITY:-MEDIUM}\"" "accepted-risk suppression caps at MEDIUM by default"
+	assert_file_contains "$GATE_SCRIPT" "vulnerability_file_is_accepted_risk() {" "gate defines the accepted-risk matcher"
+	assert_file_contains "$GATE_SCRIPT" "HIGH/CRITICAL findings are never suppressible" "accepted-risk logging states HIGH/CRITICAL are never suppressible"
+	# Wired into every finding-blocking verdict path, not just one.
+	local wired_count
+	wired_count="$(grep -c 'if vulnerability_file_is_accepted_risk "\$vuln_file"; then' "$GATE_SCRIPT")"
+	if [ "$wired_count" -lt 3 ]; then
+		record_failure "accepted-risk skip wired into only $wired_count verdict paths (expected >= 3)"
+	fi
+	assert_file_contains "$GATE_SCRIPT" "[ \"\$found_any_vuln_file\" -eq 0 ]" "console-log fallback does not resurrect accepted per-finding reports"
+}
+
+assert_strix_accepted_risk_matcher_functional() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-accepted-risk.XXXXXX")"
+	mkdir -p "$tmp_dir/.security"
+	cat >"$tmp_dir/.security/strix-accepted-risks.txt" <<'EOF'
+# severity | title-substring | reason
+MEDIUM | stored unencrypted in Expo SQLite | On-device-first design; documented tradeoff.
+EOF
+	# Fixture findings.
+	printf 'Title: Sensitive data stored unencrypted in Expo SQLite\nSeverity: MEDIUM\n' >"$tmp_dir/med_match.md"
+	printf 'Title: Sensitive data stored unencrypted in Expo SQLite\nSeverity: HIGH\n' >"$tmp_dir/high_match.md"
+	printf 'Title: SQL injection in login handler\nSeverity: MEDIUM\n' >"$tmp_dir/med_nomatch.md"
+
+	local out
+	out="$(
+		REPO_ROOT="$tmp_dir" STRIX_MAX_SUPPRESSIBLE_SEVERITY=MEDIUM \
+			STRIX_ACCEPTED_RISKS_PATH=".security/strix-accepted-risks.txt" \
+			bash -c '
+				set -uo pipefail
+				trim_whitespace() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf "%s" "$s"; }
+				is_valid_git_commit_sha() { [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]; }
+				'"$(sed -n '/^severity_rank()/,/^}/p' "$GATE_SCRIPT")"'
+				'"$(sed -n '/^extract_max_severity_rank()/,/^}/p' "$GATE_SCRIPT")"'
+				'"$(sed -n '/^extract_finding_title()/,/^}/p' "$GATE_SCRIPT")"'
+				'"$(sed -n '/^accepted_risk_declaration_lines()/,/^}/p' "$GATE_SCRIPT")"'
+				'"$(sed -n '/^vulnerability_file_is_accepted_risk()/,/^}/p' "$GATE_SCRIPT")"'
+				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/med_match.md"  2>/dev/null && echo "MED_MATCH=accepted"  || echo "MED_MATCH=blocked"
+				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/high_match.md" 2>/dev/null && echo "HIGH_MATCH=accepted" || echo "HIGH_MATCH=blocked"
+				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/med_nomatch.md" 2>/dev/null && echo "MED_NOMATCH=accepted" || echo "MED_NOMATCH=blocked"
+			'
+	)"
+	case "$out" in *"MED_MATCH=accepted"*) ;; *) record_failure "documented MEDIUM accepted-risk was not suppressed (out=$out)" ;; esac
+	case "$out" in *"HIGH_MATCH=blocked"*) ;; *) record_failure "HIGH finding was suppressed despite title match (out=$out)" ;; esac
+	case "$out" in *"MED_NOMATCH=blocked"*) ;; *) record_failure "undeclared MEDIUM finding did not block (out=$out)" ;; esac
+	rm -rf "$tmp_dir"
+}
+
 assert_strix_workflow_pr_trigger_hardened() {
 	local workflow_file="$REPO_ROOT/.github/workflows/strix.yml"
 
@@ -8555,6 +8605,10 @@ EOF
 assert_strix_workflow_pr_trigger_hardened
 
 assert_strix_pr_scope_includes_deployment_context
+
+assert_strix_accepted_risk_suppression_wired
+
+assert_strix_accepted_risk_matcher_functional
 
 assert_strix_gpt54_model_guard_cases
 
