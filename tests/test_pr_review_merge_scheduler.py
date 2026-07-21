@@ -1141,9 +1141,7 @@ def test_context_review_and_check_helpers():
                         "__typename": "CheckRun",
                         "name": "scan-pr-queue",
                         "status": "IN_PROGRESS",
-                        "checkSuite": {
-                            "workflowRun": {"workflow": {"name": "PR Review Merge Scheduler"}}
-                        },
+                        "checkSuite": {"workflowRun": {"workflow": None}},
                     },
                     {"__typename": "CheckRun", "name": "cancel-closed-pr-runs", "status": "QUEUED"},
                     {
@@ -1155,6 +1153,16 @@ def test_context_review_and_check_helpers():
                             "workflowRun": {"workflow": {"name": "Repository CI"}}
                         },
                     },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "tests",
+                        "status": "QUEUED",
+                        "startedAt": "2026-06-25T07:06:00Z",
+                        "checkSuite": {
+                            "workflowRun": {"workflow": {"name": "Alternative CI"}}
+                        },
+                    },
+                    {"context": "tests", "state": "PENDING"},
                     {"context": "legacy-security", "state": "PENDING"},
                 ]
             }

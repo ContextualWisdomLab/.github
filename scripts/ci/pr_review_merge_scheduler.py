@@ -172,6 +172,10 @@ SCHEDULER_WORKFLOW_NAMES = {
     "PR Review Merge Scheduler",
     "Required PR Review Merge Scheduler",
 }
+SCHEDULER_CHECK_NAMES = {
+    "cancel-closed-pr-runs",
+    "scan-pr-queue",
+}
 
 
 @dataclass
@@ -1503,21 +1507,32 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
 def running_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return active peer checks, excluding this scheduler's own live job."""
     running: list[str] = []
+    seen: set[str] = set()
     for node in latest_check_runs(pr):
         workflow_name = (
             (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
             or ""
         )
         name = node.get("name") or "check-run"
-        if workflow_name in SCHEDULER_WORKFLOW_NAMES or name == "cancel-closed-pr-runs":
+        if workflow_name in SCHEDULER_WORKFLOW_NAMES or name in SCHEDULER_CHECK_NAMES:
             continue
-        if (node.get("status") or "").upper() in RUNNING_CHECK_STATES:
+        if (
+            (node.get("status") or "").upper() in RUNNING_CHECK_STATES
+            and name not in seen
+        ):
             running.append(name)
+            seen.add(name)
     for node in context_nodes(pr):
         if node.get("__typename") == "CheckRun":
             continue
-        if (node.get("state") or "").upper() in RUNNING_CHECK_STATES:
-            running.append(node.get("context") or "status-context")
+        name = node.get("context") or "status-context"
+        if (
+            (node.get("state") or "").upper() in RUNNING_CHECK_STATES
+            and name not in SCHEDULER_CHECK_NAMES
+            and name not in seen
+        ):
+            running.append(name)
+            seen.add(name)
     return running
 
 
