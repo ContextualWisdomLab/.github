@@ -2848,15 +2848,15 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][5]["guidance"]["head_repository"] == "fork/repo"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
-    assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; changed files to inspect first:" in summary
+    assert "| #7 | `block` | ``merge conflict: DIRTY; base=main, head=feature\\|x; changed files to inspect first:" in summary
     assert "do not retry update-branch until the conflict is repaired" in summary
     assert "### Outdated review threads" in summary
     assert "Would resolve 1 outdated review thread(s)" in summary
     assert (
-        "| #8 | update_branch | current-head OpenCode review approved; "
-        "branch update requested with workflow GITHUB_TOKEN inside GitHub Actions as github-actions[bot] |"
+        "| #8 | `update_branch` | `current-head OpenCode review approved; "
+        "branch update requested with workflow GITHUB_TOKEN inside GitHub Actions as github-actions[bot]` |"
     ) in summary
-    assert "| #12 | merge | current head is approved; direct merge requested with workflow GITHUB_TOKEN" in summary
+    assert "| #12 | `merge` | `current head is approved; direct merge requested with workflow GITHUB_TOKEN" in summary
     assert "fresh same-head OpenCode review" in summary
     assert "### Conflict repair" in summary
     assert "When GitHub shows `Conflicting`" in summary
@@ -2869,7 +2869,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert "Changed files to inspect first:" in summary
     assert "- `scripts/ci/pr_review_merge_scheduler.py`" in summary
     assert "- `tests/test_pr_review_merge_scheduler.py`" in summary
-    assert "- `docs/has\\`tick.md`" in summary
+    assert "- ``docs/has`tick.md``" in summary
     assert "git push --force-with-lease" in summary
     assert "### Branch update requests" in summary
     assert "Requested `update-branch` for PR #8 with `workflow GITHUB_TOKEN`" in summary
@@ -2896,6 +2896,33 @@ def test_write_actions_summary_is_noop_without_summary_path(monkeypatch):
         base_branch="main",
         project_flow="github-flow",
     )
+
+
+def test_summary_markdown_renderers_neutralize_untrusted_markup(monkeypatch, tmp_path):
+    """Workflow-controlled values cannot create headings, links, HTML, or table cells."""
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    malicious = "safe|cell\r\n## injected [click](https://evil.test) <img src=x> `tick`"
+
+    assert sched.markdown_code_span("docs/has`tick.md") == "``docs/has`tick.md``"
+    assert sched.markdown_code_span("`edge`") == "`` `edge` ``"
+    assert sched.markdown_code_span("line1\rline2") == "`line1 line2`"
+    rendered_cell = sched.markdown_cell(malicious)
+    assert "\n" not in rendered_cell
+    assert "\\|" in rendered_cell
+    assert rendered_cell.startswith("``") and rendered_cell.endswith("``")
+
+    sched.write_actions_summary(
+        [sched.Decision(1, malicious, malicious)],
+        counts={"wait": 1},
+        dry_run=True,
+        base_branch=malicious,
+        project_flow=malicious,
+    )
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "\n## injected" not in summary
+    assert "\n<img" not in summary
+    assert summary.count("| #1 |") == 1
 
 
 def test_summary_section_helpers_handle_empty_and_action_error_cases():
@@ -3750,6 +3777,18 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
         )
     )
 
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "capacity_reached",
+    )
+    assert "central OpenCode active-run capacity is full" in followup(
+        make_pr(
+            headRefOid="newest-head",
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        )
+    )
+
 
 def test_post_update_branch_followup_dismisses_stale_approval_before_dispatch(monkeypatch):
     original = make_pr(headRefOid="old-head")
@@ -4170,6 +4209,25 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert (
         completed_strix_already_active.reason
         == "current head has completed Strix evidence; same-head OpenCode workflow run is already active"
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "capacity_reached",
+    )
+    stale_at_capacity = inspect(stale_opencode, stale_opencode_minutes=0)
+    assert stale_at_capacity.action == "wait"
+    assert (
+        stale_at_capacity.reason
+        == "OpenCode review exceeded the status-check retry threshold, but central active-run capacity is full"
+    )
+    completed_strix_at_capacity = inspect(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}),
+    )
+    assert completed_strix_at_capacity.action == "wait"
+    assert (
+        completed_strix_at_capacity.reason
+        == "current head has completed Strix evidence; central OpenCode active-run capacity is full"
     )
     assert inspect(make_pr(), trigger_reviews=False).reason == "current head has no OpenCode approval"
     missing_approval_auto = inspect(make_pr(autoMergeRequest={"enabledAt": "now"}), trigger_reviews=False)

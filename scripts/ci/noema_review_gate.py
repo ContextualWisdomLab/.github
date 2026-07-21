@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import ipaddress
 import json
 import os
@@ -264,18 +265,18 @@ def blocking_checks(pr: dict[str, Any]) -> list[str]:
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     """Return whether Noema already reviewed the current head."""
     head_sha = str(pr.get("headRefOid") or "")
-    marker = "<!-- noema-review-gate"
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
         if not review_matches_current_head(review, head_sha):
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
+        if not actor or review_author(review) != actor:
+            continue
         body = str(review.get("body") or "")
         marker_heads = NOEMA_REVIEW_MARKER_HEAD_RE.findall(body)
         if marker_heads and any(value.lower() != head_sha.lower() for value in marker_heads):
             continue
-        if review_author(review) == actor or marker in body:
-            return True
+        return True
     return False
 
 
@@ -427,6 +428,81 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to one validated numeric address while preserving TLS SNI."""
+
+    def __init__(self, hostname: str, port: int, pinned_ip: str, *, timeout: float) -> None:
+        """Configure a direct HTTPS connection pinned to ``pinned_ip``."""
+        super().__init__(hostname, port=port, timeout=timeout)
+        self._pinned_ip = pinned_ip
+        self._create_connection = self._create_pinned_connection
+
+    def _create_pinned_connection(
+        self,
+        address: tuple[str, int],
+        timeout: object,
+        source_address: tuple[str, int] | None,
+    ) -> socket.socket:
+        """Open the socket to the validated IP instead of resolving the hostname again."""
+        return socket.create_connection(
+            (self._pinned_ip, address[1]),
+            timeout=timeout,
+            source_address=source_address,
+        )
+
+
+def validated_https_endpoint(api_url: str) -> tuple[str, int, str, str]:
+    """Return hostname, port, pinned public IP, and request target for an HTTPS URL."""
+    if any(ord(character) < 32 or ord(character) == 127 for character in api_url):
+        raise ValueError("NOEMA_LLM_API_URL cannot contain control characters")
+    if not api_url.lower().startswith("https://"):
+        raise ValueError("NOEMA_LLM_API_URL must use https://")
+
+    parsed = urllib.parse.urlparse(api_url)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("NOEMA_LLM_API_URL must use the https scheme")
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("URL must have a valid hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("NOEMA_LLM_API_URL cannot contain user information")
+    if parsed.fragment:
+        raise ValueError("NOEMA_LLM_API_URL cannot contain a fragment")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+        raise ValueError("URL cannot target localhost")
+    try:
+        port = parsed.port or 443
+    except ValueError as exc:
+        raise ValueError("NOEMA_LLM_API_URL contains an invalid port") from exc
+
+    try:
+        addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError("NOEMA_LLM_API_URL hostname could not be resolved") from exc
+    if not addrinfo:
+        raise ValueError("NOEMA_LLM_API_URL hostname resolved to no addresses")
+
+    public_addresses: list[str] = []
+    for result in addrinfo:
+        ip_text = str(result[4][0])
+        try:
+            ip = ipaddress.ip_address(ip_text)
+        except ValueError as exc:
+            raise ValueError("NOEMA_LLM_API_URL resolved to an invalid IP address") from exc
+        if not ip.is_global:
+            raise ValueError("URL cannot target non-public IP addresses")
+        normalized = ip.compressed
+        if normalized not in public_addresses:
+            public_addresses.append(normalized)
+
+    target = parsed.path or "/"
+    if parsed.params:
+        target += f";{parsed.params}"
+    if parsed.query:
+        target += f"?{parsed.query}"
+    return hostname, port, public_addresses[0], target
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response."""
     stripped = text.strip()
@@ -453,32 +529,7 @@ def call_llm(
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
     if not api_url or not api_key:
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
-    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
-        raise ValueError(
-            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
-            "with http:// or https:// to prevent SSRF vulnerabilities"
-        )
-    parsed = urllib.parse.urlparse(api_url)
-    if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
-    hostname = (parsed.hostname or "").lower()
-    if not hostname:
-        raise ValueError("URL must have a valid hostname")
-    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
-        raise ValueError("URL cannot target localhost")
-    try:
-        addrinfo = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        pass
-    else:
-        for result in addrinfo:
-            ip_str = result[4][0]
-            try:
-                ip = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-                raise ValueError("URL cannot target internal IP addresses")
+    hostname, port, pinned_ip, request_target = validated_https_endpoint(api_url)
 
     prompt = {
         "role": "user",
@@ -509,18 +560,23 @@ def call_llm(
             prompt,
         ],
     }
-    request = urllib.request.Request(
-        api_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "authorization": f"Bearer {api_key}",
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
-    opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
+    connection = PinnedHTTPSConnection(hostname, port, pinned_ip, timeout=120)
+    try:
+        connection.request(
+            "POST",
+            request_target,
+            body=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+        )
+        response = connection.getresponse()
         raw = response.read().decode("utf-8")
+        if response.status < 200 or response.status >= 300:
+            raise RuntimeError(f"Noema LLM endpoint returned HTTP {response.status}")
+    finally:
+        connection.close()
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     verdict = extract_json_object(content)
@@ -589,6 +645,12 @@ def inspect_and_review(repo: str, number: int) -> int:
     """Inspect PR state and submit Noema's LLM review when gates are clean."""
     pr = fetch_pr(repo, number)
     actor = current_actor()
+    if not actor:
+        print(
+            "Current token actor could not be verified; Noema review skipped so "
+            "GitHub never counts an unverified credential as an independent reviewer."
+        )
+        return 0
     if actor in PRIMARY_REVIEW_AUTHORS:
         print(
             f"Current token actor {actor!r} is already a primary review actor; "

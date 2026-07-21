@@ -2866,14 +2866,17 @@ def print_summary(
 
 
 def markdown_cell(value: object) -> str:
-    """Escape a value for a compact GitHub Actions summary table cell."""
-    return str(value).replace("|", "\\|").replace("\n", "<br>")
+    """Render untrusted text inertly inside a GitHub Actions summary table cell."""
+    return markdown_code_span(str(value).replace("|", "\\|"))
 
 
 def markdown_code_span(value: object) -> str:
-    """Escape a value for a compact Markdown inline code span."""
-    escaped = str(value).replace("`", "\\`")
-    return f"`{escaped}`"
+    """Render an inert CommonMark code span with a collision-free delimiter."""
+    normalized = str(value).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    delimiter_length = max((len(match.group(0)) for match in re.finditer(r"`+", normalized)), default=0) + 1
+    delimiter = "`" * delimiter_length
+    padding = " " if normalized.startswith(("`", " ")) or normalized.endswith(("`", " ")) else ""
+    return f"{delimiter}{padding}{normalized}{padding}{delimiter}"
 
 
 def write_actions_summary(
@@ -2892,11 +2895,11 @@ def write_actions_summary(
     lines = [
         "## PR review merge scheduler",
         "",
-        f"- Base branch: `{base_branch}`",
-        f"- Project flow: `{project_flow}`",
-        f"- Dry run: `{str(dry_run).lower()}`",
-        f"- Inspected PRs: `{len(decisions)}`",
-        f"- Actions: `{json.dumps(counts, sort_keys=True)}`",
+        f"- Base branch: {markdown_code_span(base_branch)}",
+        f"- Project flow: {markdown_code_span(project_flow)}",
+        f"- Dry run: {markdown_code_span(str(dry_run).lower())}",
+        f"- Inspected PRs: {markdown_code_span(len(decisions))}",
+        f"- Actions: {markdown_code_span(json.dumps(counts, sort_keys=True))}",
         "",
         "| PR | Action | Reason |",
         "| ---: | --- | --- |",
