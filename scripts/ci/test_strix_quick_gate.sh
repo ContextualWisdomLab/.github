@@ -185,6 +185,9 @@ assert_strix_accepted_risk_matcher_functional() {
 # severity | title-substring | reason
 MEDIUM | stored unencrypted in Expo SQLite | On-device-first design; documented tradeoff.
 EOF
+	# A declaration whose substring is a bare glob metacharacter must match only
+	# titles literally containing it — never every finding.
+	printf '%s\n' 'MEDIUM | * | wildcard must not match everything' >>"$tmp_dir/.security/strix-accepted-risks.txt"
 	# Fixture findings.
 	printf 'Title: Sensitive data stored unencrypted in Expo SQLite\nSeverity: MEDIUM\n' >"$tmp_dir/med_match.md"
 	printf 'Title: Sensitive data stored unencrypted in Expo SQLite\nSeverity: HIGH\n' >"$tmp_dir/high_match.md"
@@ -201,6 +204,7 @@ EOF
 				'"$(sed -n '/^severity_rank()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^extract_max_severity_rank()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^extract_finding_title()/,/^}/p' "$GATE_SCRIPT")"'
+				'"$(sed -n '/^escape_workflow_command_message()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^accepted_risk_declaration_lines()/,/^}/p' "$GATE_SCRIPT")"'
 				'"$(sed -n '/^vulnerability_file_is_accepted_risk()/,/^}/p' "$GATE_SCRIPT")"'
 				vulnerability_file_is_accepted_risk "'"$tmp_dir"'/med_match.md"  2>/dev/null && echo "MED_MATCH=accepted"  || echo "MED_MATCH=blocked"

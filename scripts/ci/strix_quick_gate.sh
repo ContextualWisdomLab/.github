@@ -1957,9 +1957,22 @@ vulnerability_file_is_below_threshold() {
 	[ "$report_rank" -ge 0 ] && [ "$report_rank" -lt "$threshold_rank" ]
 }
 
+# Escape a string for safe inclusion in a GitHub Actions workflow command
+# (::warning ...::message). Untrusted content (finding titles, repo-supplied
+# reasons) must not be able to break the command format or inject additional
+# workflow commands via %, CR, or LF.
+escape_workflow_command_message() {
+	local text="$1"
+	text="${text//'%'/%25}"
+	text="${text//$'\r'/%0D}"
+	text="${text//$'\n'/%0A}"
+	printf '%s' "$text"
+}
+
 # Read the scanned repo's accepted-risk declaration. Prefer the PR-head blob
-# (trusted, immutable for this run) and fall back to the checkout. Emits raw
-# lines; comment/blank filtering happens in the matcher.
+# (immutable for this run, but still untrusted PR-controlled data — like every
+# other PR-head blob this script copies as scanner input) and fall back to the
+# checkout. Emits raw lines; comment/blank filtering happens in the matcher.
 accepted_risk_declaration_lines() {
 	local head_sha
 	head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
@@ -2022,8 +2035,14 @@ vulnerability_file_is_accepted_risk() {
 		if [ "$entry_rank" -lt 0 ] || [ "$entry_rank" -gt "$suppressible_rank" ] || [ "$finding_rank" -gt "$entry_rank" ]; then
 			continue
 		fi
-		if [[ "${finding_title,,}" == *"${entry_substring,,}"* ]]; then
-			echo "::warning title=Strix accepted risk::Suppressing documented accepted-risk finding (${entry_severity}) '${finding_title}' — reason: ${entry_reason}. HIGH/CRITICAL findings are never suppressible; see ${STRIX_ACCEPTED_RISKS_PATH}." >&2
+		# Literal (fixed-string) substring match — grep -F so glob metacharacters
+		# (*, ?, [) in a declared substring match literally and cannot broaden the
+		# match (e.g. a lone '*' matches only titles containing an asterisk, never all).
+		if printf '%s' "${finding_title,,}" | grep -Fq -- "${entry_substring,,}"; then
+			local safe_title safe_reason
+			safe_title="$(escape_workflow_command_message "$finding_title")"
+			safe_reason="$(escape_workflow_command_message "$entry_reason")"
+			echo "::warning title=Strix accepted risk::Suppressing documented accepted-risk finding (${entry_severity}) '${safe_title}' — reason: ${safe_reason}. HIGH/CRITICAL findings are never suppressible; see ${STRIX_ACCEPTED_RISKS_PATH}." >&2
 			return 0
 		fi
 	done < <(accepted_risk_declaration_lines)
