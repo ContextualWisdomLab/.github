@@ -904,7 +904,7 @@ def fetch_pr_for_merge_revalidation(repo: str, number: int) -> dict[str, Any]:
 
 def fetch_rest_mergeable_state(repo: str, number: int) -> str:
     """Fetch and normalize GitHub REST mergeable_state for one pull request."""
-    raw_state = run(
+    raw_state = run_github_read(
         [
             GITHUB_CLI,
             "api",
@@ -931,7 +931,7 @@ def fetch_compare_branch_freshness(repo: str, pr: dict[str, Any]) -> dict[str, A
     base = quote(pr.get("baseRefName") or "base", safe="")
     head = quote(compare_ref_for_pr_head(repo, pr), safe=":")
     return json.loads(
-        run(
+        run_github_read(
             [
                 GITHUB_CLI,
                 "api",

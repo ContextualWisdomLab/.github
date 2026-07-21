@@ -444,7 +444,12 @@ def test_rest_mergeable_state_helpers(monkeypatch):
         calls.append(args)
         return "dirty\n"
 
-    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched, "run_github_read", fake_run)
+    monkeypatch.setattr(
+        sched,
+        "run",
+        lambda *args, **kwargs: pytest.fail("read-only REST lookup used mutation credential"),
+    )
 
     assert sched.fetch_rest_mergeable_state("owner/repo", 7) == "DIRTY"
     assert calls == [["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".mergeable_state // \"\""]]
@@ -454,7 +459,7 @@ def test_rest_mergeable_state_helpers(monkeypatch):
         calls.append(args)
         return '{"status":"behind","behind_by":3}'
 
-    monkeypatch.setattr(sched, "run", fake_compare_run)
+    monkeypatch.setattr(sched, "run_github_read", fake_compare_run)
     compare = sched.fetch_compare_branch_freshness(
         "owner/repo",
         {
