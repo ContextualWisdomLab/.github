@@ -353,9 +353,8 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
     if len(bounded_paths) == 1:
         sections.append(_fetch(bounded_paths[0]))
     else:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(bounded_paths)
-        ) as executor:
+        max_workers = min(MAX_CONTEXT_FILES, len(bounded_paths))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             for result in executor.map(_fetch, bounded_paths):
                 sections.append(result)
     if len(paths) > MAX_CONTEXT_FILES:
