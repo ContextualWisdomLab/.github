@@ -25,20 +25,35 @@ MAX_LOCKS = 8
 MAX_LOCK_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 20 * 1024 * 1024
 MAX_TREE_OUTPUT_BYTES = 32 * 1024 * 1024
-GIT_EXECUTABLE = shutil.which("git")
+GIT_EXECUTABLE = shutil.which("git", path=os.defpath)
+TRUSTED_GIT_OWNER_UID = 0
 
 
 def validated_git_executable() -> str:
-    """Return the absolute, executable Git binary selected from the trusted runner PATH."""
-    candidate = GIT_EXECUTABLE
-    if not candidate or not Path(candidate).is_absolute():
+    """Return a trusted Git binary selected without the inherited runner PATH."""
+    candidate = Path(GIT_EXECUTABLE or "")
+    if not GIT_EXECUTABLE or not candidate.is_absolute():
         raise RuntimeError("an absolute Git executable path is required")
     try:
-        resolved = Path(candidate).resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        candidate_parent = candidate.parent.resolve(strict=True)
+        resolved_parent = resolved.parent.resolve(strict=True)
+        resolved_stat = resolved.stat()
+        parent_stats = (candidate_parent.stat(), resolved_parent.stat())
     except OSError as exc:
         raise RuntimeError("the configured Git executable is unavailable") from exc
-    if not resolved.is_file() or not os.access(resolved, os.X_OK):
-        raise RuntimeError("the configured Git executable failed validation")
+    if (
+        not resolved.is_file()
+        or not os.access(resolved, os.X_OK)
+        or resolved_stat.st_uid != TRUSTED_GIT_OWNER_UID
+        or resolved_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or any(
+            parent_stat.st_uid != TRUSTED_GIT_OWNER_UID
+            or parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            for parent_stat in parent_stats
+        )
+    ):
+        raise RuntimeError("the configured Git executable failed trust validation")
     return str(resolved)
 
 

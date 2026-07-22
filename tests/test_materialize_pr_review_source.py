@@ -357,6 +357,28 @@ def test_git_executable_requires_trusted_owner_and_permissions(
     assert materializer.validated_git_executable() == str(candidate.resolve())
 
 
+def test_streaming_git_readers_revalidate_the_executable(monkeypatch, tmp_path: Path) -> None:
+    """Every long-lived Git process crosses the executable trust boundary."""
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(argv, **unused):
+        popen_calls.append(argv)
+        return object()
+
+    monkeypatch.setattr(
+        materializer, "validated_git_executable", lambda: "/trusted/bin/git"
+    )
+    monkeypatch.setattr(materializer.subprocess, "Popen", fake_popen)
+
+    materializer.open_tree_reader(tmp_path, "a" * 40)
+    materializer.open_batch_reader(tmp_path)
+
+    assert [call[0] for call in popen_calls] == [
+        "/trusted/bin/git",
+        "/trusted/bin/git",
+    ]
+
+
 def test_tree_entry_parser_covers_gitlink_and_malformed_records() -> None:
     """Tree metadata accepts only exact blob and gitlink shapes."""
     oid = "a" * 40

@@ -150,6 +150,24 @@ def test_git_bytes_requires_an_absolute_verified_executable(monkeypatch, tmp_pat
         locks.git_bytes(tmp_path, "rev-parse", "HEAD")
 
 
+def test_git_executable_requires_trusted_owner_and_permissions(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Dependency-lock extraction rejects a user-controlled executable path."""
+    candidate = tmp_path / "bin" / "git"
+    candidate.parent.mkdir()
+    candidate.write_text("#!/bin/sh\n", encoding="utf-8")
+    candidate.chmod(0o755)
+    monkeypatch.setattr(locks, "GIT_EXECUTABLE", str(candidate))
+    monkeypatch.setattr(locks, "TRUSTED_GIT_OWNER_UID", os.getuid() + 1)
+
+    with pytest.raises(RuntimeError, match="failed trust validation"):
+        locks.validated_git_executable()
+
+    monkeypatch.setattr(locks, "TRUSTED_GIT_OWNER_UID", os.getuid())
+    assert locks.validated_git_executable() == str(candidate.resolve())
+
+
 def test_write_exclusive_closes_descriptor_when_fdopen_fails(
     monkeypatch,
     tmp_path: Path,

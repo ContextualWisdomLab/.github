@@ -1226,8 +1226,14 @@ pull_request_scope_context_files() {
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
 	for changed_file in "$@"; do
-		# Callers pass only the cache produced by normalize_changed_files_cache.
-		normalized_changed_file="$changed_file"
+		# Callers should pass only the cache produced by
+		# normalize_changed_files_cache. Revalidate the boundary so a future raw
+		# call fails closed instead of silently changing the context allowlist.
+		if ! normalized_changed_file="$(normalize_changed_file_path "$changed_file")" ||
+			[ "$normalized_changed_file" != "$changed_file" ]; then
+			echo "ERROR: pull_request_scope_context_files received a non-normalized changed path" >&2
+			return 2
+		fi
 		case "$normalized_changed_file" in
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then

@@ -217,7 +217,7 @@ def open_tree_reader(git_dir: Path, head_sha: str) -> subprocess.Popen[bytes]:
     """Start bounded streaming enumeration of one exact commit tree."""
     return subprocess.Popen(  # nosec B603
         [
-            GIT_EXECUTABLE,
+            validated_git_executable(),
             f"--git-dir={git_dir}",
             "ls-tree",
             "-r",
@@ -352,7 +352,7 @@ def open_batch_reader(git_dir: Path) -> subprocess.Popen[bytes]:
     """Start one Git batch process for bounded blob reads."""
     # Fixed Git subcommand and no shell evaluation.
     return subprocess.Popen(  # nosec B603
-        [GIT_EXECUTABLE, f"--git-dir={git_dir}", "cat-file", "--batch"],
+        [validated_git_executable(), f"--git-dir={git_dir}", "cat-file", "--batch"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
