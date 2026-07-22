@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import argparse
 import base64
+import concurrent.futures
 import ipaddress
 import json
 import os
@@ -349,9 +349,15 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
             return f"### {path}\nNo UTF-8 text content available from head content API."
         return f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONTEXT_FILES) as executor:
-        for result in executor.map(_fetch, paths[:MAX_CONTEXT_FILES]):
-            sections.append(result)
+    bounded_paths = paths[:MAX_CONTEXT_FILES]
+    if len(bounded_paths) == 1:
+        sections.append(_fetch(bounded_paths[0]))
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(bounded_paths)
+        ) as executor:
+            for result in executor.map(_fetch, bounded_paths):
+                sections.append(result)
     if len(paths) > MAX_CONTEXT_FILES:
         sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)

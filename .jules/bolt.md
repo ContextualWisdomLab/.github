@@ -43,9 +43,9 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
-## 2024-11-24 - Avoid N+1 API blocking in LLM review context gathering
+## 2026-07-22 - Avoid N+1 API blocking in LLM review context gathering
 **Learning:** The `changed_file_context` function in `scripts/ci/noema_review_gate.py` was fetching changed file contents sequentially using synchronous GitHub API calls (via `fetch_head_file_content`). This caused N+1 network request bottlenecks proportional to the number of files (up to `MAX_CONTEXT_FILES`), significantly increasing the execution time.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch file contents concurrently when building bounded context from external APIs in PR gates, preserving the order using `executor.map`.
-## 2024-11-24 - LLM 리뷰 컨텍스트 수집 시 N+1 API 차단 방지
+## 2026-07-22 - LLM 리뷰 컨텍스트 수집 시 N+1 API 차단 방지
 **Learning:** `scripts/ci/noema_review_gate.py`의 `changed_file_context` 함수는 `fetch_head_file_content`를 통해 동기식 GitHub API 호출을 사용하여 순차적으로 변경된 파일의 내용을 가져왔습니다. 이는 파일 수(최대 `MAX_CONTEXT_FILES`)에 비례하여 N+1 네트워크 요청 병목 현상을 일으켜 전체 실행 시간을 크게 증가시켰습니다.
 **Action:** PR 게이트의 외부 API에서 바운디드 컨텍스트를 구성할 때 `concurrent.futures.ThreadPoolExecutor`를 사용하여 파일 내용을 동시에 가져오고, `executor.map`을 사용하여 순서를 유지하도록 최적화해야 합니다.

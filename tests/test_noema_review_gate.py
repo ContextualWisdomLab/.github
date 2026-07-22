@@ -296,6 +296,33 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
     assert "1 changed files omitted from context budget" in context
 
 
+def test_changed_file_context_uses_serial_path_for_one_file(monkeypatch):
+    """One changed file must not pay the cost of creating a worker pool."""
+    calls = []
+    monkeypatch.setattr(
+        noema,
+        "fetch_changed_file_paths",
+        lambda repo, number: ["src/only.py"],
+    )
+    monkeypatch.setattr(
+        noema,
+        "fetch_head_file_content",
+        lambda repo, path, head_sha: calls.append((repo, path, head_sha))
+        or "print('only')\n",
+    )
+    monkeypatch.setattr(
+        noema.concurrent.futures,
+        "ThreadPoolExecutor",
+        lambda *args, **kwargs: pytest.fail("single-file context created a worker pool"),
+    )
+
+    context = noema.changed_file_context("owner/repo", 7, "head")
+
+    assert "### src/only.py" in context
+    assert "print('only')" in context
+    assert calls == [("owner/repo", "src/only.py", "head")]
+
+
 class FakeResponse:
     """Small context-manager response for urllib monkeypatches."""
 
