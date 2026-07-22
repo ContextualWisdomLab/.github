@@ -174,6 +174,43 @@ def test_write_exclusive_closes_descriptor_when_fdopen_fails(
     assert len(closed) == 1
 
 
+def test_write_exclusive_does_not_double_close_after_write_failure(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """A wrapped descriptor is closed only by its owning stream."""
+    closed: list[int] = []
+    real_close = os.close
+
+    class FailingWriter:
+        def __init__(self, descriptor: int) -> None:
+            self.descriptor = descriptor
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *unused) -> None:
+            locks.os.close(self.descriptor)
+
+        def write(self, unused: bytes) -> None:
+            raise RuntimeError("write failed")
+
+    def recording_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(locks.os, "close", recording_close)
+    monkeypatch.setattr(
+        locks.os,
+        "fdopen",
+        lambda descriptor, *args, **kwargs: FailingWriter(descriptor),
+    )
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        locks.write_exclusive(tmp_path / "lock.txt", b"data")
+    assert len(closed) == 1
+
+
 def test_repository_and_output_paths_fail_closed(monkeypatch, tmp_path: Path):
     """Repository identity, existing outputs, and symlink ancestors are rejected."""
     not_directory = tmp_path / "repo-file"

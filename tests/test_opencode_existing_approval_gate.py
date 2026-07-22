@@ -329,6 +329,16 @@ def test_review_rejection_reason_rejects_non_model_evidence(mutate, reason):
     assert reason in gate.review_rejection_reason(value, HEAD, BASE_REF, BASE_SHA)
 
 
+def test_review_rejection_reason_accepts_uppercase_sha_bullets():
+    """Hex SHA identity is case-insensitive while the base ref remains exact."""
+    value = review()
+    value["body"] = value["body"].replace(
+        f"- Head SHA: `{HEAD}`", f"- Head SHA: `{HEAD.upper()}`"
+    ).replace(f"- Base SHA: `{BASE_SHA}`", f"- Base SHA: `{BASE_SHA.upper()}`")
+
+    assert gate.review_rejection_reason(value, HEAD, BASE_REF, BASE_SHA) is None
+
+
 @pytest.mark.parametrize(
     ("evidence", "reason"),
     [

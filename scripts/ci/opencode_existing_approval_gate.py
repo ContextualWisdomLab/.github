@@ -39,6 +39,8 @@ BASE_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 WORKFLOW_RUN_RE = re.compile(r"(?m)^- Workflow run: ([1-9][0-9]*)\s*$")
 WORKFLOW_ATTEMPT_RE = re.compile(r"(?m)^- Workflow attempt: ([1-9][0-9]*)\s*$")
 RESULT_LINE_RE = re.compile(r"(?m)^- Result: ([A-Z_]+)\s*$")
+HEAD_SHA_LINE_RE = re.compile(r"(?m)^- Head SHA: `([0-9a-fA-F]{40})`\s*$")
+BASE_SHA_LINE_RE = re.compile(r"(?m)^- Base SHA: `([0-9a-fA-F]{40})`\s*$")
 CONTROL_BLOCK_RE = re.compile(
     r"<!--[ \t]*opencode-review-control-v1[ \t]*\n(?P<payload>.*?)[ \t]*-->",
     re.DOTALL,
@@ -163,11 +165,15 @@ def review_rejection_reason(
         return "review body lacks the real-model approval marker"
     if RESULT_LINE_RE.findall(body) != ["APPROVE"]:
         return "review body must contain exactly one unambiguous APPROVE result"
-    if f"- Head SHA: `{head_sha}`" not in body:
+    if head_sha.lower() not in {
+        candidate.lower() for candidate in HEAD_SHA_LINE_RE.findall(body)
+    }:
         return "review body lacks the exact current-head SHA"
     if f"- Base ref: `{base_ref}`" not in body:
         return "review body lacks the exact current base ref"
-    if f"- Base SHA: `{base_sha}`" not in body:
+    if base_sha.lower() not in {
+        candidate.lower() for candidate in BASE_SHA_LINE_RE.findall(body)
+    }:
         return "review body lacks the exact current base SHA"
     workflow_run = WORKFLOW_RUN_RE.search(body)
     if not workflow_run:

@@ -599,6 +599,42 @@ def test_inert_writer_closes_descriptor_after_fdopen_failure(
         materializer.write_inert_file(tmp_path / "inert", b"data")
 
 
+def test_inert_writer_does_not_double_close_after_write_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Once fdopen owns the descriptor, stream cleanup is the only closer."""
+    closed: list[int] = []
+    real_close = os.close
+
+    class FailingWriter:
+        def __init__(self, descriptor: int) -> None:
+            self.descriptor = descriptor
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *unused) -> None:
+            materializer.os.close(self.descriptor)
+
+        def write(self, unused: bytes) -> None:
+            raise RuntimeError("write failed")
+
+    def recording_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(materializer.os, "close", recording_close)
+    monkeypatch.setattr(
+        materializer.os,
+        "fdopen",
+        lambda descriptor, *args, **kwargs: FailingWriter(descriptor),
+    )
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        materializer.write_inert_file(tmp_path / "inert", b"data")
+    assert len(closed) == 1
+
+
 def test_materialize_in_process_covers_gitlink_manifest_and_cli(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:

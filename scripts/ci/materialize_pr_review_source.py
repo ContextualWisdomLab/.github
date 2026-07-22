@@ -354,14 +354,15 @@ def write_inert_file(path: Path, data: bytes) -> None:
         flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags, 0o600)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(data)
+        handle = os.fdopen(descriptor, "wb")
     except BaseException:
         try:
             os.close(descriptor)
         except OSError:
             pass
         raise
+    with handle:
+        handle.write(data)
     path.chmod(0o444)
 
 
