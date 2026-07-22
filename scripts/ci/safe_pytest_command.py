@@ -9,6 +9,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import stat
 from collections.abc import Sequence
@@ -17,18 +18,16 @@ RUN_LINE_RE = re.compile(r"\s*(?:-\s*)?run:\s*(.+?)\s*$")
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
 TRUSTED_PYTHON_ENV_ROOT = pathlib.Path("/opt/base-python-envs")
-
-
-def _basename(value: str) -> str:
-    """Return a command token's POSIX basename."""
-    return pathlib.PurePosixPath(value).name
+TRUSTED_PYTHON_ENV_OWNER_UID = 0
 
 
 def _is_pytest_argv(argv: Sequence[str]) -> bool:
     """Return whether argv is a supported direct pytest invocation."""
     if not argv:
         return False
-    executable = _basename(argv[0])
+    executable = argv[0]
+    if "/" in executable or "\\" in executable:
+        return False
     if executable in PYTEST_EXECUTABLES:
         return True
     if executable in PYTHON_EXECUTABLES:
@@ -83,7 +82,7 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
     supplied_env_bin = os.environ.get("OPENCODE_PYTHON_ENV_BIN", "").strip()
-    virtualenv_bin = project_dir.resolve() / ".venv" / "bin"
+    trusted_bin: pathlib.Path | None = None
     if supplied_env_bin:
         candidate = pathlib.Path(supplied_env_bin)
         try:
@@ -95,20 +94,49 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
         if (
             not resolved.is_dir()
             or trusted_root not in resolved.parents
-            or candidate_stat.st_uid != 0
+            or candidate_stat.st_uid != TRUSTED_PYTHON_ENV_OWNER_UID
             or candidate_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
         ):
             raise ValueError("trusted Python environment path failed validation")
-        virtualenv_bin = resolved
-    if virtualenv_bin.is_dir():
-        inherited_path = env.get("PATH")
-        env["PATH"] = (
-            os.pathsep.join((str(virtualenv_bin), inherited_path))
-            if inherited_path
-            else str(virtualenv_bin)
-        )
+        trusted_bin = resolved
+
+    search_path = str(trusted_bin) if trusted_bin is not None else env.get("PATH", "")
+    executable_path = shutil.which(argv[0], path=search_path)
+    if not executable_path:
+        raise ValueError("configured pytest executable is unavailable from the trusted PATH")
+    candidate_executable = pathlib.Path(executable_path)
+    if not candidate_executable.is_absolute():
+        raise ValueError("configured pytest executable must resolve to an absolute path")
+    try:
+        candidate_absolute = candidate_executable.absolute()
+        resolved_executable = candidate_executable.resolve(strict=True)
+        candidate_stat = candidate_executable.lstat()
+        resolved_stat = resolved_executable.stat()
+        project_root = project_dir.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("configured pytest executable path is unavailable") from exc
+    if (
+        not resolved_executable.is_file()
+        or not os.access(resolved_executable, os.X_OK)
+        or candidate_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or resolved_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or candidate_absolute == project_root
+        or project_root in candidate_absolute.parents
+        or resolved_executable == project_root
+        or project_root in resolved_executable.parents
+    ):
+        raise ValueError("configured pytest executable failed trust validation")
+    if trusted_bin is not None:
+        if (
+            candidate_absolute.parent != trusted_bin
+            or candidate_stat.st_uid != TRUSTED_PYTHON_ENV_OWNER_UID
+        ):
+            raise ValueError("trusted Python environment executable failed validation")
+        env["PATH"] = str(trusted_bin)
+
+    command = [str(resolved_executable), *argv[1:]]
     completed = subprocess.run(
-        list(argv),
+        command,
         cwd=project_dir,
         env=env,
         shell=False,
@@ -148,5 +176,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     return execute_command(args.project_dir, command)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
     raise SystemExit(main())

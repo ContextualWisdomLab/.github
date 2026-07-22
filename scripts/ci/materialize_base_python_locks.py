@@ -139,8 +139,15 @@ def parse_lock_entries(tree: bytes) -> list[tuple[str, str, int]]:
             path = raw_path.decode("utf-8")
         except (UnicodeDecodeError, ValueError) as exc:
             raise ValueError("could not parse Git tree entry") from exc
-        if PurePosixPath(path).name != "requirements-hashes.txt":
+        pure_path = PurePosixPath(path)
+        if pure_path.name != "requirements-hashes.txt":
             continue
+        if (
+            pure_path.is_absolute()
+            or ".." in pure_path.parts
+            or pure_path.as_posix() != path
+        ):
+            raise ValueError(f"hashed requirements path or size is unsafe: {path}")
         if mode != "100644" or kind != "blob" or not SHA_RE.fullmatch(oid):
             raise ValueError(f"hashed requirements must be a regular file: {path}")
         if not size_text.isdigit() or not SAFE_PATH_RE.fullmatch(path):
@@ -225,5 +232,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
     raise SystemExit(main())

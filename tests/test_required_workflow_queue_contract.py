@@ -207,6 +207,24 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
     )
 
 
+def test_strix_install_uses_only_the_trusted_dependency_lock() -> None:
+    """A pull_request_target run must never execute package metadata from PR HEAD."""
+    workflow = workflow_text("strix.yml")
+    install_step = workflow_step(workflow, "Install Strix")
+
+    assert "Materialize central Strix dependency lock from PR head" not in workflow
+    assert 'PR_HEAD_SHA:requirements-strix-ci-hashes.txt' not in workflow
+    assert (
+        'trusted_lock="$TRUSTED_STRIX_SOURCE/requirements-strix-ci-hashes.txt"'
+        in install_step
+    )
+    assert '[ ! -f "$trusted_lock" ] || [ -L "$trusted_lock" ]' in install_step
+    assert 'resolved_trusted_lock="$(realpath "$trusted_lock")"' in install_step
+    assert '"$TRUSTED_STRIX_SOURCE"/*' in install_step
+    assert '--require-hashes -r "$resolved_trusted_lock"' in install_step
+    assert "--require-hashes -r requirements-strix-ci-hashes.txt" not in install_step
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     workflows = (
         "close-empty-pr.yml",
@@ -457,6 +475,21 @@ def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> N
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "github.event.workflow_run.pull_requests[0].number" in workflow
+
+
+def test_scheduler_repository_dispatch_is_actor_gated_and_default_branch_bound() -> None:
+    """Generic repository dispatch cannot select a privileged merge target branch."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count("github.actor == 'github-actions[bot]'") >= 2
+    assert workflow.count("github.event.sender.login == 'github-actions[bot]'") >= 2
+    assert (
+        "DEFAULT_BRANCH: ${{ github.event_name == 'workflow_call' && "
+        "inputs.base_branch || github.event.repository.default_branch }}"
+    ) in workflow
+    assert (
+        "DEFAULT_BRANCH: ${{ github.event.client_payload.base_branch ||" not in workflow
+    )
 
 
 def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:

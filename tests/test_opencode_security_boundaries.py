@@ -161,6 +161,11 @@ def test_safe_pytest_argv_classifier_rejects_empty_argv() -> None:
         "pytest `id`",
         "pytest $(id)",
         "pytest 'unterminated",
+        "./pytest -q",
+        "../pytest -q",
+        "/tmp/pytest -q",
+        ".\\pytest -q",
+        "C:\\pytest -q",
         "",
     ],
 )
@@ -172,21 +177,137 @@ def test_safe_pytest_parser_rejects_shell_and_non_pytest_execution(command: str)
 def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The realistic configured-command boundary executes validated argv with shell disabled."""
     observed: dict[str, object] = {}
-    virtualenv_bin = tmp_path / ".venv" / "bin"
-    virtualenv_bin.mkdir(parents=True)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    local_virtualenv_bin = project_dir / ".venv" / "bin"
+    local_virtualenv_bin.mkdir(parents=True)
+    (local_virtualenv_bin / "pytest").write_text("untrusted", encoding="utf-8")
+    trusted_executable = tmp_path / "runner-tools" / "pytest"
+    trusted_executable.parent.mkdir()
+    trusted_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    trusted_executable.chmod(0o755)
 
     def fake_run(argv, *, cwd, env, shell, check):
         observed.update(argv=argv, cwd=cwd, env=env, shell=shell, check=check)
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
-    assert safe_pytest.execute_command(tmp_path, ["pytest", "-q", "tests"]) == 0
-    assert observed["argv"] == ["pytest", "-q", "tests"]
-    assert observed["cwd"] == tmp_path
+    monkeypatch.setattr(
+        safe_pytest.shutil, "which", lambda executable, path: str(trusted_executable)
+    )
+    assert safe_pytest.execute_command(project_dir, ["pytest", "-q", "tests"]) == 0
+    assert observed["argv"] == [str(trusted_executable), "-q", "tests"]
+    assert observed["cwd"] == project_dir
     assert observed["shell"] is False
     assert observed["check"] is False
     assert observed["env"]["PYTHONPATH"] == "."
-    assert observed["env"]["PATH"].split(os.pathsep)[0] == str(virtualenv_bin)
+    assert observed["env"]["PATH"] == os.environ.get("PATH", "")
+
+
+def test_safe_pytest_executor_rejects_project_symlink_and_relative_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PATH lookup cannot select a local venv shim, symlink, or relative executable."""
+    project_dir = tmp_path / "project"
+    project_bin = project_dir / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    trusted_target = tmp_path / "runner-tools" / "pytest"
+    trusted_target.parent.mkdir()
+    trusted_target.write_text("#!/bin/sh\n", encoding="utf-8")
+    trusted_target.chmod(0o755)
+    local_symlink = project_bin / "pytest"
+    local_symlink.symlink_to(trusted_target)
+
+    monkeypatch.setattr(
+        safe_pytest.shutil, "which", lambda executable, path: str(local_symlink)
+    )
+    with pytest.raises(ValueError, match="trust validation"):
+        safe_pytest.execute_command(project_dir, ["pytest", "-q"])
+
+    monkeypatch.setattr(safe_pytest.shutil, "which", lambda executable, path: "pytest")
+    with pytest.raises(ValueError, match="absolute path"):
+        safe_pytest.execute_command(project_dir, ["pytest", "-q"])
+
+
+def test_safe_pytest_executor_uses_only_validated_base_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An explicitly supplied base environment is owner and permission checked."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    trusted_root = tmp_path / "base-python-envs"
+    trusted_bin = trusted_root / "lock-000" / "bin"
+    trusted_bin.mkdir(parents=True)
+    trusted_executable = trusted_bin / "python"
+    trusted_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    trusted_executable.chmod(0o755)
+    observed: dict[str, object] = {}
+
+    def fake_run(argv, *, cwd, env, shell, check):
+        observed.update(argv=argv, cwd=cwd, env=env, shell=shell, check=check)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(safe_pytest, "TRUSTED_PYTHON_ENV_ROOT", trusted_root)
+    monkeypatch.setattr(
+        safe_pytest, "TRUSTED_PYTHON_ENV_OWNER_UID", os.getuid()
+    )
+    monkeypatch.setenv("OPENCODE_PYTHON_ENV_BIN", str(trusted_bin))
+    monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
+
+    assert safe_pytest.execute_command(project_dir, ["python", "-m", "pytest"]) == 0
+    assert observed["argv"] == [str(trusted_executable), "-m", "pytest"]
+    assert observed["env"]["PATH"] == str(trusted_bin)
+
+
+def test_safe_pytest_executor_reports_unavailable_and_invalid_executables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every failed trusted-path lookup leaves a specific fail-closed result."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    monkeypatch.setattr(safe_pytest.shutil, "which", lambda executable, path: None)
+    with pytest.raises(ValueError, match="unavailable from the trusted PATH"):
+        safe_pytest.execute_command(project_dir, ["pytest"])
+
+    missing = tmp_path / "runner-tools" / "pytest"
+    monkeypatch.setattr(
+        safe_pytest.shutil, "which", lambda executable, path: str(missing)
+    )
+    with pytest.raises(ValueError, match="executable path is unavailable"):
+        safe_pytest.execute_command(project_dir, ["pytest"])
+
+
+def test_safe_pytest_executor_rejects_invalid_trusted_environment_layout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The explicit base environment must be a direct, owner-controlled bin path."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    trusted_root = tmp_path / "base-python-envs"
+    trusted_root.mkdir()
+    monkeypatch.setattr(safe_pytest, "TRUSTED_PYTHON_ENV_ROOT", trusted_root)
+    monkeypatch.setattr(
+        safe_pytest, "TRUSTED_PYTHON_ENV_OWNER_UID", os.getuid()
+    )
+    monkeypatch.setenv("OPENCODE_PYTHON_ENV_BIN", str(trusted_root))
+    with pytest.raises(ValueError, match="environment path failed validation"):
+        safe_pytest.execute_command(project_dir, ["pytest"])
+
+    trusted_bin = trusted_root / "lock-000" / "bin"
+    nested_bin = trusted_bin / "nested"
+    nested_bin.mkdir(parents=True)
+    nested_executable = nested_bin / "pytest"
+    nested_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    nested_executable.chmod(0o755)
+    monkeypatch.setenv("OPENCODE_PYTHON_ENV_BIN", str(trusted_bin))
+    monkeypatch.setattr(
+        safe_pytest.shutil,
+        "which",
+        lambda executable, path: str(nested_executable),
+    )
+    with pytest.raises(ValueError, match="environment executable failed validation"):
+        safe_pytest.execute_command(project_dir, ["pytest"])
 
 
 def test_safe_pytest_executor_rejects_untrusted_supplied_environment(
