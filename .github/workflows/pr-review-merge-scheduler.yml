@@ -270,6 +270,7 @@ jobs:
             exit 1
           fi
           if [[ ! "$base_branch" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+             [[ "$base_branch" == -* ]] ||
              [[ "$base_branch" == "HEAD" ]] || [[ "$base_branch" == /* ]] ||
              [[ "$base_branch" == *".."* ]] || [[ "$base_branch" == *"@{"* ]] ||
              [[ "$base_branch" == *"//"* ]] ||

@@ -441,6 +441,7 @@ def test_targeted_central_scheduler_binds_live_sibling_pr_metadata() -> None:
     assert "^ContextualWisdomLab/[A-Za-z0-9._-]+$" in workflow
     assert 'pull_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"' in workflow
     assert 'base_repository" != "$TARGET_REPOSITORY"' in workflow
+    assert '[[ "$base_branch" == -* ]]' in workflow
     assert '[[ "$base_branch" == "HEAD" ]]' in workflow
     assert '[[ "$base_branch" == /* ]]' in workflow
     assert '[[ "$base_branch" == *"//"* ]]' in workflow
