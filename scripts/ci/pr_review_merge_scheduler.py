@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import json
 import os
 import re
@@ -123,6 +124,9 @@ OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
+_ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE: (
+    dict[tuple[str, tuple[str, ...], tuple[str, ...]], list[tuple[str, str]]] | None
+) = None
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -2042,9 +2046,16 @@ def active_central_opencode_dispatch_refs(
     shared model-review capacity.
     """
     dispatch_repo = repository_dispatch_target(repo)
-    workflow_names = frozenset({workflow, *OPENCODE_WORKFLOW_NAMES})
+    normalized_statuses = tuple(statuses)
+    workflow_names = tuple(sorted({workflow, *OPENCODE_WORKFLOW_NAMES}))
+    cache_key = (dispatch_repo, normalized_statuses, workflow_names)
+    if (
+        _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE is not None
+        and cache_key in _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE
+    ):
+        return list(_ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE[cache_key])
     refs: list[tuple[str, str]] = []
-    for run_data in active_workflow_runs(dispatch_repo, statuses):
+    for run_data in active_workflow_runs(dispatch_repo, normalized_statuses):
         if run_data.get("event") != "repository_dispatch":
             continue
         labels = (
@@ -2060,7 +2071,41 @@ def active_central_opencode_dispatch_refs(
         run_id = run_data.get("id")
         if run_id:
             refs.append((dispatch_repo, str(run_id)))
+    if _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE is not None:
+        _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE[cache_key] = list(refs)
     return refs
+
+
+@contextlib.contextmanager
+def central_opencode_dispatch_cache():
+    """Cache central capacity reads for one scheduler heartbeat."""
+    global _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE
+    previous_cache = _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE
+    _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE = {}
+    try:
+        yield
+    finally:
+        _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE = previous_cache
+
+
+def reserve_central_opencode_dispatch_capacity(
+    repo: str,
+    workflow: str,
+    statuses: Sequence[str] = ("queued", "in_progress"),
+) -> None:
+    """Count a successful dispatch immediately in the heartbeat-local cache."""
+    if _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE is None:
+        return
+    dispatch_repo = repository_dispatch_target(repo)
+    cache_key = (
+        dispatch_repo,
+        tuple(statuses),
+        tuple(sorted({workflow, *OPENCODE_WORKFLOW_NAMES})),
+    )
+    cached_refs = _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE.get(cache_key)
+    if cached_refs is not None:
+        reservation = f"heartbeat-reservation-{len(cached_refs) + 1}"
+        cached_refs.append((dispatch_repo, reservation))
 
 
 def active_opencode_dispatch_limit() -> int:
@@ -2211,6 +2256,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             }
         ),
     )
+    reserve_central_opencode_dispatch_capacity(repo, workflow)
     return "dispatched"
 
 
@@ -2883,7 +2929,7 @@ def print_summary(
 
 def markdown_cell(value: object) -> str:
     """Render untrusted text inertly inside a GitHub Actions summary table cell."""
-    return markdown_code_span(str(value).replace("|", "\\|"))
+    return markdown_code_span(value)
 
 
 def markdown_code_span(value: object) -> str:
@@ -3886,48 +3932,53 @@ def main(argv: list[str]) -> int:
                 f"live head {live_head or 'missing'}."
             )
             return 0
-    decisions = []
-    review_dispatches_used = 0
-    branch_updates_used = 0
-    for pr in prs:
-        review_dispatch_allowed = (
-            args.review_dispatch_limit < 0 or review_dispatches_used < args.review_dispatch_limit
+    with central_opencode_dispatch_cache():
+        decisions = []
+        review_dispatches_used = 0
+        branch_updates_used = 0
+        for pr in prs:
+            review_dispatch_allowed = (
+                args.review_dispatch_limit < 0
+                or review_dispatches_used < args.review_dispatch_limit
+            )
+            branch_update_allowed = (
+                args.branch_update_limit < 0
+                or branch_updates_used < args.branch_update_limit
+            )
+            try:
+                decision = inspect_pr(
+                    args.repo,
+                    pr,
+                    dry_run=args.dry_run,
+                    trigger_reviews=args.trigger_reviews,
+                    review_dispatch_allowed=review_dispatch_allowed,
+                    branch_update_allowed=branch_update_allowed,
+                    branch_update_limit=args.branch_update_limit,
+                    enable_auto_merge_flag=args.enable_auto_merge,
+                    merge_mode=args.merge_mode,
+                    update_branches=args.update_branches,
+                    workflow=args.review_workflow,
+                    security_workflow=args.security_workflow,
+                    base_branch=args.base_branch,
+                    stale_opencode_minutes=args.stale_opencode_minutes,
+                )
+            except RuntimeError as exc:
+                decision = Decision(
+                    pr.get("number", 0),
+                    "action_error",
+                    summarize_action_error(exc),
+                )
+            decisions.append(decision)
+            if decision.action in {"review_dispatch", "security_dispatch"}:
+                review_dispatches_used += 1
+            if decision.action in {"update_branch", "restamp_head"}:
+                branch_updates_used += 1
+        print_summary(
+            decisions,
+            dry_run=args.dry_run,
+            base_branch=args.base_branch,
+            project_flow=args.project_flow,
         )
-        branch_update_allowed = args.branch_update_limit < 0 or branch_updates_used < args.branch_update_limit
-        try:
-            decision = inspect_pr(
-                args.repo,
-                pr,
-                dry_run=args.dry_run,
-                trigger_reviews=args.trigger_reviews,
-                review_dispatch_allowed=review_dispatch_allowed,
-                branch_update_allowed=branch_update_allowed,
-                branch_update_limit=args.branch_update_limit,
-                enable_auto_merge_flag=args.enable_auto_merge,
-                merge_mode=args.merge_mode,
-                update_branches=args.update_branches,
-                workflow=args.review_workflow,
-                security_workflow=args.security_workflow,
-                base_branch=args.base_branch,
-                stale_opencode_minutes=args.stale_opencode_minutes,
-            )
-        except RuntimeError as exc:
-            decision = Decision(
-                pr.get("number", 0),
-                "action_error",
-                summarize_action_error(exc),
-            )
-        decisions.append(decision)
-        if decision.action in {"review_dispatch", "security_dispatch"}:
-            review_dispatches_used += 1
-        if decision.action in {"update_branch", "restamp_head"}:
-            branch_updates_used += 1
-    print_summary(
-        decisions,
-        dry_run=args.dry_run,
-        base_branch=args.base_branch,
-        project_flow=args.project_flow,
-    )
     return 0
 
 

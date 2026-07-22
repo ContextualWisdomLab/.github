@@ -2346,6 +2346,50 @@ def test_active_central_opencode_dispatch_refs_filters_unrelated_runs(monkeypatc
     ]
 
 
+def test_central_dispatch_capacity_is_cached_and_reserved_per_heartbeat(monkeypatch):
+    """One heartbeat performs one central run read and counts accepted dispatches."""
+    calls = 0
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        nonlocal calls
+        calls += 1
+        assert repo == "ContextualWisdomLab/.github"
+        assert statuses == ("queued", "in_progress")
+        return [
+            {
+                "id": 9200,
+                "name": "Required OpenCode Review",
+                "display_title": "Required OpenCode Review owner/repo#1@" + "a" * 40,
+                "event": "repository_dispatch",
+            }
+        ]
+
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+
+    with sched.central_opencode_dispatch_cache():
+        first = sched.active_central_opencode_dispatch_refs(
+            "owner/repo", "OpenCode Review"
+        )
+        second = sched.active_central_opencode_dispatch_refs(
+            "owner/other", "OpenCode Review"
+        )
+        sched.reserve_central_opencode_dispatch_capacity(
+            "owner/repo", "OpenCode Review"
+        )
+        reserved = sched.active_central_opencode_dispatch_refs(
+            "owner/repo", "OpenCode Review"
+        )
+
+    assert first == second == [("ContextualWisdomLab/.github", "9200")]
+    assert len(reserved) == 2
+    assert reserved[-1][1].startswith("heartbeat-reservation-")
+    assert calls == 1
+
+
 def test_dispatch_opencode_review_defers_when_central_capacity_is_full(monkeypatch, capsys):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
@@ -2915,7 +2959,7 @@ def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys)
     assert payload["decisions"][5]["guidance"]["head_repository"] == "fork/repo"
     summary = summary_path.read_text(encoding="utf-8")
     assert "## PR review merge scheduler" in summary
-    assert "| #7 | `block` | ``merge conflict: DIRTY; base=main, head=feature\\|x; changed files to inspect first:" in summary
+    assert "| #7 | `block` | ``merge conflict: DIRTY; base=main, head=feature|x; changed files to inspect first:" in summary
     assert "do not retry update-branch until the conflict is repaired" in summary
     assert "### Outdated review threads" in summary
     assert "Would resolve 1 outdated review thread(s)" in summary
@@ -2976,7 +3020,8 @@ def test_summary_markdown_renderers_neutralize_untrusted_markup(monkeypatch, tmp
     assert sched.markdown_code_span("line1\rline2") == "`line1 line2`"
     rendered_cell = sched.markdown_cell(malicious)
     assert "\n" not in rendered_cell
-    assert "\\|" in rendered_cell
+    assert "safe|cell" in rendered_cell
+    assert "\\|" not in rendered_cell
     assert rendered_cell.startswith("``") and rendered_cell.endswith("``")
 
     sched.write_actions_summary(

@@ -231,6 +231,16 @@ def test_existing_noema_review_rejects_mismatched_body_and_marker_heads():
 
     assert not noema.existing_noema_review(pr(mismatched_body), "noema")
     assert not noema.existing_noema_review(pr(mismatched_marker), "noema")
+    assert not noema.existing_noema_review(
+        pr(
+            review(
+                commit=current_head,
+                login="noema",
+                body=f"- Head SHA: `{current_head}`\nResult: APPROVE",
+            )
+        ),
+        "noema",
+    )
     assert noema.existing_noema_review(pr(exact), "noema")
     assert not noema.existing_noema_review(
         pr(review(commit=current_head, login="attacker", body=exact["body"])),

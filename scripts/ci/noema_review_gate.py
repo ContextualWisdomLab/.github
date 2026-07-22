@@ -276,7 +276,9 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
             continue
         body = str(review.get("body") or "")
         marker_heads = NOEMA_REVIEW_MARKER_HEAD_RE.findall(body)
-        if marker_heads and any(value.lower() != head_sha.lower() for value in marker_heads):
+        if not marker_heads or any(
+            value.lower() != head_sha.lower() for value in marker_heads
+        ):
             continue
         return True
     return False
