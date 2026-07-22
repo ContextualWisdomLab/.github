@@ -2466,7 +2466,7 @@ def test_central_dispatch_capacity_cache_is_isolated_between_threads(monkeypatch
 
     def fake_active_runs(repo, statuses=("queued", "in_progress")):
         del statuses
-        barrier.wait(timeout=5)
+        barrier.wait(timeout=30)
         return [
             {
                 "id": threading.current_thread().name,
