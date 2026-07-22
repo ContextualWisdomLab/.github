@@ -47,6 +47,16 @@ def test_recent_fix_marker_is_head_scoped():
         24 * 3600,
         actor,
     )
+    oversized_epoch_marker = {
+        "body": f"{fix.FIX_MARKER} head_sha={head} epoch={'9' * 5000} -->",
+        "user": {"login": actor},
+    }
+    assert not fix.recent_fix_marker_exists(
+        [oversized_epoch_marker], head, 24 * 3600, actor
+    )
+    assert fix.recent_fix_marker_exists(
+        [comments[0], oversized_epoch_marker], head, 24 * 3600, actor
+    )
     forged = [{**comments[0], "user": {"login": "contributor"}}]
     assert not fix.recent_fix_marker_exists(forged, head, 24 * 3600, actor)
     future = [

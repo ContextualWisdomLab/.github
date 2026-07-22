@@ -101,7 +101,11 @@ def recent_fix_marker_exists(
         match = FIX_MARKER_RE.search(str(comment.get("body") or ""))
         if not match or match.group(1).lower() != head_sha.lower():
             continue
-        age_seconds = now - int(match.group(2))
+        try:
+            marker_epoch = int(match.group(2))
+        except ValueError:
+            continue
+        age_seconds = now - marker_epoch
         return 0 <= age_seconds < min_interval_seconds
     return False
 
