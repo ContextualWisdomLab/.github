@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import contextvars
 import json
 import os
 import re
@@ -124,9 +125,12 @@ OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
-_ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE: (
-    dict[tuple[str, tuple[str, ...], tuple[str, ...]], list[tuple[str, str]]] | None
-) = None
+CentralOpenCodeDispatchCache = dict[
+    tuple[str, tuple[str, ...], tuple[str, ...]], list[tuple[str, str]]
+]
+_ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE: contextvars.ContextVar[
+    CentralOpenCodeDispatchCache | None
+] = contextvars.ContextVar("active_central_opencode_dispatch_cache", default=None)
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -1872,6 +1876,7 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
         return []
     runs: list[dict[str, Any]] = []
     for status in statuses:
+        runs_for_status: list[dict[str, Any]] = []
         for page in range(1, MAX_ACTIVE_WORKFLOW_RUN_PAGES + 1):
             payload = json.loads(
                 run_github_actions(
@@ -1891,7 +1896,14 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                 )
             )
             page_runs = payload.get("workflow_runs") or []
-            runs.extend(page_runs)
+            runs_for_status.extend(page_runs)
+            total_count = payload.get("total_count")
+            if (
+                type(total_count) is int
+                and total_count >= 0
+                and len(runs_for_status) >= total_count
+            ):
+                break
             if len(page_runs) < 100:
                 break
         else:
@@ -1899,6 +1911,7 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                 f"active workflow run pagination exceeded {MAX_ACTIVE_WORKFLOW_RUN_PAGES} pages "
                 f"for {repo} with status {status}"
             )
+        runs.extend(runs_for_status)
     return runs
 
 
@@ -2049,11 +2062,9 @@ def active_central_opencode_dispatch_refs(
     normalized_statuses = tuple(statuses)
     workflow_names = tuple(sorted({workflow, *OPENCODE_WORKFLOW_NAMES}))
     cache_key = (dispatch_repo, normalized_statuses, workflow_names)
-    if (
-        _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE is not None
-        and cache_key in _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE
-    ):
-        return list(_ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE[cache_key])
+    cache = _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE.get()
+    if cache is not None and cache_key in cache:
+        return list(cache[cache_key])
     refs: list[tuple[str, str]] = []
     for run_data in active_workflow_runs(dispatch_repo, normalized_statuses):
         if run_data.get("event") != "repository_dispatch":
@@ -2071,21 +2082,19 @@ def active_central_opencode_dispatch_refs(
         run_id = run_data.get("id")
         if run_id:
             refs.append((dispatch_repo, str(run_id)))
-    if _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE is not None:
-        _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE[cache_key] = list(refs)
+    if cache is not None:
+        cache[cache_key] = list(refs)
     return refs
 
 
 @contextlib.contextmanager
 def central_opencode_dispatch_cache():
     """Cache central capacity reads for one scheduler heartbeat."""
-    global _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE
-    previous_cache = _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE
-    _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE = {}
+    token = _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE.set({})
     try:
         yield
     finally:
-        _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE = previous_cache
+        _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE.reset(token)
 
 
 def reserve_central_opencode_dispatch_capacity(
@@ -2094,7 +2103,8 @@ def reserve_central_opencode_dispatch_capacity(
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> None:
     """Count a successful dispatch immediately in the heartbeat-local cache."""
-    if _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE is None:
+    cache = _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE.get()
+    if cache is None:
         return
     dispatch_repo = repository_dispatch_target(repo)
     cache_key = (
@@ -2102,7 +2112,7 @@ def reserve_central_opencode_dispatch_capacity(
         tuple(statuses),
         tuple(sorted({workflow, *OPENCODE_WORKFLOW_NAMES})),
     )
-    cached_refs = _ACTIVE_CENTRAL_OPENCODE_DISPATCH_CACHE.get(cache_key)
+    cached_refs = cache.get(cache_key)
     if cached_refs is not None:
         reservation = f"heartbeat-reservation-{len(cached_refs) + 1}"
         cached_refs.append((dispatch_repo, reservation))

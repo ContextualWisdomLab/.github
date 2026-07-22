@@ -435,7 +435,7 @@ def test_targeted_central_scheduler_binds_live_sibling_pr_metadata() -> None:
     assert "Bind targeted central dispatch to live pull request metadata" in workflow
     assert (
         "github.event.client_payload.target_repository != '' && "
-        "github.event.client_payload.pr_number != '' && "
+        "github.event.client_payload.pr_number > 0 && "
         "format('target-{0}-pr-{1}'"
     ) in workflow
     assert "^ContextualWisdomLab/[A-Za-z0-9._-]+$" in workflow

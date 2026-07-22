@@ -1,5 +1,7 @@
 import json
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import pytest
@@ -2137,6 +2139,30 @@ def test_active_workflow_runs_paginates_each_status(monkeypatch):
     assert [call[-1] for call in calls] == ["page=1", "page=2", "page=1", "page=2"]
 
 
+def test_active_workflow_runs_stops_at_exact_total_count(monkeypatch):
+    """An exact 100-run page must not trigger a redundant second API request."""
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        status = args[args.index("-f") + 1].split("=", 1)[1]
+        return json.dumps(
+            {
+                "total_count": 100,
+                "workflow_runs": [
+                    {"id": f"{status}-{index}"} for index in range(100)
+                ],
+            }
+        )
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    runs = sched.active_workflow_runs("ContextualWisdomLab/.github")
+
+    assert len(runs) == 200
+    assert [call[-1] for call in calls] == ["page=1", "page=1"]
+
+
 def test_actions_repository_scope_refuses_sibling_job_rerun(monkeypatch):
     """A central runner token must not rerun a sibling repository job."""
     monkeypatch.setenv(
@@ -2388,6 +2414,44 @@ def test_central_dispatch_capacity_is_cached_and_reserved_per_heartbeat(monkeypa
     assert len(reserved) == 2
     assert reserved[-1][1].startswith("heartbeat-reservation-")
     assert calls == 1
+
+
+def test_central_dispatch_capacity_cache_is_isolated_between_threads(monkeypatch):
+    """Concurrent scheduler contexts must not share mutable heartbeat caches."""
+    barrier = threading.Barrier(2)
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        barrier.wait(timeout=5)
+        return [
+            {
+                "id": threading.current_thread().name,
+                "name": "Required OpenCode Review",
+                "event": "repository_dispatch",
+            }
+        ]
+
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+
+    def cached_refs():
+        with sched.central_opencode_dispatch_cache():
+            first = sched.active_central_opencode_dispatch_refs(
+                "owner/repo", "OpenCode Review"
+            )
+            second = sched.active_central_opencode_dispatch_refs(
+                "owner/repo", "OpenCode Review"
+            )
+            return first, second
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: cached_refs(), range(2)))
+
+    assert all(first == second for first, second in results)
+    assert results[0][0] != results[1][0]
 
 
 def test_dispatch_opencode_review_defers_when_central_capacity_is_full(monkeypatch, capsys):
