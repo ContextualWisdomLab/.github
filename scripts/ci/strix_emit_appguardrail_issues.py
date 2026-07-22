@@ -11,8 +11,7 @@ The two sources share the same reconciliation path while retaining distinct
 labels and stable source identities.
 
 * one open issue per distinct finding (deduplicated by a stable content hash),
-* body refreshed on every run, a comment added only when severity or location
-  changed,
+* body refreshed on every run, a comment added only when severity changed,
 * close-on-fix for issues whose finding disappeared — but only from a *complete
   full-repo* scan. A PR-scoped scan (``--scope pr``) inspects just the PR's
   changed files, so an absent finding means "outside this PR", never "fixed";
@@ -70,6 +69,7 @@ SEVERITY_MARKER_PREFIX = "<!-- strix-severity:"
 LOCATION_MARKER_PREFIX = "<!-- strix-location:"
 SOURCE_MARKER_PREFIX = "<!-- security-source:"
 SHORT_HASH_LENGTH = 12
+ISSUE_OPERATION_ACTIONS = frozenset({"create", "update", "comment", "close"})
 
 SEVERITY_ORDER = {
     "CRITICAL": 4,
@@ -495,22 +495,71 @@ def _format_location(match: re.Match[str]) -> str:
 def iter_vulnerability_files(run_dir: Path) -> list[Path]:
     """Return sorted ``vulnerabilities/*.md`` report paths beneath ``run_dir``.
 
-    Accepts either a single run directory or a parent containing multiple runs;
-    symlinked report files/directories are skipped for safety.
+    Accepts either a single run directory or a parent containing multiple runs.
+    The walk never follows symlinked directories, and every returned regular
+    file is resolved beneath the canonical run root before it is trusted.
     """
-    if not run_dir.is_dir():
+    try:
+        if run_dir.is_symlink():
+            return []
+        root = run_dir.resolve(strict=True)
+    except OSError:
         return []
+    if not root.is_dir():
+        return []
+
     results: list[Path] = []
-    for vuln_dir in sorted(run_dir.rglob("vulnerabilities")):
-        if not vuln_dir.is_dir() or vuln_dir.is_symlink():
+    for current_dir, dir_names, file_names in os.walk(
+        root, topdown=True, followlinks=False
+    ):
+        current = Path(current_dir)
+        try:
+            current.resolve(strict=True).relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Strix report directory escaped the run root: {current}"
+            ) from exc
+
+        safe_dir_names: list[str] = []
+        for name in sorted(dir_names):
+            candidate = current / name
+            if candidate.is_symlink():
+                continue
+            try:
+                resolved_dir = candidate.resolve(strict=True)
+                resolved_dir.relative_to(root)
+            except (OSError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Strix report directory escaped the run root: {candidate}"
+                ) from exc
+            if resolved_dir.is_dir():
+                safe_dir_names.append(name)
+        dir_names[:] = safe_dir_names
+
+        if current.name != "vulnerabilities":
             continue
-        for report in sorted(vuln_dir.glob("*.md")):
-            if report.is_file() and not report.is_symlink():
-                results.append(report)
-    if len(results) > MAX_REPORT_FILES:
-        raise RuntimeError(
-            f"Strix report count {len(results)} exceeds bounded limit {MAX_REPORT_FILES}"
-        )
+
+        for name in sorted(file_names):
+            if not name.endswith(".md"):
+                continue
+            report = current / name
+            if report.is_symlink():
+                continue
+            try:
+                resolved_report = report.resolve(strict=True)
+                resolved_report.relative_to(root)
+            except (OSError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Strix report escaped the run root: {report}"
+                ) from exc
+            if not resolved_report.is_file():
+                continue
+            results.append(resolved_report)
+            if len(results) > MAX_REPORT_FILES:
+                raise RuntimeError(
+                    f"Strix report count {len(results)} exceeds bounded limit "
+                    f"{MAX_REPORT_FILES}"
+                )
     return results
 
 
@@ -824,7 +873,7 @@ def plan_operations(
             )
             continue
 
-        number = _issue_number(existing)
+        number = _required_issue_number(existing, finding.finding_hash)
         old_body = str(existing.get("body") or "")
         old_severity = marker_value(old_body, SEVERITY_MARKER_PREFIX)
         # Strix identities pin repo+title+location; Code Scanning identities pin
@@ -869,6 +918,7 @@ def plan_operations(
             found_hash = issue_finding_hash(issue)
             if not found_hash or found_hash in current_hashes:
                 continue
+            number = _required_issue_number(issue, found_hash)
             resolved_ref = context.head_sha or "the latest scan"
             operations.append(
                 Operation(
@@ -876,7 +926,7 @@ def plan_operations(
                     finding_hash=found_hash,
                     short_hash=found_hash[:SHORT_HASH_LENGTH],
                     title=str(issue.get("title") or ""),
-                    issue_number=_issue_number(issue),
+                    issue_number=number,
                     reason="finding no longer present",
                     comment=f"Resolved on {resolved_ref}: this security finding is no longer "
                     f"reported for `{context.source_repo}`. Closing automatically.",
@@ -889,9 +939,21 @@ def plan_operations(
 def _issue_number(issue: dict[str, Any]) -> int | None:
     """Return the integer issue number, or ``None`` when unparseable."""
     try:
-        return int(issue["number"])
+        number = int(issue["number"])
     except (KeyError, TypeError, ValueError):
         return None
+    return number if number > 0 else None
+
+
+def _required_issue_number(issue: dict[str, Any], finding_hash: str) -> int:
+    """Return a valid issue number or abort reconciliation planning."""
+    number = _issue_number(issue)
+    if number is None:
+        raise RuntimeError(
+            "existing tracker issue for finding "
+            f"{finding_hash[:SHORT_HASH_LENGTH]} has no valid issue number"
+        )
+    return number
 
 
 class GitHubCodeScanningClient:
@@ -1137,9 +1199,13 @@ def execute_plan(
         "error": 0,
     }
     for op in operations:
+        if op.action not in ISSUE_OPERATION_ACTIONS:
+            counts["error"] += 1
+            emit(f"::error::unsupported issue operation: {_scrub(op.action)}")
+            continue
         if dry_run or client is None:
             emit(f"DRY-RUN: would {op.describe()}")
-            counts[op.action] = counts.get(op.action, 0) + 1
+            counts[op.action] += 1
             continue
         try:
             if op.action == "create":
@@ -1150,9 +1216,7 @@ def execute_plan(
                 client.comment_issue(int(op.issue_number), op.comment)
             elif op.action == "close":
                 client.close_issue(int(op.issue_number), op.comment)
-            else:
-                raise ValueError(f"unsupported issue operation: {op.action}")
-            counts[op.action] = counts.get(op.action, 0) + 1
+            counts[op.action] += 1
             emit(f"OK: {op.describe()}")
         except Exception as exc:  # noqa: BLE001 - continue to expose all failures
             counts["error"] += 1

@@ -513,6 +513,17 @@ def test_plan_comments_when_severity_changes():
     assert "severity" in ops[1].comment.lower()
 
 
+def test_plan_rejects_invalid_issue_number_before_update_or_comment():
+    """A matching issue without a valid number aborts the pure plan."""
+    existing = existing_issue_for(SQLI_REPORT, number=7)
+    existing["number"] = "invalid"
+    escalated = SQLI_REPORT.replace("Severity: HIGH", "Severity: CRITICAL")
+    finding = emit.parse_finding_markdown(escalated, SOURCE_REPO)
+
+    with pytest.raises(RuntimeError, match="has no valid issue number"):
+        emit.plan_operations([finding], [existing], make_context())
+
+
 def test_plan_reopens_closed_issue_when_finding_returns():
     """A closed issue whose finding reappears is updated back to open."""
     finding = emit.parse_finding_markdown(SQLI_REPORT, SOURCE_REPO)
@@ -537,6 +548,16 @@ def test_close_on_fix_closes_missing_open_issue_only_for_full_scope():
     assert len(close_ops) == 1
     assert close_ops[0].issue_number == 9
     assert ("a" * 40) in close_ops[0].comment
+
+
+def test_plan_rejects_invalid_issue_number_before_close():
+    """A stale issue without a valid number aborts before any mutation runs."""
+    stale = existing_issue_for(XSS_REPORT, number=9)
+    stale.pop("number")
+    context = make_context(scan_complete=True, scan_scope=emit.SCOPE_FULL)
+
+    with pytest.raises(RuntimeError, match="has no valid issue number"):
+        emit.plan_operations([], [stale], context)
 
 
 def test_pr_scoped_complete_scan_closes_nothing():
@@ -637,7 +658,8 @@ def test_execute_plan_applies_update_and_comment():
     assert client.comments[0]["number"] == 7
 
 
-def test_execute_plan_rejects_unknown_operation_fail_closed():
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_execute_plan_rejects_unknown_operation_fail_closed(dry_run):
     """An unsupported mutation cannot be logged as a successful issue write."""
     operation = emit.Operation(
         action="rename",
@@ -648,7 +670,7 @@ def test_execute_plan_rejects_unknown_operation_fail_closed():
     messages: list[str] = []
 
     counts = emit.execute_plan(
-        [operation], FakeClient(), dry_run=False, log=messages.append
+        [operation], FakeClient(), dry_run=dry_run, log=messages.append
     )
 
     assert counts["error"] == 1
@@ -879,6 +901,108 @@ def test_iter_vulnerability_files_skips_symlinked_dir(tmp_path):
     assert len(files) == 1
 
 
+def test_iter_vulnerability_files_does_not_follow_symlinked_parent(tmp_path):
+    """A symlinked parent directory cannot import reports from outside root."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    outside = tmp_path / "outside-run"
+    outside_vulnerabilities = outside / "vulnerabilities"
+    outside_vulnerabilities.mkdir(parents=True)
+    (outside_vulnerabilities / "escaped.md").write_text(
+        XSS_REPORT, encoding="utf-8"
+    )
+    (runs / "linked-run").symlink_to(outside, target_is_directory=True)
+
+    files = emit.iter_vulnerability_files(runs)
+
+    assert [path.name for path in files] == ["a.md"]
+    assert all(path.is_relative_to(runs.resolve()) for path in files)
+
+
+def test_iter_vulnerability_files_rejects_symlinked_or_non_directory_root(tmp_path):
+    """Only a real directory may become the canonical report-walk root."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(runs, target_is_directory=True)
+    file_root = tmp_path / "not-a-directory"
+    file_root.write_text("not reports", encoding="utf-8")
+
+    assert emit.iter_vulnerability_files(linked_root) == []
+    assert emit.iter_vulnerability_files(file_root) == []
+
+
+def test_iter_vulnerability_files_rejects_walk_directory_escape(
+    tmp_path, monkeypatch
+):
+    """A walk result outside the canonical root aborts reconciliation."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.setattr(
+        emit.os,
+        "walk",
+        lambda *_args, **_kwargs: [(str(outside), [], [])],
+    )
+
+    with pytest.raises(RuntimeError, match="directory escaped the run root"):
+        emit.iter_vulnerability_files(runs)
+
+
+def test_iter_vulnerability_files_rejects_child_directory_escape(
+    tmp_path, monkeypatch
+):
+    """A child name resolving outside the root is rejected before descent."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.setattr(
+        emit.os,
+        "walk",
+        lambda *_args, **_kwargs: [(str(runs.resolve()), ["../outside"], [])],
+    )
+
+    with pytest.raises(RuntimeError, match="directory escaped the run root"):
+        emit.iter_vulnerability_files(runs)
+
+
+def test_iter_vulnerability_files_rejects_report_escape(tmp_path, monkeypatch):
+    """A report name resolving outside the root aborts reconciliation."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    vulnerabilities = runs / "run-1" / "vulnerabilities"
+    escaped_report = tmp_path / "escaped.md"
+    escaped_report.write_text(XSS_REPORT, encoding="utf-8")
+    monkeypatch.setattr(
+        emit.os,
+        "walk",
+        lambda *_args, **_kwargs: [
+            (str(vulnerabilities), [], ["../../../escaped.md"])
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="report escaped the run root"):
+        emit.iter_vulnerability_files(runs)
+
+
+def test_iter_vulnerability_files_ignores_non_reports_and_non_files(
+    tmp_path, monkeypatch
+):
+    """Only regular Markdown files from a vulnerabilities directory are returned."""
+    runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
+    vulnerabilities = runs / "run-1" / "vulnerabilities"
+    (vulnerabilities / "notes.txt").write_text("not a report", encoding="utf-8")
+    (vulnerabilities / "directory.md").mkdir()
+    monkeypatch.setattr(
+        emit.os,
+        "walk",
+        lambda *_args, **_kwargs: [
+            (str(vulnerabilities), [], ["notes.txt", "directory.md", "a.md"])
+        ],
+    )
+
+    files = emit.iter_vulnerability_files(runs)
+
+    assert [path.name for path in files] == ["a.md"]
+
+
 def test_iter_vulnerability_files_skips_symlinked_files_and_directories(tmp_path):
     """Only real regular Markdown report files enter reconciliation."""
     runs = write_run(tmp_path, {"a.md": SQLI_REPORT})
@@ -987,6 +1111,8 @@ def test_issue_number_handles_bad_values():
     assert emit._issue_number({"number": "5"}) == 5
     assert emit._issue_number({}) is None
     assert emit._issue_number({"number": "x"}) is None
+    assert emit._issue_number({"number": 0}) is None
+    assert emit._issue_number({"number": -1}) is None
 
 
 # --------------------------------------------------------------------------- #
