@@ -518,7 +518,7 @@ def scheduler_actions_repository_in_scope(repo: str) -> bool:
             "SCHEDULER_ACTIONS_REPOSITORY must be a valid owner/repository; "
             f"got {scoped_repo!r}"
         ) from exc
-    return target_repo == validated_scope
+    return target_repo.casefold() == validated_scope.casefold()
 
 
 def scheduler_dispatch_env() -> dict[str, str] | None:
@@ -660,8 +660,14 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "timeout",
     "received from peer",
     "unexpected end of JSON input",
-    "GitHub GraphQL returned invalid JSON",
+    "GitHub GraphQL returned invalid JSON (truncated response)",
 )
+
+
+def json_decode_error_looks_truncated(exc: json.JSONDecodeError) -> bool:
+    """Return whether a JSON parser failure is consistent with cut-off stdout."""
+    document = exc.doc.rstrip()
+    return exc.pos >= len(document) or exc.msg.startswith("Unterminated string")
 
 
 def is_transient_github_api_error(exc: RuntimeError) -> bool:
@@ -683,8 +689,11 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
         try:
             return json.loads(run_github_read(cmd, stdin=query))
         except json.JSONDecodeError as exc:
+            truncation_detail = (
+                " (truncated response)" if json_decode_error_looks_truncated(exc) else ""
+            )
             failure = RuntimeError(
-                f"GitHub GraphQL returned invalid JSON: {exc}"
+                f"GitHub GraphQL returned invalid JSON{truncation_detail}: {exc}"
             )
             failure_cause = exc
         except RuntimeError as exc:
@@ -1878,7 +1887,8 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
         print(
             "Actions run inspection skipped for "
             f"{repo}: control credential is scoped to "
-            f"{os.environ.get('SCHEDULER_ACTIONS_REPOSITORY')}"
+            f"{os.environ.get('SCHEDULER_ACTIONS_REPOSITORY')}",
+            file=sys.stderr,
         )
         return []
     runs: list[dict[str, Any]] = []

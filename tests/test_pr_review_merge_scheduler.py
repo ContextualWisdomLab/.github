@@ -391,6 +391,26 @@ def test_gh_graphql_retries_truncated_success_stdout(monkeypatch):
     assert sleeps == [1]
 
 
+def test_gh_graphql_does_not_retry_structurally_invalid_json(monkeypatch):
+    """A complete non-JSON response fails immediately instead of hiding its cause."""
+    calls = []
+    sleeps = []
+
+    def fake_run(args, stdin=None):
+        calls.append((args, stdin))
+        return "<html>proxy authentication required</html>"
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(RuntimeError, match="invalid JSON") as exc_info:
+        sched.gh_graphql("query", owner="owner")
+
+    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+    assert len(calls) == 1
+    assert sleeps == []
+
+
 def test_gh_graphql_preserves_final_json_decode_cause(monkeypatch):
     """A final invalid response must retain the parser exception for diagnostics."""
     monkeypatch.setattr(sched, "run", lambda args, stdin=None: '{"data":')
@@ -2100,7 +2120,9 @@ def test_actions_repository_scope_skips_inaccessible_sibling_queries(monkeypatch
     )
 
     assert sched.active_workflow_runs("ContextualWisdomLab/scopeweave") == []
-    assert "Actions run inspection skipped for ContextualWisdomLab/scopeweave" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "Actions run inspection skipped for ContextualWisdomLab/scopeweave" in captured.err
+    assert captured.out == ""
 
 
 def test_actions_repository_scope_keeps_central_run_inspection(monkeypatch):
@@ -2119,6 +2141,16 @@ def test_actions_repository_scope_keeps_central_run_inspection(monkeypatch):
     assert sched.active_workflow_runs("ContextualWisdomLab/.github") == []
     assert len(calls) == 2
     assert all("repos/ContextualWisdomLab/.github/actions/runs" in call for call in calls)
+
+
+def test_actions_repository_scope_is_case_insensitive(monkeypatch):
+    """GitHub repository identity must not depend on owner/name casing."""
+    monkeypatch.setenv(
+        "SCHEDULER_ACTIONS_REPOSITORY",
+        "contextualwisdomlab/.GITHUB",
+    )
+
+    assert sched.scheduler_actions_repository_in_scope("ContextualWisdomLab/.github")
 
 
 def test_actions_repository_scope_names_invalid_configuration(monkeypatch):

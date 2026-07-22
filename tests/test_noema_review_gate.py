@@ -475,7 +475,10 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
             (noema.socket.AF_INET, noema.socket.SOCK_STREAM, 6, "", ("169.254.169.254", port))
         ],
     )
-    with pytest.raises(ValueError, match="non-public IP"):
+    with pytest.raises(
+        ValueError,
+        match="NOEMA_LLM_API_URL cannot target non-public IP addresses",
+    ):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://unresolved.example.com/chat")

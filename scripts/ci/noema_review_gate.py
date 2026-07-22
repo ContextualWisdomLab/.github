@@ -514,7 +514,7 @@ def validated_https_endpoint(api_url: str) -> tuple[str, int, tuple[str, ...], s
         except ValueError as exc:
             raise ValueError("NOEMA_LLM_API_URL resolved to an invalid IP address") from exc
         if not ip.is_global:
-            raise ValueError("URL cannot target non-public IP addresses")
+            raise ValueError("NOEMA_LLM_API_URL cannot target non-public IP addresses")
         normalized = ip.compressed
         if normalized not in public_addresses:
             public_addresses.append(normalized)
