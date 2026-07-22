@@ -400,6 +400,8 @@ def test_gh_graphql_preserves_final_json_decode_cause(monkeypatch):
         sched.gh_graphql("query", owner="owner")
 
     assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+    assert "line 1 column 9" in str(exc_info.value)
+    assert "char 8" in str(exc_info.value)
 
 
 def test_gh_graphql_retries_transient_http2_stream_cancel(monkeypatch):
@@ -2117,6 +2119,16 @@ def test_actions_repository_scope_keeps_central_run_inspection(monkeypatch):
     assert sched.active_workflow_runs("ContextualWisdomLab/.github") == []
     assert len(calls) == 2
     assert all("repos/ContextualWisdomLab/.github/actions/runs" in call for call in calls)
+
+
+def test_actions_repository_scope_names_invalid_configuration(monkeypatch):
+    """An invalid scoped Actions repository must identify its configuration key."""
+    monkeypatch.setenv("SCHEDULER_ACTIONS_REPOSITORY", "invalid-repository")
+
+    with pytest.raises(RuntimeError, match="SCHEDULER_ACTIONS_REPOSITORY") as exc_info:
+        sched.scheduler_actions_repository_in_scope("ContextualWisdomLab/.github")
+
+    assert "invalid-repository" in str(exc_info.value)
 
 
 def test_active_workflow_runs_paginates_each_status(monkeypatch):

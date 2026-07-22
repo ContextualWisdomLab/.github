@@ -477,6 +477,8 @@ def validated_https_endpoint(api_url: str) -> tuple[str, int, tuple[str, ...], s
     """Return hostname, port, pinned public IPs, and request target for an HTTPS URL."""
     if any(ord(character) < 32 or ord(character) == 127 for character in api_url):
         raise ValueError("NOEMA_LLM_API_URL cannot contain control characters")
+    if any(character.isspace() for character in api_url):
+        raise ValueError("NOEMA_LLM_API_URL cannot contain whitespace")
     if not api_url.lower().startswith("https://"):
         raise ValueError("NOEMA_LLM_API_URL must use https://")
 
@@ -485,13 +487,13 @@ def validated_https_endpoint(api_url: str) -> tuple[str, int, tuple[str, ...], s
         raise ValueError("NOEMA_LLM_API_URL must use the https scheme")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
-        raise ValueError("URL must have a valid hostname")
+        raise ValueError("NOEMA_LLM_API_URL must have a valid hostname")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("NOEMA_LLM_API_URL cannot contain user information")
     if parsed.fragment:
         raise ValueError("NOEMA_LLM_API_URL cannot contain a fragment")
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
-        raise ValueError("URL cannot target localhost")
+        raise ValueError("NOEMA_LLM_API_URL cannot target localhost")
     try:
         port = parsed.port or 443
     except ValueError as exc:

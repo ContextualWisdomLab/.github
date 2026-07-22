@@ -460,7 +460,11 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https:///chat")
-    with pytest.raises(ValueError, match="URL must have a valid hostname"):
+    with pytest.raises(ValueError, match="NOEMA_LLM_API_URL must have a valid hostname"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat path")
+    with pytest.raises(ValueError, match="NOEMA_LLM_API_URL cannot contain whitespace"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://169.254.169.254/chat")

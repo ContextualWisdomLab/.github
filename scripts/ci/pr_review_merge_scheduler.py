@@ -511,7 +511,14 @@ def scheduler_actions_repository_in_scope(repo: str) -> bool:
     scoped_repo = (os.environ.get("SCHEDULER_ACTIONS_REPOSITORY") or "").strip()
     if not scoped_repo:
         return True
-    return target_repo == validate_github_repository(scoped_repo)
+    try:
+        validated_scope = validate_github_repository(scoped_repo)
+    except ValueError as exc:
+        raise RuntimeError(
+            "SCHEDULER_ACTIONS_REPOSITORY must be a valid owner/repository; "
+            f"got {scoped_repo!r}"
+        ) from exc
+    return target_repo == validated_scope
 
 
 def scheduler_dispatch_env() -> dict[str, str] | None:
@@ -677,7 +684,7 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
             return json.loads(run_github_read(cmd, stdin=query))
         except json.JSONDecodeError as exc:
             failure = RuntimeError(
-                f"GitHub GraphQL returned invalid JSON: {exc.msg}"
+                f"GitHub GraphQL returned invalid JSON: {exc}"
             )
             failure_cause = exc
         except RuntimeError as exc:
