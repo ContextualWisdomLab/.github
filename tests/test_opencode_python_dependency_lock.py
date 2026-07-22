@@ -13,6 +13,27 @@ TRUSTED_SAJU_WHEELS = {
 }
 
 
+def _top_level_requirement(line: str) -> str | None:
+    """Return a requirement token from one non-indented, non-comment line."""
+
+    if not line or line[0].isspace() or line.startswith("#"):
+        return None
+    header = line.split("\\", 1)[0].strip()
+    if not header or header.startswith("-"):
+        return None
+    return header.split(maxsplit=1)[0]
+
+
+def _top_level_requirements(text: str) -> set[str]:
+    """Return parsed top-level requirements without comments or stanza details."""
+
+    return {
+        requirement
+        for line in text.splitlines()
+        if (requirement := _top_level_requirement(line)) is not None
+    }
+
+
 def _lock_stanza(lock: str, requirement: str) -> list[str]:
     """Return one top-level requirement stanza without borrowing later hashes."""
 
@@ -21,10 +42,7 @@ def _lock_stanza(lock: str, requirement: str) -> list[str]:
         (
             index
             for index, line in enumerate(lines)
-            if line
-            and not line[0].isspace()
-            and not line.startswith("#")
-            and line.split(maxsplit=1)[0] == requirement
+            if _top_level_requirement(line) == requirement
         ),
         None,
     )
@@ -56,6 +74,15 @@ def test_lock_stanza_accepts_indented_via_comments() -> None:
     ]
 
 
+def test_lock_stanza_accepts_attached_line_continuation() -> None:
+    lock = "demo==1.0\\\n    --hash=sha256:abc123\n"
+
+    assert _lock_stanza(lock, "demo==1.0") == [
+        "demo==1.0\\",
+        "    --hash=sha256:abc123",
+    ]
+
+
 def test_lock_stanza_does_not_borrow_a_later_requirement_hash() -> None:
     lock = (
         "demo==1.0\n"
@@ -69,6 +96,17 @@ def test_lock_stanza_does_not_borrow_a_later_requirement_hash() -> None:
     )
 
 
+def test_top_level_requirements_ignore_comments_and_stanza_details() -> None:
+    requirements = _top_level_requirements(
+        "# lunar-python==9.9.9 is intentionally not installed\n"
+        "demo==1.0 \\\n"
+        "    --hash=sha256:abc123\n"
+        "    # via lunar-python==9.9.9\n"
+    )
+
+    assert requirements == {"demo==1.0"}
+
+
 def test_saju_caldav_dependencies_are_exact_hash_locked_wheels() -> None:
     source = (REPO_ROOT / "requirements-opencode-review-ci.txt").read_text(
         encoding="utf-8"
@@ -76,11 +114,8 @@ def test_saju_caldav_dependencies_are_exact_hash_locked_wheels() -> None:
     lock = (REPO_ROOT / "requirements-opencode-review-ci-hashes.txt").read_text(
         encoding="utf-8"
     )
-    source_requirements = {
-        line.split(maxsplit=1)[0]
-        for line in source.splitlines()
-        if line.strip() and not line.startswith("#")
-    }
+    source_requirements = _top_level_requirements(source)
+    lock_requirements = _top_level_requirements(lock)
 
     for package, version in TRUSTED_SAJU_WHEELS.items():
         requirement = f"{package}=={version}"
@@ -90,10 +125,20 @@ def test_saju_caldav_dependencies_are_exact_hash_locked_wheels() -> None:
             line.lstrip().startswith("--hash=sha256:") for line in stanza[1:]
         ), f"{requirement} has no artifact hash in its lock stanza"
 
-    assert "lunar-python==" not in source
-    assert "lunar-python==" not in lock
-    assert (
-        "uv pip compile --generate-hashes --python-version 3.12 "
-        "--python-platform x86_64-manylinux_2_28 requirements-opencode-review-ci.txt "
-        "-o requirements-opencode-review-ci-hashes.txt"
-    ) in lock
+    assert not any(
+        requirement.startswith("lunar-python==")
+        for requirement in source_requirements | lock_requirements
+    )
+
+    generation_header = "\n".join(
+        line for line in lock.splitlines() if line.startswith("#")
+    )
+    for fragment in (
+        "uv pip compile",
+        "--generate-hashes",
+        "--python-version 3.12",
+        "--python-platform x86_64-manylinux_2_28",
+        "requirements-opencode-review-ci.txt",
+        "requirements-opencode-review-ci-hashes.txt",
+    ):
+        assert fragment in generation_header
