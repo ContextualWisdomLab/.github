@@ -46,7 +46,7 @@ jobs:
           ruleset_json="$RUNNER_TEMP/central-required-workflow-ruleset.json"
           ruleset_with_scope_json="$RUNNER_TEMP/central-required-workflow-ruleset-with-scope.json"
           ruleset_error="$RUNNER_TEMP/central-required-workflow-ruleset.error"
-          repositories_json="$RUNNER_TEMP/central-required-workflow-public-repositories.json"
+          repositories_json="$RUNNER_TEMP/central-required-workflow-organization-repositories.json"
           scope_json="$RUNNER_TEMP/central-required-workflow-scope.json"
           ruleset_endpoint="repos/${ORG_LOGIN}/${RULESET_SENTINEL_REPOSITORY}/rulesets/${RULESET_ID}?includes_parents=true"
 
