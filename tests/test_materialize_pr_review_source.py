@@ -343,6 +343,10 @@ def test_git_executable_requires_trusted_owner_and_permissions(
     monkeypatch, tmp_path: Path
 ) -> None:
     """A user-controlled absolute Git path is rejected before subprocess execution."""
+    monkeypatch.setattr(materializer, "GIT_EXECUTABLE", None)
+    with pytest.raises(RuntimeError, match="absolute Git executable"):
+        materializer.validated_git_executable()
+
     candidate = tmp_path / "bin" / "git"
     candidate.parent.mkdir()
     candidate.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -355,6 +359,12 @@ def test_git_executable_requires_trusted_owner_and_permissions(
 
     monkeypatch.setattr(materializer, "TRUSTED_GIT_OWNER_UID", os.getuid())
     assert materializer.validated_git_executable() == str(candidate.resolve())
+
+    monkeypatch.setattr(
+        materializer, "GIT_EXECUTABLE", str(tmp_path / "missing" / "git")
+    )
+    with pytest.raises(RuntimeError, match="configured Git executable is unavailable"):
+        materializer.validated_git_executable()
 
 
 def test_streaming_git_readers_revalidate_the_executable(monkeypatch, tmp_path: Path) -> None:

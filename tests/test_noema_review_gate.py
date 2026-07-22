@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import json
+from pathlib import Path
+import runpy
 import sys
 
 import pytest
@@ -169,6 +171,24 @@ def test_run_split_repo_graphql_and_fetch_pr(monkeypatch):
         noema.run([sys.executable, "-c", "import sys; sys.exit(5)"])
 
     assert noema.split_repo("owner/repo") == ("owner", "repo")
+
+
+def test_module_bootstrap_restores_trusted_repository_root(monkeypatch):
+    """Standalone execution can import shared review helpers from the trusted root."""
+    repository_root = Path(noema.__file__).resolve().parents[2]
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if Path(entry or ".").resolve() != repository_root
+        ],
+    )
+
+    runpy.run_path(noema.__file__, run_name="noema_review_gate_bootstrap_test")
+
+    assert sys.path[0] == str(repository_root)
 
 def test_scrub_sensitive_data():
     assert noema.scrub_sensitive_data(None) is None
@@ -618,6 +638,9 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
     response["value"] = FakeResponse({}, content_length="9")
     with pytest.raises(RuntimeError, match="response exceeded the size limit"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+    response["value"] = FakeResponse({}, content_length="invalid")
+    with pytest.raises(RuntimeError, match="invalid Content-Length"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
     monkeypatch.setattr(noema, "MAX_LLM_RESPONSE_BYTES", original_limit)
 

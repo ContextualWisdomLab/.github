@@ -149,6 +149,10 @@ def test_git_bytes_requires_an_absolute_verified_executable(monkeypatch, tmp_pat
     with pytest.raises(RuntimeError, match="absolute Git executable"):
         locks.git_bytes(tmp_path, "rev-parse", "HEAD")
 
+    monkeypatch.setattr(locks, "GIT_EXECUTABLE", str(tmp_path / "missing" / "git"))
+    with pytest.raises(RuntimeError, match="configured Git executable is unavailable"):
+        locks.validated_git_executable()
+
 
 def test_git_executable_requires_trusted_owner_and_permissions(
     monkeypatch, tmp_path: Path
@@ -190,6 +194,14 @@ def test_write_exclusive_closes_descriptor_when_fdopen_fails(
     with pytest.raises(OSError, match="fdopen failed"):
         locks.write_exclusive(tmp_path / "lock.txt", b"data")
     assert len(closed) == 1
+
+    def close_then_fail(descriptor: int) -> None:
+        real_close(descriptor)
+        raise OSError("close failed")
+
+    monkeypatch.setattr(locks.os, "close", close_then_fail)
+    with pytest.raises(OSError, match="fdopen failed"):
+        locks.write_exclusive(tmp_path / "lock-close-failure.txt", b"data")
 
 
 def test_write_exclusive_does_not_double_close_after_write_failure(

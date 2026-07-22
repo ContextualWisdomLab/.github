@@ -358,6 +358,55 @@ def test_safe_pytest_rejects_inherited_directory_from_untrusted_owner(
     assert safe_pytest._trusted_inherited_search_dirs() == []
 
 
+def test_safe_pytest_rejects_unavailable_inherited_search_dirs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing fixed directories cannot produce an empty privileged PATH allowlist."""
+    monkeypatch.delenv("OPENCODE_PYTHON_ENV_BIN", raising=False)
+    monkeypatch.setenv("PATH", os.defpath)
+    monkeypatch.setattr(
+        safe_pytest,
+        "TRUSTED_INHERITED_EXECUTABLE_DIRS",
+        (tmp_path / "missing-runtime",),
+    )
+
+    assert safe_pytest._trusted_inherited_search_dirs() == []
+    with pytest.raises(ValueError, match="allowlist is unavailable"):
+        safe_pytest.execute_command(tmp_path, ["pytest"])
+
+
+def test_safe_pytest_rejects_nested_inherited_executable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Inherited executables must live directly in an allowlisted directory."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    trusted_root = tmp_path / "trusted-runtime"
+    nested_dir = trusted_root / "nested"
+    nested_dir.mkdir(parents=True)
+    nested_executable = nested_dir / "pytest"
+    nested_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    nested_executable.chmod(0o755)
+    monkeypatch.delenv("OPENCODE_PYTHON_ENV_BIN", raising=False)
+    monkeypatch.setenv("PATH", os.defpath)
+    monkeypatch.setattr(
+        safe_pytest, "TRUSTED_INHERITED_EXECUTABLE_DIRS", (trusted_root,)
+    )
+    monkeypatch.setattr(
+        safe_pytest,
+        "TRUSTED_INHERITED_EXECUTABLE_OWNER_UID",
+        os.getuid(),
+    )
+    monkeypatch.setattr(
+        safe_pytest.shutil,
+        "which",
+        lambda executable, path: str(nested_executable),
+    )
+
+    with pytest.raises(ValueError, match="outside the trusted allowlist"):
+        safe_pytest.execute_command(project_dir, ["pytest"])
+
+
 def test_safe_pytest_executor_reports_unavailable_and_invalid_executables(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
