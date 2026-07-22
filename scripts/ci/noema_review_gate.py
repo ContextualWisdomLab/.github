@@ -31,9 +31,18 @@ PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
     "opencode-agent",
 }
-REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
-REVIEW_BODY_BASE_REF_RE = re.compile(r"Base ref:\s*`([A-Za-z0-9._/-]+)`")
-REVIEW_BODY_BASE_SHA_RE = re.compile(r"Base SHA:\s*`([0-9a-fA-F]{40})`")
+REVIEW_BODY_HEAD_SHA_RE = re.compile(
+    r"^[ \t]*-[ \t]+Head SHA:[ \t]*`([0-9a-fA-F]{40})`[ \t]*$",
+    re.MULTILINE,
+)
+REVIEW_BODY_BASE_REF_RE = re.compile(
+    r"^[ \t]*-[ \t]+Base ref:[ \t]*`([A-Za-z0-9._/-]+)`[ \t]*$",
+    re.MULTILINE,
+)
+REVIEW_BODY_BASE_SHA_RE = re.compile(
+    r"^[ \t]*-[ \t]+Base SHA:[ \t]*`([0-9a-fA-F]{40})`[ \t]*$",
+    re.MULTILINE,
+)
 IGNORED_RUNNING_CHECKS = {
     "approve-after-primary-review",
     "noema-review",

@@ -313,6 +313,27 @@ def test_review_state_helpers_reject_explicit_previous_head_evidence():
     )
 
 
+def test_review_identity_ignores_incidental_or_quoted_labels():
+    """Only canonical identity bullets can bind a review to a pull request."""
+    previous_head = "b" * 40
+    body = "\n".join(
+        (
+            valid_primary_body(),
+            "",
+            f"Diagnostic prose mentions Head SHA: `{previous_head}`.",
+            "> - Base ref: `quoted-branch`",
+            f"> - Base SHA: `{previous_head}`",
+        )
+    )
+    exact_approval = review(body=body)
+
+    assert noema.review_matches_current_head(
+        exact_approval,
+        make_pr(),
+        require_base_identity=True,
+    )
+
+
 def test_check_helpers_and_existing_noema_review():
     status_context = {"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}
     check_run = {
