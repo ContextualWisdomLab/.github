@@ -39,9 +39,38 @@ DEFAULT_TREE_TIMEOUT_SECONDS = 60
 TREE_READ_CHUNK_BYTES = 65_536
 MAX_TREE_RECORD_BYTES = 1_048_576
 TREE_ENTRY_METADATA_OVERHEAD_BYTES = 128
-GIT_EXECUTABLE = shutil.which("git")
+GIT_EXECUTABLE = shutil.which("git", path=os.defpath)
+TRUSTED_GIT_OWNER_UID = 0
 if not GIT_EXECUTABLE or not Path(GIT_EXECUTABLE).is_absolute():
     raise RuntimeError("an absolute Git executable path is required")
+
+
+def validated_git_executable() -> str:
+    """Return a trusted absolute Git binary for privileged materialization."""
+    candidate = Path(GIT_EXECUTABLE or "")
+    if not GIT_EXECUTABLE or not candidate.is_absolute():
+        raise RuntimeError("an absolute Git executable path is required")
+    try:
+        resolved = candidate.resolve(strict=True)
+        candidate_parent = candidate.parent.resolve(strict=True)
+        resolved_parent = resolved.parent.resolve(strict=True)
+        resolved_stat = resolved.stat()
+        parent_stats = (candidate_parent.stat(), resolved_parent.stat())
+    except OSError as exc:
+        raise RuntimeError("the configured Git executable is unavailable") from exc
+    if (
+        not resolved.is_file()
+        or not os.access(resolved, os.X_OK)
+        or resolved_stat.st_uid != TRUSTED_GIT_OWNER_UID
+        or resolved_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or any(
+            parent_stat.st_uid != TRUSTED_GIT_OWNER_UID
+            or parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            for parent_stat in parent_stats
+        )
+    ):
+        raise RuntimeError("the configured Git executable failed trust validation")
+    return str(resolved)
 
 
 def positive_int(value: str) -> int:
@@ -89,7 +118,7 @@ def git_bytes(git_dir: Path, *args: str) -> bytes:
     """Run a read-only Git command against the isolated object store."""
     # argv only; the Git directory and commit inputs are validated before use.
     completed = subprocess.run(  # nosec B603
-        [GIT_EXECUTABLE, f"--git-dir={git_dir}", *args],
+        [validated_git_executable(), f"--git-dir={git_dir}", *args],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

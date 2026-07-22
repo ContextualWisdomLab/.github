@@ -199,6 +199,31 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     assert payload["autofix_dispatches"] == 1
 
 
+def test_process_queue_resolves_token_actor_once_for_multiple_prs(monkeypatch):
+    """One queue sweep must not spend one actor lookup per candidate PR."""
+    prs = [make_pr(number=7), make_pr(number=8)]
+    actor_calls = []
+    monkeypatch.setattr(
+        fix,
+        "current_token_actor",
+        lambda: actor_calls.append("lookup") or "scheduler[bot]",
+    )
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "inspect_pr",
+        lambda repo, pr, args, **kwargs: ("skip", (kwargs["trusted_actor"],)),
+    )
+    args = fix.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
+    )
+
+    assert fix.process_queue(args) == 0
+    assert actor_calls == ["lookup"]
+
+
 def test_autofix_context_filters_outdated_threads_and_renders_checks():
     """The context helper filters stale threads and renders compact checks."""
     assert context.repo_parts("owner/repo") == ("owner", "repo")

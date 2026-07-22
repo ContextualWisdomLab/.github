@@ -339,6 +339,24 @@ def test_argument_git_and_path_validation_edges(monkeypatch, tmp_path: Path, cap
         materializer.safe_relative_path(b"bad-\xff")
 
 
+def test_git_executable_requires_trusted_owner_and_permissions(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A user-controlled absolute Git path is rejected before subprocess execution."""
+    candidate = tmp_path / "bin" / "git"
+    candidate.parent.mkdir()
+    candidate.write_text("#!/bin/sh\n", encoding="utf-8")
+    candidate.chmod(0o755)
+    monkeypatch.setattr(materializer, "GIT_EXECUTABLE", str(candidate))
+    monkeypatch.setattr(materializer, "TRUSTED_GIT_OWNER_UID", os.getuid() + 1)
+
+    with pytest.raises(RuntimeError, match="failed trust validation"):
+        materializer.validated_git_executable()
+
+    monkeypatch.setattr(materializer, "TRUSTED_GIT_OWNER_UID", os.getuid())
+    assert materializer.validated_git_executable() == str(candidate.resolve())
+
+
 def test_tree_entry_parser_covers_gitlink_and_malformed_records() -> None:
     """Tree metadata accepts only exact blob and gitlink shapes."""
     oid = "a" * 40
@@ -786,6 +804,10 @@ def test_materializer_main_failure_dunder_and_missing_git_import(
         runpy.run_path(str(SCRIPT), run_name="__main__")
     assert exc.value.code == 1
 
-    monkeypatch.setattr(materializer.shutil, "which", lambda unused: None)
+    monkeypatch.setattr(
+        materializer.shutil,
+        "which",
+        lambda *args, **kwargs: None,
+    )
     with pytest.raises(RuntimeError, match="absolute Git executable"):
         runpy.run_path(str(SCRIPT), run_name="materializer_without_git")

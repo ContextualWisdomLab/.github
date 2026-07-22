@@ -253,6 +253,7 @@ def inspect_pr(
     args: argparse.Namespace,
     *,
     comments: list[dict[str, Any]] | None = None,
+    trusted_actor: str | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Inspect one PR and optionally dispatch autofix."""
     number = int(pr["number"])
@@ -281,7 +282,7 @@ def inspect_pr(
         comments,
         str(pr["headRefOid"]),
         args.retry_hours * 3600,
-        current_token_actor(),
+        current_token_actor() if trusted_actor is None else trusted_actor,
     ):
         return "wait", ("recent autofix marker exists for this head",)
 
@@ -318,6 +319,7 @@ def process_queue(args: argparse.Namespace) -> int:
             prs_needing_comments.append(pr)
 
     comments_by_pr: dict[int, list[dict[str, Any]]] = {}
+    trusted_actor = current_token_actor() if prs_needing_comments else ""
     if len(prs_needing_comments) <= 1:
         # Fast path for single items
         for pr in prs_needing_comments:
@@ -352,6 +354,7 @@ def process_queue(args: argparse.Namespace) -> int:
                 pr,
                 args,
                 comments=comments_by_pr.get(pr_number),
+                trusted_actor=trusted_actor,
             )
         except RuntimeError as exc:
             action, reasons = "error", (str(exc),)

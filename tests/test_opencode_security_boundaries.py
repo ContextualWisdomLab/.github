@@ -197,6 +197,11 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
         "TRUSTED_INHERITED_EXECUTABLE_DIRS",
         (trusted_executable.parent,),
     )
+    monkeypatch.setattr(
+        safe_pytest,
+        "TRUSTED_INHERITED_EXECUTABLE_OWNER_UID",
+        os.getuid(),
+    )
     monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
     monkeypatch.setattr(
         safe_pytest.shutil, "which", lambda executable, path: str(trusted_executable)
@@ -319,6 +324,11 @@ def test_safe_pytest_executor_ignores_user_path_entries(
     monkeypatch.setattr(
         safe_pytest, "TRUSTED_INHERITED_EXECUTABLE_DIRS", (trusted_bin,)
     )
+    monkeypatch.setattr(
+        safe_pytest,
+        "TRUSTED_INHERITED_EXECUTABLE_OWNER_UID",
+        os.getuid(),
+    )
     monkeypatch.setattr(safe_pytest.shutil, "which", fake_which)
     monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
 
@@ -326,6 +336,26 @@ def test_safe_pytest_executor_ignores_user_path_entries(
     assert observed["path"] == str(trusted_bin)
     assert observed["argv"] == [str(trusted_target), "-q"]
     assert observed["env"]["PATH"] == str(trusted_bin)
+
+
+def test_safe_pytest_rejects_inherited_directory_from_untrusted_owner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An owner-writable user directory cannot enter the privileged PATH allowlist."""
+    user_bin = tmp_path / "user-bin"
+    user_bin.mkdir()
+    monkeypatch.setattr(
+        safe_pytest,
+        "TRUSTED_INHERITED_EXECUTABLE_DIRS",
+        (user_bin,),
+    )
+    monkeypatch.setattr(
+        safe_pytest,
+        "TRUSTED_INHERITED_EXECUTABLE_OWNER_UID",
+        os.getuid() + 1,
+    )
+
+    assert safe_pytest._trusted_inherited_search_dirs() == []
 
 
 def test_safe_pytest_executor_reports_unavailable_and_invalid_executables(

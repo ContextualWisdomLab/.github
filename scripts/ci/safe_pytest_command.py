@@ -21,6 +21,7 @@ PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
 TRUSTED_PYTHON_ENV_ROOT = pathlib.Path("/opt/base-python-envs")
 TRUSTED_PYTHON_ENV_OWNER_UID = 0
+TRUSTED_INHERITED_EXECUTABLE_OWNER_UID = 0
 TRUSTED_INHERITED_EXECUTABLE_DIRS = tuple(
     dict.fromkeys(
         pathlib.Path(entry)
@@ -50,6 +51,7 @@ def _trusted_inherited_search_dirs() -> list[pathlib.Path]:
             continue
         if (
             not resolved_dir.is_dir()
+            or resolved_stat.st_uid != TRUSTED_INHERITED_EXECUTABLE_OWNER_UID
             or resolved_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             or resolved_dir in resolved_dirs
         ):
@@ -176,6 +178,10 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
             not stat.S_ISLNK(candidate_stat.st_mode)
             and candidate_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
         )
+        or (
+            trusted_bin is None
+            and resolved_stat.st_uid != TRUSTED_INHERITED_EXECUTABLE_OWNER_UID
+        )
         or resolved_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
         or candidate_absolute == project_root
         or project_root in candidate_absolute.parents
@@ -191,11 +197,15 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
         if (
             candidate_absolute.parent != trusted_bin
             or candidate_stat.st_uid != TRUSTED_PYTHON_ENV_OWNER_UID
+            or resolved_stat.st_uid != TRUSTED_PYTHON_ENV_OWNER_UID
         ):
             raise ValueError("trusted Python environment executable failed validation")
     else:
         if not any(
             candidate_absolute.parent == root for root in trusted_resolution_roots
+        ) or (
+            not stat.S_ISLNK(candidate_stat.st_mode)
+            and candidate_stat.st_uid != TRUSTED_INHERITED_EXECUTABLE_OWNER_UID
         ):
             raise ValueError("inherited executable is outside the trusted allowlist")
     env["PATH"] = search_path

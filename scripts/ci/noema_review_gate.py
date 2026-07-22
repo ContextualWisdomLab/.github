@@ -17,12 +17,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
-try:
-    from opencode_existing_approval_gate import review_rejection_reason
-except ModuleNotFoundError:
-    from scripts.ci.opencode_existing_approval_gate import review_rejection_reason
+TRUSTED_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(TRUSTED_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(TRUSTED_REPOSITORY_ROOT))
+
+from scripts.ci.opencode_existing_approval_gate import review_rejection_reason  # noqa: E402
 
 
 PRIMARY_REVIEW_AUTHORS = {
