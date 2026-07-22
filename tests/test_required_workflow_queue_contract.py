@@ -207,13 +207,40 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
     )
 
 
-def test_strix_install_uses_only_the_trusted_dependency_lock() -> None:
-    """A pull_request_target run must never execute package metadata from PR HEAD."""
+def test_strix_install_accepts_only_same_repo_exact_head_dependency_lock() -> None:
+    """Only the central repo's exact PR-head hash lock may replace the base lock."""
     workflow = workflow_text("strix.yml")
+    materialize_step = workflow_step(
+        workflow, "Materialize central Strix dependency lock from PR head"
+    )
     install_step = workflow_step(workflow, "Install Strix")
 
-    assert "Materialize central Strix dependency lock from PR head" not in workflow
-    assert 'PR_HEAD_SHA:requirements-strix-ci-hashes.txt' not in workflow
+    assert "github.event_name == 'pull_request_target'" in materialize_step
+    assert materialize_step.count(
+        "github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/.github'"
+    ) == 1
+    assert materialize_step.count(
+        "github.event.pull_request.head.repo.full_name == 'ContextualWisdomLab/.github'"
+    ) == 1
+    assert "github.event.pull_request.user.login == 'dependabot[bot]'" in materialize_step
+    assert (
+        "startsWith(github.event.pull_request.head.ref, 'dependabot/pip/')"
+        in materialize_step
+    )
+    assert "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}" in materialize_step
+    assert '[[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' in materialize_step
+    assert '[[ "$PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' in materialize_step
+    assert 'git -C "$TRUSTED_WORKSPACE" diff --name-only -z' in materialize_step
+    assert '"${#changed_files[@]}" -ne 1' in materialize_step
+    assert '"${changed_files[0]}" != "requirements-strix-ci-hashes.txt"' in materialize_step
+    assert '"$lock_mode" != "100644"' in materialize_step
+    assert '"$lock_type" != "blob"' in materialize_step
+    assert (
+        'git -C "$TRUSTED_WORKSPACE" show '
+        '"$PR_HEAD_SHA:requirements-strix-ci-hashes.txt" > '
+        '"$TRUSTED_STRIX_SOURCE/requirements-strix-ci-hashes.txt"'
+        in materialize_step
+    )
     assert (
         'trusted_lock="$TRUSTED_STRIX_SOURCE/requirements-strix-ci-hashes.txt"'
         in install_step
@@ -222,7 +249,6 @@ def test_strix_install_uses_only_the_trusted_dependency_lock() -> None:
     assert 'resolved_trusted_lock="$(realpath "$trusted_lock")"' in install_step
     assert '"$TRUSTED_STRIX_SOURCE"/*' in install_step
     assert '--require-hashes -r "$resolved_trusted_lock"' in install_step
-    assert "--require-hashes -r requirements-strix-ci-hashes.txt" not in install_step
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:

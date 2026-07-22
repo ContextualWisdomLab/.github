@@ -12,6 +12,8 @@ import shlex
 import shutil
 import subprocess
 import stat
+import sys
+import sysconfig
 from collections.abc import Sequence
 
 RUN_LINE_RE = re.compile(r"\s*(?:-\s*)?run:\s*(.+?)\s*$")
@@ -19,6 +21,41 @@ PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
 TRUSTED_PYTHON_ENV_ROOT = pathlib.Path("/opt/base-python-envs")
 TRUSTED_PYTHON_ENV_OWNER_UID = 0
+TRUSTED_INHERITED_EXECUTABLE_DIRS = tuple(
+    dict.fromkeys(
+        pathlib.Path(entry)
+        for entry in (
+            *os.defpath.split(os.pathsep),
+            sysconfig.get_path("scripts"),
+            str(pathlib.Path(sys.executable).resolve().parent),
+        )
+        if entry
+    )
+)
+
+
+def _is_within(path: pathlib.Path, root: pathlib.Path) -> bool:
+    """Return whether path is root or one of its descendants."""
+    return path == root or root in path.parents
+
+
+def _trusted_inherited_search_dirs() -> list[pathlib.Path]:
+    """Resolve the fixed runtime/system executable allowlist."""
+    resolved_dirs: list[pathlib.Path] = []
+    for configured_dir in TRUSTED_INHERITED_EXECUTABLE_DIRS:
+        try:
+            resolved_dir = configured_dir.resolve(strict=True)
+            resolved_stat = resolved_dir.stat()
+        except OSError:
+            continue
+        if (
+            not resolved_dir.is_dir()
+            or resolved_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or resolved_dir in resolved_dirs
+        ):
+            continue
+        resolved_dirs.append(resolved_dir)
+    return resolved_dirs
 
 
 def _is_pytest_argv(argv: Sequence[str]) -> bool:
@@ -83,6 +120,7 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
     env["PYTHONPATH"] = "."
     supplied_env_bin = os.environ.get("OPENCODE_PYTHON_ENV_BIN", "").strip()
     trusted_bin: pathlib.Path | None = None
+    trusted_root: pathlib.Path | None = None
     if supplied_env_bin:
         candidate = pathlib.Path(supplied_env_bin)
         try:
@@ -102,6 +140,7 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
 
     if trusted_bin is not None:
         search_path = str(trusted_bin)
+        trusted_resolution_roots = [trusted_root, *_trusted_inherited_search_dirs()]
     else:
         inherited_path = env.get("PATH")
         if not inherited_path or any(
@@ -109,7 +148,13 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
             for entry in inherited_path.split(os.pathsep)
         ):
             raise ValueError("inherited trusted PATH is missing or unsafe")
-        search_path = inherited_path
+        trusted_resolution_roots = _trusted_inherited_search_dirs()
+        if not trusted_resolution_roots:
+            raise ValueError("trusted executable directory allowlist is unavailable")
+        search_path = os.pathsep.join(str(path) for path in trusted_resolution_roots)
+    trusted_resolution_roots = [
+        root for root in trusted_resolution_roots if root is not None
+    ]
     executable_path = shutil.which(argv[0], path=search_path)
     if not executable_path:
         raise ValueError("configured pytest executable is unavailable from the trusted PATH")
@@ -127,12 +172,19 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
     if (
         not resolved_executable.is_file()
         or not os.access(resolved_executable, os.X_OK)
-        or candidate_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or (
+            not stat.S_ISLNK(candidate_stat.st_mode)
+            and candidate_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        )
         or resolved_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
         or candidate_absolute == project_root
         or project_root in candidate_absolute.parents
         or resolved_executable == project_root
         or project_root in resolved_executable.parents
+        or not any(
+            _is_within(resolved_executable, root)
+            for root in trusted_resolution_roots
+        )
     ):
         raise ValueError("configured pytest executable failed trust validation")
     if trusted_bin is not None:
@@ -141,7 +193,12 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
             or candidate_stat.st_uid != TRUSTED_PYTHON_ENV_OWNER_UID
         ):
             raise ValueError("trusted Python environment executable failed validation")
-        env["PATH"] = str(trusted_bin)
+    else:
+        if not any(
+            candidate_absolute.parent == root for root in trusted_resolution_roots
+        ):
+            raise ValueError("inherited executable is outside the trusted allowlist")
+    env["PATH"] = search_path
 
     command = [str(resolved_executable), *argv[1:]]
     completed = subprocess.run(

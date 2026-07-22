@@ -400,6 +400,44 @@ jobs:
           printf 'Running bounded Strix required-workflow smoke test.\n'
           bash "$TRUSTED_STRIX_REQUIRED_SMOKE"
 
+      - name: Materialize central Strix dependency lock from PR head
+        if: >-
+          github.event_name == 'pull_request_target'
+          && github.repository == 'ContextualWisdomLab/.github'
+          && github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/.github'
+          && github.event.pull_request.head.repo.full_name == 'ContextualWisdomLab/.github'
+          && github.event.pull_request.user.login == 'dependabot[bot]'
+          && startsWith(github.event.pull_request.head.ref, 'dependabot/pip/')
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::PR base SHA must be a 40-character git SHA."
+            exit 1
+          fi
+          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::PR head SHA must be a 40-character git SHA."
+            exit 1
+          fi
+          mapfile -d '' -t changed_files < <(
+            git -C "$TRUSTED_WORKSPACE" diff --name-only -z "$PR_BASE_SHA" "$PR_HEAD_SHA"
+          )
+          if [ "${#changed_files[@]}" -ne 1 ] || [ "${changed_files[0]}" != "requirements-strix-ci-hashes.txt" ]; then
+            echo "::error::Dependabot Strix lock validation requires the hashed lock to be the only changed file."
+            exit 1
+          fi
+          read -r lock_mode lock_type _ lock_path < <(
+            git -C "$TRUSTED_WORKSPACE" ls-tree "$PR_HEAD_SHA" -- requirements-strix-ci-hashes.txt
+          )
+          if [ "$lock_mode" != "100644" ] || [ "$lock_type" != "blob" ] || [ "$lock_path" != "requirements-strix-ci-hashes.txt" ]; then
+            echo "::error::Dependabot Strix lock must be a regular Git blob at the exact trusted path."
+            exit 1
+          fi
+          git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt" > "$TRUSTED_STRIX_SOURCE/requirements-strix-ci-hashes.txt"
+          printf 'Materialized central Strix dependency lock from the exact Dependabot PR head.\n'
+
       - name: Gate Strix secrets
         id: gate
         env:

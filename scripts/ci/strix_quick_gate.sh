@@ -254,11 +254,9 @@ report_path_predates_snapshot() {
 	fi
 	local existing
 	while IFS= read -r existing; do
-		case "$candidate" in
-		"$existing" | "$existing"/*)
+		if [[ "$candidate" == "$existing" || "$candidate" == "$existing/"* ]]; then
 			return 0
-			;;
-		esac
+		fi
 	done <"$snapshot_file"
 	return 1
 }

@@ -10,9 +10,15 @@ from pathlib import Path
 from typing import Any, Sequence
 
 APPROVAL_AUTHORS = frozenset({"opencode-agent", "opencode-agent[bot]"})
-HEAD_SHA_RE = re.compile(r"Head SHA:\s*`?([0-9a-fA-F]{40})`?", re.IGNORECASE)
-BASE_SHA_RE = re.compile(r"Base SHA:\s*`?([0-9a-fA-F]{40})`?", re.IGNORECASE)
-BASE_REF_RE = re.compile(r"Base ref:\s*`?([A-Za-z0-9._/-]+)`?", re.IGNORECASE)
+HEAD_SHA_RE = re.compile(
+    r"^- Head SHA:\s*`([0-9a-fA-F]{40})`\s*$", re.IGNORECASE | re.MULTILINE
+)
+BASE_SHA_RE = re.compile(
+    r"^- Base SHA:\s*`([0-9a-fA-F]{40})`\s*$", re.IGNORECASE | re.MULTILINE
+)
+BASE_REF_RE = re.compile(
+    r"^- Base ref:\s*`([A-Za-z0-9._/-]+)`\s*$", re.IGNORECASE | re.MULTILINE
+)
 
 
 def _has_current_approval(

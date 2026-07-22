@@ -192,6 +192,11 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setenv("PATH", os.defpath)
+    monkeypatch.setattr(
+        safe_pytest,
+        "TRUSTED_INHERITED_EXECUTABLE_DIRS",
+        (trusted_executable.parent,),
+    )
     monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
     monkeypatch.setattr(
         safe_pytest.shutil, "which", lambda executable, path: str(trusted_executable)
@@ -202,7 +207,7 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
     assert observed["shell"] is False
     assert observed["check"] is False
     assert observed["env"]["PYTHONPATH"] == "."
-    assert observed["env"]["PATH"] == os.environ.get("PATH", "")
+    assert observed["env"]["PATH"] == str(trusted_executable.parent)
 
 
 @pytest.mark.parametrize("unsafe_path", [None, "", ".", f"/usr/bin{os.pathsep}", f"relative{os.pathsep}/usr/bin"])
@@ -259,9 +264,12 @@ def test_safe_pytest_executor_uses_only_validated_base_environment(
     trusted_root = tmp_path / "base-python-envs"
     trusted_bin = trusted_root / "lock-000" / "bin"
     trusted_bin.mkdir(parents=True)
+    trusted_target = trusted_root / "runtime" / "python"
+    trusted_target.parent.mkdir()
+    trusted_target.write_text("#!/bin/sh\n", encoding="utf-8")
+    trusted_target.chmod(0o755)
     trusted_executable = trusted_bin / "python"
-    trusted_executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    trusted_executable.chmod(0o755)
+    trusted_executable.symlink_to(trusted_target)
     observed: dict[str, object] = {}
 
     def fake_run(argv, *, cwd, env, shell, check):
@@ -276,7 +284,47 @@ def test_safe_pytest_executor_uses_only_validated_base_environment(
     monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
 
     assert safe_pytest.execute_command(project_dir, ["python", "-m", "pytest"]) == 0
-    assert observed["argv"] == [str(trusted_executable), "-m", "pytest"]
+    assert observed["argv"] == [str(trusted_target), "-m", "pytest"]
+    assert observed["env"]["PATH"] == str(trusted_bin)
+
+
+def test_safe_pytest_executor_ignores_user_path_entries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Inherited PATH cannot select executables outside the fixed runtime allowlist."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    attacker_bin = tmp_path / "attacker-bin"
+    attacker_bin.mkdir()
+    (attacker_bin / "pytest").write_text("#!/bin/sh\n", encoding="utf-8")
+    trusted_bin = tmp_path / "trusted-runtime"
+    trusted_bin.mkdir()
+    trusted_target = trusted_bin / "pytest-real"
+    trusted_target.write_text("#!/bin/sh\n", encoding="utf-8")
+    trusted_target.chmod(0o755)
+    trusted_link = trusted_bin / "pytest"
+    trusted_link.symlink_to(trusted_target)
+    observed: dict[str, object] = {}
+
+    def fake_which(executable: str, path: str) -> str:
+        observed.update(executable=executable, path=path)
+        return str(trusted_link)
+
+    def fake_run(argv, *, cwd, env, shell, check):
+        observed.update(argv=argv, cwd=cwd, env=env, shell=shell, check=check)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.delenv("OPENCODE_PYTHON_ENV_BIN", raising=False)
+    monkeypatch.setenv("PATH", f"{attacker_bin}{os.pathsep}{trusted_bin}")
+    monkeypatch.setattr(
+        safe_pytest, "TRUSTED_INHERITED_EXECUTABLE_DIRS", (trusted_bin,)
+    )
+    monkeypatch.setattr(safe_pytest.shutil, "which", fake_which)
+    monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
+
+    assert safe_pytest.execute_command(project_dir, ["pytest", "-q"]) == 0
+    assert observed["path"] == str(trusted_bin)
+    assert observed["argv"] == [str(trusted_target), "-q"]
     assert observed["env"]["PATH"] == str(trusted_bin)
 
 
@@ -463,6 +511,23 @@ def test_dispatch_status_latest_current_head_decision_is_authoritative() -> None
     )
 
     assert decision["state"] == "failure"
+
+
+def test_dispatch_status_ignores_incidental_identity_text() -> None:
+    """Quoted findings cannot override the anchored identity bullet lines."""
+    head = "a" * 40
+    review = approval_review(head)
+    review["body"] = (
+        f"{review['body']}\n\n"
+        "Quoted finding text:\n"
+        "Base ref: `release`\n"
+        f"Base SHA: `{'c' * 40}`\n"
+        f"Head SHA: `{'d' * 40}`"
+    )
+
+    assert dispatch_status._has_current_approval(
+        [review], head, BASE_REF, BASE_SHA
+    )
 
 
 @pytest.mark.parametrize(
