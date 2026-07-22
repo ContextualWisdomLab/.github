@@ -118,6 +118,7 @@ OPEN_PRS_PAGE_SIZE = 25
 DEFAULT_STALE_OPENCODE_MINUTES = 90
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
+MAX_ACTIVE_WORKFLOW_RUN_PAGES = 100
 OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
@@ -663,15 +664,19 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
         cmd.extend([flag, f"{key}={value}"])
     max_attempts = 4
     for attempt in range(1, max_attempts + 1):  # pragma: no branch - last failed attempt always raises
+        failure_cause: BaseException | None = None
         try:
             return json.loads(run_github_read(cmd, stdin=query))
         except json.JSONDecodeError as exc:
             failure = RuntimeError(
                 f"GitHub GraphQL returned invalid JSON: {exc.msg}"
             )
+            failure_cause = exc
         except RuntimeError as exc:
             failure = exc
         if attempt >= max_attempts or not is_transient_github_api_error(failure):
+            if failure_cause is not None:
+                raise failure from failure_cause
             raise failure
         delay = min(2 ** (attempt - 1), 8)
         print(
@@ -1853,7 +1858,7 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
 
 
 def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
-    """Return active workflow runs for a repository."""
+    """Return every active workflow run, failing closed on excessive pagination."""
     if not scheduler_actions_repository_in_scope(repo):
         print(
             "Actions run inspection skipped for "
@@ -1863,22 +1868,33 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
         return []
     runs: list[dict[str, Any]] = []
     for status in statuses:
-        payload = json.loads(
-            run_github_actions(
-                [
-                    "gh",
-                    "api",
-                    "--method",
-                    "GET",
-                    f"repos/{repo}/actions/runs",
-                    "-f",
-                    f"status={status}",
-                    "-F",
-                    "per_page=100",
-                ]
+        for page in range(1, MAX_ACTIVE_WORKFLOW_RUN_PAGES + 1):
+            payload = json.loads(
+                run_github_actions(
+                    [
+                        "gh",
+                        "api",
+                        "--method",
+                        "GET",
+                        f"repos/{repo}/actions/runs",
+                        "-f",
+                        f"status={status}",
+                        "-F",
+                        "per_page=100",
+                        "-F",
+                        f"page={page}",
+                    ]
+                )
             )
-        )
-        runs.extend(payload.get("workflow_runs") or [])
+            page_runs = payload.get("workflow_runs") or []
+            runs.extend(page_runs)
+            if len(page_runs) < 100:
+                break
+        else:
+            raise RuntimeError(
+                f"active workflow run pagination exceeded {MAX_ACTIVE_WORKFLOW_RUN_PAGES} pages "
+                f"for {repo} with status {status}"
+            )
     return runs
 
 

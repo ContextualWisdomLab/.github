@@ -389,6 +389,17 @@ def test_gh_graphql_retries_truncated_success_stdout(monkeypatch):
     assert sleeps == [1]
 
 
+def test_gh_graphql_preserves_final_json_decode_cause(monkeypatch):
+    """A final invalid response must retain the parser exception for diagnostics."""
+    monkeypatch.setattr(sched, "run", lambda args, stdin=None: '{"data":')
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(RuntimeError, match="invalid JSON") as exc_info:
+        sched.gh_graphql("query", owner="owner")
+
+    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+
+
 def test_gh_graphql_retries_transient_http2_stream_cancel(monkeypatch):
     calls = []
     sleeps = []
@@ -1682,8 +1693,32 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
     assert calls[:2] == [
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"],
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=in_progress", "-F", "per_page=100"],
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                "repos/owner/repo/actions/runs",
+                "-f",
+                "status=queued",
+                "-F",
+                "per_page=100",
+                "-F",
+                "page=1",
+            ],
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                "repos/owner/repo/actions/runs",
+                "-f",
+                "status=in_progress",
+                "-F",
+                "per_page=100",
+                "-F",
+                "page=1",
+            ],
     ]
     assert calls[2:] == [
         ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
@@ -2082,6 +2117,26 @@ def test_actions_repository_scope_keeps_central_run_inspection(monkeypatch):
     assert all("repos/ContextualWisdomLab/.github/actions/runs" in call for call in calls)
 
 
+def test_active_workflow_runs_paginates_each_status(monkeypatch):
+    """Capacity accounting must include active runs beyond the first 100."""
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        status = args[args.index("-f") + 1].split("=", 1)[1]
+        page = int(args[-1].split("=", 1)[1])
+        if page == 1:
+            return json.dumps({"workflow_runs": [{"id": f"{status}-{index}"} for index in range(100)]})
+        return json.dumps({"workflow_runs": [{"id": f"{status}-last"}]})
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    runs = sched.active_workflow_runs("ContextualWisdomLab/.github")
+
+    assert len(runs) == 202
+    assert [call[-1] for call in calls] == ["page=1", "page=2", "page=1", "page=2"]
+
+
 def test_actions_repository_scope_refuses_sibling_job_rerun(monkeypatch):
     """A central runner token must not rerun a sibling repository job."""
     monkeypatch.setenv(
@@ -2174,7 +2229,19 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     )
 
     assert result == "already_running"
-    assert ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"] in calls
+    assert [
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        "repos/owner/repo/actions/runs",
+        "-f",
+        "status=queued",
+        "-F",
+        "per_page=100",
+        "-F",
+        "page=1",
+    ] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)

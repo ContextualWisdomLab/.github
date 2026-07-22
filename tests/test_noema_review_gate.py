@@ -377,8 +377,8 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     seen = {}
 
     class FakeConnection:
-        def __init__(self, hostname, port, pinned_ip, *, timeout):
-            seen.update(hostname=hostname, port=port, pinned_ip=pinned_ip, timeout=timeout)
+        def __init__(self, hostname, port, pinned_ips, *, timeout):
+            seen.update(hostname=hostname, port=port, pinned_ips=pinned_ips, timeout=timeout)
 
         def request(self, method, target, *, body, headers):
             seen.update(
@@ -409,7 +409,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert verdict["decision"] == "approve"
     assert seen["hostname"] == "llm.example.test"
     assert seen["port"] == 443
-    assert seen["pinned_ip"] == "8.8.8.8"
+    assert seen["pinned_ips"] == ("8.8.8.8",)
     assert seen["target"] == "/chat;v=1?mode=review"
     assert seen["headers"]["authorization"] == "Bearer secret"
     assert seen["body"]["model"] == "review-model"
@@ -523,6 +523,49 @@ def test_pinned_https_connection_uses_numeric_peer_and_original_sni(monkeypatch)
     assert seen["server_hostname"] == "llm.example.test"
     assert seen["wrapped_socket"] is fake_socket
     assert seen["closed"] is True
+
+
+def test_pinned_https_connection_falls_back_across_validated_addresses(monkeypatch):
+    """A failed numeric peer must fall back without another DNS lookup."""
+    attempts = []
+
+    class FakeSocket:
+        def setsockopt(self, *args):
+            return None
+
+        def close(self):
+            return None
+
+    successful_socket = FakeSocket()
+
+    def fake_create_connection(address, timeout, source_address):
+        attempts.append(address)
+        if address[0] == "8.8.8.8":
+            raise OSError("first peer unavailable")
+        return successful_socket
+
+    class FakeContext:
+        def wrap_socket(self, sock, *, server_hostname):
+            assert server_hostname == "llm.example.test"
+            return sock
+
+    monkeypatch.setattr(noema.socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(
+        noema.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: pytest.fail("pinned transport must not resolve DNS again"),
+    )
+    connection = noema.PinnedHTTPSConnection(
+        "llm.example.test",
+        443,
+        ("8.8.8.8", "1.1.1.1"),
+        timeout=12,
+    )
+    connection._context = FakeContext()
+    connection.connect()
+    connection.close()
+
+    assert attempts == [("8.8.8.8", 443), ("1.1.1.1", 443)]
 
 
 def test_noema_redirect_handler_rejects_redirects():

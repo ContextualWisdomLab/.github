@@ -204,7 +204,7 @@ def current_primary_approval(pr: dict[str, Any]) -> dict[str, Any] | None:
     head_sha = str(pr.get("headRefOid") or "")
     reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
     for review in reversed(reviews):
-        if not review_matches_current_head(review, head_sha):
+        if not review_matches_current_head(review, head_sha=head_sha):
             continue
         if str(review.get("state") or "").upper() != "APPROVED":
             continue
@@ -220,7 +220,9 @@ def has_current_changes_requested(pr: dict[str, Any]) -> bool:
     head_sha = str(pr.get("headRefOid") or "")
     reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
     for review in reversed(reviews):
-        if review_matches_current_head(review, head_sha) and str(review.get("state") or "").upper() == "CHANGES_REQUESTED":
+        if review_matches_current_head(review, head_sha=head_sha) and str(
+            review.get("state") or ""
+        ).upper() == "CHANGES_REQUESTED":
             return True
     return False
 
@@ -266,7 +268,7 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     """Return whether Noema already reviewed the current head."""
     head_sha = str(pr.get("headRefOid") or "")
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
-        if not review_matches_current_head(review, head_sha):
+        if not review_matches_current_head(review, head_sha=head_sha):
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
@@ -429,12 +431,22 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """Connect to one validated numeric address while preserving TLS SNI."""
+    """Try validated numeric addresses in order while preserving TLS SNI."""
 
-    def __init__(self, hostname: str, port: int, pinned_ip: str, *, timeout: float) -> None:
-        """Configure a direct HTTPS connection pinned to ``pinned_ip``."""
+    def __init__(
+        self,
+        hostname: str,
+        port: int,
+        pinned_ips: str | Sequence[str],
+        *,
+        timeout: float,
+    ) -> None:
+        """Configure direct HTTPS fallback across prevalidated numeric peers."""
         super().__init__(hostname, port=port, timeout=timeout)
-        self._pinned_ip = pinned_ip
+        addresses = (pinned_ips,) if isinstance(pinned_ips, str) else tuple(pinned_ips)
+        if not addresses:
+            raise ValueError("at least one validated HTTPS address is required")
+        self._pinned_ips = addresses
         self._create_connection = self._create_pinned_connection
 
     def _create_pinned_connection(
@@ -443,16 +455,23 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         timeout: object,
         source_address: tuple[str, int] | None,
     ) -> socket.socket:
-        """Open the socket to the validated IP instead of resolving the hostname again."""
-        return socket.create_connection(
-            (self._pinned_ip, address[1]),
-            timeout=timeout,
-            source_address=source_address,
-        )
+        """Try validated peers without resolving the hostname again."""
+        last_error: OSError | None = None
+        for pinned_ip in self._pinned_ips:
+            try:
+                return socket.create_connection(
+                    (pinned_ip, address[1]),
+                    timeout=timeout,
+                    source_address=source_address,
+                )
+            except OSError as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
 
 
-def validated_https_endpoint(api_url: str) -> tuple[str, int, str, str]:
-    """Return hostname, port, pinned public IP, and request target for an HTTPS URL."""
+def validated_https_endpoint(api_url: str) -> tuple[str, int, tuple[str, ...], str]:
+    """Return hostname, port, pinned public IPs, and request target for an HTTPS URL."""
     if any(ord(character) < 32 or ord(character) == 127 for character in api_url):
         raise ValueError("NOEMA_LLM_API_URL cannot contain control characters")
     if not api_url.lower().startswith("https://"):
@@ -500,7 +519,7 @@ def validated_https_endpoint(api_url: str) -> tuple[str, int, str, str]:
         target += f";{parsed.params}"
     if parsed.query:
         target += f"?{parsed.query}"
-    return hostname, port, public_addresses[0], target
+    return hostname, port, tuple(public_addresses), target
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -529,7 +548,7 @@ def call_llm(
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
     if not api_url or not api_key:
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
-    hostname, port, pinned_ip, request_target = validated_https_endpoint(api_url)
+    hostname, port, pinned_ips, request_target = validated_https_endpoint(api_url)
 
     prompt = {
         "role": "user",
@@ -560,7 +579,7 @@ def call_llm(
             prompt,
         ],
     }
-    connection = PinnedHTTPSConnection(hostname, port, pinned_ip, timeout=120)
+    connection = PinnedHTTPSConnection(hostname, port, pinned_ips, timeout=120)
     try:
         connection.request(
             "POST",
