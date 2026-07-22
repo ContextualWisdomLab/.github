@@ -44,6 +44,7 @@ def test_coverage_process_queue_exception_handling(monkeypatch):
 
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr1, pr2])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
+    monkeypatch.setattr(fix, "current_token_actor", lambda: "github-actions[bot]")
 
     def raise_error(repo, number):
         raise RuntimeError("boom")
