@@ -1082,11 +1082,24 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
 def test_strix_provider_outage_without_findings_fails_closed(tmp_path: Path) -> None:
     workflow = workflow_text("strix.yml")
     run_step = workflow_step(workflow, "Run Strix (quick)")
-    run_marker = "        run: |\n"
-    run_body = run_step.split(run_marker, 1)[1]
-    script = textwrap.dedent(
-        "\n".join(line[10:] for line in run_body.splitlines())
+    run_lines = run_step.splitlines()
+    run_line_index = next(
+        (
+            index
+            for index, line in enumerate(run_lines)
+            if line.lstrip() == "run: |"
+        ),
+        None,
     )
+    assert run_line_index is not None, "Run Strix (quick) must contain a run block"
+
+    run_line = run_lines[run_line_index]
+    run_indent = run_line[: len(run_line) - len(run_line.lstrip())]
+    body_indent = f"{run_indent}  "
+    run_body = run_lines[run_line_index + 1 :]
+    assert run_body, "Run Strix (quick) run block must not be empty"
+    assert all(not line or line.startswith(body_indent) for line in run_body)
+    script = textwrap.dedent("\n".join(run_body))
 
     fake_gate = tmp_path / "fake-strix-gate.sh"
     fake_gate.write_text(
