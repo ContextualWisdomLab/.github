@@ -224,6 +224,27 @@ def test_process_queue_resolves_token_actor_once_for_multiple_prs(monkeypatch):
     assert actor_calls == ["lookup"]
 
 
+def test_process_queue_blocks_candidates_when_token_actor_is_unknown(monkeypatch):
+    """Unknown mutation identity must not bypass author-bound marker dedupe."""
+    pr = make_pr()
+    comment_calls = []
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
+    monkeypatch.setattr(fix, "current_token_actor", lambda: "")
+    monkeypatch.setattr(
+        fix,
+        "issue_comments",
+        lambda repo, number: comment_calls.append((repo, number)) or [],
+    )
+    args = fix.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
+    )
+
+    with pytest.raises(RuntimeError, match="mutation credential actor"):
+        fix.process_queue(args)
+    assert comment_calls == []
+
+
 def test_autofix_context_filters_outdated_threads_and_renders_checks():
     """The context helper filters stale threads and renders compact checks."""
     assert context.repo_parts("owner/repo") == ("owner", "repo")

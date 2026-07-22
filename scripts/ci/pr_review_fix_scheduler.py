@@ -320,6 +320,11 @@ def process_queue(args: argparse.Namespace) -> int:
 
     comments_by_pr: dict[int, list[dict[str, Any]]] = {}
     trusted_actor = current_token_actor() if prs_needing_comments else ""
+    if prs_needing_comments and not trusted_actor:
+        raise RuntimeError(
+            "autofix dispatch blocked: active mutation credential actor "
+            "could not be resolved"
+        )
     if len(prs_needing_comments) <= 1:
         # Fast path for single items
         for pr in prs_needing_comments:
