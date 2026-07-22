@@ -44,6 +44,7 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_LLM_RESPONSE_BYTES = 1_048_576
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -65,6 +66,22 @@ def scrub_sensitive_data(text: str | None) -> str | None:
     for pattern, repl in SENSITIVE_DATA_SCRUB_PATTERNS:
         text = pattern.sub(repl, text)
     return text
+
+
+def read_bounded_llm_response(response: http.client.HTTPResponse) -> bytes:
+    """Read one LLM response within a strict byte budget."""
+    raw_content_length = response.getheader("Content-Length")
+    if raw_content_length is not None:
+        try:
+            content_length = int(raw_content_length)
+        except ValueError as exc:
+            raise RuntimeError("Noema LLM endpoint returned an invalid Content-Length") from exc
+        if content_length < 0 or content_length > MAX_LLM_RESPONSE_BYTES:
+            raise RuntimeError("Noema LLM endpoint response exceeded the size limit")
+    raw = response.read(MAX_LLM_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_LLM_RESPONSE_BYTES:
+        raise RuntimeError("Noema LLM endpoint response exceeded the size limit")
+    return raw
 
 
 def run(args: Sequence[str], *, stdin: str | None = None) -> str:
@@ -627,7 +644,7 @@ def call_llm(
             },
         )
         response = connection.getresponse()
-        raw = response.read().decode("utf-8")
+        raw = read_bounded_llm_response(response).decode("utf-8")
         if response.status < 200 or response.status >= 300:
             raise RuntimeError(f"Noema LLM endpoint returned HTTP {response.status}")
     finally:

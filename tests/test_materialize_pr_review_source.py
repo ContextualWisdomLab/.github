@@ -150,7 +150,14 @@ def test_rejects_non_bare_git_directory(tmp_path: Path) -> None:
 
 def test_rejects_unsafe_tree_paths() -> None:
     """Traversal and absolute paths fail closed before filesystem writes."""
-    for unsafe in (b"../escape", b"/absolute", b"a/../escape"):
+    for unsafe in (
+        b"../escape",
+        b"/absolute",
+        b"a/../escape",
+        b"directory\\file",
+        b"directory//file",
+        b"./file",
+    ):
         try:
             materializer.safe_relative_path(unsafe)
         except ValueError:

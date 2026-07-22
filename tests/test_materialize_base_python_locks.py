@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -140,6 +141,37 @@ def test_git_bytes_reports_failures_and_bounds_output(monkeypatch, tmp_path: Pat
     )
     with pytest.raises(ValueError, match="bounded materialization"):
         locks.git_bytes(tmp_path, "ls-tree", "HEAD")
+
+
+def test_git_bytes_requires_an_absolute_verified_executable(monkeypatch, tmp_path: Path):
+    """Dependency materialization cannot resolve Git through a mutable relative PATH."""
+    monkeypatch.setattr(locks, "GIT_EXECUTABLE", "git")
+    with pytest.raises(RuntimeError, match="absolute Git executable"):
+        locks.git_bytes(tmp_path, "rev-parse", "HEAD")
+
+
+def test_write_exclusive_closes_descriptor_when_fdopen_fails(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """A failed stream wrapper cannot leak the exclusive output descriptor."""
+    closed: list[int] = []
+    real_close = os.close
+
+    def recording_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(locks.os, "close", recording_close)
+    monkeypatch.setattr(
+        locks.os,
+        "fdopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("fdopen failed")),
+    )
+
+    with pytest.raises(OSError, match="fdopen failed"):
+        locks.write_exclusive(tmp_path / "lock.txt", b"data")
+    assert len(closed) == 1
 
 
 def test_repository_and_output_paths_fail_closed(monkeypatch, tmp_path: Path):

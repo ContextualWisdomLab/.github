@@ -191,6 +191,7 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
         observed.update(argv=argv, cwd=cwd, env=env, shell=shell, check=check)
         return subprocess.CompletedProcess(argv, 0)
 
+    monkeypatch.setenv("PATH", os.defpath)
     monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
     monkeypatch.setattr(
         safe_pytest.shutil, "which", lambda executable, path: str(trusted_executable)
@@ -202,6 +203,25 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
     assert observed["check"] is False
     assert observed["env"]["PYTHONPATH"] == "."
     assert observed["env"]["PATH"] == os.environ.get("PATH", "")
+
+
+@pytest.mark.parametrize("unsafe_path", [None, "", ".", f"/usr/bin{os.pathsep}", f"relative{os.pathsep}/usr/bin"])
+def test_safe_pytest_executor_rejects_missing_or_ambiguous_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    unsafe_path: str | None,
+) -> None:
+    """An absent, empty, or relative PATH cannot select a project-local executable."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.delenv("OPENCODE_PYTHON_ENV_BIN", raising=False)
+    if unsafe_path is None:
+        monkeypatch.delenv("PATH", raising=False)
+    else:
+        monkeypatch.setenv("PATH", unsafe_path)
+
+    with pytest.raises(ValueError, match="trusted PATH is missing or unsafe"):
+        safe_pytest.execute_command(project_dir, ["pytest"])
 
 
 def test_safe_pytest_executor_rejects_project_symlink_and_relative_resolution(
@@ -218,6 +238,7 @@ def test_safe_pytest_executor_rejects_project_symlink_and_relative_resolution(
     local_symlink = project_bin / "pytest"
     local_symlink.symlink_to(trusted_target)
 
+    monkeypatch.setenv("PATH", os.defpath)
     monkeypatch.setattr(
         safe_pytest.shutil, "which", lambda executable, path: str(local_symlink)
     )
@@ -266,6 +287,7 @@ def test_safe_pytest_executor_reports_unavailable_and_invalid_executables(
     project_dir = tmp_path / "project"
     project_dir.mkdir()
 
+    monkeypatch.setenv("PATH", os.defpath)
     monkeypatch.setattr(safe_pytest.shutil, "which", lambda executable, path: None)
     with pytest.raises(ValueError, match="unavailable from the trusted PATH"):
         safe_pytest.execute_command(project_dir, ["pytest"])

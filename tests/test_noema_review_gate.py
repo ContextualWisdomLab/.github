@@ -511,14 +511,20 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
 class FakeResponse:
     """Small response object for pinned HTTPS transport tests."""
 
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, content_length=None):
         """Store a JSON-serializable response payload."""
         self.payload = payload
         self.status = status
+        self.content_length = content_length
 
-    def read(self):
+    def getheader(self, name):
+        """Return an optional synthetic Content-Length header."""
+        return self.content_length if name.lower() == "content-length" else None
+
+    def read(self, amount=None):
         """Return the payload as encoded JSON bytes."""
-        return json.dumps(self.payload).encode("utf-8")
+        encoded = json.dumps(self.payload).encode("utf-8")
+        return encoded if amount is None else encoded[:amount]
 
 
 def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
@@ -583,6 +589,16 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert seen["body"]["model"] == "review-model"
     assert "extra review context" in seen["body"]["messages"][1]["content"]
     assert seen["closed"] is True
+
+    original_limit = noema.MAX_LLM_RESPONSE_BYTES
+    monkeypatch.setattr(noema, "MAX_LLM_RESPONSE_BYTES", 8)
+    response["value"] = FakeResponse({"oversized": "response"})
+    with pytest.raises(RuntimeError, match="response exceeded the size limit"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+    response["value"] = FakeResponse({}, content_length="9")
+    with pytest.raises(RuntimeError, match="response exceeded the size limit"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+    monkeypatch.setattr(noema, "MAX_LLM_RESPONSE_BYTES", original_limit)
 
     response["value"] = FakeResponse(
         {"choices": [{"message": {"content": '{"decision":"defer"}'}}]}

@@ -143,7 +143,11 @@ def safe_relative_path(raw_path: bytes) -> PurePosixPath:
     path = PurePosixPath(decoded)
     if not decoded or decoded.startswith("/") or path.is_absolute():
         raise ValueError(f"unsafe absolute or empty Git tree path: {decoded!r}")
-    if any(part in {"", ".", ".."} for part in path.parts):
+    if (
+        "\\" in decoded
+        or decoded != path.as_posix()
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
         raise ValueError(f"unsafe Git tree path component: {decoded!r}")
     return path
 

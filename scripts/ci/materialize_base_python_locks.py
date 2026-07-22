@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -24,6 +25,21 @@ MAX_LOCKS = 8
 MAX_LOCK_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 20 * 1024 * 1024
 MAX_TREE_OUTPUT_BYTES = 32 * 1024 * 1024
+GIT_EXECUTABLE = shutil.which("git")
+
+
+def validated_git_executable() -> str:
+    """Return the absolute, executable Git binary selected from the trusted runner PATH."""
+    candidate = GIT_EXECUTABLE
+    if not candidate or not Path(candidate).is_absolute():
+        raise RuntimeError("an absolute Git executable path is required")
+    try:
+        resolved = Path(candidate).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("the configured Git executable is unavailable") from exc
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise RuntimeError("the configured Git executable failed validation")
+    return str(resolved)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -41,7 +57,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def git_bytes(repo_root: Path, *args: str) -> bytes:
     """Run a bounded read-only Git command without shell interpretation."""
     completed = subprocess.run(  # nosec B603
-        ["git", "-C", str(repo_root), *args],
+        [validated_git_executable(), "-C", str(repo_root), *args],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -170,8 +186,15 @@ def write_exclusive(path: Path, data: bytes) -> None:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags, 0o600)
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(data)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
     path.chmod(0o444)
 
 

@@ -100,7 +100,16 @@ def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
             raise ValueError("trusted Python environment path failed validation")
         trusted_bin = resolved
 
-    search_path = str(trusted_bin) if trusted_bin is not None else env.get("PATH", "")
+    if trusted_bin is not None:
+        search_path = str(trusted_bin)
+    else:
+        inherited_path = env.get("PATH")
+        if not inherited_path or any(
+            not entry or not pathlib.Path(entry).is_absolute()
+            for entry in inherited_path.split(os.pathsep)
+        ):
+            raise ValueError("inherited trusted PATH is missing or unsafe")
+        search_path = inherited_path
     executable_path = shutil.which(argv[0], path=search_path)
     if not executable_path:
         raise ValueError("configured pytest executable is unavailable from the trusted PATH")
