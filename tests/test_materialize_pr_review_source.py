@@ -286,10 +286,14 @@ def test_tree_metadata_budget_stops_large_paths_before_append(
         raise AssertionError("oversized tree path metadata was accepted")
 
 
-def test_argument_git_and_path_validation_edges(monkeypatch, tmp_path: Path) -> None:
+def test_argument_git_and_path_validation_edges(monkeypatch, tmp_path: Path, capsys) -> None:
     """Malformed limits, Git identities, and output paths fail before writes."""
     with pytest.raises(argparse.ArgumentTypeError, match="positive"):
         materializer.positive_int("0")
+
+    with pytest.raises(SystemExit):
+        materializer.parse_args(["--help"])
+    assert "immediate parent of --output-dir must already exist" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         materializer.parse_args(
             [

@@ -1364,8 +1364,22 @@ build_pull_request_scope_dir() {
 			return 2
 		fi
 		relative_path="$changed_file"
+		case "$relative_path" in
+		"" | /* | . | .. | ./* | ../* | */./* | */../* | */. | */..)
+			echo "ERROR: pull request changed file escaped the generated scope: $changed_file" >&2
+			return 2
+			;;
+		esac
 		local dst_path
 		dst_path="$scope_dir/$relative_path"
+		case "$dst_path" in
+		"$scope_dir"/*)
+			;;
+		*)
+			echo "ERROR: pull request changed file escaped the generated scope: $changed_file" >&2
+			return 2
+			;;
+		esac
 		mkdir -p -- "$(dirname -- "$dst_path")"
 		local copy_rc=1
 		local head_sha_for_copy

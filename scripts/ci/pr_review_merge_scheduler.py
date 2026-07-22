@@ -125,9 +125,18 @@ ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([^`\s]+)`")
-REVIEW_BODY_BASE_REF_RE = re.compile(r"Base ref:\s*`([A-Za-z0-9._/-]+)`")
-REVIEW_BODY_BASE_SHA_RE = re.compile(r"Base SHA:\s*`([^`\s]+)`")
+REVIEW_BODY_HEAD_SHA_RE = re.compile(
+    r"^[ \t]*-[ \t]+Head SHA:[ \t]*`([0-9a-fA-F]{40})`[ \t]*$",
+    re.MULTILINE,
+)
+REVIEW_BODY_BASE_REF_RE = re.compile(
+    r"^[ \t]*-[ \t]+Base ref:[ \t]*`([A-Za-z0-9._/-]+)`[ \t]*$",
+    re.MULTILINE,
+)
+REVIEW_BODY_BASE_SHA_RE = re.compile(
+    r"^[ \t]*-[ \t]+Base SHA:[ \t]*`([0-9a-fA-F]{40})`[ \t]*$",
+    re.MULTILINE,
+)
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "base branch policy prohibits the merge",
@@ -1013,7 +1022,7 @@ def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> b
     base_ref = str(pr.get("baseRefName") or "")
     base_sha = str(pr.get("baseRefOid") or "")
     return bool(
-        body_head
+        (body_head or commit == head)
         and base_ref
         and base_sha
         and base_refs
@@ -3147,6 +3156,8 @@ def summarize_action_error(exc: RuntimeError) -> str:
 
 def self_test() -> None:
     """Exercise scheduler invariants without GitHub network access."""
+    sample_head = "a" * 40
+    sample_base = "b" * 40
     assert split_repo("owner/name") == ("owner", "name")
     assert split_repo("owner/name/extra") == ("owner", "name/extra")
     try:
@@ -3166,9 +3177,9 @@ def self_test() -> None:
         pass
     sample = {
         "number": 1,
-        "headRefOid": "abc",
+        "headRefOid": sample_head,
         "baseRefName": "main",
-        "baseRefOid": "base",
+        "baseRefOid": sample_base,
         "headRefName": "feature",
         "mergeStateStatus": "CLEAN",
         "restMergeableState": "CLEAN",
@@ -3181,7 +3192,7 @@ def self_test() -> None:
             "nodes": [
                 {
                     "commit": {
-                        "oid": "abc",
+                        "oid": sample_head,
                         "committedDate": "2026-06-25T16:38:22Z",
                         "messageHeadline": "feat: sample",
                     }
@@ -3197,11 +3208,11 @@ def self_test() -> None:
                     "body": (
                         "OpenCode Agent approved this head.\n"
                         "- Base ref: `main`\n"
-                        "- Base SHA: `base`\n"
-                        "- Head SHA: `abc`"
+                        f"- Base SHA: `{sample_base}`\n"
+                        f"- Head SHA: `{sample_head}`"
                     ),
                     "submittedAt": "2026-06-25T15:42:19Z",
-                    "commit": {"oid": "abc"},
+                    "commit": {"oid": sample_head},
                 }
             ]
         },
@@ -3303,7 +3314,7 @@ def self_test() -> None:
             "state": "APPROVED",
             "author": {"login": "not-opencode-agent"},
             "body": "OpenCode Agent approved this head.",
-            "commit": {"oid": "abc"},
+            "commit": {"oid": sample_head},
         }
     )
     assert has_current_head_approval(sample)
@@ -3321,7 +3332,7 @@ def self_test() -> None:
         {
             "state": "CHANGES_REQUESTED",
             "author": {"login": "opencode-agent"},
-            "commit": {"oid": "abc"},
+            "commit": {"oid": sample_head},
         }
     ]
     sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
@@ -3389,12 +3400,12 @@ def self_test() -> None:
     )
     assert decision.action == "update_branch"
     assert "branch is outdated before review dispatch" in decision.reason
-    sample["reviews"]["nodes"][0]["commit"]["oid"] = "abc"
+    sample["reviews"]["nodes"][0]["commit"]["oid"] = sample_head
     sample["reviews"]["nodes"][0]["body"] = (
         "OpenCode approved the current PR identity.\n"
         "- Base ref: `main`\n"
-        "- Base SHA: `base`\n"
-        "- Head SHA: `abc`"
+        f"- Base SHA: `{sample_base}`\n"
+        f"- Head SHA: `{sample_head}`"
     )
     decision = inspect_pr(
         "owner/repo",
@@ -3546,9 +3557,9 @@ def self_test() -> None:
     assert "git status --short" in conflict_guidance["commands"]
     blocked_sample = {
         "number": 2,
-        "headRefOid": "abc",
+        "headRefOid": sample_head,
         "baseRefName": "main",
-        "baseRefOid": "base",
+        "baseRefOid": sample_base,
         "headRefName": "feature",
         "mergeStateStatus": "BLOCKED",
         "restMergeableState": "BLOCKED",
@@ -3564,7 +3575,7 @@ def self_test() -> None:
             "nodes": [
                 {
                     "commit": {
-                        "oid": "abc",
+                        "oid": sample_head,
                         "committedDate": "2026-06-25T16:38:22Z",
                         "messageHeadline": "ci: exercise blocked approval path",
                     }
@@ -3580,11 +3591,11 @@ def self_test() -> None:
                     "body": (
                         "OpenCode Agent approved this head.\n"
                         "- Base ref: `main`\n"
-                        "- Base SHA: `base`\n"
-                        "- Head SHA: `abc`"
+                        f"- Base SHA: `{sample_base}`\n"
+                        f"- Head SHA: `{sample_head}`"
                     ),
                     "submittedAt": "2026-06-25T15:42:19Z",
-                    "commit": {"oid": "abc"},
+                    "commit": {"oid": sample_head},
                 }
             ]
         },

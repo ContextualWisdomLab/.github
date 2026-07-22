@@ -447,6 +447,7 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 	assert_file_contains "$GATE_SCRIPT" "NORMALIZED_CHANGED_FILES=()" "strix gate caches normalized PR changed paths"
 	assert_file_contains "$GATE_SCRIPT" 'NORMALIZED_CHANGED_FILES+=("$normalized_changed_file")' "strix gate populates cached normalized PR changed paths"
 	assert_file_contains "$GATE_SCRIPT" "for normalized_changed_file in \"\${NORMALIZED_CHANGED_FILES[@]}\"" "strix gate uses cached normalized paths for membership checks"
+	assert_file_contains "$GATE_SCRIPT" "pull request changed file escaped the generated scope" "strix gate revalidates changed-file containment at the copy sink"
 }
 
 assert_absent_endpoint_search_uses_canonical_target_path() {

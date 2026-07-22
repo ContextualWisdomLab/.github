@@ -54,10 +54,18 @@ def positive_int(value: str) -> int:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Precondition: the immediate parent of --output-dir must already exist.",
+    )
     parser.add_argument("--git-dir", type=Path, required=True)
     parser.add_argument("--head-sha", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="fresh output path whose immediate parent already exists",
+    )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--max-files", type=positive_int, default=DEFAULT_MAX_FILES)
     parser.add_argument("--max-bytes", type=positive_int, default=DEFAULT_MAX_BYTES)

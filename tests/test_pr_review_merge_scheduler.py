@@ -30,6 +30,9 @@ def fake_fine_grained_github_token(body):
     return "github" + TOKEN_SEPARATOR + "pat" + TOKEN_SEPARATOR + body
 
 
+TEST_BASE_SHA = "c" * 40
+
+
 def make_pr(**overrides):
     value = {
         "number": 1,
@@ -40,7 +43,7 @@ def make_pr(**overrides):
         "restMergeableState": "",
         "reviewDecision": "REVIEW_REQUIRED",
         "baseRefName": "main",
-        "baseRefOid": "base",
+        "baseRefOid": TEST_BASE_SHA,
         "headRefName": "feature",
         "headRefOid": "head",
         "isCrossRepository": False,
@@ -81,7 +84,7 @@ def opencode_review(
         "body": (
             "OpenCode review evidence.\n"
             "- Base ref: `main`\n"
-            "- Base SHA: `base`\n"
+            f"- Base SHA: `{TEST_BASE_SHA}`\n"
             f"- Head SHA: `{commit}`"
         ),
     }
@@ -1056,7 +1059,7 @@ def test_review_state_and_failed_checks():
                     "body": (
                         "## Gate evidence\n\n"
                         "- Base ref: `main`\n"
-                        "- Base SHA: `base`\n"
+                        f"- Base SHA: `{TEST_BASE_SHA}`\n"
                         f"- Head SHA: `{exact_head.upper()}`"
                     ),
                 }
@@ -1064,6 +1067,53 @@ def test_review_state_and_failed_checks():
         },
     )
     assert sched.has_current_head_approval(body_sha_match)
+    body_with_incidental_identity_text = make_pr(
+        headRefOid=exact_head,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", exact_head),
+                    "body": (
+                        "## Gate evidence\n\n"
+                        "- Base ref: `main`\n"
+                        f"- Base SHA: `{TEST_BASE_SHA}`\n"
+                        f"- Head SHA: `{exact_head}`\n\n"
+                        f"Quoted finding prose Head SHA: `{stale_body_head}`\n"
+                        "Untrusted prose Head SHA: `not-a-sha`"
+                    ),
+                }
+            ]
+        },
+    )
+    assert (
+        sched.review_body_head_sha(
+            body_with_incidental_identity_text["reviews"]["nodes"][0]
+        )
+        == exact_head
+    )
+    assert sched.has_current_head_approval(body_with_incidental_identity_text)
+    commit_bound_review_ignores_invalid_body_token = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", "head"),
+                    "body": (
+                        "## Gate evidence\n\n"
+                        "- Base ref: `main`\n"
+                        f"- Base SHA: `{TEST_BASE_SHA}`\n"
+                        "- Head SHA: `not-a-sha`"
+                    ),
+                }
+            ]
+        }
+    )
+    assert (
+        sched.review_body_head_sha(
+            commit_bound_review_ignores_invalid_body_token["reviews"]["nodes"][0]
+        )
+        is None
+    )
+    assert sched.has_current_head_approval(commit_bound_review_ignores_invalid_body_token)
     body_sha_only_match = make_pr(
         headRefOid=exact_head,
         reviews={
@@ -1073,7 +1123,7 @@ def test_review_state_and_failed_checks():
                     "body": (
                         "## Gate evidence\n\n"
                         "- Base ref: `main`\n"
-                        "- Base SHA: `base`\n"
+                        f"- Base SHA: `{TEST_BASE_SHA}`\n"
                         f"- Head SHA: `{exact_head}`"
                     ),
                 }
@@ -1228,7 +1278,7 @@ def test_review_state_and_failed_checks():
         "body": (
             "## Gate evidence\n\n"
             "- Base ref: `main`\n"
-            "- Base SHA: `base`\n"
+            f"- Base SHA: `{TEST_BASE_SHA}`\n"
             f"- Head SHA: `{exact_head}`"
         ),
     }
@@ -1388,7 +1438,7 @@ def test_body_head_sha_approval_prevents_same_run_opencode_rerun(monkeypatch):
                     "body": (
                         "## Gate evidence\n\n"
                         "- Base ref: `main`\n"
-                        "- Base SHA: `base`\n"
+                        f"- Base SHA: `{TEST_BASE_SHA}`\n"
                         f"- Head SHA: `{head}`"
                     ),
                 }
