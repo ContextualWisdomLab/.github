@@ -283,6 +283,14 @@ def test_extract_control_payload_rejects_ambiguous_and_malformed_blocks():
         ),
         (
             lambda value: value.update(
+                body=value["body"].replace(
+                    f"- Base ref: `{BASE_REF}`", f"> - Base ref: `{BASE_REF}`"
+                )
+            ),
+            "base ref",
+        ),
+        (
+            lambda value: value.update(
                 body=value["body"].replace(f"- Base SHA: `{BASE_SHA}`", "")
             ),
             "base SHA",

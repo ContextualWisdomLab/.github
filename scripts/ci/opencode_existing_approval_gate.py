@@ -40,6 +40,7 @@ WORKFLOW_RUN_RE = re.compile(r"(?m)^- Workflow run: ([1-9][0-9]*)\s*$")
 WORKFLOW_ATTEMPT_RE = re.compile(r"(?m)^- Workflow attempt: ([1-9][0-9]*)\s*$")
 RESULT_LINE_RE = re.compile(r"(?m)^- Result: ([A-Z_]+)\s*$")
 HEAD_SHA_LINE_RE = re.compile(r"(?m)^- Head SHA: `([0-9a-fA-F]{40})`\s*$")
+BASE_REF_LINE_RE = re.compile(r"(?m)^- Base ref: `([A-Za-z0-9._/-]+)`\s*$")
 BASE_SHA_LINE_RE = re.compile(r"(?m)^- Base SHA: `([0-9a-fA-F]{40})`\s*$")
 CONTROL_BLOCK_RE = re.compile(
     r"<!--[ \t]*opencode-review-control-v1[ \t]*\n(?P<payload>.*?)[ \t]*-->",
@@ -169,7 +170,7 @@ def review_rejection_reason(
         candidate.lower() for candidate in HEAD_SHA_LINE_RE.findall(body)
     }:
         return "review body lacks the exact current-head SHA"
-    if f"- Base ref: `{base_ref}`" not in body:
+    if BASE_REF_LINE_RE.findall(body)[-1:] != [base_ref]:
         return "review body lacks the exact current base ref"
     if base_sha.lower() not in {
         candidate.lower() for candidate in BASE_SHA_LINE_RE.findall(body)
