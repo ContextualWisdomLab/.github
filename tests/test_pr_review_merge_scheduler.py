@@ -2207,6 +2207,23 @@ def test_active_workflow_runs_stops_at_exact_total_count(monkeypatch):
     assert [call[-1] for call in calls] == ["page=1", "page=1"]
 
 
+def test_active_workflow_runs_fails_closed_after_pagination_bound(monkeypatch):
+    """Unbounded active-run pagination must stop with an explicit failure."""
+    calls = []
+    monkeypatch.setattr(sched, "MAX_ACTIVE_WORKFLOW_RUN_PAGES", 2)
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        return json.dumps({"workflow_runs": [{"id": index} for index in range(100)]})
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    with pytest.raises(RuntimeError, match="pagination exceeded 2 pages"):
+        sched.active_workflow_runs("ContextualWisdomLab/.github")
+
+    assert [call[-1] for call in calls] == ["page=1", "page=2"]
+
+
 def test_actions_repository_scope_refuses_sibling_job_rerun(monkeypatch):
     """A central runner token must not rerun a sibling repository job."""
     monkeypatch.setenv(

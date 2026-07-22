@@ -598,6 +598,31 @@ def test_pinned_https_connection_falls_back_across_validated_addresses(monkeypat
     assert attempts == [("8.8.8.8", 443), ("1.1.1.1", 443)]
 
 
+def test_pinned_https_connection_rejects_empty_and_raises_last_peer_error(monkeypatch):
+    """Pinned transport fails closed without peers and preserves the final error."""
+    with pytest.raises(ValueError, match="at least one validated HTTPS address"):
+        noema.PinnedHTTPSConnection("llm.example.test", 443, (), timeout=12)
+
+    attempts = []
+
+    def fail_create_connection(address, timeout, source_address):
+        attempts.append(address)
+        raise OSError(f"peer {address[0]} unavailable")
+
+    monkeypatch.setattr(noema.socket, "create_connection", fail_create_connection)
+    connection = noema.PinnedHTTPSConnection(
+        "llm.example.test",
+        443,
+        ("8.8.8.8", "1.1.1.1"),
+        timeout=12,
+    )
+
+    with pytest.raises(OSError, match="peer 1.1.1.1 unavailable"):
+        connection._create_pinned_connection(("llm.example.test", 443), 12, None)
+
+    assert attempts == [("8.8.8.8", 443), ("1.1.1.1", 443)]
+
+
 def test_noema_redirect_handler_rejects_redirects():
     """Noema must not follow redirects after validating the initial URL."""
     handler = noema.NoRedirectHandler()
