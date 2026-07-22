@@ -433,6 +433,11 @@ def test_targeted_central_scheduler_binds_live_sibling_pr_metadata() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "Bind targeted central dispatch to live pull request metadata" in workflow
+    assert (
+        "github.event.client_payload.target_repository != '' && "
+        "github.event.client_payload.pr_number != '' && "
+        "format('target-{0}-pr-{1}'"
+    ) in workflow
     assert "^ContextualWisdomLab/[A-Za-z0-9._-]+$" in workflow
     assert 'pull_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"' in workflow
     assert 'base_repository" != "$TARGET_REPOSITORY"' in workflow
