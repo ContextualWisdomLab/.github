@@ -15,8 +15,11 @@ korean-lunar-calendar==0.4.0
 
 # Trusted runtime set required to execute ContextualWisdomLab/naruon backend and
 # ContextualWisdomLab/keyverse account-unification tests inside the networkless
-# OpenCode coverage sandbox. Pins follow those repositories' reviewed manifests;
-# fastapi/httpx/icalendar above stay the single resolved versions.
+# OpenCode coverage sandbox. Naruon's conftest imports its application root, so
+# collection loads the mail, database, LLM, Google, telemetry, upload, and auth
+# modules covered by these runtime pins. Build/lint-only tools stay out of this
+# trusted runtime set. fastapi/httpx/icalendar above remain single resolutions.
+# Naruon tests import starlette.websockets directly; do not leave this implicit.
 starlette==1.3.1
 uvicorn==0.51.0
 pydantic-settings==2.14.2
@@ -44,10 +47,7 @@ opentelemetry-sdk==1.43.0
 opentelemetry-instrumentation-fastapi==0.64b0
 opentelemetry-exporter-otlp==1.43.0
 protobuf==7.35.1
-setuptools==83.0.0
-wheel==0.47.0
 websockets==16.1
-PyJWT==2.13.0
+pyjwt==2.13.0
 defusedxml==0.7.1
-ruff==0.15.21
 pyyaml==6.0.3

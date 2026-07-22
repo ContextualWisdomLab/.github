@@ -414,6 +414,17 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
         in trusted_requirements
     )
+    trusted_manifest = Path("requirements-opencode-review-ci.txt").read_text(
+        encoding="utf-8"
+    )
+    trusted_direct_names = {
+        line.split("==", 1)[0]
+        for line in trusted_manifest.splitlines()
+        if "==" in line and not line.lstrip().startswith("#")
+    }
+    assert "pyjwt" in trusted_direct_names
+    assert "PyJWT" not in trusted_direct_names
+    assert trusted_direct_names.isdisjoint({"setuptools", "wheel", "ruff"})
 
     target_start = workflow.index("  opencode-review-target:\n")
     target_job = workflow[target_start:]
