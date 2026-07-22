@@ -441,6 +441,9 @@ def test_targeted_central_scheduler_binds_live_sibling_pr_metadata() -> None:
     assert "^ContextualWisdomLab/[A-Za-z0-9._-]+$" in workflow
     assert 'pull_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"' in workflow
     assert 'base_repository" != "$TARGET_REPOSITORY"' in workflow
+    assert '[[ "$base_branch" == "HEAD" ]]' in workflow
+    assert '[[ "$base_branch" == /* ]]' in workflow
+    assert '[[ "$base_branch" == *"//"* ]]' in workflow
     assert "Live PR metadata did not provide exact 40-character base and head SHAs" in workflow
     assert "SCHEDULER_ACTIONS_REPOSITORY:" in workflow
     assert '--repo "$SCHEDULER_TARGET_REPOSITORY"' in workflow

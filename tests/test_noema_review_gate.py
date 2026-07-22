@@ -195,6 +195,19 @@ def test_check_helpers_and_existing_noema_review():
         make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}),
         "noema",
     )
+    assert noema.existing_noema_review(
+        make_pr(
+            reviews={
+                "nodes": [
+                    review(
+                        login="NoEmA",
+                        body="<!-- noema-review-gate head_sha=head -->",
+                    )
+                ]
+            }
+        ),
+        "NOEMA",
+    )
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
 
@@ -250,7 +263,7 @@ def test_existing_noema_review_rejects_mismatched_body_and_marker_heads():
 
 
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "noema\n")
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "NoEmA\n")
     assert noema.current_actor() == "noema"
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")))
     assert noema.current_actor() == ""

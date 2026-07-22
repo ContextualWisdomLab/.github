@@ -270,7 +270,9 @@ jobs:
             exit 1
           fi
           if [[ ! "$base_branch" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+             [[ "$base_branch" == "HEAD" ]] || [[ "$base_branch" == /* ]] ||
              [[ "$base_branch" == *".."* ]] || [[ "$base_branch" == *"@{"* ]] ||
+             [[ "$base_branch" == *"//"* ]] ||
              [[ "$base_branch" == .* ]] || [[ "$base_branch" == */.* ]] ||
              [[ "$base_branch" == */ ]] || [[ "$base_branch" == *. ]]; then
             echo "::error::Live PR base ref is not safe for targeted scheduler arguments."

@@ -177,7 +177,7 @@ def fetch_pr(repo: str, number: int) -> dict[str, Any]:
 
 def review_author(review: dict[str, Any]) -> str:
     """Return the normalized author login from a review node."""
-    return ((review.get("author") or {}).get("login") or "").strip()
+    return ((review.get("author") or {}).get("login") or "").strip().casefold()
 
 
 def review_commit(review: dict[str, Any]) -> str:
@@ -267,12 +267,13 @@ def blocking_checks(pr: dict[str, Any]) -> list[str]:
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     """Return whether Noema already reviewed the current head."""
     head_sha = str(pr.get("headRefOid") or "")
+    actor_login = actor.strip().casefold()
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
         if not review_matches_current_head(review, head_sha=head_sha):
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
-        if not actor or review_author(review) != actor:
+        if not actor_login or review_author(review) != actor_login:
             continue
         body = str(review.get("body") or "")
         marker_heads = NOEMA_REVIEW_MARKER_HEAD_RE.findall(body)
@@ -287,7 +288,7 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
 def current_actor() -> str:
     """Return the login for the active gh token, or empty string on failure."""
     try:
-        return run(["gh", "api", "user", "--jq", ".login"]).strip()
+        return run(["gh", "api", "user", "--jq", ".login"]).strip().casefold()
     except Exception:
         return ""
 
