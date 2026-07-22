@@ -283,6 +283,15 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131"
         in coverage_job
     )
+    download_start = coverage_job.index(
+        "      - name: Download materialized pull request merge tree\n"
+    )
+    download_end = coverage_job.index("\n      - name:", download_start + 1)
+    download_step = coverage_job[download_start:download_end]
+    assert "github-token: ${{ github.token }}" in download_step
+    assert "repository: ${{ github.repository }}" in download_step
+    assert "run-id: ${{ github.run_id }}" in download_step
+    assert "re-run failed jobs" in download_step
 
     start = workflow.index(
         "      - name: Materialize pull request merge tree for coverage measurement\n"

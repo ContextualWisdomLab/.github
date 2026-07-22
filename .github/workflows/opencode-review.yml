@@ -384,6 +384,13 @@ jobs:
         with:
           name: opencode-coverage-source
           path: ${{ runner.temp }}/opencode-coverage-artifact
+          # Force the REST-backed download path so "re-run failed jobs" can
+          # consume the artifact uploaded by a successful prior run attempt.
+          # The token is scoped to this trusted download step; the later
+          # untrusted test step explicitly clears every GitHub credential.
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
 
       - name: Prepare pull request merge tree for coverage measurement
         env:

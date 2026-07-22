@@ -865,6 +865,9 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Exchange OpenCode app token for target repository coverage reads" "coverage source materialization can read private target repositories during central manual dispatch"
 	assert_file_contains "$workflow_file" "Upload materialized pull request merge tree" "coverage source materialization passes only a prepared merge tree artifact to the PR-head coverage job"
 	assert_file_contains "$workflow_file" "Download materialized pull request merge tree" "coverage evidence consumes the prepared merge tree artifact without target-repository credentials"
+	assert_file_contains "$workflow_file" 'github-token: ${{ github.token }}' "coverage artifact download uses the REST-backed token path across failed-job rerun attempts"
+	assert_file_contains "$workflow_file" 'repository: ${{ github.repository }}' "coverage artifact download binds the artifact source repository explicitly"
+	assert_file_contains "$workflow_file" 'run-id: ${{ github.run_id }}' "coverage artifact download binds the original workflow run across attempts"
 	assert_file_contains "$workflow_file" "Report coverage source materialization failure" "coverage evidence logs source materialization failures as the coverage blocker"
 	local coverage_merge_tree_step
 	coverage_merge_tree_step="$(
