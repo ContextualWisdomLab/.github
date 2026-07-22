@@ -39,6 +39,7 @@ FAILED_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQU
 RUNNING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING", "EXPECTED"}
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
+MAX_CONTEXT_WORKERS = 6
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
@@ -353,7 +354,7 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
     if len(bounded_paths) == 1:
         sections.append(_fetch(bounded_paths[0]))
     else:
-        max_workers = min(MAX_CONTEXT_FILES, len(bounded_paths))
+        max_workers = min(MAX_CONTEXT_WORKERS, len(bounded_paths))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             for result in executor.map(_fetch, bounded_paths):
                 sections.append(result)

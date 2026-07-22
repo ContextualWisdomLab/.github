@@ -542,32 +542,70 @@ def test_parse_args_and_main(monkeypatch):
 
     with pytest.raises(SystemExit, match="--pr-number must be positive"):
         noema.main(["--repo", "owner/repo", "--pr-number", "0"])
-import pytest
-from scripts.ci import noema_review_gate as noema
-import concurrent.futures
 
-def test_changed_file_context_single_file_executor(monkeypatch):
-    """Ensure executor is not created for single file contexts to save overhead."""
-    # Mock to return exactly 1 file
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["single.txt"])
 
-    # Mock content fetch
-    monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, sha: "content")
+def test_changed_file_context_uses_serial_path_for_one_file(monkeypatch):
+    """One changed file must not pay the cost of creating a worker pool."""
+    calls = []
+    monkeypatch.setattr(
+        noema,
+        "fetch_changed_file_paths",
+        lambda repo, number: ["src/only.py"],
+    )
+    monkeypatch.setattr(
+        noema,
+        "fetch_head_file_content",
+        lambda repo, path, head_sha: calls.append((repo, path, head_sha))
+        or "print('only')\n",
+    )
+    monkeypatch.setattr(
+        noema.concurrent.futures,
+        "ThreadPoolExecutor",
+        lambda *args, **kwargs: pytest.fail("single-file context created a worker pool"),
+    )
 
-    # Track executor creation
-    original_executor = concurrent.futures.ThreadPoolExecutor
-    created = False
+    context = noema.changed_file_context("owner/repo", 7, "head")
 
-    class FakeExecutor(original_executor):
-        def __init__(self, *args, **kwargs):
-            nonlocal created
-            created = True
-            super().__init__(*args, **kwargs)
+    assert "### src/only.py" in context
+    assert "print('only')" in context
+    assert calls == [("owner/repo", "src/only.py", "head")]
 
-    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
 
-    result = noema.changed_file_context("owner/repo", 1, "sha")
+def test_changed_file_context_caps_workers_and_preserves_path_order(monkeypatch):
+    """Multiple files use a bounded pool whose map output keeps path order."""
+    paths = [f"src/file-{index}.py" for index in range(noema.MAX_CONTEXT_WORKERS + 2)]
+    executor_calls = []
+    original_executor = noema.concurrent.futures.ThreadPoolExecutor
 
-    assert "### single.txt" in result
-    assert "content" in result
-    assert not created, "ThreadPoolExecutor should not be created for a single file"
+    class RecordingExecutor:
+        def __init__(self, *, max_workers):
+            executor_calls.append(max_workers)
+            self._executor = original_executor(max_workers=max_workers)
+
+        def __enter__(self):
+            self._executor.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._executor.__exit__(*args)
+
+        def map(self, function, iterable):
+            return self._executor.map(function, iterable)
+
+    monkeypatch.setattr(
+        noema, "fetch_changed_file_paths", lambda repo, number: paths
+    )
+    monkeypatch.setattr(
+        noema,
+        "fetch_head_file_content",
+        lambda repo, path, head_sha: f"content for {path}",
+    )
+    monkeypatch.setattr(
+        noema.concurrent.futures, "ThreadPoolExecutor", RecordingExecutor
+    )
+
+    context = noema.changed_file_context("owner/repo", 7, "head")
+    heading_positions = [context.index(f"### {path}") for path in paths]
+
+    assert executor_calls == [noema.MAX_CONTEXT_WORKERS]
+    assert heading_positions == sorted(heading_positions)
