@@ -198,6 +198,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == 'ContextualWisdomLab/.github'" "strix PR-head lock override requires the central head repository"
 	assert_file_contains "$workflow_file" "github.event.pull_request.user.login == 'dependabot[bot]'" "strix PR-head lock override is limited to Dependabot"
 	assert_file_contains "$workflow_file" "startsWith(github.event.pull_request.head.ref, 'dependabot/pip/')" "strix PR-head lock override is limited to Dependabot pip branches"
+	assert_file_contains "$workflow_file" 'diff --name-only -z "$PR_BASE_SHA...$PR_HEAD_SHA"' "strix Dependabot lock validation uses merge-base PR diff semantics"
 	assert_file_contains "$workflow_file" '[[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' "strix PR-head lock override requires an exact commit SHA"
 	assert_file_contains "$workflow_file" 'PR_HEAD_SHA:requirements-strix-ci-hashes.txt' "strix workflow reads only the central hashed dependency lock from the exact PR head"
 	assert_file_contains "$workflow_file" '"${#changed_files[@]}" -ne 1' "strix Dependabot lock validation requires exactly one changed file"

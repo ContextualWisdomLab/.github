@@ -230,7 +230,10 @@ def test_strix_install_accepts_only_same_repo_exact_head_dependency_lock() -> No
     assert "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}" in materialize_step
     assert '[[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' in materialize_step
     assert '[[ "$PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' in materialize_step
-    assert 'git -C "$TRUSTED_WORKSPACE" diff --name-only -z' in materialize_step
+    assert (
+        'git -C "$TRUSTED_WORKSPACE" diff --name-only -z '
+        '"$PR_BASE_SHA...$PR_HEAD_SHA"' in materialize_step
+    )
     assert '"${#changed_files[@]}" -ne 1' in materialize_step
     assert '"${changed_files[0]}" != "requirements-strix-ci-hashes.txt"' in materialize_step
     assert '"$lock_mode" != "100644"' in materialize_step

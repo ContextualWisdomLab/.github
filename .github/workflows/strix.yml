@@ -422,7 +422,7 @@ jobs:
             exit 1
           fi
           mapfile -d '' -t changed_files < <(
-            git -C "$TRUSTED_WORKSPACE" diff --name-only -z "$PR_BASE_SHA" "$PR_HEAD_SHA"
+            git -C "$TRUSTED_WORKSPACE" diff --name-only -z "$PR_BASE_SHA...$PR_HEAD_SHA"
           )
           if [ "${#changed_files[@]}" -ne 1 ] || [ "${changed_files[0]}" != "requirements-strix-ci-hashes.txt" ]; then
             echo "::error::Dependabot Strix lock validation requires the hashed lock to be the only changed file."
