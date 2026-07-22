@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read live inherited organization ruleset and public scope
+      - name: Read live inherited organization ruleset and repository scope
         env:
           ORG_LOGIN: ContextualWisdomLab
           RULESET_ID: "18156473"
@@ -55,9 +55,9 @@ jobs:
             sed 's/^/    /' "$ruleset_error"
             exit 1
           fi
-          if ! gh api --paginate "orgs/${ORG_LOGIN}/repos?type=public&per_page=100" \
+          if ! gh api --paginate "orgs/${ORG_LOGIN}/repos?type=all&per_page=100" \
             | jq -s 'add | map(.name) | unique | sort' >"$repositories_json"; then
-            echo "::error::Ruleset audit could not enumerate public repositories for ${ORG_LOGIN}."
+            echo "::error::Ruleset audit could not enumerate organization repositories for ${ORG_LOGIN}."
             exit 1
           fi
 
