@@ -3,3 +3,12 @@ interrogate==1.7.0
 pytest==9.1.1
 pytest-cov==7.1.0
 uv==0.11.25
+
+# Trusted runtime set required to execute ContextualWisdomLab/saju-caldav tests
+# inside the networkless OpenCode coverage sandbox. Keep these exact pins aligned
+# with that repository's reviewed lockfile; PR-controlled manifests remain inert.
+bcrypt==5.0.0
+fastapi==0.139.2
+httpx==0.28.1
+icalendar==7.2.0
+korean-lunar-calendar==0.4.0
