@@ -44,41 +44,42 @@ def _redact_json(value: Any) -> Any:
     return value
 
 
-def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | None:
-    """Return a redacted key/value assignment parsed in linear time."""
+def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | int:
+    """Return a redacted assignment, or the next index to scan if no match."""
     cursor = start
     key_quote = ""
-    if cursor < len(text) and text[cursor] in "\"'":
+    length = len(text)
+    if cursor < length and text[cursor] in "\"'":
         key_quote = text[cursor]
         cursor += 1
     key_start = cursor
-    if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
-        return None
-    while cursor < len(text) and text[cursor] in KEY_CHARS:
+    if cursor >= length or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
+        return start + 1
+    while cursor < length and text[cursor] in KEY_CHARS:
         cursor += 1
     key = text[key_start:cursor]
     if key_quote:
-        if cursor >= len(text) or text[cursor] != key_quote:
-            return None
+        if cursor >= length or text[cursor] != key_quote:
+            return start + 1
         cursor += 1
     if not SENSITIVE_KEY_RE.search(key):
-        return None
-    while cursor < len(text) and text[cursor].isspace():
+        return cursor
+    while cursor < length and text[cursor].isspace():
         cursor += 1
-    if cursor >= len(text) or text[cursor] not in ":=":
-        return None
+    if cursor >= length or text[cursor] not in ":=":
+        return cursor
     cursor += 1
-    while cursor < len(text) and text[cursor].isspace():
+    while cursor < length and text[cursor].isspace():
         cursor += 1
-    if cursor >= len(text):
-        return None
+    if cursor >= length:
+        return cursor
 
     value_start = cursor
     if text[cursor] in "\"'":
         value_quote = text[cursor]
         cursor += 1
         escaped = False
-        while cursor < len(text):
+        while cursor < length:
             char = text[cursor]
             cursor += 1
             if escaped:
@@ -88,10 +89,10 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
             elif char == value_quote:
                 break
     else:
-        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
+        while cursor < length and not text[cursor].isspace() and text[cursor] not in ",}":
             cursor += 1
     if cursor == value_start:
-        return None
+        return cursor
     return text[start:value_start] + REDACTED, cursor
 
 
@@ -99,14 +100,21 @@ def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
     output: list[str] = []
     cursor = 0
-    while cursor < len(text):
-        match = _consume_sensitive_assignment(text, cursor)
-        if match is None:
-            output.append(text[cursor])
-            cursor += 1
+    last_append = 0
+    length = len(text)
+    while cursor < length:
+        result = _consume_sensitive_assignment(text, cursor)
+        if isinstance(result, int):
+            cursor = result
             continue
-        replacement, cursor = match
+        replacement, next_cursor = result
+        if cursor > last_append:
+            output.append(text[last_append:cursor])
         output.append(replacement)
+        cursor = next_cursor
+        last_append = cursor
+    if last_append < length:
+        output.append(text[last_append:])
     return "".join(output)
 
 

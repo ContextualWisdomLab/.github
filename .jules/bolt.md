@@ -43,3 +43,7 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+
+## 2024-05-18 - [Optimize redact_sensitive_log O(N^2) bottlenecks]
+**Learning:** `_consume_sensitive_assignment` inside `redact_sensitive_log.py` had a severe performance issue because when it checked for sensitive words, it skipped non-matching characters very slowly (only incrementing `cursor` by 1 on failure to find an exact start). Using standard logic to quickly skip sequences and avoid copying slices significantly improves parsing speed on large log texts.
+**Action:** Replace `_consume_sensitive_assignment` with a more efficient scanning implementation.
