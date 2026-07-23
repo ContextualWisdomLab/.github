@@ -61,6 +61,9 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
+    changed_files.chmod(0o600)
+    manifest.chmod(0o600)
+
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
