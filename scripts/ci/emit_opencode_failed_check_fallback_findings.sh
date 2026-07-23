@@ -962,7 +962,7 @@ emit_known_missing_string_finding \
 	"scripts/ci/test_strix_quick_gate.sh"
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model" \
+	"STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model" \
 	"Strix unsupported-model errors must name the allowed providers" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"

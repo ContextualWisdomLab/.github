@@ -47,3 +47,7 @@
 ## 2024-05-20 - Fast-path pre-filter for O(N) un-trusted log parsing
 **Learning:** The custom character-by-character parser in redact_sensitive_log.py safely avoids regex backtracking on untrusted logs, but blindly iterating through every log line is computationally wasteful for the vast majority of safe logs.
 **Action:** Always include a fast-path regex pre-filter (like `SENSITIVE_KEY_RE.search(text)`) before initiating manual O(N) string parsing loops to skip safe inputs entirely.
+
+## 2026-07-23 - GitHub Models Prefix Configuration parsing
+**Learning:** Adding new provider prefixes like `openai_direct` mapping to GitHub Models or OpenAI required careful expansion of multiple case statements (`is_github_models_api_compatible_model`, etc) because `strix_quick_gate.sh` parses error signals explicitly bound to certain provider prefix mappings.
+**Action:** When adding fallback aliases (like `openai_direct/*`) mapped to external or proxy APIs, remember to update `is_github_models_api_compatible_model` or similar verification filters in `strix_quick_gate.sh` so these new models correctly qualify as API compatible and properly route rate-limit / connection error signals.

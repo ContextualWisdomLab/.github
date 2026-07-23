@@ -3,4 +3,3 @@ google-cloud-aiplatform==1.133.0
 protobuf<7.0.0
 cryptography==49.0.0
 python-multipart==0.0.31
-pyasn1==0.6.4
