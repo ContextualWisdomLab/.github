@@ -100,7 +100,8 @@ jobs:
           }
           EOF
           set +e
-          opencode run "Reply with the single word OK and nothing else." \
+          timeout --kill-after=15s 180s \
+            opencode run "Reply with the single word OK and nothing else." \
             --pure \
             --model openrouter/openrouter/free --format json > out.json 2> err.log
           rc=$?
