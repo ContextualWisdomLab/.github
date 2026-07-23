@@ -2316,7 +2316,7 @@ def test_inspect_pr_dispatches_when_only_pr_event_opencode_run_is_active(monkeyp
     assert dispatched == ["OpenCode Review"]
 
 
-
+def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
     runs = [
         {
             "id": 9200,
