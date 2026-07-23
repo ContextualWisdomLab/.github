@@ -1,7 +1,10 @@
-name: OpenRouter Diagnostic
+﻿name: OpenRouter Diagnostic
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - openrouter-diag-branch
 
 permissions:
   contents: read
