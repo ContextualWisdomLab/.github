@@ -585,7 +585,7 @@ jobs:
           fi
           umask 077
           llm_api_key_file="$RUNNER_TEMP/llm_api_key.txt"
-          printf '%s' "$sanitized" > "$llm_api_key_file"
+          printf '%s' "$trimmed" > "$llm_api_key_file"
           echo "LLM_API_KEY_FILE=$llm_api_key_file" >> "$GITHUB_ENV"
 
       - name: Prepare OpenRouter API base
