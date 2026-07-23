@@ -9,7 +9,9 @@ import sys
 from typing import Any
 
 REDACTED = "[REDACTED]"
-KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+KEY_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
+)
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
@@ -20,8 +22,7 @@ JWT_RE = re.compile(
     r"[A-Za-z0-9_-]{3,}(?![A-Za-z0-9_-])"
 )
 BEARER_RE = re.compile(
-    r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)"
-    r"[^\s\"'\\]+",
+    r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)" r"[^\s\"'\\]+",
     re.IGNORECASE,
 )
 PROVIDER_TOKEN_RES = (
@@ -44,7 +45,7 @@ def _redact_json(value: Any) -> Any:
     return value
 
 
-def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | None:
+def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, int]:
     """Return a redacted key/value assignment parsed in linear time."""
     cursor = start
     key_quote = ""
@@ -53,25 +54,31 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
         cursor += 1
     key_start = cursor
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
-        return None
+        return None, start + 1
     while cursor < len(text) and text[cursor] in KEY_CHARS:
         cursor += 1
     key = text[key_start:cursor]
+
+    parsed_end = cursor
+    fail_ret = start + 1 if key_quote else parsed_end
+
     if key_quote:
         if cursor >= len(text) or text[cursor] != key_quote:
-            return None
+            return None, fail_ret
         cursor += 1
+
     if not SENSITIVE_KEY_RE.search(key):
-        return None
+        return None, fail_ret
+
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text) or text[cursor] not in ":=":
-        return None
+        return None, fail_ret
     cursor += 1
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text):
-        return None
+        return None, fail_ret
 
     value_start = cursor
     if text[cursor] in "\"'":
@@ -88,10 +95,14 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
             elif char == value_quote:
                 break
     else:
-        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
+        while (
+            cursor < len(text)
+            and not text[cursor].isspace()
+            and text[cursor] not in ",}"
+        ):
             cursor += 1
     if cursor == value_start:
-        return None
+        return None, fail_ret
     return text[start:value_start] + REDACTED, cursor
 
 
@@ -100,13 +111,13 @@ def _redact_assignments(text: str) -> str:
     output: list[str] = []
     cursor = 0
     while cursor < len(text):
-        match = _consume_sensitive_assignment(text, cursor)
-        if match is None:
-            output.append(text[cursor])
-            cursor += 1
-            continue
-        replacement, cursor = match
-        output.append(replacement)
+        replacement, next_cursor = _consume_sensitive_assignment(text, cursor)
+        if replacement is None:
+            output.append(text[cursor:next_cursor])
+            cursor = next_cursor
+        else:
+            output.append(replacement)
+            cursor = next_cursor
     return "".join(output)
 
 
