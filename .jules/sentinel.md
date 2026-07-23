@@ -35,3 +35,8 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+
+## 2026-07-23 - OSV-Scan Dependency Hash Update
+**Vulnerability:** Found `pyasn1` version 0.6.3 vulnerable to denial of service attacks (PYSEC-2026-3455, PYSEC-2026-3456, PYSEC-2026-3457) in `requirements-strix-ci-hashes.txt`.
+**Learning:** Hard-coded versions and dependency hashes in `requirements-strix-ci-hashes.txt` (and similar lockfiles) prevent automatic updates. When a new vulnerability arises, it breaks CI pipelines (like pip-audit or OSV scanners) failing with an exit code 1.
+**Prevention:** Monitor dependency audit pipeline failures and manually update both the version number (e.g. from `0.6.3` to `0.6.4`) AND the sha256 hashes generated from the official PyPI wheels and tarballs in the CI environment.
