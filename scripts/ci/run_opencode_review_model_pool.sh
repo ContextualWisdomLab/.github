@@ -311,6 +311,13 @@ is_direct_openai_candidate() {
 	esac
 }
 
+is_openrouter_candidate() {
+	case "$1" in
+	openrouter/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 is_low_sensitivity_candidate() {
 	case "$1" in
 	openai/*-mini | openai/*-nano | \
@@ -332,6 +339,10 @@ should_skip_model_candidate() {
 	fi
 	if is_direct_openai_candidate "$model_candidate" && [ -z "${OPENAI_API_KEY:-}" ]; then
 		printf 'Skipping OpenCode %s because OPENAI_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+		return 0
+	fi
+	if is_openrouter_candidate "$model_candidate" && [ -z "${OPENROUTER_API_KEY:-}" ]; then
+		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
 	return 1
