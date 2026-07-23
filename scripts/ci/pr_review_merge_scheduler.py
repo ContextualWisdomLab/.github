@@ -1920,6 +1920,12 @@ def active_review_run_refs(
                 continue
             if run_repo != target_repo:
                 continue
+            # pull_request and pull_request_target runs always skip the review job
+            # via the ``github.event_name == 'repository_dispatch'`` gate in the
+            # review workflow.  Treat them as non-reviews so the scheduler is not
+            # stalled waiting for a run that will never produce review evidence.
+            if run_data.get("event") in {"pull_request", "pull_request_target"}:
+                continue
             run_head = str(run_data.get("head_sha") or "").lower()
             pull_requests = run_data.get("pull_requests") or []
             if run_head == head:
@@ -2559,7 +2565,17 @@ def inspect_pr(
 
     opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
     if opencode_state == "running":
-        return decide("wait", "OpenCode review is already in progress")
+        # A pull_request_target run of the OpenCode workflow always skips the
+        # real review job via the ``github.event_name == 'repository_dispatch'``
+        # gate.  Verify that an actual repository_dispatch run is active before
+        # waiting; if only PR-event runs exist the scheduler would stall
+        # indefinitely because no workflow_run retry fires for required
+        # workflows.  When no dispatch run is found, override the state to
+        # absent so the review is dispatched immediately.
+        current_run_refs, _ = active_opencode_run_refs(repo, workflow, pr)
+        if current_run_refs:
+            return decide("wait", "OpenCode review is already in progress")
+        opencode_state = "absent"
 
     if (
         os.environ.get("GITHUB_EVENT_NAME") == "workflow_run"

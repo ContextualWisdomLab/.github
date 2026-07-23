@@ -2232,7 +2232,91 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
     assert sched.force_cancel_workflow_runs("owner/repo", []) == {}
 
 
-def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
+def test_active_run_refs_excludes_pull_request_target_runs_in_target_repo(monkeypatch):
+    """pull_request_target runs in the target repo skip the review job and must not be treated as active reviews."""
+    head_sha = "a" * 40
+    target_runs = [
+        {
+            "id": 9500,
+            "name": "Required OpenCode Review",
+            "event": "pull_request_target",
+            "head_sha": head_sha,
+            "pull_requests": [{"number": 1}],
+        },
+        {
+            "id": 9501,
+            "name": "Required OpenCode Review",
+            "event": "pull_request",
+            "head_sha": head_sha,
+            "pull_requests": [{"number": 1}],
+        },
+    ]
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        return target_runs if repo == "owner/repo" else []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "owner/repo")
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "Required OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+
+
+def test_inspect_pr_dispatches_when_only_pr_event_opencode_run_is_active(monkeypatch):
+    """Scheduler dispatches a review when the only active OpenCode run is a pull_request_target run.
+
+    pull_request_target runs always skip the review job via the
+    ``github.event_name == 'repository_dispatch'`` gate in the OpenCode workflow.
+    The scheduler must not wait for such a run and must dispatch a real review instead.
+    """
+    head_sha = "a" * 40
+    pt_run = {
+        "id": 9999,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [pt_run] if repo == "owner/repo" else [],
+    )
+    # No cross-repo dispatch complexity: dispatch_repo == target_repo.
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "owner/repo")
+
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(workflow) or "dispatched",
+    )
+
+    # PR has a running OpenCode check from the concurrent pull_request_target run
+    # plus completed Strix evidence (so OpenCode dispatch is the next step).
+    running_pr = make_pr(
+        headRefOid=head_sha,
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(),
+                    strix_check(),
+                ]
+            }
+        },
+    )
+    result = inspect(running_pr)
+    assert result.action == "review_dispatch"
+    assert "same-head OpenCode dispatched" in result.reason
+    assert dispatched == ["OpenCode Review"]
+
+
+
     runs = [
         {
             "id": 9200,
@@ -3915,6 +3999,12 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert external_blocked.action == "wait"
     assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in external_blocked.reason
 
+    # An active repository_dispatch run is present: scheduler waits.
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda repo, workflow, pr: ([("owner/repo", "1")], []),
+    )
     running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert inspect(running).reason == "OpenCode review is already in progress"
 
