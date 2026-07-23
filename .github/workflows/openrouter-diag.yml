@@ -99,15 +99,22 @@ jobs:
             }
           }
           EOF
-          set +e
-          timeout --kill-after=15s 180s \
-            opencode run "Reply with the single word OK and nothing else." \
-            --pure \
-            --model openrouter/openrouter/free --format json > out.json 2> err.log
-          rc=$?
-          set -e
-          echo "opencode exit code: $rc"
-          echo "--- stdout (first 8000 bytes) ---"
-          head -c 8000 out.json; echo
-          echo "--- stderr (first 6000 bytes) ---"
-          head -c 6000 err.log; echo
+          run_variant() {
+            local label="$1"; shift
+            echo "=== variant: $label ==="
+            set +e
+            timeout --kill-after=15s 120s \
+              opencode run "Reply with the single word OK and nothing else." \
+              --model openrouter/openrouter/free "$@" > out.json 2> err.log
+            local rc=$?
+            set -e
+            echo "exit code: $rc"
+            echo "--- stdout (first 3000 bytes) ---"
+            head -c 3000 out.json; echo
+            echo "--- stderr (first 2000 bytes) ---"
+            head -c 2000 err.log; echo
+          }
+          run_variant "plain" 
+          run_variant "format-json" --format json
+          run_variant "pure" --pure
+          run_variant "pure-format-json" --pure --format json
