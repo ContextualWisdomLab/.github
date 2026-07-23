@@ -101,11 +101,12 @@ jobs:
           EOF
           set +e
           opencode run "Reply with the single word OK and nothing else." \
-            --model openrouter/openrouter/free --print-logs > out.json 2> err.log
+            --pure \
+            --model openrouter/openrouter/free --format json > out.json 2> err.log
           rc=$?
           set -e
           echo "opencode exit code: $rc"
-          echo "--- stdout (first 4000 bytes) ---"
-          head -c 4000 out.json; echo
+          echo "--- stdout (first 8000 bytes) ---"
+          head -c 8000 out.json; echo
           echo "--- stderr (first 6000 bytes) ---"
           head -c 6000 err.log; echo
