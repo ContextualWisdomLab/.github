@@ -1,0 +1,43 @@
+name: OpenRouter Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe OpenRouter free model endpoint
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo '::error::OPENROUTER_API_KEY secret is empty or not visible to this workflow.'
+            exit 1
+          fi
+          key_len="$(printf '%s' "$OPENROUTER_API_KEY" | wc -c | tr -d ' ')"
+          echo "Key length: ${key_len} characters."
+
+          body='{"model":"openrouter/free","messages":[{"role":"user","content":"Say OK"}],"max_tokens":10}'
+          response_file="$(mktemp)"
+          status="$(curl -sS -o "$response_file" -w '%{http_code}' \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -d "$body" \
+            https://openrouter.ai/api/v1/chat/completions)"
+          echo "HTTP status: $status"
+          echo "Response (first 1500 bytes):"
+          head -c 1500 "$response_file"
+          echo
+
+          echo "--- key info endpoint ---"
+          key_status="$(curl -sS -o "$response_file" -w '%{http_code}' \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/auth/key)"
+          echo "HTTP status: $key_status"
+          head -c 1500 "$response_file"
+          echo
