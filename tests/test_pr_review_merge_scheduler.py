@@ -2237,6 +2237,40 @@ def test_active_review_run_refs_match_dynamic_run_names_from_actions_api(monkeyp
     current_run = {
         "id": 9500,
         "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "event": "repository_dispatch",
+        "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "head_sha": "default-branch-sha",
+        "pull_requests": [],
+    }
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        if repo == "ContextualWisdomLab/.github":
+            return [current_run]
+        return []
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        fake_active_runs,
+    )
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([("ContextualWisdomLab/.github", "9500")], [])
+
+
+def test_active_review_run_refs_ignore_dynamic_titles_from_pull_request_target(monkeypatch):
+    head_sha = "a" * 40
+    current_run = {
+        "id": 9501,
+        "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
         "event": "pull_request_target",
         "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
         "head_sha": head_sha,
@@ -2252,7 +2286,7 @@ def test_active_review_run_refs_match_dynamic_run_names_from_actions_api(monkeyp
         "owner/repo",
         "OpenCode Review",
         make_pr(headRefOid=head_sha),
-    ) == ([("owner/repo", "9500")], [])
+    ) == ([], [])
 
 
 def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
