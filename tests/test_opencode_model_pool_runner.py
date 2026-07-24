@@ -576,6 +576,32 @@ def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -
     assert "logged a fatal provider error while still running" not in result.stdout
 
 
+def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) -> None:
+    """A delisted pinned OpenRouter model dies seconds after a model-unavailable error."""
+    start = time.monotonic()
+    result = run_failed_model(
+        tmp_path,
+        json_line=(
+            '{"type":"error","error":{"name":"ProviderModelNotFoundError","data":'
+            '{"message":"No endpoints found for nvidia/nemotron-3-ultra-550b-a55b:free."}}}'
+        ),
+        model_candidates="openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        extra_env={
+            "OPENROUTER_API_KEY": "fake-openrouter-key",
+            "FAKE_OPENCODE_HANG_SECONDS": "120",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "120",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "240",
+        },
+    )
+    elapsed = time.monotonic() - start
+
+    assert result.returncode == 1
+    assert "logged a fatal provider error while still running" in result.stdout
+    assert "skipping remaining attempts for this model" in result.stdout
+    assert "class=model-unavailable" in result.stdout
+    assert elapsed < 25
+
+
 def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> None:
     """Small PRs fail through hung/unavailable providers quickly with a visible budget reason."""
     result = run_failed_model(

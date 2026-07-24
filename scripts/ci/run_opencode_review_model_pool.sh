@@ -159,7 +159,9 @@ write_prompt() {
 	else
 		intro="Review PR #\${PR_NUMBER} in \${OPENCODE_SOURCE_WORKDIR} with \${model_candidate}."
 	fi
-	contract_file="$OPENCODE_REVIEW_WORKDIR/opencode-review-contract-${model_candidate//\//-}.md"
+	# Colon-safe: OpenRouter ":free" candidates would otherwise produce file
+	# names that Windows and actions/upload-artifact reject.
+	contract_file="$OPENCODE_REVIEW_WORKDIR/opencode-review-contract-${model_candidate//[\/:]/-}.md"
 	evidence_excerpt_file="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
 	evidence_file_in_workdir="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
 	cp "$GITHUB_WORKSPACE/scripts/ci/opencode_review_prompt_template.md" "$contract_file"
@@ -243,7 +245,7 @@ is_fatal_provider_failure() {
 		return 0
 	fi
 	[ -s "$opencode_json_file" ] || return 1
-	grep -Eiq 'budget limit|insufficient_quota' "$opencode_json_file"
+	grep -Eiq 'budget limit|insufficient_quota|model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file"
 }
 
 has_fatal_provider_error_event() {
@@ -253,8 +255,12 @@ has_fatal_provider_error_event() {
 	# Only structured "type":"error" events count while the process is still
 	# running: model prose or tool output quoting these signatures is
 	# JSON-escaped inside event strings, so a healthy streaming run is never
-	# killed for merely discussing context windows or quota errors.
-	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
+	# killed for merely discussing context windows, quota errors, or missing
+	# models. Model-unavailable signatures (OpenRouter "No endpoints found" /
+	# "not a valid model ID", OpenAI-style model_not_found) matter because a
+	# delisted pinned free model would otherwise hang and burn the whole
+	# candidate run budget.
+	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota|model_not_found|model not found|modelnotfounderror|not a valid model|no endpoints/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
 }
 
 emit_sanitized_opencode_failure_detail() {
@@ -276,6 +282,8 @@ emit_sanitized_opencode_failure_detail() {
 		failure_class="context-window"
 	elif grep -Eiq 'budget limit|insufficient_quota|quota exceeded' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="quota-or-budget"
+	elif grep -Eiq 'model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="model-unavailable"
 	elif grep -Eiq 'rate.?limit|too many requests|(^|[^0-9])429([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="rate-limit"
 	elif grep -Eiq 'permission denied|authentication|authorization|(^|[^0-9])(401|403)([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
@@ -427,7 +435,7 @@ run_one_model_attempt() {
 			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
 		fi
 		if is_fatal_provider_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, quota, or model unavailable); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
@@ -438,7 +446,7 @@ run_one_model_attempt() {
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "sessionless-json" "$opencode_json_file"
 		if is_fatal_provider_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, quota, or model unavailable); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
@@ -533,7 +541,7 @@ main() {
 				continue
 			fi
 			assert_reasoning_effort_for_candidate "$model_candidate"
-			safe_model="${model_candidate//\//-}"
+			safe_model="${model_candidate//[\/:]/-}"
 			prompt_file="${RUNNER_TEMP}/opencode-review-${safe_model}-prompt.md"
 			candidate_output_file="${RUNNER_TEMP}/opencode-review-${safe_model}.md"
 			opencode_json_file="${candidate_output_file}.jsonl"
