@@ -245,7 +245,7 @@ is_fatal_provider_failure() {
 		return 0
 	fi
 	[ -s "$opencode_json_file" ] || return 1
-	grep -Eiq 'budget limit|insufficient_quota|model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file"
+	grep -Eiq 'budget limit|insufficient_quota|insufficient credits|payment required|model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file"
 }
 
 has_fatal_provider_error_event() {
@@ -260,7 +260,24 @@ has_fatal_provider_error_event() {
 	# "not a valid model ID", OpenAI-style model_not_found) matter because a
 	# delisted pinned free model would otherwise hang and burn the whole
 	# candidate run budget.
-	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota|model_not_found|model not found|modelnotfounderror|not a valid model|no endpoints/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
+	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota|insufficient credits|payment required|model_not_found|model not found|modelnotfounderror|not a valid model|no endpoints/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
+}
+
+is_credit_exhausted_failure() {
+	local opencode_json_file="$1"
+	local opencode_stderr_file="$2"
+
+	# Paid-provider credit exhaustion (OpenRouter HTTP 402 "Insufficient
+	# credits") can never recover within one run: every retry is a wasted
+	# paid request. Match structured "type":"error" events in the JSON
+	# stream (same trust model as has_fatal_provider_error_event) plus
+	# CLI diagnostics on stderr, which never contain model prose.
+	if [ -s "$opencode_json_file" ] &&
+		awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /insufficient credits|payment required|(^|[^0-9])402([^0-9]|$)/ { found = 1; exit } END { exit !found }' "$opencode_json_file"; then
+		return 0
+	fi
+	[ -s "$opencode_stderr_file" ] || return 1
+	grep -Eiq 'insufficient credits|payment required|"code"[[:space:]]*:[[:space:]]*402' "$opencode_stderr_file"
 }
 
 emit_sanitized_opencode_failure_detail() {
@@ -280,6 +297,8 @@ emit_sanitized_opencode_failure_detail() {
 	failure_class="unclassified"
 	if grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="context-window"
+	elif grep -Eiq 'insufficient credits|payment required|"code"[[:space:]]*:[[:space:]]*402' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
+		failure_class="credit-exhausted"
 	elif grep -Eiq 'budget limit|insufficient_quota|quota exceeded' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="quota-or-budget"
 	elif grep -Eiq 'model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
@@ -467,7 +486,7 @@ run_one_model_attempt() {
 	if ! normalize_opencode_output "$candidate_output_file"; then
 		printf 'OpenCode %s attempt %s/%s output did not include a valid control conclusion.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "invalid-control-output" "$candidate_output_file"
-		return 1
+		return 3
 	fi
 	return 0
 }
@@ -477,7 +496,18 @@ main() {
 	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
 	local uncapped_run_timeout
 	local changed_file_count small_file_threshold medium_file_threshold
+	local invalid_control_cap max_total_attempts total_attempts alive_candidates
+	local -A dead_candidate_reasons invalid_control_counts
 	local -a model_candidates
+
+	# Spend guards, not timing: a paid candidate that keeps producing
+	# control-rejected output or has exhausted provider credits must stop
+	# consuming paid requests instead of cycling until the retry budget
+	# elapses (run 30120972549 burned the org OpenRouter credit in ~102
+	# cycles of re-sent full prompts). Timeouts/deadlines are untouched.
+	invalid_control_cap="$(env_integer_or_default OPENCODE_INVALID_CONTROL_OUTPUT_CAP 3)"
+	max_total_attempts="$(env_integer_or_default OPENCODE_POOL_MAX_TOTAL_ATTEMPTS 30)"
+	total_attempts=0
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
 	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
@@ -537,6 +567,11 @@ main() {
 	while :; do
 		printf 'Starting OpenCode model pool cycle %s.\n' "$cycle"
 		for model_candidate in "${model_candidates[@]}"; do
+			if [ -n "${dead_candidate_reasons[$model_candidate]:-}" ]; then
+				printf 'Skipping OpenCode %s for the rest of this run: %s.\n' \
+					"$model_candidate" "${dead_candidate_reasons[$model_candidate]}"
+				continue
+			fi
 			if should_skip_model_candidate "$model_candidate"; then
 				continue
 			fi
@@ -556,6 +591,14 @@ main() {
 					fi
 					exit 1
 				fi
+				if [ "$max_total_attempts" -gt 0 ] && [ "$total_attempts" -ge "$max_total_attempts" ]; then
+					printf 'OpenCode model pool reached the per-run provider attempt ceiling of %s attempts; ending the pool to bound provider spend. Set OPENCODE_POOL_MAX_TOTAL_ATTEMPTS=0 to disable.\n' "$max_total_attempts"
+					if finish_pool_without_model; then
+						exit 0
+					fi
+					exit 1
+				fi
+				total_attempts=$((total_attempts + 1))
 				remaining="$original_run_timeout"
 				if [ "$deadline" -gt 0 ]; then
 					remaining=$((deadline - now))
@@ -585,6 +628,20 @@ main() {
 				else
 					run_status=$?
 				fi
+				if [ "$run_status" -ne 3 ] && is_credit_exhausted_failure "$opencode_json_file" "${opencode_json_file}.stderr"; then
+					dead_candidate_reasons[$model_candidate]="provider credits exhausted (HTTP 402 / payment required)"
+					printf 'OpenCode %s provider credits are exhausted; marking this candidate failed for the rest of the run so retries cannot accrue further spend.\n' "$model_candidate"
+					break
+				fi
+				if [ "$run_status" -eq 3 ]; then
+					invalid_control_counts[$model_candidate]=$((${invalid_control_counts[$model_candidate]:-0} + 1))
+					if [ "$invalid_control_cap" -gt 0 ] && [ "${invalid_control_counts[$model_candidate]}" -ge "$invalid_control_cap" ]; then
+						dead_candidate_reasons[$model_candidate]="produced ${invalid_control_counts[$model_candidate]} control-rejected outputs"
+						printf 'OpenCode %s produced %s control-rejected outputs; marking this candidate failed for the rest of the run so paid retries cannot loop on rejected output. Set OPENCODE_INVALID_CONTROL_OUTPUT_CAP=0 to disable.\n' \
+							"$model_candidate" "${invalid_control_counts[$model_candidate]}"
+						break
+					fi
+				fi
 				if [ "$run_status" -eq 2 ]; then
 					break
 				fi
@@ -600,6 +657,20 @@ main() {
 				fi
 			done
 		done
+
+		alive_candidates=0
+		for model_candidate in "${model_candidates[@]}"; do
+			if [ -z "${dead_candidate_reasons[$model_candidate]:-}" ]; then
+				alive_candidates=$((alive_candidates + 1))
+			fi
+		done
+		if [ "$alive_candidates" -eq 0 ]; then
+			printf 'Every OpenCode model candidate is marked failed for this run; ending the pool without further provider spend.\n'
+			if finish_pool_without_model; then
+				exit 0
+			fi
+			exit 1
+		fi
 
 		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the retry budget/GitHub Actions job timeout is reached.\n'
 		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
