@@ -2289,6 +2289,36 @@ def test_active_review_run_refs_ignore_dynamic_titles_from_pull_request_target(m
     ) == ([], [])
 
 
+def test_active_review_run_refs_ignore_target_repo_dispatch_when_central_repo_is_configured(monkeypatch):
+    head_sha = "a" * 40
+    target_repo_dispatch_run = {
+        "id": 9502,
+        "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "event": "repository_dispatch",
+        "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "head_sha": "target-default-branch-sha",
+        "pull_requests": [],
+    }
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        if repo == "owner/repo":
+            return [target_repo_dispatch_run]
+        return []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+
+
 def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
     runs = [
         {

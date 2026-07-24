@@ -1907,7 +1907,11 @@ def active_review_run_refs(
             run_ref = (run_repo, str(run_id))
             run_event = str(run_data.get("event") or "").lower()
             display_title = str(run_data.get("display_title") or "")
-            if run_event == "repository_dispatch" and display_title.startswith(dispatch_title_prefix):
+            if (
+                run_repo == dispatch_repo
+                and run_event == "repository_dispatch"
+                and display_title.startswith(dispatch_title_prefix)
+            ):
                 dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
