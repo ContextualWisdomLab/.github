@@ -1901,22 +1901,19 @@ def active_review_run_refs(
 
     for run_repo in repositories:
         for run_data in active_workflow_runs(run_repo, statuses):
-            run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
-                continue
             run_id = run_data.get("id")
             if not run_id:
                 continue
             run_ref = (run_repo, str(run_id))
             display_title = str(run_data.get("display_title") or "")
-            if (
-                run_data.get("event") == "repository_dispatch"
-                and display_title.startswith(dispatch_title_prefix)
-            ):
+            if display_title.startswith(dispatch_title_prefix):
                 dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
+                continue
+            run_name = str(run_data.get("name") or "")
+            if run_name != workflow and run_name not in workflow_aliases:
                 continue
             if run_repo != target_repo:
                 continue

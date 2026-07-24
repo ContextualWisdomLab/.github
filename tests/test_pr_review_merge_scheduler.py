@@ -2078,7 +2078,7 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
     head_sha = "a" * 40
     current_dispatch = {
         "id": 9100,
-        "name": "Required OpenCode Review",
+        "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
         "event": "repository_dispatch",
         "head_sha": "default-branch-sha",
         "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
@@ -2132,7 +2132,7 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
     central_runs = [
         {
             "id": 9300,
-            "name": "Strix Security Scan",
+            "name": f"Strix Security Scan owner/repo#1@{stale_sha}",
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
             "display_title": f"Strix Security Scan owner/repo#1@{stale_sha}",
@@ -2140,7 +2140,7 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
         },
         {
             "id": 9301,
-            "name": "Strix Security Scan",
+            "name": f"Strix Security Scan owner/repo#1@{head_sha}",
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
             "display_title": f"Strix Security Scan owner/repo#1@{head_sha}",
@@ -2200,7 +2200,7 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
     central_runs = [
         {
             "id": 9400,
-            "name": "Required OpenCode Review",
+            "name": "Required OpenCode Review owner/repo#1@not-a-sha",
             "event": "repository_dispatch",
             "display_title": "Required OpenCode Review owner/repo#1@not-a-sha",
             "pull_requests": [],
@@ -2230,6 +2230,29 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
         make_pr(headRefOid=head_sha),
     ) == ([], [])
     assert sched.force_cancel_workflow_runs("owner/repo", []) == {}
+
+
+def test_active_review_run_refs_match_dynamic_run_names_from_actions_api(monkeypatch):
+    head_sha = "a" * 40
+    current_run = {
+        "id": 9500,
+        "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "event": "pull_request_target",
+        "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [current_run],
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([("owner/repo", "9500")], [])
 
 
 def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
