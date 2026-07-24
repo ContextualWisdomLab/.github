@@ -39,29 +39,36 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
 
 
 def test_merge_scheduler_pull_request_target_includes_retarget_and_queue_events() -> None:
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    trigger_block = workflow.split("pull_request_target:", 1)[1].split(
-        "pull_request_review:",
-        1,
-    )[0]
-    types_line = next(
-        line.strip() for line in trigger_block.splitlines() if line.strip().startswith("types:")
-    )
-    listed = types_line.split("[", 1)[1].split("]", 1)[0]
-    trigger_types = {item.strip() for item in listed.split(",") if item.strip()}
+    import yaml  # noqa: PLC0415 — stdlib-like import in test; yaml is always available in CI
 
-    assert trigger_types == {
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
+    data = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    # PyYAML (YAML 1.1) parses bare `on` as boolean True, so check both spellings.
+    on_section = data.get(True) or data.get("on") or {}
+    trigger_types = set(on_section.get("pull_request_target", {}).get("types", []))
+
+    # Stacked-PR retarget and auto-merge transitions that must fire the scheduler.
+    # `enqueued`/`dequeued` are NOT valid pull_request_target activity types —
+    # merge-queue events use the separate `merge_group` event instead.
+    required = {
         "opened",
         "synchronize",
         "reopened",
-        "edited",
+        "edited",           # retarget: base branch change fires this
         "ready_for_review",
-        "enqueued",
-        "dequeued",
         "auto_merge_enabled",
         "auto_merge_disabled",
         "closed",
     }
+    assert required.issubset(trigger_types), (
+        f"Missing pull_request_target trigger types: {required - trigger_types}"
+    )
+    assert "enqueued" not in trigger_types, (
+        "`enqueued` is not a valid pull_request_target activity type"
+    )
+    assert "dequeued" not in trigger_types, (
+        "`dequeued` is not a valid pull_request_target activity type"
+    )
 
 
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
