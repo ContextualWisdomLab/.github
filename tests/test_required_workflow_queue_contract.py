@@ -39,17 +39,19 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
 
 
 def test_merge_scheduler_pull_request_target_includes_retarget_and_queue_events() -> None:
-    import yaml  # noqa: PLC0415 — stdlib-like import in test; yaml is always available in CI
+    import re  # noqa: PLC0415
 
-    workflow_path = REPO_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
-    data = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
-    # PyYAML (YAML 1.1) parses bare `on` as boolean True, so check both spellings.
-    on_section = data.get(True) or data.get("on") or {}
-    trigger_types = set(on_section.get("pull_request_target", {}).get("types", []))
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    # Match the inline types list under pull_request_target (DOTALL to skip comment lines).
+    m = re.search(
+        r"pull_request_target:.*?types:\s*\[([^\]]+)\]",
+        workflow,
+        re.DOTALL,
+    )
+    assert m is not None, "pull_request_target.types list not found in scheduler workflow"
+    trigger_types = {t.strip() for t in m.group(1).split(",") if t.strip()}
 
     # Stacked-PR retarget and auto-merge transitions that must fire the scheduler.
-    # `enqueued`/`dequeued` are NOT valid pull_request_target activity types —
-    # merge-queue events use the separate `merge_group` event instead.
     required = {
         "opened",
         "synchronize",
@@ -63,6 +65,7 @@ def test_merge_scheduler_pull_request_target_includes_retarget_and_queue_events(
     assert required.issubset(trigger_types), (
         f"Missing pull_request_target trigger types: {required - trigger_types}"
     )
+    # enqueued/dequeued are not valid pull_request_target activity types.
     assert "enqueued" not in trigger_types, (
         "`enqueued` is not a valid pull_request_target activity type"
     )

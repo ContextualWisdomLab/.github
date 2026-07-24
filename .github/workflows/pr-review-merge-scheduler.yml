@@ -6,8 +6,7 @@ on:
   pull_request_target:
     # Include retarget/auto-merge state changes so stacked PR chains are
     # re-evaluated immediately when merge readiness shifts without a new head push.
-    # Note: `enqueued`/`dequeued` are not valid pull_request_target activity types;
-    # merge-queue transitions fire the separate `merge_group` event.
+    # `enqueued` and `dequeued` are not valid pull_request_target activity types.
     types: [opened, synchronize, reopened, edited, ready_for_review, auto_merge_enabled, auto_merge_disabled, closed]
   pull_request_review:
     types: [submitted, dismissed]
