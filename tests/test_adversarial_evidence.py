@@ -10,6 +10,13 @@ def test_rejects_circular_adversarial_evidence():
     )
 
 
+def test_rejects_negated_execution_evidence():
+    assert "explicitly denies" in evidence.adversarial_evidence_rejection_reason(
+        "No test was run. .github/workflows/review.yml passed.",
+        ".github/workflows/review.yml",
+    )
+
+
 def test_accepts_independent_proof_anchor_and_rejects_path_only():
     assert (
         evidence.adversarial_evidence_rejection_reason(
@@ -84,6 +91,40 @@ def test_requires_the_exact_probe_path_and_line_when_line_is_supplied():
         ".github/workflows/review.yml",
         42,
     )
+
+
+def test_accepts_natural_english_line_of_path_citation():
+    """'line N of path' and 'line N in path' are valid citation formats."""
+    # "line N of path" form
+    assert (
+        evidence.adversarial_evidence_rejection_reason(
+            f"Source trace at line 42 of .github/workflows/review.yml confirmed the branch was rejected. {SOURCE_RECEIPT}",
+            ".github/workflows/review.yml",
+            42,
+        )
+        is None
+    ), "should accept 'line N of path' citation"
+    # "line N in path" form
+    assert (
+        evidence.adversarial_evidence_rejection_reason(
+            f"Checked line 42 in .github/workflows/review.yml and observed it was rejected. {SOURCE_RECEIPT}",
+            ".github/workflows/review.yml",
+            42,
+        )
+        is None
+    ), "should accept 'line N in path' citation"
+    # wrong line number still rejected
+    assert "must cite" in evidence.adversarial_evidence_rejection_reason(
+        f"Line 99 of .github/workflows/review.yml confirmed. {SOURCE_RECEIPT}",
+        ".github/workflows/review.yml",
+        42,
+    ), "wrong line number must still be rejected"
+    # prefix boundary still enforced
+    assert "must cite" in evidence.adversarial_evidence_rejection_reason(
+        f"line 42 of prefix.github/workflows/review.yml confirmed. {SOURCE_RECEIPT}",
+        ".github/workflows/review.yml",
+        42,
+    ), "leading path boundary must still be enforced"
 
 
 def test_path_only_citation_rejects_longer_path_substrings():
