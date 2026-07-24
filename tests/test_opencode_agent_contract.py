@@ -108,8 +108,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidate_pairs == [
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
-        ["openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"],
-        ["openrouter", "poolside/laguna-m.1:free"],
+        ["openrouter", "deepseek/deepseek-v3.2"],
+        ["openrouter", "qwen/qwen3-coder"],
         ["github-models", "openai/gpt-4.1"],
         ["github-models", "openai/gpt-5"],
         ["github-models", "openai/gpt-5-chat"],
@@ -119,8 +119,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert openrouter_models == [
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "poolside/laguna-m.1:free",
+        "deepseek/deepseek-v3.2",
+        "qwen/qwen3-coder",
     ]
     assert set(github_candidate_models).issubset(set(github_models))
     assert github_candidate_models == [
@@ -1103,8 +1103,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5.6-luna "
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free "
-        "openrouter/poolside/laguna-m.1:free "
+        "openrouter/deepseek/deepseek-v3.2 "
+        "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
@@ -1228,8 +1228,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
         "openai/gpt-5.6-luna "
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free "
-        "openrouter/poolside/laguna-m.1:free "
+        "openrouter/deepseek/deepseek-v3.2 "
+        "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
         "github-models/openai/gpt-5-chat "
