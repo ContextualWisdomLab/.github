@@ -4,7 +4,9 @@ on:
   push:
     branches: [main, develop, master]
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, auto_merge_enabled, closed]
+    # Include retarget/queue/auto-merge state changes so stacked PR chains are
+    # re-evaluated immediately when merge readiness shifts without a new head push.
+    types: [opened, synchronize, reopened, edited, ready_for_review, enqueued, dequeued, auto_merge_enabled, auto_merge_disabled, closed]
   pull_request_review:
     types: [submitted, dismissed]
   workflow_run:
