@@ -113,6 +113,15 @@ def test_accepts_natural_english_line_of_path_citation():
         )
         is None
     ), "should accept 'line N in path' citation"
+    # sentence punctuation after path should still be accepted
+    assert (
+        evidence.adversarial_evidence_rejection_reason(
+            f"Checked line 42 in .github/workflows/review.yml. observed it was rejected. {SOURCE_RECEIPT}",
+            ".github/workflows/review.yml",
+            42,
+        )
+        is None
+    ), "should accept trailing sentence punctuation after path"
     # wrong line number still rejected
     assert "must cite" in evidence.adversarial_evidence_rejection_reason(
         f"Line 99 of .github/workflows/review.yml confirmed. {SOURCE_RECEIPT}",
@@ -125,6 +134,12 @@ def test_accepts_natural_english_line_of_path_citation():
         ".github/workflows/review.yml",
         42,
     ), "leading path boundary must still be enforced"
+    # longer suffix paths remain invalid
+    assert "must cite" in evidence.adversarial_evidence_rejection_reason(
+        f"line 42 in .github/workflows/review.yml.backup confirmed. {SOURCE_RECEIPT}",
+        ".github/workflows/review.yml",
+        42,
+    ), "path suffix continuation must still be rejected"
 
 
 def test_path_only_citation_rejects_longer_path_substrings():

@@ -38,7 +38,7 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
-def test_merge_scheduler_pull_request_target_includes_retarget_and_queue_events() -> None:
+def test_merge_scheduler_pull_request_target_includes_retarget_and_automerge_events() -> None:
     import re  # noqa: PLC0415
 
     workflow = workflow_text("pr-review-merge-scheduler.yml")

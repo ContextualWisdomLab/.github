@@ -60,12 +60,14 @@ def adversarial_evidence_rejection_reason(
         escaped_line = re.escape(str(line))
         # Accept "path:N", "path#LN", "path line N", "path, line N" (path-first),
         # or "line N of path" / "line N in path" (natural English phrasing).
+        # The path may be followed by sentence punctuation (e.g., "... in path.").
         path_citation = re.search(
             rf"{escaped_path}(?::|#L|,?\s+line\s+){escaped_line}\b",
             cleaned,
             re.IGNORECASE,
         ) or re.search(
-            rf"\bline\s+{escaped_line}\b\s+(?:of|in)\s+{escaped_path}(?![A-Za-z0-9_./-])",
+            rf"\bline\s+{escaped_line}\b\s+(?:of|in)\s+{escaped_path}"
+            r"(?:(?![A-Za-z0-9_./-])|(?=\.(?:$|[\s)\]}\",;:!?])))",
             cleaned,
             re.IGNORECASE,
         )
