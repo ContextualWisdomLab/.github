@@ -40,11 +40,28 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
 
 def test_merge_scheduler_pull_request_target_includes_retarget_and_queue_events() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
-
-    assert (
-        "types: [opened, synchronize, reopened, edited, ready_for_review, enqueued, dequeued, auto_merge_enabled, auto_merge_disabled, closed]"
-        in workflow
+    trigger_block = workflow.split("pull_request_target:", 1)[1].split(
+        "pull_request_review:",
+        1,
+    )[0]
+    types_line = next(
+        line.strip() for line in trigger_block.splitlines() if line.strip().startswith("types:")
     )
+    listed = types_line.split("[", 1)[1].split("]", 1)[0]
+    trigger_types = {item.strip() for item in listed.split(",") if item.strip()}
+
+    assert trigger_types == {
+        "opened",
+        "synchronize",
+        "reopened",
+        "edited",
+        "ready_for_review",
+        "enqueued",
+        "dequeued",
+        "auto_merge_enabled",
+        "auto_merge_disabled",
+        "closed",
+    }
 
 
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
