@@ -3304,7 +3304,7 @@ jobs:
                     "tool_call": true,
                     "limit": {
                       "context": 1000000,
-                      "output": 8192
+                      "output": 65536
                     }
                   },
                   "poolside/laguna-m.1:free": {
@@ -3312,7 +3312,7 @@ jobs:
                     "tool_call": true,
                     "limit": {
                       "context": 262144,
-                      "output": 8192
+                      "output": 32768
                     }
                   }
                 }
