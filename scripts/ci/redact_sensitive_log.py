@@ -44,7 +44,7 @@ def _redact_json(value: Any) -> Any:
     return value
 
 
-def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | None:
+def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | tuple[None, int]:
     """Return a redacted key/value assignment parsed in linear time."""
     cursor = start
     key_quote = ""
@@ -53,25 +53,25 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
         cursor += 1
     key_start = cursor
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
-        return None
+        return None, start + 1
     while cursor < len(text) and text[cursor] in KEY_CHARS:
         cursor += 1
     key = text[key_start:cursor]
     if key_quote:
         if cursor >= len(text) or text[cursor] != key_quote:
-            return None
+            return None, start + 1
         cursor += 1
     if not SENSITIVE_KEY_RE.search(key):
-        return None
+        return None, cursor
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text) or text[cursor] not in ":=":
-        return None
+        return None, cursor
     cursor += 1
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text):
-        return None
+        return None, cursor
 
     value_start = cursor
     if text[cursor] in "\"'":
@@ -91,7 +91,7 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
         while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
             cursor += 1
     if cursor == value_start:
-        return None
+        return None, start + 1
     return text[start:value_start] + REDACTED, cursor
 
 
@@ -99,14 +99,23 @@ def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
     output: list[str] = []
     cursor = 0
+    last_append = 0
     while cursor < len(text):
         match = _consume_sensitive_assignment(text, cursor)
-        if match is None:
-            output.append(text[cursor])
-            cursor += 1
+        if match[0] is None:
+            next_cursor = match[1]
+            if next_cursor <= cursor:
+                next_cursor = cursor + 1
+            cursor = next_cursor
             continue
-        replacement, cursor = match
+        replacement, next_cursor = match
+        if cursor > last_append:
+            output.append(text[last_append:cursor])
         output.append(replacement)
+        cursor = next_cursor
+        last_append = cursor
+    if last_append < len(text):
+        output.append(text[last_append:])
     return "".join(output)
 
 
