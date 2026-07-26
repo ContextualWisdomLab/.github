@@ -1074,25 +1074,27 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     assert run_timeout <= remaining_budget <= 30
 
 
-def test_github_deepseek_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
-    """No-output DeepSeek endpoints cannot consume a full cadence slot."""
+def test_github_deepseek_r1_runtime_cap_preserves_queue_budget(
+    tmp_path: Path,
+) -> None:
+    """No-output DeepSeek R1 endpoints cannot consume a full cadence slot."""
     result = run_failed_model(
         tmp_path,
-        model_candidates="github-models/deepseek/deepseek-v3-0324",
+        model_candidates="github-models/deepseek/deepseek-r1-0528",
         extra_env={
-            "OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS": "2",
+            "OPENCODE_GITHUB_DEEPSEEK_R1_RUN_TIMEOUT_SECONDS": "2",
             "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
         },
     )
 
     assert result.returncode == 1
     assert (
-        "OpenCode github-models/deepseek/deepseek-v3-0324 runtime cap selected 2s "
+        "OpenCode github-models/deepseek/deepseek-r1-0528 runtime cap selected 2s "
         "instead of 9s because the configured provider-specific cap is lower than "
         "the cadence timeout."
     ) in result.stdout
     attempt_budget = re.search(
-        r"OpenCode github-models/deepseek/deepseek-v3-0324 attempt 1/1 using "
+        r"OpenCode github-models/deepseek/deepseek-r1-0528 attempt 1/1 using "
         r"(\d+)s run timeout with (\d+)s retry budget remaining\.",
         result.stdout,
     )
@@ -1100,6 +1102,28 @@ def test_github_deepseek_runtime_cap_preserves_queue_budget(tmp_path: Path) -> N
     run_timeout, remaining_budget = map(int, attempt_budget.groups())
     assert run_timeout == 2
     assert run_timeout <= remaining_budget <= 30
+
+
+def test_github_deepseek_v3_preserves_full_review_cadence(tmp_path: Path) -> None:
+    """The primary DeepSeek V3 candidate is not subject to the R1 runtime cap."""
+    result = run_failed_model(
+        tmp_path,
+        model_candidates="github-models/deepseek/deepseek-v3-0324",
+        extra_env={
+            "OPENCODE_GITHUB_DEEPSEEK_R1_RUN_TIMEOUT_SECONDS": "2",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode github-models/deepseek/deepseek-v3-0324 attempt 1/1 using 9s "
+        "run timeout"
+    ) in result.stdout
+    assert (
+        "OpenCode github-models/deepseek/deepseek-v3-0324 runtime cap selected"
+        not in result.stdout
+    )
 
 
 def test_github_models_openai_prompt_references_evidence_without_inlining(

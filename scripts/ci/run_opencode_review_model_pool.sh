@@ -384,8 +384,8 @@ cap_model_run_timeout() {
 	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
 		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
 		;;
-	github-models/deepseek/*)
-		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_DEEPSEEK_RUN_TIMEOUT_SECONDS 300)"
+	github-models/deepseek/deepseek-r1 | github-models/deepseek/deepseek-r1-0528)
+		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_DEEPSEEK_R1_RUN_TIMEOUT_SECONDS 300)"
 		;;
 	*)
 		printf '%s\n' "$run_timeout_seconds"

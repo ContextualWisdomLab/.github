@@ -91,9 +91,19 @@ assert_file_not_matches() {
 	local file_path="$1"
 	local pattern="$2"
 	local message="$3"
+	local grep_status
 
-	if [ -f "$file_path" ] && grep -Eq -- "$pattern" "$file_path"; then
+	if [ ! -f "$file_path" ]; then
+		return
+	fi
+	if grep -Eq -- "$pattern" "$file_path"; then
 		record_failure "$message (unexpected pattern '$pattern')"
+	else
+		grep_status=$?
+		if [ "$grep_status" -ne 1 ]; then
+			record_failure "$message (grep failed with exit $grep_status for pattern '$pattern')"
+			print_assertion_source "$file_path"
+		fi
 	fi
 }
 
@@ -5652,10 +5662,28 @@ run_gate_case_allow_provider_signal() {
 	run_gate_case_with_provider_signal_mode "0" "$@"
 }
 
+test_assert_file_not_matches_fails_closed() {
+	local fixture_file
+
+	fixture_file="$(mktemp)"
+	printf 'safe fixture\n' >"$fixture_file"
+	if ! (
+		FAILURES=0
+		assert_file_not_matches "$fixture_file" "[" "invalid regex must fail closed"
+		[ "$FAILURES" -eq 1 ]
+	) >/dev/null 2>&1; then
+		record_failure "assert_file_not_matches must record grep regex/read failures"
+	fi
+	rm -f "$fixture_file"
+}
+
 run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
 	"")
 		return 0
+		;;
+	assert-file-not-matches-errors-fail-closed)
+		test_assert_file_not_matches_fails_closed
 		;;
 	success)
 		run_gate_case "success" \
