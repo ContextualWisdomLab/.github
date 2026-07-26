@@ -159,6 +159,33 @@ def test_normalizer_binds_only_a_verified_structured_probe_location(
     )
 
 
+@pytest.mark.parametrize("citation_template", ("{path}:2", "{path}#L2"))
+def test_normalizer_does_not_add_a_contradictory_redundant_citation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    citation_template: str,
+) -> None:
+    """A different existing citation for the probe path remains fail-closed."""
+    path, line, receipt = prepare_probe_binding_artifacts(tmp_path, monkeypatch)
+    evidence = (
+        f"Source trace at {citation_template.format(path=path)} rejected malformed input "
+        f"with exit code 1; {receipt}"
+    )
+    value = {
+        "adversarial_validation": {
+            "probes": [
+                {
+                    "path": path,
+                    "line": line,
+                    "evidence": evidence,
+                }
+            ]
+        }
+    }
+
+    assert normalizer.repair_adversarial_probe_evidence_bindings(value) is value
+
+
 def test_normalizer_rebinds_structured_location_to_unique_receipted_citation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -653,6 +653,19 @@ def adversarial_probe_source_receipt_error(
     return ""
 
 
+def evidence_cites_probe_path_at_any_line(evidence: str, path: str) -> bool:
+    """Return whether evidence already cites any positive line for the probe path."""
+    escaped_path = rf"(?<![A-Za-z0-9_./-]){re.escape(path)}"
+    return (
+        re.search(
+            rf"{escaped_path}(?::|#L|\s+line\s+)[1-9][0-9]*\b",
+            evidence,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def receipt_verified_evidence_location(
     evidence: str,
     changed_files: frozenset[str],
@@ -745,6 +758,9 @@ def repair_adversarial_probe_evidence_bindings(value: Any) -> dict[str, Any] | A
         rejection = adversarial_evidence_rejection_reason(repaired_evidence, path, line)
         if rejection == "must cite the exact probe path and positive line":
             if not adversarial_probe_source_receipt_error(evidence, path, line):
+                if evidence_cites_probe_path_at_any_line(evidence, path):
+                    repaired_probes.append(probe)
+                    continue
                 repaired_evidence = f"{path}:{line} {repaired_evidence}"
             else:
                 rebound_location = receipt_verified_evidence_location(
