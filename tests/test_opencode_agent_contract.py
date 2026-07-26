@@ -563,6 +563,45 @@ def test_coverage_source_artifact_excludes_git_history(tmp_path):
     assert b"deleted-history" not in archive.read_bytes()
 
 
+def test_coverage_source_symlink_scan_fails_closed_on_find_error(tmp_path):
+    """Artifact export must stop when its symbolic-link scan cannot complete."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    scan_start = workflow.index(
+        '          for source_tree in "$COVERAGE_BASE_WORKDIR" '
+        '"$COVERAGE_SOURCE_WORKDIR"; do\n'
+    )
+    scan_end = workflow.index(
+        '          tar -cf "$COVERAGE_SOURCE_ARCHIVE"', scan_start
+    )
+    scan_script = textwrap.dedent(workflow[scan_start:scan_end])
+
+    base_worktree = tmp_path / "opencode-coverage-base"
+    source_worktree = tmp_path / "opencode-coverage-source"
+    base_worktree.mkdir()
+    source_worktree.mkdir()
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_find = fake_bin / "find"
+    fake_find.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    fake_find.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + scan_script],
+        env={
+            **os.environ,
+            "COVERAGE_BASE_WORKDIR": str(base_worktree),
+            "COVERAGE_SOURCE_WORKDIR": str(source_worktree),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "could not scan" in result.stdout
+
+
 def test_opencode_repository_dispatch_authorization_is_fail_closed():
     """Reject an untrusted dispatcher or a target outside the exact allowlist."""
     workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
@@ -2007,6 +2046,25 @@ def test_materialized_pr_worktree_rejects_symlinks_before_trusted_readers(tmp_pa
         check=False,
     )
     assert clean.returncode == 0, clean.stderr
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_find = fake_bin / "find"
+    fake_find.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    fake_find.chmod(0o755)
+    scan_error = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + validation],
+        env={
+            **os.environ,
+            "OPENCODE_SOURCE_WORKDIR": str(clean_worktree),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert scan_error.returncode == 1
+    assert "Could not scan PR worktree for symbolic links" in scan_error.stdout
 
     untracked_link = clean_worktree / "untracked-credential-link"
     untracked_link.symlink_to(outside)

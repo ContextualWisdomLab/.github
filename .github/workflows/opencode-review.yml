@@ -403,7 +403,11 @@ jobs:
               echo "::error::Coverage source export retained forbidden Git metadata at ${source_tree}/.git."
               exit 1
             fi
-            if find -P "$source_tree" -mindepth 1 -type l -print -quit | grep -q .; then
+            if ! coverage_symlink_path="$(find -P "$source_tree" -mindepth 1 -type l -print -quit)"; then
+              echo "::error::Coverage source export could not scan ${source_tree} for symbolic links."
+              exit 1
+            fi
+            if [ -n "$coverage_symlink_path" ]; then
               echo "::error::Coverage source export contains a symbolic link; refusing cross-job artifact materialization."
               exit 1
             fi
@@ -2055,7 +2059,11 @@ jobs:
                   ;;
               esac
             done
-          if find -P "$OPENCODE_SOURCE_WORKDIR" -mindepth 1 -type l -print -quit | grep -q .; then
+          if ! pr_symlink_path="$(find -P "$OPENCODE_SOURCE_WORKDIR" -mindepth 1 -type l -print -quit)"; then
+            echo "::error::Could not scan PR worktree for symbolic links; refusing trusted review processing."
+            exit 1
+          fi
+          if [ -n "$pr_symlink_path" ]; then
             echo "::error::PR worktree contains a symbolic link; refusing trusted review processing."
             exit 1
           fi
@@ -6359,7 +6367,6 @@ jobs:
                   | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence","metadata-only gate evaluation"] | index($n)) | not)
                   | select((.status // "") == "completed")
                   | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
-                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue") | not)
                   | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
                   | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review") | not)
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.conclusion // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
