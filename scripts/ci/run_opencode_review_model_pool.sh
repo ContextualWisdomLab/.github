@@ -573,6 +573,7 @@ main() {
 				continue
 			fi
 			if should_skip_model_candidate "$model_candidate"; then
+				dead_candidate_reasons[$model_candidate]="not runnable with the credentials available to this job"
 				continue
 			fi
 			assert_reasoning_effort_for_candidate "$model_candidate"
@@ -671,7 +672,7 @@ main() {
 			fi
 		done
 		if [ "$alive_candidates" -eq 0 ]; then
-			printf 'Every OpenCode model candidate is marked failed for this run; ending the pool without further provider spend.\n'
+			printf 'No runnable OpenCode model candidates remain for this run; ending the pool without further provider spend or idle cycles.\n'
 			if finish_pool_without_model; then
 				exit 0
 			fi

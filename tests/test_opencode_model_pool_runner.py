@@ -914,10 +914,35 @@ def test_credit_exhausted_402_ends_pool_without_further_spend(tmp_path: Path) ->
     assert result.returncode == 1
     assert "provider credits are exhausted" in result.stdout
     assert "marking this candidate failed for the rest of the run" in result.stdout
-    assert "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    assert "No runnable OpenCode model candidates remain for this run" in result.stdout
     assert "class=credit-exhausted" in result.stdout
     assert "Restarting OpenCode model pool" not in result.stdout
     assert elapsed < 20
+
+
+def test_all_credentialless_candidates_end_without_idle_cycles(tmp_path: Path) -> None:
+    """A fully skipped catalog exits even when cycles and deadlines are unbounded."""
+    start = time.monotonic()
+    result = run_failed_model(
+        tmp_path,
+        model_candidates=(
+            "openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2"
+        ),
+        extra_env={
+            "OPENAI_API_KEY": "",
+            "OPENROUTER_API_KEY": "",
+            "OPENCODE_POOL_MAX_CYCLES": "0",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "0",
+        },
+    )
+    elapsed = time.monotonic() - start
+
+    assert result.returncode == 1
+    assert "OPENAI_API_KEY is not configured" in result.stdout
+    assert "OPENROUTER_API_KEY is not configured" in result.stdout
+    assert "No runnable OpenCode model candidates remain for this run" in result.stdout
+    assert "Restarting OpenCode model pool" not in result.stdout
+    assert elapsed < 10
 
 
 def test_invalid_control_output_cap_marks_candidate_failed(tmp_path: Path) -> None:
@@ -949,7 +974,7 @@ def test_invalid_control_output_cap_marks_candidate_failed(tmp_path: Path) -> No
     assert result.returncode == 1
     assert "produced 2 control-rejected outputs" in result.stdout
     assert "marking this candidate failed for the rest of the run" in result.stdout
-    assert "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    assert "No runnable OpenCode model candidates remain for this run" in result.stdout
     assert "attempt 3/3" not in result.stdout
 
 

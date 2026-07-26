@@ -94,6 +94,8 @@ assert_file_not_matches() {
 	local grep_status
 
 	if [ ! -f "$file_path" ]; then
+		record_failure "$message (missing file '$file_path')"
+		print_assertion_source "$file_path"
 		return
 	fi
 	if grep -Eq -- "$pattern" "$file_path"; then
@@ -624,7 +626,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" '"$CODEGRAPH_BIN" --version' "opencode review logs the exact trusted CodeGraph version"
 	assert_file_not_contains "$workflow_file" 'cat "$codegraph_status" >&2' "opencode review does not replay PR-derived CodeGraph status bytes as workflow commands"
 	assert_file_not_contains "$workflow_file" 'cat "$codegraph_raw" >&2' "opencode review does not replay PR-derived CodeGraph exploration bytes as workflow commands"
-	assert_file_not_matches "$workflow_file" '^[[:space:]]{10}cat "\$CODEGRAPH_EVIDENCE_FILE"[[:space:]]*$' "opencode review does not replay assembled PR-derived CodeGraph evidence into the command channel"
+	assert_file_not_matches "$workflow_file" '^[[:space:]]*cat "\$CODEGRAPH_EVIDENCE_FILE"[[:space:]]*$' "opencode review does not replay assembled PR-derived CodeGraph evidence into the command channel"
 	assert_file_contains "$workflow_file" 'CodeGraph status command failed; captured %s bytes without replaying PR-derived log content.' "opencode review reports bounded CodeGraph status failure metadata"
 	assert_file_contains "$workflow_file" 'CodeGraph exploration command failed; captured %s bytes without replaying PR-derived log content.' "opencode review reports bounded CodeGraph exploration failure metadata"
 	assert_file_contains "$workflow_file" 'Captured bounded CodeGraph evidence (%s bytes) without replaying PR-derived log content.' "opencode review reports bounded CodeGraph success metadata"
@@ -5670,9 +5672,10 @@ test_assert_file_not_matches_fails_closed() {
 	if ! (
 		FAILURES=0
 		assert_file_not_matches "$fixture_file" "[" "invalid regex must fail closed"
-		[ "$FAILURES" -eq 1 ]
+		assert_file_not_matches "${fixture_file}.missing" "safe" "missing file must fail closed"
+		[ "$FAILURES" -eq 2 ]
 	) >/dev/null 2>&1; then
-		record_failure "assert_file_not_matches must record grep regex/read failures"
+		record_failure "assert_file_not_matches must record missing-file and grep failures"
 	fi
 	rm -f "$fixture_file"
 }
