@@ -261,7 +261,7 @@ def test_load_payload_rejects_non_object_and_main_logs_load_reason(monkeypatch, 
     )
 
 
-def test_scheduled_audit_and_rollout_document_the_semgrep_requirement() -> None:
+def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -> None:
     workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
         encoding="utf-8"
     )
