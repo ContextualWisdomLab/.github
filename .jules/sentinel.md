@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-07-27 - Prevent Information Disclosure in CI Subprocess Logs
+**Vulnerability:** Information Disclosure / Secret Leakage
+**Learning:** Untrusted subprocess output and logs in `sandboxed_verify.py` and `sandboxed_web_e2e.py` can expose sensitive credentials in standard output and error tracebacks.
+**Prevention:** Always wrap arbitrary subprocess stdout/stderr and tracebacks with `scripts.ci.redact_sensitive_log.redact_text` (with an `ImportError` fallback) before printing or logging them in the CI environment.

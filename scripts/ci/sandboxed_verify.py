@@ -12,6 +12,12 @@ import sys
 import tempfile
 import time
 from collections.abc import Sequence
+
+try:
+    from scripts.ci.redact_sensitive_log import redact_text
+except ImportError:  # pragma: no cover
+    def redact_text(text: str) -> str:
+        return text
 from pathlib import Path
 
 
@@ -210,26 +216,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = scrubbed_env(sandbox, args.allow_env)
-        print(f"sandboxed-verify: cwd={copied_repo}")
-        print(f"sandboxed-verify: command={' '.join(args.command)}")
+        print(redact_text(f"sandboxed-verify: cwd={copied_repo}"))
+        print(redact_text(f"sandboxed-verify: command={' '.join(args.command)}"))
         if args.allow_env:
-            print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
+            print(redact_text(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}"))
         if args.network != "default":
             print(f"sandboxed-verify: network={args.network}")
         try:
             completed = run_command(args.command, copied_repo, env, args.timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
             stdout = timeout_output_text(exc.stdout)
             stderr = timeout_output_text(exc.stderr)
             if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
+                print(redact_text(stdout), end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+                print(redact_text(stderr), end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
             print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
             exit_code = 124
         return exit_code
