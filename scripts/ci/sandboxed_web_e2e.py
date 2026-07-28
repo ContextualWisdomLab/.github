@@ -23,6 +23,13 @@ if __package__ in (None, ""):
 
 from scripts.ci import sandboxed_verify
 
+try:
+    from scripts.ci.redact_sensitive_log import redact_text
+except ImportError:  # pragma: no cover
+
+    def redact_text(text: str) -> str:
+        return text
+
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 
@@ -232,18 +239,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
             return exit_code
         except subprocess.TimeoutExpired as exc:
             stdout = sandboxed_verify.timeout_output_text(exc.stdout)
             stderr = sandboxed_verify.timeout_output_text(exc.stderr)
             if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
+                print(redact_text(stdout), end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+                print(redact_text(stderr), end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
             print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
             exit_code = 124
             return exit_code
@@ -253,7 +260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_tail = tail_text(service.log_path)
             if log_tail:
                 print(f"--- {service.label} log tail ---")
-                print(log_tail)
+                print(redact_text(log_tail))
         emit_result(
             args=args,
             copied_repo=copied_repo,
