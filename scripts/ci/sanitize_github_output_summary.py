@@ -13,29 +13,18 @@ SECRET_KEY_RE = re.compile(
     r"DATABASE[_-]?URL|DB[_-]?URL|CONNECTION[_-]?STRING|"
     r"SECRET|TOKEN|PASSWORD|PASSWD|"
     r"API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|ENCRYPTION[_-]?KEY"
-    r")[A-Z0-9_.-]*\b)(?P<sep>\s*[:=]\s*)"
+    r")[A-Z0-9_.-]*\b)(?P<sep>\s*[:=]\s*)[^\n]*"
 )
 URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@")
 AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+")
 
 
-def sanitize_line(line: str) -> str:
-    """Redact one log line while preserving the key and evidence context."""
-
-    match = SECRET_KEY_RE.search(line)
-    if match:
-        return f"{line[: match.end()]}<redacted>"
-    line = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
-    return AUTH_HEADER_RE.sub(r"\1\2 <redacted>", line)
-
-
 def sanitize_text(text: str) -> str:
     """Return a GitHub-output-safe version of a coverage evidence summary."""
 
-    sanitized = "\n".join(sanitize_line(line) for line in text.splitlines())
-    if text.endswith("\n"):
-        sanitized += "\n"
-    return sanitized
+    sanitized = SECRET_KEY_RE.sub(r"\g<key>\g<sep><redacted>", text)
+    sanitized = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", sanitized)
+    return AUTH_HEADER_RE.sub(r"\1\2 <redacted>", sanitized)
 
 
 def main() -> int:

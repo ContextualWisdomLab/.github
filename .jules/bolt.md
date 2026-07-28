@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2024-11-23 - Optimize Multiline Regex Processing
+**Learning:** Processing large string payloads line-by-line using `.splitlines()` and calling regex replacement functions on every line causes massive string object creation overhead and O(L*R) complexity.
+**Action:** When a regular expression pattern does not strictly require line-by-line contextual isolation, modify the pattern to handle trailing content safely (e.g. appending `[^\n]*`), and use `re.sub` directly on the entire multiline string to avoid string splitting operations entirely.
