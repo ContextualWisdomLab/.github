@@ -420,9 +420,25 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     trusted_requirements = Path(
         "requirements-opencode-review-ci-hashes.txt"
     ).read_text(encoding="utf-8")
+    compile_script = Path(
+        "scripts/ci/compile_opencode_review_lock.sh"
+    ).read_text(encoding="utf-8")
+    normalized_compile_script = " ".join(compile_script.replace("\\\n", " ").split())
     assert "pytest-cov==7.1.0" in trusted_requirements
     assert (
         "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
+        in trusted_requirements
+    )
+    assert "./scripts/ci/compile_opencode_review_lock.sh" in trusted_requirements
+    assert "uv pip compile" in compile_script
+    assert "--upgrade" in compile_script
+    assert "--generate-hashes" in compile_script
+    assert (
+        "--python-version 3.14 --python-platform x86_64-manylinux_2_28"
+        in normalized_compile_script
+    )
+    assert (
+        "1bb93c2aa61d2a5b38f1526546d95cf4132cb681e541a337bf8dfd092be816e5"
         in trusted_requirements
     )
 
