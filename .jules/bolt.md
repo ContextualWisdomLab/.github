@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2026-07-28 - String Parsing Performance - Batch String Appending
+**Learning:** For Python string processing or redaction loops, avoiding character-by-character list appends (`output.append(text[cursor])`) prevents massive O(N^2) memory and runtime overhead.
+**Action:** Track a `last_append` index and use string slicing to batch-append non-matching blocks (`output.append(text[last_append:cursor])`). Note: On match failures, advance the cursor by 1 to prevent missing valid embedded tokens.

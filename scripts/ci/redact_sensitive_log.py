@@ -99,14 +99,20 @@ def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
     output: list[str] = []
     cursor = 0
+    last_append = 0
     while cursor < len(text):
         match = _consume_sensitive_assignment(text, cursor)
         if match is None:
-            output.append(text[cursor])
             cursor += 1
             continue
-        replacement, cursor = match
+        replacement, next_cursor = match
+        # ⚡ Bolt: Use string slicing to append chunks instead of O(N^2) character-by-character appends
+        # Impact: Dramatically reduces string parsing time by avoiding unnecessary list appends
+        output.append(text[last_append:cursor])
         output.append(replacement)
+        cursor = next_cursor
+        last_append = cursor
+    output.append(text[last_append:])
     return "".join(output)
 
 
