@@ -468,6 +468,7 @@ assert_strix_child_target_uses_constant_argument() {
 assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	local bootstrap_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
 	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml"
+	local comment_helpers_file="$REPO_ROOT/scripts/ci/opencode_review_comment_helpers.sh"
 	local opencode_config="$REPO_ROOT/opencode.jsonc"
 
 	assert_file_contains "$bootstrap_file" "pull_request_target:" "opencode required workflow loads its metadata-only bootstrap from the protected base ref"
@@ -556,12 +557,9 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Exchange OpenCode app token for target repository review reads" "opencode review can read private target repositories through the OpenCode app token before materializing review data"
 	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ steps.review_read_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}' "opencode materialization prefers the OpenCode app token for private target repository reads"
 	assert_file_contains "$workflow_file" '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' "opencode approval uses the app token for target-repository check lookup"
-	assert_file_contains "$workflow_file" "LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: \${{ github.event_name == 'pull_request_target' && github.token || '' }}" "opencode app-token approval can bridge stale same-repo github-actions review state"
-	assert_file_contains "$workflow_file" "legacy_github_actions_opencode_blocking_review_ids" "opencode approval detects stale github-actions OpenCode request-changes reviews"
-	assert_file_contains "$workflow_file" 'select((.user.login // "") == "github-actions[bot]")' "opencode stale-review bridge is limited to legacy github-actions reviews"
-	assert_file_contains "$workflow_file" 'select((.state // "") == "CHANGES_REQUESTED")' "opencode stale-review bridge only reacts to blocking request-changes reviews"
-	assert_file_contains "$workflow_file" "OpenCode current-head approval bridge" "opencode stale-review bridge publishes an auditable current-head approval body"
-	assert_file_contains "$workflow_file" "legacy github-actions approval bridge" "opencode stale-review bridge uses a distinct publication label"
+	assert_file_not_contains "$workflow_file" "LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN" "dispatch-only opencode review does not retain an unreachable pull-request-target token bridge"
+	assert_file_not_contains "$workflow_file" "legacy_github_actions_opencode_blocking_review_ids" "dispatch-only opencode review does not retain stale github-actions bridge lookup code"
+	assert_file_not_contains "$workflow_file" "publish_legacy_github_actions_approval_bridge" "dispatch-only opencode review does not retain stale github-actions bridge publication code"
 	assert_file_contains "$workflow_file" 'COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head' "opencode coverage keeps PR-head data outside the trusted workflow root"
 	assert_file_contains "$workflow_file" 'target=/trusted,readonly' "opencode coverage mounts central scripts read-only in the isolated sandbox"
 	assert_file_contains "$workflow_file" 'target=/work' "opencode coverage mounts only the PR worktree writable in the isolated sandbox"
@@ -1280,16 +1278,18 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "deterministic current-head gates passed for a workflow-only change" "opencode approval gate must not record deterministic model-failure approval"
 	assert_file_not_contains "$workflow_file" "request_changes_after_model_exhaustion" "opencode model-failure path keeps waiting instead of synthesizing review state"
 	assert_file_contains "$workflow_file" "request_changes_for_merge_conflict_if_present" "opencode approval gate checks mergeability before approving model or fallback output"
-	assert_file_contains "$workflow_file" "Merge Conflict Guidance" "opencode approval gate emits explicit conflict guidance when mergeability is dirty"
-	assert_file_contains "$workflow_file" "Changed-File Evidence Map" "opencode review overview labels Mermaid as changed-file flow analysis"
+	assert_file_contains "$comment_helpers_file" "Merge Conflict Guidance" "opencode approval gate emits explicit conflict guidance when mergeability is dirty"
+	assert_file_contains "$comment_helpers_file" "Changed-File Evidence Map" "opencode review overview labels Mermaid as changed-file flow analysis"
 	assert_file_contains "$workflow_file" 'body="$(ensure_review_body_has_change_graph "$body")"' "opencode PR review body gets deterministic changed-file flow analysis"
-	graph_helper_definitions="$(grep -Fc 'ensure_review_body_has_change_graph() {' "$workflow_file")"
-	assert_equals "2" "$graph_helper_definitions" "opencode defines the graph helper in each shell scope that publishes reviews"
+	graph_helper_definitions="$(grep -Fc 'ensure_review_body_has_change_graph() {' "$comment_helpers_file" || true)"
+	assert_equals "1" "$graph_helper_definitions" "opencode defines the graph helper once in the trusted shared shell library"
+	graph_helper_sources="$(grep -Fc '. scripts/ci/opencode_review_comment_helpers.sh' "$workflow_file" || true)"
+	assert_equals "2" "$graph_helper_sources" "opencode sources the trusted graph helper library in both review publication scopes"
 	assert_file_contains "$workflow_file" "rewritten_payload_file" "opencode inline review payload is rewritten after graph insertion"
 	assert_file_contains "$workflow_file" '.body = $body' "opencode inline review payload JSON receives the same logged review body"
-	assert_file_contains "$workflow_file" "OpenCode bounded evidence" "opencode Mermaid graph ties changed files to bounded review evidence"
-	assert_file_contains "$workflow_file" "GitHub Actions review job" "opencode Mermaid graph maps workflow files to the affected execution path"
-	assert_file_contains "$workflow_file" "Merge conflict blocks this path" "opencode merge-conflict guidance shows which changed-file flow is blocked"
+	assert_file_contains "$comment_helpers_file" "OpenCode bounded evidence" "opencode Mermaid graph ties changed files to bounded review evidence"
+	assert_file_contains "$comment_helpers_file" "GitHub Actions review job" "opencode Mermaid graph maps workflow files to the affected execution path"
+	assert_file_contains "$comment_helpers_file" "Merge conflict blocks this path" "opencode merge-conflict guidance shows which changed-file flow is blocked"
 	assert_file_contains "$workflow_file" "Mermaid DAG" "opencode prompt asks for a Mermaid DAG instead of a generic risk sketch"
 	assert_file_contains "$workflow_file" 'quoted label, for example A["text"]' "opencode prompt avoids shell-executed backtick examples for Mermaid labels"
 	assert_file_not_contains "$workflow_file" '`A["text"]`' "opencode prompt must not put Mermaid label examples in shell-substituted backticks"
@@ -1876,8 +1876,8 @@ EOF
 	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'awk '\''NF > 0 && $0 !~ /^\// && $0 !~ /(^|\/)\.\.($|\/)/ { print }'\'' >"$OPENCODE_CHANGED_FILES_FILE"' "opencode workflow writes path-safe exact changed files for the normalizer"
 	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "changed-files.txt" "opencode workflow copies exact changed-file evidence into the isolated review workspace"
 	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'A["text"]' "opencode prompt requires quoted Mermaid labels"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'S%s["%s"]' "opencode generated Mermaid surface labels are quoted"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'R%s["Review risk: %s"]' "opencode generated Mermaid risk labels are quoted"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_comment_helpers.sh" 'S%s["%s"]' "opencode generated Mermaid surface labels are quoted"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_comment_helpers.sh" 'R%s["Review risk: %s"]' "opencode generated Mermaid risk labels are quoted"
 	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'emit_review_body_to_action_log "$event" "$body"' "opencode PR-level review bodies are mirrored to the Actions log"
 	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'emit_review_body_to_action_log "$event" "$body" "$review_payload_file"' "opencode inline review bodies are mirrored to the Actions log"
 	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'OpenCode is publishing this review content to PR #%s.' "opencode Actions log includes the review body that is being posted"
@@ -8929,11 +8929,11 @@ run_gate_case "provider-prefix-required-resource-path-primary-implicit-default-p
 run_gate_case "provider-prefix-required-resource-path-primary-explicit-empty-default-provider" \
 	"projects/p1/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
 	"vertex_ai/fallback-one" \
+	"2" \
+	"ERROR: Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." \
 	"0" \
-	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/gemini-2.5-pro'." \
-	"1" \
-	"vertex_ai/gemini-2.5-pro" \
-	"<unset>" \
+	"" \
+	"" \
 	""
 
 run_gate_case "provider-prefix-resource-path-primary-notfound-fallback-success" \
@@ -10054,19 +10054,18 @@ run_gate_case "malformed-severity-marker-nonrecoverable" \
 	"vertex_ai/malformed-severity-primary" \
 	"<unset>"
 
-# Bug 7: Model disagreement — primary produces CRITICAL, fallback produces LOW.
-# The CRITICAL from the earlier report must NOT be ignored.
-# Both models produce NOT_FOUND errors, so the gate exhausts fallbacks and
-# reports "Configured Vertex model and fallback models were unavailable."
-# The key assertion is exit 1: the CRITICAL finding is NOT downgraded to pass.
+# Bug 7: Model disagreement — the primary produces an unmapped CRITICAL report
+# alongside a NOT_FOUND error. The report is already actionable fail-closed
+# evidence, so the gate must not spend provider budget on a fallback whose LOW
+# result could make the earlier finding appear downgraded.
 run_gate_case "model-disagreement-critical-in-earlier-report" \
 	"vertex_ai/model-a" \
 	"vertex_ai/model-b" \
 	"1" \
 	"Strix quick scan failed with a non-recoverable error." \
-	"2" \
-	"vertex_ai/model-a|vertex_ai/model-b" \
-	"<unset>|<unset>"
+	"1" \
+	"vertex_ai/model-a" \
+	"<unset>"
 
 # Bug 4: deepseek/models/deepseek-r1 must NOT be rewritten to vertex_ai/deepseek-r1
 run_gate_case "nonvertex-slash-model-not-rewritten" \
