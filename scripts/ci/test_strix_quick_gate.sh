@@ -1001,6 +1001,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "JavaScript/TypeScript dependencies (npm ci, lifecycle hooks disabled)" "opencode coverage evidence installs npm workspace dependencies without lifecycle hooks before JS coverage"
 	assert_file_contains "$workflow_file" "coverage/coverage-summary.json" "opencode coverage evidence reads JS coverage summaries instead of trusting test exit codes"
 	assert_file_contains "$workflow_file" "coverage/coverage-final.json" "opencode coverage evidence supports Vitest Istanbul final coverage files"
+	assert_file_contains "$workflow_file" 'chmod 0444 "$summary_list"' "opencode coverage makes the root-created summary list readable by the unprivileged sandbox user"
 	assert_file_contains "$workflow_file" "javascript_coverage_gate.py" "opencode coverage evidence delegates changed-source measurement to the tested central gate"
 	assert_file_contains "$workflow_file" '--base-sha "$PR_BASE_SHA"' "opencode changed-source coverage is bound to the pull request base"
 	assert_file_contains "$workflow_file" '--head-sha "$PR_HEAD_SHA"' "opencode changed-source coverage is bound to the current pull request head"
