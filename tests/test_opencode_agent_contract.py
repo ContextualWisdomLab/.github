@@ -339,6 +339,33 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
     assert "docker.io/library/python:3.14-slim@sha256:" in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
+    assert (
+        "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz"
+    ) in measure_step
+    assert (
+        "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742"
+        "  /tmp/node-linux-x64.tar.xz"
+    ) in measure_step
+    assert (
+        "tar --no-same-owner -xJf /tmp/node-linux-x64.tar.xz -C /usr/local "
+        "--strip-components=1"
+    ) in measure_step
+    assert 'test "$(/usr/local/bin/node --version)" = "v24.18.0"' in measure_step
+    assert "/usr/local/bin/npm --version >/dev/null" in measure_step
+    assert (
+        "https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz"
+    ) in measure_step
+    assert (
+        "7ac1c919341c213a34dc0d02afb7143c5c26ac26ee8c4782deea821b8ac64d2134"
+        "a081fd8941dae6e29bbb48f58dfc2b7fbceeccc07cb2f09d219d342a4969ed"
+        "  /tmp/pnpm.tgz"
+    ) in measure_step
+    assert (
+        "tar --no-same-owner -xzf /tmp/pnpm.tgz -C /opt/pnpm "
+        "--strip-components=1"
+    ) in measure_step
+    assert "ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm" in measure_step
+    assert 'test "$(/usr/local/bin/pnpm --version)" = "11.5.3"' in measure_step
     assert "--require-hashes" in measure_step
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
     assert "The networked build context contains only this" in measure_step
