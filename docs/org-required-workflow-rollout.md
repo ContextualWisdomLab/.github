@@ -48,6 +48,34 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Model-exhaustion posture: command exit codes and deterministic checks cannot synthesize an approval. Exhaustion remains `MODEL_OUTPUT_UNAVAILABLE`; only a prior real-model approval bound to the exact current head can satisfy the review gate after all checks, alerts, and threads are revalidated.
 - Adversarial-evidence posture: every probe must cite its exact changed path and positive in-range line in the materialized current-head source tree. Unrelated paths, nonexistent lines, circular claims, and missing observed results fail closed with a concrete rejection reason.
 
+For a bounded current-head retry in one repository, dispatch `merge-scheduler`
+to the central repository with `target_repository`, `pr_number`, and the live
+`base_branch`. The target must exactly match
+`OPENCODE_REPOSITORY_DISPATCH_TARGETS`; the scheduler then re-reads the open PR
+and rejects a noncanonical repository name, fork head, base mismatch, malformed
+head SHA, or changed/closed PR before using cross-repository credentials:
+
+```bash
+jq -n '{
+  event_type: "merge-scheduler",
+  client_payload: {
+    target_repository: "ContextualWisdomLab/naruon",
+    pr_number: 1179,
+    base_branch: "develop",
+    trigger_reviews: true,
+    review_dispatch_limit: "1",
+    enable_auto_merge: false,
+    update_branches: false,
+    merge_mode: "disabled"
+  }
+}' | gh api --method POST \
+  repos/ContextualWisdomLab/.github/dispatches --input -
+```
+
+Use the canonical `full_name` returned by the GitHub repository API. Keep
+mutation options disabled for an evidence-only retry; enabling branch updates
+or merge behavior is a separate operational decision.
+
 Keep the OpenCode required workflow active only while the central workflow keeps proving current-head coverage, CodeGraph initialization, bounded evidence, model review output, and approval-gate publication on the current head.
 
 ## Code scanning required workflow posture
