@@ -370,6 +370,28 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
     assert "pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
+    assert "trusted_pnpm_lock_matches_base()" in measure_step
+    assert (
+        'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
+        in measure_step
+    )
+    assert (
+        'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
+        in measure_step
+    )
+    assert (
+        'worktree_blob="$(trusted_git hash-object --no-filters -- "$relative_lock")"'
+        in measure_step
+    )
+    assert "refusing --trust-lockfile for PR-controlled dependency resolution" in measure_step
+    assert "prepare_writable_pnpm_store()" in measure_step
+    assert (
+        'destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"'
+        in measure_step
+    )
+    assert 'cp -R /opt/pnpm-store/. "$destination/"' in measure_step
+    assert 'chmod -R u+rwX,go-rwx "$destination"' in measure_step
+    assert '--store-dir "$writable_pnpm_store_dir"' in measure_step
     assert "pnpm offline install" in measure_step
     assert "--offline" in measure_step
     assert 'find "$COVERAGE_SOURCE_WORKDIR"' in measure_step
@@ -1679,8 +1701,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "pnpm install \\" in coverage_job
     assert "--offline" in coverage_job
     assert "--frozen-lockfile" in coverage_job
+    assert "--trust-lockfile" in coverage_job
     assert "--ignore-scripts" in coverage_job
-    assert "--store-dir /opt/pnpm-store" in coverage_job
+    assert "prepare_writable_pnpm_store" in coverage_job
+    assert '--store-dir "$writable_pnpm_store_dir"' in coverage_job
     assert "yarn install --immutable --mode=skip-builds" in coverage_job
     assert 'corepack prepare "${runner}@latest"' not in coverage_job
     assert "https://sh.rustup.rs" not in coverage_job
