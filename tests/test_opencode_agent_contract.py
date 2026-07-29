@@ -90,7 +90,16 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
 
     assert candidates_match is not None
-    candidates = candidates_match.group(1).split()
+    conditional_public_candidate = (
+        "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
+        "&& 'opencode-free/north-mini-code-free ' || '' }}"
+    )
+    candidates_text = candidates_match.group(1)
+    assert candidates_text.startswith(conditional_public_candidate)
+    candidates = [
+        "opencode-free/north-mini-code-free",
+        *candidates_text.removeprefix(conditional_public_candidate).split(),
+    ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
     direct_openai_models = [
         model_name for provider, model_name in candidate_pairs if provider == "openai"
@@ -106,6 +115,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs == [
+        ["opencode-free", "north-mini-code-free"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -123,6 +133,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "qwen/qwen3-coder",
     ]
     assert set(github_candidate_models).issubset(set(github_models))
+    assert '"context": 256000' in workflow
+    assert '"output": 64000' in workflow
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -1186,7 +1198,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "needs.validate-pr-metadata.outputs.is_private == 'false' && "
+        "'opencode-free/north-mini-code-free ' || ''"
+    ) in workflow
+    assert (
+        "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder "
@@ -1195,7 +1211,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "github-models/openai/gpt-5-chat "
         "github-models/openai/o3 "
         "github-models/deepseek/deepseek-r1-0528 "
-        'github-models/deepseek/deepseek-r1"'
+        "github-models/deepseek/deepseek-r1"
     ) in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
@@ -1311,7 +1327,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
     assert (
-        'OPENCODE_MODEL_CANDIDATES: "github-models/deepseek/deepseek-v3-0324 '
+        "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder "
@@ -1748,6 +1764,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "metadata changed before OIDC" in trust_step
     assert 'live_head_sha="$(jq -r' in trust_step
     assert '[ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]' in trust_step
+    assert (
+        "EXPECTED_IS_PRIVATE: "
+        "${{ needs.validate-pr-metadata.outputs.is_private }}"
+    ) in trust_step
+    assert (
+        'live_is_private="$(jq -r \'.base.repo.private | tostring\''
+    ) in trust_step
+    assert '! [[ "$EXPECTED_IS_PRIVATE" =~ ^(true|false)$ ]]' in trust_step
+    assert '! [[ "$live_is_private" =~ ^(true|false)$ ]]' in trust_step
+    assert '[ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]' in trust_step
     assert target_job.index(
         "Validate pull request head repository trust"
     ) < target_job.index(
