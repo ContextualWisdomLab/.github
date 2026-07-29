@@ -425,6 +425,14 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
         in trusted_requirements
     )
+    assert (
+        "--python-version 3.14 --python-platform x86_64-manylinux_2_28"
+        in trusted_requirements
+    )
+    assert (
+        "1bb93c2aa61d2a5b38f1526546d95cf4132cb681e541a337bf8dfd092be816e5"
+        in trusted_requirements
+    )
 
     target_start = workflow.index("  opencode-review-target:\n")
     target_job = workflow[target_start:]
