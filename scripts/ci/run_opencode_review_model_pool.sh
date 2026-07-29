@@ -345,6 +345,13 @@ is_openrouter_candidate() {
 	esac
 }
 
+is_structured_output_candidate() {
+	case "$1" in
+	opencode-free/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 is_low_sensitivity_candidate() {
 	case "$1" in
 	openai/*-mini | openai/*-nano | \
@@ -396,6 +403,301 @@ cap_model_run_timeout() {
 	fi
 }
 
+reserve_loopback_port() {
+	python3 - <<'PY'
+import socket
+
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+stop_opencode_server() {
+	local server_pid="$1"
+
+	if ! kill -0 "$server_pid" 2>/dev/null; then
+		wait "$server_pid" 2>/dev/null || true
+		return 0
+	fi
+	kill "$server_pid" 2>/dev/null || true
+	for _ in $(seq 1 20); do
+		kill -0 "$server_pid" 2>/dev/null || break
+		sleep 0.1
+	done
+	kill -9 "$server_pid" 2>/dev/null || true
+	wait "$server_pid" 2>/dev/null || true
+}
+
+write_structured_review_request() {
+	local model_candidate="$1"
+	local agent="$2"
+	local prompt_file="$3"
+	local request_file="$4"
+	local provider_id="${model_candidate%%/*}"
+	local model_id="${model_candidate#*/}"
+
+	jq -n \
+		--arg provider_id "$provider_id" \
+		--arg model_id "$model_id" \
+		--arg agent "$agent" \
+		--rawfile prompt "$prompt_file" \
+		--arg head_sha "$HEAD_SHA" \
+		--arg run_id "$RUN_ID" \
+		--arg run_attempt "$RUN_ATTEMPT" '
+		{
+			model: {
+				providerID: $provider_id,
+				modelID: $model_id
+			},
+			agent: $agent,
+			parts: [
+				{
+					type: "text",
+					text: $prompt
+				}
+			],
+			format: {
+				type: "json_schema",
+				retryCount: 2,
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						head_sha: {type: "string", enum: [$head_sha]},
+						run_id: {type: "string", enum: [$run_id]},
+						run_attempt: {type: "string", enum: [$run_attempt]},
+						result: {
+							type: "string",
+							enum: ["APPROVE", "REQUEST_CHANGES"]
+						},
+						reason: {type: "string", minLength: 1},
+						summary: {type: "string", minLength: 1},
+						adversarial_validation: {
+							type: "object",
+							additionalProperties: false,
+							properties: {
+								status: {
+									type: "string",
+									enum: ["passed", "failed"]
+								},
+								probes: {
+									type: "array",
+									items: {
+										type: "object",
+										additionalProperties: false,
+										properties: {
+											path: {type: "string", minLength: 1},
+											line: {type: "integer", minimum: 1},
+											hypothesis: {type: "string", minLength: 1},
+											attack_or_counterexample: {
+												type: "string",
+												minLength: 1
+											},
+											evidence: {type: "string", minLength: 1},
+											outcome: {
+												type: "string",
+												enum: ["falsified", "confirmed"]
+											}
+										},
+										required: [
+											"path",
+											"line",
+											"hypothesis",
+											"attack_or_counterexample",
+											"evidence",
+											"outcome"
+										]
+									}
+								},
+								residual_risk: {type: "string", minLength: 1}
+							},
+							required: ["status", "probes", "residual_risk"]
+						},
+						findings: {
+							type: "array",
+							items: {
+								type: "object",
+								additionalProperties: false,
+								properties: {
+									path: {type: "string", minLength: 1},
+									line: {type: "integer", minimum: 1},
+									severity: {type: "string", minLength: 1},
+									title: {type: "string", minLength: 1},
+									problem: {type: "string", minLength: 1},
+									root_cause: {type: "string", minLength: 1},
+									fix_direction: {type: "string", minLength: 1},
+									regression_test_direction: {
+										type: "string",
+										minLength: 1
+									},
+									suggested_diff: {type: "string", minLength: 1}
+								},
+								required: [
+									"path",
+									"line",
+									"severity",
+									"title",
+									"problem",
+									"root_cause",
+									"fix_direction",
+									"regression_test_direction",
+									"suggested_diff"
+								]
+							}
+						}
+					},
+					required: [
+						"head_sha",
+						"run_id",
+						"run_attempt",
+						"result",
+						"reason",
+						"summary",
+						"adversarial_validation",
+						"findings"
+					]
+				}
+			}
+		}
+	' >"$request_file"
+}
+
+run_structured_output_attempt() {
+	local model_candidate="$1"
+	local attempt="$2"
+	local attempts="$3"
+	local agent="$4"
+	local prompt_file="$5"
+	local candidate_output_file="$6"
+	local opencode_json_file="$7"
+	local opencode_export_file="$8"
+	local opencode_stderr_file="$9"
+	local run_timeout_seconds="${10}"
+	local server_port server_url server_pid startup_timeout_seconds startup_deadline
+	local server_stdout_file session_file request_file http_status curl_status session_id
+	local server_ready=false
+
+	server_port="$(reserve_loopback_port)"
+	server_url="http://127.0.0.1:${server_port}"
+	server_stdout_file="${opencode_json_file}.server.stdout"
+	session_file="${opencode_export_file}.session-create.json"
+	request_file="${opencode_export_file}.request.json"
+	startup_timeout_seconds="$(env_integer_or_default OPENCODE_SERVER_STARTUP_TIMEOUT_SECONDS 30)"
+	rm -f "$server_stdout_file" "$session_file" "$request_file"
+
+	env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		opencode serve --hostname 127.0.0.1 --port "$server_port" \
+		>"$server_stdout_file" 2>"$opencode_stderr_file" &
+	server_pid=$!
+	startup_deadline=$((SECONDS + startup_timeout_seconds))
+	while [ "$SECONDS" -lt "$startup_deadline" ]; do
+		if curl --silent --show-error --fail --max-time 2 \
+			"${server_url}/global/health" >/dev/null 2>>"$opencode_stderr_file"; then
+			server_ready=true
+			break
+		fi
+		kill -0 "$server_pid" 2>/dev/null || break
+		sleep 1
+	done
+	if [ "$server_ready" != "true" ]; then
+		stop_opencode_server "$server_pid"
+		printf 'OpenCode %s attempt %s/%s could not start the loopback structured-output server within %ss.\n' \
+			"$model_candidate" "$attempt" "$attempts" "$startup_timeout_seconds"
+		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
+		rm -f "$server_stdout_file" "$session_file" "$request_file"
+		return 1
+	fi
+
+	jq -n \
+		--arg title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+		'{title: $title}' >"$request_file"
+	set +e
+	http_status="$(curl --silent --show-error --max-time 15 \
+		--output "$session_file" --write-out '%{http_code}' \
+		--header 'Content-Type: application/json' \
+		--request POST --data-binary "@${request_file}" \
+		"${server_url}/session" 2>>"$opencode_stderr_file")"
+	curl_status=$?
+	set -e
+	if [ "$curl_status" -ne 0 ] || [[ "$http_status" != 2?? ]]; then
+		[ ! -f "$session_file" ] || cp "$session_file" "$opencode_json_file"
+		stop_opencode_server "$server_pid"
+		printf 'OpenCode %s attempt %s/%s session creation failed with transport status %s and HTTP status %s.\n' \
+			"$model_candidate" "$attempt" "$attempts" "$curl_status" "${http_status:-unavailable}"
+		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
+		rm -f "$server_stdout_file" "$session_file" "$request_file"
+		if is_fatal_provider_failure "$opencode_json_file"; then
+			return 2
+		fi
+		return 1
+	fi
+	session_id="$(jq -r '.id // empty' "$session_file")"
+	if [ -z "$session_id" ]; then
+		stop_opencode_server "$server_pid"
+		printf 'OpenCode %s attempt %s/%s session creation response did not include a session id.\n' \
+			"$model_candidate" "$attempt" "$attempts"
+		emit_rejected_opencode_artifact_metadata "sessionless-structured-response" "$session_file"
+		rm -f "$server_stdout_file" "$session_file" "$request_file"
+		return 1
+	fi
+
+	if ! write_structured_review_request "$model_candidate" "$agent" "$prompt_file" "$request_file"; then
+		stop_opencode_server "$server_pid"
+		printf 'OpenCode %s attempt %s/%s could not build the structured review request.\n' \
+			"$model_candidate" "$attempt" "$attempts"
+		rm -f "$server_stdout_file" "$session_file" "$request_file"
+		return 1
+	fi
+	set +e
+	http_status="$(curl --silent --show-error --max-time "$run_timeout_seconds" \
+		--output "$opencode_export_file" --write-out '%{http_code}' \
+		--header 'Content-Type: application/json' \
+		--request POST --data-binary "@${request_file}" \
+		"${server_url}/session/${session_id}/message" 2>>"$opencode_stderr_file")"
+	curl_status=$?
+	set -e
+	stop_opencode_server "$server_pid"
+	rm -f "$server_stdout_file" "$session_file" "$request_file"
+
+	if [ "$curl_status" -ne 0 ] || [[ "$http_status" != 2?? ]]; then
+		[ ! -f "$opencode_export_file" ] || cp "$opencode_export_file" "$opencode_json_file"
+		printf 'OpenCode %s attempt %s/%s structured review failed with transport status %s and HTTP status %s.\n' \
+			"$model_candidate" "$attempt" "$attempts" "$curl_status" "${http_status:-unavailable}"
+		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
+		if is_fatal_provider_failure "$opencode_json_file"; then
+			return 2
+		fi
+		return 1
+	fi
+	if jq -e '.info.error != null' "$opencode_export_file" >/dev/null 2>&1; then
+		cp "$opencode_export_file" "$opencode_json_file"
+		printf 'OpenCode %s attempt %s/%s structured review returned a provider error.\n' \
+			"$model_candidate" "$attempt" "$attempts"
+		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
+		if is_fatal_provider_failure "$opencode_json_file"; then
+			return 2
+		fi
+		return 1
+	fi
+	jq -c '(.info.structured // .info.structured_output) // empty' \
+		"$opencode_export_file" >"$candidate_output_file"
+	if [ ! -s "$candidate_output_file" ]; then
+		printf 'OpenCode %s attempt %s/%s response did not include structured review output.\n' \
+			"$model_candidate" "$attempt" "$attempts"
+		emit_rejected_opencode_artifact_metadata "missing-structured-output" "$opencode_export_file"
+		return 3
+	fi
+	if ! normalize_opencode_output "$candidate_output_file"; then
+		printf 'OpenCode %s attempt %s/%s structured output did not include a valid control conclusion.\n' \
+			"$model_candidate" "$attempt" "$attempts"
+		emit_rejected_opencode_artifact_metadata "invalid-structured-control-output" "$candidate_output_file"
+		return 3
+	fi
+	return 0
+}
+
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -414,6 +716,13 @@ run_one_model_attempt() {
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
+	if is_structured_output_candidate "$model_candidate"; then
+		run_structured_output_attempt \
+			"$model_candidate" "$attempt" "$attempts" "$agent" "$prompt_file" \
+			"$candidate_output_file" "$opencode_json_file" "$opencode_export_file" \
+			"$opencode_stderr_file" "$run_timeout_seconds"
+		return $?
+	fi
 	set +e
 	timeout --kill-after=30s "${run_timeout_seconds}s" \
 		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
