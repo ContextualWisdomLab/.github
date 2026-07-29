@@ -366,6 +366,16 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     ) in measure_step
     assert "ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm" in measure_step
     assert 'test "$(/usr/local/bin/pnpm --version)" = "11.5.3"' in measure_step
+    assert "materialize_base_javascript_packages.py" in measure_step
+    assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
+    assert "pnpm fetch" in measure_step
+    assert "--store-dir /opt/pnpm-store" in measure_step
+    assert "pnpm offline install" in measure_step
+    assert "--offline" in measure_step
+    assert 'find "$COVERAGE_SOURCE_WORKDIR"' in measure_step
+    assert '--repo-root "$COVERAGE_SOURCE_WORKDIR"' in measure_step
+    assert "javascript_coverage_ran_any=1" in measure_step
+    assert measure_step.count("check_javascript_coverage_thresholds") == 2
     assert "--require-hashes" in measure_step
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
     assert "The networked build context contains only this" in measure_step
@@ -984,12 +994,20 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert (
+        "ContextualWisdomLab/.github:scripts/ci/materialize_base_javascript_packages.py | \\"
+        in workflow
+    )
+    assert (
         "ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \\"
         in workflow
     )
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert (
         "ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \\"
+        in workflow
+    )
+    assert (
+        "ContextualWisdomLab/.github:tests/test_materialize_base_javascript_packages.py | \\"
         in workflow
     )
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
@@ -1658,7 +1676,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "read directly from the live-validated base SHA" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci --ignore-scripts" in coverage_job
-    assert "pnpm install --frozen-lockfile --ignore-scripts" in coverage_job
+    assert "pnpm install \\" in coverage_job
+    assert "--offline" in coverage_job
+    assert "--frozen-lockfile" in coverage_job
+    assert "--ignore-scripts" in coverage_job
+    assert "--store-dir /opt/pnpm-store" in coverage_job
     assert "yarn install --immutable --mode=skip-builds" in coverage_job
     assert 'corepack prepare "${runner}@latest"' not in coverage_job
     assert "https://sh.rustup.rs" not in coverage_job
