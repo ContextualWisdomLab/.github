@@ -277,14 +277,23 @@ jobs:
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
           # Pre-fetch every locked crate graph in the merge tree (root and nested
           # workspaces alike, matching the sandbox's nested-manifest coverage
-          # discovery) into the tree-local CARGO_HOME the network-isolated
-          # coverage sandbox already uses, so `cargo llvm-cov` can compile Rust
-          # coverage offline. Prefer the same pinned toolchain the sandbox
-          # measures with so lockfile parsing and cache layout cannot drift from
-          # the runner's default cargo. `cargo fetch` downloads content-addressed
-          # crates without executing any build scripts, and a failed prefetch
-          # keeps the same fail-closed sandbox behavior: the offline build
-          # surfaces the missing dependencies for this head.
+          # discovery) so `cargo llvm-cov` can compile Rust coverage offline.
+          # Prefer the same pinned toolchain the sandbox measures with so
+          # lockfile parsing and cache layout cannot drift from the runner's
+          # default cargo. `cargo fetch` downloads content-addressed crates
+          # without executing any build scripts, and a failed prefetch keeps
+          # the same fail-closed sandbox behavior: the offline build surfaces
+          # the missing dependencies for this head.
+          #
+          # The fetch itself never trusts pull-request-controlled cargo
+          # configuration: it runs from a runner-owned temporary HOME and
+          # CARGO_HOME (cargo discovers config.toml from the working directory
+          # and CARGO_HOME, so a config committed to the merge tree — including
+          # an external credential-provider executable — is never loaded on
+          # this authenticated runner). Only the content-addressed registry/
+          # and git/ caches are copied into the tree-local CARGO_HOME the
+          # network-isolated sandbox uses; configuration and credential files
+          # are never propagated.
           prefetch_manifests="$(git -C "$COVERAGE_SOURCE_WORKDIR" ls-files 'Cargo.toml' '*/Cargo.toml')"
           if [ -n "$prefetch_manifests" ]; then
             prefetch_cargo=()
@@ -297,17 +306,31 @@ jobs:
             if [ "${#prefetch_cargo[@]}" -eq 0 ]; then
               echo "::warning::cargo is unavailable on this runner, so no locked crate graph was pre-fetched; offline Rust coverage for this head will fail with missing dependencies."
             else
+              prefetch_home="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cargo-prefetch.XXXXXX")"
               while IFS= read -r prefetch_manifest; do
                 [ -n "$prefetch_manifest" ] || continue
                 prefetch_dir="$(dirname "$prefetch_manifest")"
                 if [ ! -f "$COVERAGE_SOURCE_WORKDIR/$prefetch_dir/Cargo.lock" ]; then
                   continue
                 fi
-                if ! CARGO_HOME="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo" \
-                  "${prefetch_cargo[@]}" fetch --locked --manifest-path "$COVERAGE_SOURCE_WORKDIR/$prefetch_manifest"; then
+                if ! (
+                  cd "$prefetch_home" \
+                    && HOME="$prefetch_home" \
+                      CARGO_HOME="$prefetch_home/.cargo" \
+                      "${prefetch_cargo[@]}" fetch --locked \
+                      --manifest-path "$COVERAGE_SOURCE_WORKDIR/$prefetch_manifest"
+                ); then
                   echo "::warning::Locked cargo prefetch failed for ${prefetch_manifest}; offline Rust coverage will surface the missing dependencies for this head."
                 fi
               done <<<"$prefetch_manifests"
+              sandbox_cargo_home="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo"
+              for prefetch_cache_dir in registry git; do
+                if [ -d "$prefetch_home/.cargo/$prefetch_cache_dir" ]; then
+                  mkdir -p "$sandbox_cargo_home"
+                  cp -a "$prefetch_home/.cargo/$prefetch_cache_dir" "$sandbox_cargo_home/"
+                fi
+              done
+              rm -rf "$prefetch_home"
             fi
           fi
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
@@ -1508,8 +1531,22 @@ jobs:
             # repository rust-toolchain(.toml) requesting any other channel would
             # make the rustup proxy attempt a download the offline sandbox cannot
             # perform. The env override takes precedence over directory overrides,
-            # keeping toolchain selection deterministic and offline-safe.
+            # keeping toolchain selection deterministic and offline-safe, and
+            # rustup's auto-install is disabled so a missing pinned toolchain
+            # fails fast as an image-provisioning error instead of a network
+            # attempt the sandbox can never satisfy.
             export RUSTUP_TOOLCHAIN=1.94.1
+            export RUSTUP_AUTO_INSTALL=0
+            if ! rustc --version >/dev/null 2>&1; then
+              append "### Rust coverage toolchain"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: the trusted offline coverage image cannot resolve the pinned Rust 1.94.1 toolchain (rustc --version failed with rustup auto-install disabled)."
+              append "- Fix: rebuild the trusted coverage image with the pinned toolchain, then rerun the current-head coverage job."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
           }
