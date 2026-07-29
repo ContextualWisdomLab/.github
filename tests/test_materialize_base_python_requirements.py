@@ -34,6 +34,10 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
         "demo==1 --hash=sha256:" + ("a" * 64) + "\n",
         encoding="utf-8",
     )
+    (repo / "requirements.lock").write_text(
+        "locked==1 --hash=sha256:" + ("c" * 64) + "\n",
+        encoding="utf-8",
+    )
     (backend / "requirements.txt").write_text("untrusted==1\n", encoding="utf-8")
     git(repo, "add", ".")
     git(repo, "commit", "-m", "base")
@@ -41,6 +45,10 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
 
     (backend / "requirements-hashes.txt").write_text(
         "changed==2 --hash=sha256:" + ("b" * 64) + "\n",
+        encoding="utf-8",
+    )
+    (repo / "requirements.lock").write_text(
+        "changed==2 --hash=sha256:" + ("d" * 64) + "\n",
         encoding="utf-8",
     )
     git(repo, "add", ".")
@@ -53,15 +61,21 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
         {
             "file": "requirements-000.txt",
             "source": "backend/requirements-hashes.txt",
-        }
+        },
+        {"file": "requirements-001.txt", "source": "requirements.lock"},
     ]
     assert (
         (output / "requirements-000.txt")
         .read_text(encoding="utf-8")
         .startswith("demo==1")
     )
-    assert "requirements-000.txt\n" == (output / "manifest.txt").read_text(
-        encoding="utf-8"
+    assert "requirements-000.txt\nrequirements-001.txt\n" == (
+        output / "manifest.txt"
+    ).read_text(encoding="utf-8")
+    assert (
+        (output / "requirements-001.txt")
+        .read_text(encoding="utf-8")
+        .startswith("locked==1")
     )
     assert "requirements.txt" not in (output / "manifest.json").read_text(
         encoding="utf-8"
@@ -128,7 +142,12 @@ def test_main_reports_each_materialized_lock(
     def fake_materialize(
         _repo_root: Path, _base_sha: str, _output_dir: Path
     ) -> list[dict[str, str]]:
-        return [{"file": "requirements-000.txt", "source": "backend/requirements-hashes.txt"}]
+        return [
+            {
+                "file": "requirements-000.txt",
+                "source": "backend/requirements-hashes.txt",
+            }
+        ]
 
     monkeypatch.setattr(materializer, "materialize", fake_materialize)
 
@@ -172,7 +191,10 @@ def test_main_reports_when_no_locks_exist(
         )
         == 0
     )
-    assert "No tracked requirements-hashes.txt files exist" in capsys.readouterr().out
+    assert (
+        "No tracked hash-pinned Python requirement locks exist"
+        in capsys.readouterr().out
+    )
 
 
 def test_main_fails_with_the_materialization_reason(
