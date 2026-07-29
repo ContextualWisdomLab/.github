@@ -407,6 +407,7 @@ run_one_model_attempt() {
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
 	local opencode_pid fatal_poll_seconds repair_json_file repair_status repair_timeout_seconds
+	local validation_output validation_error
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
@@ -492,8 +493,13 @@ run_one_model_attempt() {
 		emit_rejected_opencode_artifact_metadata "assistant-empty-export" "$opencode_export_file"
 		return 1
 	fi
-	if ! normalize_opencode_output "$candidate_output_file"; then
+	if ! validation_output="$(normalize_opencode_output "$candidate_output_file" 2>&1)"; then
+		printf '%s\n' "$validation_output"
 		if [[ "$model_candidate" == opencode-free/* ]]; then
+			validation_error="$(printf '%s\n' "$validation_output" | sed -n '/CONTROL_REJECTED/p' | tail -n 1)"
+			if [ -z "$validation_error" ]; then
+				validation_error="$(printf '%s\n' "$validation_output" | tail -n 1)"
+			fi
 			repair_json_file="${opencode_json_file}.control-repair"
 			repair_timeout_seconds="$(env_integer_or_default OPENCODE_CONTROL_REPAIR_TIMEOUT_SECONDS 120)"
 			set +e
@@ -501,7 +507,7 @@ run_one_model_attempt() {
 				env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 				-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
 				opencode run --session "$session_id" \
-				"Rewrite your preceding review as exactly one JSON control object using the schema already provided; emit no prose or Markdown. Preserve every source-backed finding. REQUEST_CHANGES requires at least one complete source-backed finding; if none exists, use APPROVE with findings []. Use head_sha=${HEAD_SHA}, run_id=${RUN_ID}, and run_attempt=${RUN_ATTEMPT}." \
+				"Rewrite your preceding review as exactly one JSON control object using the schema already provided; emit no prose or Markdown. Correct this validator rejection: ${validation_error}. Preserve every source-backed finding. REQUEST_CHANGES requires at least one complete source-backed finding; if none exists, use APPROVE with findings []. Use head_sha=${HEAD_SHA}, run_id=${RUN_ID}, and run_attempt=${RUN_ATTEMPT}." \
 				--pure --agent "$agent" --model "$model_candidate" --format json \
 				>"$repair_json_file" 2>>"$opencode_stderr_file"
 			repair_status=$?

@@ -154,6 +154,7 @@ def run_failed_model(
         "#!/usr/bin/env bash\n"
         'if [ "${1:-}" = run ]; then\n'
         '  if [[ " $* " == *" --session "* ]] && [ -n "${FAKE_OPENCODE_REPAIR_JSON:-}" ]; then\n'
+        '    [ -z "${FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$4" > "$FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE"\n'
         '    printf \'%s\\n\' "$FAKE_OPENCODE_REPAIR_JSON"\n'
         '    exit "${FAKE_OPENCODE_REPAIR_EXIT:-0}"\n'
         "  fi\n"
@@ -520,6 +521,7 @@ def test_invalid_control_output_suppresses_assistant_content(tmp_path: Path) -> 
 def test_free_model_repairs_invalid_control_in_the_same_session(tmp_path: Path) -> None:
     """A free review can repair formatting without repeating repository analysis."""
     changed_file = "scripts/ci/run_opencode_review_model_pool.sh"
+    repair_prompt = tmp_path / "repair-prompt.txt"
     posture = "\n".join(
         [
             f"Approval sufficiency: affirmative evidence from {changed_file}.",
@@ -563,6 +565,7 @@ def test_free_model_repairs_invalid_control_in_the_same_session(tmp_path: Path) 
         changed_files=[changed_file],
         extra_env={
             "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE": bash_path(repair_prompt),
             "FAKE_OPENCODE_EXPORT": json.dumps(
                 {
                     "messages": [
@@ -583,6 +586,10 @@ def test_free_model_repairs_invalid_control_in_the_same_session(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "Correct this validator rejection: CONTROL_REJECTED:"
+        in repair_prompt.read_text(encoding="utf-8")
+    )
     assert json.loads(
         (tmp_path / "selected-output.md").read_text(encoding="utf-8")
     ) == control
