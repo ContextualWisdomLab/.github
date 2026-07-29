@@ -155,6 +155,7 @@ def run_failed_model(
         'if [ "${1:-}" = run ]; then\n'
         '  if [[ " $* " == *" --session "* ]] && [ -n "${FAKE_OPENCODE_REPAIR_JSON:-}" ]; then\n'
         '    [ -z "${FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$4" > "$FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE"\n'
+        '    [ -z "${FAKE_OPENCODE_REPAIR_STATE_FILE:-}" ] || : > "$FAKE_OPENCODE_REPAIR_STATE_FILE"\n'
         '    printf \'%s\\n\' "$FAKE_OPENCODE_REPAIR_JSON"\n'
         '    exit "${FAKE_OPENCODE_REPAIR_EXIT:-0}"\n'
         "  fi\n"
@@ -165,7 +166,11 @@ def run_failed_model(
         '  exit "${FAKE_OPENCODE_RUN_EXIT:-1}"\n'
         "fi\n"
         'if [ "${1:-}" = export ]; then\n'
-        '  [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
+        '  if [ -n "${FAKE_OPENCODE_REPAIR_STATE_FILE:-}" ] && [ -f "$FAKE_OPENCODE_REPAIR_STATE_FILE" ] && [ -n "${FAKE_OPENCODE_REPAIR_EXPORT:-}" ]; then\n'
+        '    printf \'%s\\n\' "$FAKE_OPENCODE_REPAIR_EXPORT"\n'
+        "  else\n"
+        '    [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
+        "  fi\n"
         '  exit "${FAKE_OPENCODE_EXPORT_EXIT:-0}"\n'
         "fi\n"
         "printf 'unexpected fake opencode command: %s\\n' \"$*\" >&2\n"
@@ -522,6 +527,7 @@ def test_free_model_repairs_invalid_control_in_the_same_session(tmp_path: Path) 
     """A free review can repair formatting without repeating repository analysis."""
     changed_file = "scripts/ci/run_opencode_review_model_pool.sh"
     repair_prompt = tmp_path / "repair-prompt.txt"
+    repair_state = tmp_path / "repair-state"
     posture = "\n".join(
         [
             f"Approval sufficiency: affirmative evidence from {changed_file}.",
@@ -566,6 +572,7 @@ def test_free_model_repairs_invalid_control_in_the_same_session(tmp_path: Path) 
         extra_env={
             "FAKE_OPENCODE_RUN_EXIT": "0",
             "FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE": bash_path(repair_prompt),
+            "FAKE_OPENCODE_REPAIR_STATE_FILE": bash_path(repair_state),
             "FAKE_OPENCODE_EXPORT": json.dumps(
                 {
                     "messages": [
@@ -579,7 +586,17 @@ def test_free_model_repairs_invalid_control_in_the_same_session(tmp_path: Path) 
             "FAKE_OPENCODE_REPAIR_JSON": json.dumps(
                 {
                     "type": "text",
-                    "part": {"type": "text", "text": json.dumps(control)},
+                    "part": {"type": "text", "text": "streamed repair event"},
+                }
+            ),
+            "FAKE_OPENCODE_REPAIR_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [{"type": "text", "text": json.dumps(control)}],
+                        }
+                    ]
                 }
             ),
         },

@@ -17,6 +17,19 @@ record_pool_exhausted() {
 	record_review_status "exhausted"
 }
 
+extract_final_assistant_text() {
+	jq -r '
+		[
+			.messages[]?
+			| select(.info.role == "assistant")
+			| [.parts[]? | select(.type == "text") | .text]
+			| join("\n")
+			| select(length > 0)
+		]
+		| last // empty
+	' "$1" >"$2"
+}
+
 finish_pool_without_model() {
 	record_pool_exhausted
 	return 1
@@ -478,16 +491,7 @@ run_one_model_attempt() {
 		printf 'OpenCode %s attempt %s/%s session export did not complete within %ss.\n' "$model_candidate" "$attempt" "$attempts" "$export_timeout_seconds"
 		return 1
 	fi
-	jq -r '
-		[
-			.messages[]?
-			| select(.info.role == "assistant")
-			| [.parts[]? | select(.type == "text") | .text]
-			| join("\n")
-			| select(length > 0)
-		]
-		| last // empty
-	' "$opencode_export_file" >"$candidate_output_file"
+		extract_final_assistant_text "$opencode_export_file" "$candidate_output_file"
 	if [ ! -s "$candidate_output_file" ]; then
 		printf 'OpenCode %s attempt %s/%s session export did not include assistant text.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "assistant-empty-export" "$opencode_export_file"
@@ -513,8 +517,12 @@ run_one_model_attempt() {
 			repair_status=$?
 			set -e
 			if [ "$repair_status" -eq 0 ]; then
-				jq -rs '[.[] | select(.type == "text") | .part.text] | last // empty' \
-					"$repair_json_file" >"$candidate_output_file"
+				if timeout --kill-after=15s "${export_timeout_seconds}s" \
+					env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+					-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+					opencode export "$session_id" --pure >"$opencode_export_file"; then
+					extract_final_assistant_text "$opencode_export_file" "$candidate_output_file"
+				fi
 				if [ -s "$candidate_output_file" ] && normalize_opencode_output "$candidate_output_file"; then
 					return 0
 				fi
