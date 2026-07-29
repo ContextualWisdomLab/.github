@@ -11,6 +11,7 @@ def ruleset_payload() -> dict:
     """Return the expected live central required-workflow ruleset shape."""
     workflow_paths = (
         "close-empty-pr.yml",
+        "noema-review.yml",
         "opencode-review.yml",
         "pr-review-merge-scheduler.yml",
         "security-scan.yml",
@@ -25,7 +26,7 @@ def ruleset_payload() -> dict:
         "conditions": {
             "repository_name": {
                 "include": ["~ALL"],
-                "exclude": ["noema", "argos", ".github"],
+                "exclude": ["noema", "IRT-bibliography-set", ".github"],
             },
             "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
         },
@@ -47,7 +48,7 @@ def ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 1,
+                    "required_approving_review_count": 2,
                     "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": False,
                     "require_last_push_approval": True,
@@ -70,7 +71,8 @@ def inherited_ruleset_payload() -> dict:
     payload["source"] = "ContextualWisdomLab"
     payload[audit.INHERITED_SCOPE_FIELD] = {
         ".github": False,
-        "argos": False,
+        "IRT-bibliography-set": False,
+        "argos": True,
         "naruon": True,
         "noema": False,
         "xtrmLLMBatchPython": True,
@@ -83,25 +85,26 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
     assert audit.main([]) == 0
     assert (
-        "PASS: ruleset 18156473 enforces 6 central required workflows"
+        "PASS: ruleset 18156473 enforces 7 central required workflows"
         in capsys.readouterr().out
     )
 
 
-def test_inherited_ruleset_and_public_scope_probes_pass() -> None:
+def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 
 
 def test_inherited_scope_reports_every_inclusion_and_exclusion_drift() -> None:
     payload = inherited_ruleset_payload()
     payload[audit.INHERITED_SCOPE_FIELD][".github"] = True
+    payload[audit.INHERITED_SCOPE_FIELD]["argos"] = False
     payload[audit.INHERITED_SCOPE_FIELD]["naruon"] = False
     payload[audit.INHERITED_SCOPE_FIELD].pop("noema")
 
     errors = audit.audit_ruleset(payload)
 
     assert "central ruleset unexpectedly applies to excluded repository .github" in errors
-    assert "central ruleset is not inherited by public repository probes: ['naruon']" in errors
+    assert "central ruleset is not inherited by organization repository probes: ['argos', 'naruon']" in errors
     assert "inherited repository scope probes omit expected exclusions: ['noema']" in errors
 
 
@@ -112,7 +115,7 @@ def test_inherited_scope_rejects_non_boolean_probe_results() -> None:
     errors = audit.audit_ruleset(payload)
 
     assert "inherited repository scope probes are not boolean for: ['naruon']" in errors
-    assert "central ruleset is not inherited by public repository probes: ['naruon']" in errors
+    assert "central ruleset is not inherited by organization repository probes: ['naruon']" in errors
 
 
 def test_missing_semgrep_workflow_reports_exact_drift(capsys, tmp_path) -> None:
@@ -134,6 +137,20 @@ def test_missing_semgrep_workflow_reports_exact_drift(capsys, tmp_path) -> None:
     )
 
 
+def test_missing_noema_workflow_reports_exact_drift() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"] = [
+        workflow
+        for workflow in workflow_rule["parameters"]["workflows"]
+        if workflow["path"] != ".github/workflows/noema-review.yml"
+    ]
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "missing central required workflow .github/workflows/noema-review.yml" in errors
+
+
 def test_wrong_workflow_ref_reports_exact_drift() -> None:
     payload = ruleset_payload()
     workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
@@ -150,11 +167,13 @@ def test_wrong_workflow_ref_reports_exact_drift() -> None:
 def test_review_policy_weakening_reports_exact_drift() -> None:
     payload = ruleset_payload()
     review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["required_approving_review_count"] = 1
     review_rule["parameters"]["require_last_push_approval"] = False
     review_rule["parameters"]["required_review_thread_resolution"] = False
 
     errors = audit.audit_ruleset(payload)
 
+    assert "exactly two approving reviews are not required" in errors
     assert "last-push approval protection is disabled" in errors
     assert "review-thread resolution protection is disabled" in errors
 
@@ -177,10 +196,11 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "central ruleset target is not branch",
         "central ruleset enforcement is not active",
         "central ruleset does not include all repositories",
-        "central ruleset repository exclusions drifted: expected ['.github', 'argos', 'noema'], got []",
+        "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
         "central ruleset does not target every default branch",
         "expected one workflows rule, found 0",
         "missing central required workflow .github/workflows/close-empty-pr.yml",
+        "missing central required workflow .github/workflows/noema-review.yml",
         "missing central required workflow .github/workflows/opencode-review.yml",
         "missing central required workflow .github/workflows/pr-review-merge-scheduler.yml",
         "missing central required workflow .github/workflows/security-scan.yml",
@@ -211,7 +231,7 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
     errors = audit.audit_ruleset(payload)
 
     assert "central required workflow .github/workflows/sast-semgrep.yml is configured 2 times" in errors
-    assert "at least one approving review is not required" in errors
+    assert "exactly two approving reviews are not required" in errors
     assert "stale-review dismissal on push is disabled" in errors
     assert "last-push approval protection is disabled" in errors
     assert "review-thread resolution protection is disabled" in errors
@@ -228,7 +248,7 @@ def test_audit_handles_malformed_rule_parameter_shapes() -> None:
     errors = audit.audit_ruleset(payload)
 
     assert "missing central required workflow .github/workflows/sast-semgrep.yml" in errors
-    assert "at least one approving review is not required" in errors
+    assert "exactly two approving reviews are not required" in errors
 
 
 def test_load_payload_rejects_non_object_and_main_logs_load_reason(monkeypatch, capsys) -> None:
@@ -241,7 +261,7 @@ def test_load_payload_rejects_non_object_and_main_logs_load_reason(monkeypatch, 
     )
 
 
-def test_scheduled_audit_and_rollout_document_the_semgrep_requirement() -> None:
+def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -> None:
     workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
         encoding="utf-8"
     )
@@ -251,11 +271,12 @@ def test_scheduled_audit_and_rollout_document_the_semgrep_requirement() -> None:
 
     assert 'cron: "11 2 * * *"' in workflow
     assert "repos/${ORG_LOGIN}/${RULESET_SENTINEL_REPOSITORY}/rulesets/${RULESET_ID}" in workflow
-    assert 'orgs/${ORG_LOGIN}/repos?type=public&per_page=100' in workflow
+    assert 'orgs/${ORG_LOGIN}/repos?type=all&per_page=100' in workflow
     assert "RULESET_SCOPE repository=${repository} inherited=${inherited}" in workflow
     assert "HTTP 404" in workflow
     assert "audit_central_required_workflows.py" in workflow
     assert "Ruleset audit could not read inherited organization ruleset" in workflow
+    assert "- `.github/workflows/noema-review.yml`" in rollout
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
 
 
