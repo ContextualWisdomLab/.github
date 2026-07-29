@@ -36,7 +36,7 @@ This keeps Strix security evidence, OpenCode and independent Noema review eviden
 The central `.github/workflows/opencode-review.yml` is now part of the active organization required workflow ruleset.
 
 - Required workflow trigger support: metadata-only `pull_request_target`; the file contains no checkout, PR-head execution, or secret expression
-- Stable required bootstrap job name: `required-workflow-bootstrap`
+- Stable branch-protection job names: `required-workflow-bootstrap`, `coverage-source-tree`, `coverage-evidence`, and `opencode-review`; these jobs are data-only sentinels, while approval remains a separate current-head PR-review requirement
 - Trusted source: `ContextualWisdomLab/.github`
 - PR-head handling: authenticated current-head `repository_dispatch` runs `.github/workflows/opencode-review-dispatch.yml` from the protected default branch; that workflow owns metadata validation, bounded coverage, source-as-data inspection, model review, and publication
 - Manual target support: the central scheduler sends exact repository, PR, base, and head metadata through `repository_dispatch`; the dispatch workflow rejects an unauthorized actor, an unallowlisted repository, a fork head, or any live metadata mismatch

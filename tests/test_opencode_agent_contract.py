@@ -1625,6 +1625,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "actions/checkout" not in bootstrap
     assert "${{ secrets." not in bootstrap
     assert "required-workflow-bootstrap:" in bootstrap
+    assert "  coverage-source-tree:\n" in bootstrap
+    assert "  coverage-evidence:\n" in bootstrap
+    assert "  opencode-review-target:\n" in bootstrap
+    assert "    name: opencode-review\n" in bootstrap
+    assert "authenticated default-branch OpenCode review dispatch" in bootstrap
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow

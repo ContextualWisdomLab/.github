@@ -30,3 +30,30 @@ jobs:
         run: >-
           echo "Required OpenCode workflow materialized without checking out or
           executing pull-request content."
+
+  coverage-source-tree:
+    name: coverage-source-tree
+    needs: [required-workflow-bootstrap]
+    runs-on: ubuntu-latest
+    steps:
+      - run: >-
+          echo "PR-head source and coverage execution are delegated to the
+          authenticated default-branch OpenCode review dispatch."
+
+  coverage-evidence:
+    name: coverage-evidence
+    needs: [coverage-source-tree]
+    runs-on: ubuntu-latest
+    steps:
+      - run: >-
+          echo "This required-workflow job preserves the stable branch-protection
+          context without executing pull-request content."
+
+  opencode-review-target:
+    name: opencode-review
+    needs: [coverage-evidence]
+    runs-on: ubuntu-latest
+    steps:
+      - run: >-
+          echo "Review approval remains a separate current-head PR review
+          requirement produced by the authenticated dispatch workflow."
