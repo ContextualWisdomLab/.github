@@ -337,7 +337,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "member.isfile() or member.isdir()" in workflow
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
-    assert "docker.io/library/ubuntu@sha256:" in measure_step
+    assert "docker.io/library/python:3.14-slim@sha256:" in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert "--require-hashes" in measure_step
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
@@ -1507,11 +1507,17 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "steps.opencode_app_token.outputs" not in status_step
     assert "continue-on-error: true" not in status_step
     assert (
-        "same-repository github.token is available for cross-repository target"
+        "same-repository github.token can access cross-repository target"
         in status_step
     )
     assert "status publication failed because pr_head_sha was empty" in status_step
     assert "exit 1" in status_step
+    cross_repository_guard = status_step.split(
+        'if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]', 1
+    )[1].split("\n          fi", 1)[0]
+    assert "exact-head formal review remains authoritative" in cross_repository_guard
+    assert "exit 0" in cross_repository_guard
+    assert "exit 1" not in cross_repository_guard
     assert "using %s token" in status_step
     assert "scripts/ci/opencode_dispatch_status.py" in status_step
     assert "COVERAGE_EVIDENCE_RESULT" in status_step
@@ -1597,6 +1603,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "uv run --no-build" not in measure
     assert "Trusted offline Python test toolchain" in measure
     assert "python3 -m coverage run -m pytest tests" in measure
+    assert "materialize_base_python_requirements.py" in measure
+    assert "base-python-requirements/manifest.txt" in measure
+    assert "read directly from the live-validated base SHA" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci --ignore-scripts" in coverage_job
     assert "pnpm install --frozen-lockfile --ignore-scripts" in coverage_job

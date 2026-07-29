@@ -1896,14 +1896,20 @@ def active_review_run_refs(
     """Return repository-qualified current and stale review workflow runs."""
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
-    repositories = tuple(dict.fromkeys((target_repo, dispatch_repo)))
+    centralized_dispatch = bool(
+        (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    )
     head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
     dispatch_title_prefix = f"{run_title} {target_repo}#{number}@"
     current: list[tuple[str, str]] = []
     stale: list[tuple[str, str]] = []
 
-    for run_repo in repositories:
+    # Only the repository_dispatch receiver hosts the privileged review run.
+    # When organization required workflows are materialized in a target
+    # repository, their pull_request_target jobs are evidence placeholders and
+    # must not suppress the central authenticated reviewer.
+    for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
             if run_name != workflow and run_name not in workflow_aliases:
@@ -1922,7 +1928,7 @@ def active_review_run_refs(
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
                 continue
-            if run_repo != target_repo:
+            if centralized_dispatch:
                 continue
             run_head = str(run_data.get("head_sha") or "").lower()
             pull_requests = run_data.get("pull_requests") or []
