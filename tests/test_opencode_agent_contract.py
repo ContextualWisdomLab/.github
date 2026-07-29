@@ -397,6 +397,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "pnpm offline install" in measure_step
     assert "--offline" in measure_step
     assert 'find "$COVERAGE_SOURCE_WORKDIR"' in measure_step
+    assert 'chmod 0444 "$summary_list"' in measure_step
+    assert measure_step.index('chmod 0444 "$summary_list"') < measure_step.index(
+        '--summary-list "$summary_list"'
+    )
     assert '--repo-root "$COVERAGE_SOURCE_WORKDIR"' in measure_step
     assert "javascript_coverage_ran_any=1" in measure_step
     assert measure_step.count("check_javascript_coverage_thresholds") == 2

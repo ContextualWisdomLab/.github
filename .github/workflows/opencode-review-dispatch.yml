@@ -1293,6 +1293,7 @@ jobs:
               -type f \
               -not -path '*/node_modules/*' \
               -print >"$summary_list"
+            chmod 0444 "$summary_list"
 
             if [ ! -s "$summary_list" ]; then
               append "### JavaScript/TypeScript coverage threshold"
