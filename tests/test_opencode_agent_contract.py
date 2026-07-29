@@ -380,9 +380,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert (
-        'worktree_blob="$(trusted_git hash-object --no-filters -- "$relative_lock")"'
+        'trusted_git hash-object --no-filters -- \\\n'
+        '                "$COVERAGE_SOURCE_WORKDIR/$relative_lock"'
         in measure_step
     )
+    assert 'hash-object --no-filters -- "$relative_lock"' not in measure_step
     assert "refusing --trust-lockfile for PR-controlled dependency resolution" in measure_step
     assert "prepare_writable_pnpm_store()" in measure_step
     assert (
