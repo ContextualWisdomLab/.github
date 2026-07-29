@@ -477,7 +477,16 @@ run_one_model_attempt() {
 		printf 'OpenCode %s attempt %s/%s session export did not complete within %ss.\n' "$model_candidate" "$attempt" "$attempts" "$export_timeout_seconds"
 		return 1
 	fi
-	jq -r '.messages[] | select(.info.role == "assistant") | .parts[]? | select(.type == "text") | .text' "$opencode_export_file" >"$candidate_output_file"
+	jq -r '
+		[
+			.messages[]?
+			| select(.info.role == "assistant")
+			| [.parts[]? | select(.type == "text") | .text]
+			| join("\n")
+			| select(length > 0)
+		]
+		| last // empty
+	' "$opencode_export_file" >"$candidate_output_file"
 	if [ ! -s "$candidate_output_file" ]; then
 		printf 'OpenCode %s attempt %s/%s session export did not include assistant text.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "assistant-empty-export" "$opencode_export_file"

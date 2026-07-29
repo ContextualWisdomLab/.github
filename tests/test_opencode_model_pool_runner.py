@@ -513,6 +513,51 @@ def test_invalid_control_output_suppresses_assistant_content(tmp_path: Path) -> 
     assert_secret_absent(result, secret)
 
 
+def test_only_final_assistant_message_reaches_control_validation(
+    tmp_path: Path,
+) -> None:
+    """Intermediate assistant turns cannot corrupt the final control candidate."""
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": "intermediate analysis must be ignored",
+                                }
+                            ],
+                        },
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": "final control candidate",
+                                }
+                            ],
+                        },
+                    ]
+                }
+            ),
+        },
+    )
+
+    candidate_output = (
+        tmp_path
+        / "runner-temp"
+        / "opencode-review-github-models-openai-gpt-5.md"
+    )
+    assert result.returncode == 1
+    assert candidate_output.read_text(encoding="utf-8") == "final control candidate\n"
+
+
 def test_runner_never_cats_rejected_provider_artifacts() -> None:
     """Provider-controlled rejection files are never replayed with direct cat calls."""
     runner = RUNNER.read_text(encoding="utf-8")
