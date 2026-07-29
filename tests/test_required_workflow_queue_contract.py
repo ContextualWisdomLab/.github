@@ -59,7 +59,7 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
 def test_privileged_review_retries_use_default_branch_repository_dispatch() -> None:
     """Privileged retries must never load workflow code from a selected ref."""
     expected_types = {
-        "opencode-review.yml": "opencode-review",
+        "opencode-review-dispatch.yml": "opencode-review",
         "noema-review.yml": "noema-review",
         "strix.yml": "strix-scan",
         "pr-review-merge-scheduler.yml": "merge-scheduler",
@@ -127,13 +127,14 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
-            "opencode-review.yml",
             "security-scan.yml",
         }:
             assert (
                 "github.event_name == 'pull_request_target'" in concurrency_contract
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
+        elif filename == "opencode-review.yml":
+            assert "opencode-review-bootstrap-" in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -212,7 +213,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
-        "opencode-review.yml",
         "osv-scanner-pr.yml",
         "pr-review-merge-scheduler.yml",
         "scorecard-pr.yml",
@@ -230,6 +230,13 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             in workflow
         )
         assert "github.event.action != 'closed'" in workflow
+
+    opencode_bootstrap = workflow_text("opencode-review.yml")
+    assert "types: [opened, synchronize, reopened, ready_for_review, closed]" in (
+        opencode_bootstrap
+    )
+    assert "actions/checkout" not in opencode_bootstrap
+    assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
     assert "cancel-in-progress: true" in strix_workflow
@@ -256,7 +263,7 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
     for filename in (
-        "opencode-review.yml",
+        "opencode-review-dispatch.yml",
         "noema-review.yml",
         "pr-review-merge-scheduler.yml",
     ):
@@ -267,7 +274,7 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "github.event.client_payload.canonical_ref" not in workflow
         assert "inputs.canonical_ref" not in workflow
         assert "workflow_sha" in workflow
-        if filename == "opencode-review.yml":
+        if filename == "opencode-review-dispatch.yml":
             assert "ref: ${{ steps.trusted_source.outputs.ref }}" in workflow
             assert "ref: ${{ github.workflow_sha }}" not in workflow
         else:
@@ -874,7 +881,7 @@ def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
 
 
 def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> None:
-    workflow = workflow_text("opencode-review.yml")
+    workflow = workflow_text("opencode-review-dispatch.yml")
     failed_check_evidence = (
         REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh"
     ).read_text(encoding="utf-8")
