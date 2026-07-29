@@ -408,7 +408,20 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert '--store-dir "$writable_pnpm_store_dir"' in measure_step
     assert "pnpm offline install" in measure_step
     assert "--offline" in measure_step
-    assert 'find "$COVERAGE_SOURCE_WORKDIR"' in measure_step
+    coverage_function_start = measure_step.index(
+        "          check_javascript_coverage_thresholds() {\n"
+    )
+    coverage_function_end = measure_step.index(
+        "\n          }\n", coverage_function_start
+    )
+    coverage_function = measure_step[coverage_function_start:coverage_function_end]
+    summary_find = coverage_function.index('find "$COVERAGE_SOURCE_WORKDIR"')
+    summary_find_complete = coverage_function.index(
+        '-print >"$summary_list"', summary_find
+    )
+    summary_chmod = coverage_function.index('chmod 0444 "$summary_list"')
+    summary_argument = coverage_function.index('--summary-list "$summary_list"')
+    assert summary_find < summary_find_complete < summary_chmod < summary_argument
     assert '--repo-root "$COVERAGE_SOURCE_WORKDIR"' in measure_step
     assert "javascript_coverage_ran_any=1" in measure_step
     assert measure_step.count("check_javascript_coverage_thresholds") == 2
