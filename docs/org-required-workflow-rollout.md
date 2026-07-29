@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-14 13:35 KST
+Updated: 2026-07-23 06:35 KST
 
 ## Decision
 
@@ -14,21 +14,22 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Required workflow source repository ID: `1274066402`
 - Active required workflow paths:
   - `.github/workflows/close-empty-pr.yml`
+  - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
   - `.github/workflows/security-scan.yml`
   - `.github/workflows/strix.yml`
   - `.github/workflows/sast-semgrep.yml`
 - Required workflow ref: `refs/heads/main`
-- Last verified workflow implementation base commit: `ef9950e6b55bf943c0295e1df3e34c94210d21cc` (`#283`)
+- Last verified workflow implementation base commit: `050e6d59b0de9e62c8413d5f8f26f4f2f9ebea09` (`#584`)
 - Required workflow trigger support: `pull_request`, `pull_request_target`, `push`, `workflow_run`
 
-`.github` PRs through `#283` are now in `main`. The required-workflow
-ruleset points at `.github@main`; if live organization ruleset inspection
+The required-workflow implementation is current through merged `.github#584`.
+The ruleset points at `.github@main`; if live organization ruleset inspection
 reports another ref, treat that as operations drift and restore ruleset
 `18156473` to the current `main` head.
 
-This keeps Strix security evidence, OpenCode review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
+This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
 
 ## OpenCode required workflow posture
 
@@ -115,18 +116,20 @@ Do not centralize the scheduler by running a `.github` scheduled job against oth
 The org's two-reviewer merge rule needs a second approving-review identity
 independent of OpenCode. That identity is `cwl-noema-review[bot]`, supplied by
 the organization-owned `cwl-noema-review` GitHub App. The central workflow
-currently runs the centrally versioned `noema_review_gate.py` judgement path and
+is an active organization required workflow. It runs the centrally versioned
+`noema_review_gate.py` judgement path and
 mints a short-lived installation token restricted to the target repository; the
 App has read-only Actions/checks/contents/status/code-scanning/Dependabot access
 and write access only to pull-request reviews.
 
 The PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
 (`reviewer/noema_reviewer`, noema#9) is the target standalone judgement plane,
-but this credential/fail-closed rollout does not yet install or invoke that
-package. Do not raise the org approval count to two on the strength of this
-document alone: first wire its full current-head logs/SARIF/dependency/comment/
-CodeGraph manifest into this required workflow and prove an App-authored live
-review on a target-repository PR.
+while the central Python gate remains the deployed fail-closed reviewer. The
+standalone package is not imported into the privileged workflow. External proof
+exists on `ContextualWisdomLab/clearfolio#161`: `cwl-noema-review[bot]` submitted
+an `APPROVED` review whose review commit, explicit Head SHA, current-head checks,
+SARIF/dependency evidence, test evidence, and review marker all bind to
+`4512fb9e9b56ab95df3acd85ebec2e6b849335a7`.
 
 - Token posture: `noema-review.yml` prefers a `NOEMA_REVIEW_TOKEN` emergency
   fallback when present, otherwise mints the repository-scoped App token with
@@ -148,7 +151,7 @@ review on a target-repository PR.
 The active ruleset no longer maintains a repository-name allowlist. Live
 ruleset inspection on 2026-07-02 18:15 KST reports
 `repository_name.include=["~ALL"]`, so all current and future organization
-repositories inherit the three central required workflows on their default
+repositories inherit the seven central required workflows on their default
 branch unless a later ruleset exclusion is added. The table below is the public
 non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
@@ -175,12 +178,12 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 ## Current policy
 
 1. Security evidence, review evidence, and mechanical merge/update automation are centralized through the organization `workflows` ruleset rule.
-2. The central required workflows come from `.github`; repositories should not receive copied Strix, OpenCode, or scheduler workflow files only to satisfy this rollout.
+2. The central required workflows come from `.github`; repositories should not receive copied Strix, OpenCode, Noema, or scheduler workflow files only to satisfy this rollout.
 3. GitHub Flow repositories are those whose default branch is `main` or `master`.
 4. Git Flow repositories are those whose default branch is `develop`.
 5. OpenCode remains responsible for review judgment and structured decisions.
 6. GitHub Actions remains responsible for mechanical branch updates and merges.
-7. A merge is acceptable only when the current head has required checks passing, current-head OpenCode approval, no unresolved review threads, and a clean or mergeable merge state.
+7. A merge is acceptable only when the current head has required checks passing, distinct current-head OpenCode and Noema approvals, no unresolved review threads, and a clean or mergeable merge state.
 8. Previous-head approvals or checks are not merge evidence.
 9. Same-repository approved PRs should merge immediately when GitHub reports `CLEAN`; fork or external-head PRs are excluded from scheduler merge and auto-merge.
 
@@ -192,8 +195,10 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - On 2026-07-02 07:25 KST, organization ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the same three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.
 - On 2026-07-11 11:30 KST, organization ruleset `18156473` was normalized to keep the five central required workflows, stale-review dismissal, last-pusher protection, and review-thread resolution while setting `required_approving_review_count=0` and `require_code_owner_review=false`. The merge gate remains current-head OpenCode approval plus required checks and scheduler evidence; the change removes self-authored/code-owner deadlocks that left approved PRs unable to merge.
 - On 2026-07-13 21:10 KST, live inspection found that `sast-semgrep.yml` described itself as the central replacement for removed repository-local Semgrep jobs but was absent from ruleset `18156473`. The active ruleset was updated to require that workflow from `.github@refs/heads/main`, while preserving one approval, stale-review dismissal, last-push approval, and review-thread resolution. `scripts/ci/audit_central_required_workflows.py` and the scheduled ruleset audit now report each missing workflow, wrong source ref, or weakened review protection explicitly.
-- On 2026-07-13 22:21 KST, the first main-branch ruleset audit proved that a repository `GITHUB_TOKEN` cannot read the organization-administration endpoint (`HTTP 403 Resource not accessible by integration`). The audit now uses the least-privilege inherited-ruleset endpoint, enumerates every public organization repository, logs `RULESET_SCOPE` for each one, requires inheritance everywhere except `.github`, `argos`, and `noema`, and still validates the complete workflow and pull-request rule payload through `naruon`.
+- On 2026-07-13 22:21 KST, the first main-branch ruleset audit proved that a repository `GITHUB_TOKEN` cannot read the organization-administration endpoint (`HTTP 403 Resource not accessible by integration`). The audit uses the least-privilege inherited-ruleset endpoint, logs `RULESET_SCOPE` for each enumerated repository, and validates the complete workflow and pull-request rule payload through `naruon`. The original public-only scope and its historical `.github`/`argos`/`noema` exclusions were superseded by the 2026-07-23 audit below.
 - On 2026-07-13 22:37 KST, xtrmLLMBatchPython current-head evidence proved that Semgrep 1.169.0 reports zero blocking findings while retaining 23 source-suppressed results in raw SARIF. The central gate now logs the suppressed count, removes only SARIF results carrying explicit in-source suppressions before upload, and fails from the remaining SARIF finding count even when Semgrep's SARIF-mode exit code is zero.
+- On 2026-07-16 14:18 KST, `ContextualWisdomLab/clearfolio#161` proved the independent reviewer on exact current head `4512fb9e9b56ab95df3acd85ebec2e6b849335a7`: `cwl-noema-review[bot]` submitted an App-authored `APPROVED` review whose body records the same Head SHA and cites the clean SARIF, dependency, test, and diff evidence.
+- On 2026-07-23 06:35 KST, ruleset `18156473` was updated to require `.github/workflows/noema-review.yml`, making seven central required workflows while preserving exactly two approvals, stale-review dismissal, last-push approval, review-thread resolution, and merge/squash-only policy. The all-repository scope excludes only `.github`, `noema`, and private `IRT-bibliography-set`; `argos` now inherits the ruleset. The scheduled audit now enumerates every organization repository visible to its credential (`type=all`), rather than only public repositories, so the private exclusion and all other visible private-repository inheritance are verified. Existing open PRs may need a new PR event or branch update before GitHub creates the newly required Noema run.
 - `.github` PR `#225` raised high reasoning effort for all reasoning-capable OpenCode review model definitions and merged at `50c6ef82f52af3eeb0e58c174902fc9855c36682`.
 - `.github` PR `#226` stopped the merge scheduler from treating old deterministic fallback approval bodies as current-head approval evidence and merged at `57a1fa580731a0f76b31dcf29a597c5715dba2fd`.
 - `.github` PR `#230` added changed-file candidates to merge-conflict guidance so `DIRTY` or `CONFLICTING` PRs name the first files to inspect instead of giving only generic conflict instructions. It merged at `0cab5c8d46e88c1a3f68ef3f71b5d44d971cd2ef`.
