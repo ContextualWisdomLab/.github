@@ -90,35 +90,16 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
 
     assert candidates_match is not None
-    public_candidate_options = (
-        (
-            "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-            "&& 'opencode-free/north-mini-code-free ' || '' }}",
-            ["opencode-free/north-mini-code-free"],
-        ),
-        (
-            "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-            "&& 'opencode-free/deepseek-v4-flash-free "
-            "opencode-free/north-mini-code-free ' || '' }}",
-            [
-                "opencode-free/deepseek-v4-flash-free",
-                "opencode-free/north-mini-code-free",
-            ],
-        ),
+    conditional_public_candidate = (
+        "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
+        "&& 'opencode-free/deepseek-v4-flash-free "
+        "opencode-free/north-mini-code-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
-    public_candidate = next(
-        (
-            (prefix, candidates)
-            for prefix, candidates in public_candidate_options
-            if candidates_text.startswith(prefix)
-        ),
-        None,
-    )
-    assert public_candidate is not None
-    conditional_public_candidate, public_candidates = public_candidate
+    assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
-        *public_candidates,
+        "opencode-free/deepseek-v4-flash-free",
+        "opencode-free/north-mini-code-free",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -136,7 +117,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs == [
-        *(candidate.split("/", 1) for candidate in public_candidates),
+        ["opencode-free", "deepseek-v4-flash-free"],
+        ["opencode-free", "north-mini-code-free"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -164,13 +146,12 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
     free_models = generated_config["provider"]["opencode-free"]["models"]
+    deepseek_model = free_models["deepseek-v4-flash-free"]
     north_model = free_models["north-mini-code-free"]
+    assert deepseek_model["tool_call"] is True
+    assert "response_format" not in deepseek_model.get("options", {})
     assert north_model["tool_call"] is True
     assert "response_format" not in north_model["options"]
-    if "deepseek-v4-flash-free" in free_models:
-        deepseek_model = free_models["deepseek-v4-flash-free"]
-        assert deepseek_model["tool_call"] is True
-        assert "response_format" not in deepseek_model.get("options", {})
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -1246,18 +1227,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair"
         in workflow
     )
-    assert any(
-        (
-            "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-            f"'{candidates} ' || ''"
-        )
-        in workflow
-        for candidates in (
-            "opencode-free/north-mini-code-free",
-            "opencode-free/deepseek-v4-flash-free "
-            "opencode-free/north-mini-code-free",
-        )
-    )
+    assert (
+        "needs.validate-pr-metadata.outputs.is_private == 'false' && "
+        "'opencode-free/deepseek-v4-flash-free "
+        "opencode-free/north-mini-code-free ' || ''"
+    ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
