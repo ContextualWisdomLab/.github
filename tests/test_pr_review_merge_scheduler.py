@@ -903,7 +903,8 @@ def test_cancel_stale_opencode_runs_dry_run_skips_lookup_and_mutation(monkeypatc
     assert calls == []
 
 
-def test_context_review_and_check_helpers():
+def test_context_review_and_check_helpers(monkeypatch):
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
     assert sched.context_nodes({}) == []
     assert sched.context_nodes(make_pr()) == []
     assert sched.compare_behind_by({"compareBehindBy": "2"}) == 2
@@ -1043,6 +1044,43 @@ def test_context_review_and_check_helpers():
     assert sched.is_opencode_review(opencode_review())
     assert sched.is_opencode_review(opencode_review(login="opencode-agent[bot]"))
     assert not sched.is_opencode_review(opencode_review(login="human"))
+
+
+def test_central_progress_ignores_required_workflow_checkrun_placeholder(
+    monkeypatch,
+):
+    """Central dispatch trusts its status context, not injected placeholder jobs."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    placeholder = make_pr(
+        statusCheckRollup={"contexts": {"nodes": [opencode_check()]}}
+    )
+    central_status = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(),
+                    {
+                        "__typename": "StatusContext",
+                        "context": "opencode-review",
+                        "state": "PENDING",
+                    },
+                ]
+            }
+        }
+    )
+
+    assert not sched.is_opencode_context(opencode_check())
+    assert (
+        sched.opencode_progress_state(placeholder, stale_after_minutes=45)
+        == "absent"
+    )
+    assert (
+        sched.opencode_progress_state(central_status, stale_after_minutes=45)
+        == "running"
+    )
 
 
 def test_review_state_and_failed_checks():
@@ -2270,6 +2308,65 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
         make_pr(headRefOid=head_sha),
     ) == ([], [])
     assert sched.force_cancel_workflow_runs("owner/repo", []) == {}
+
+
+def test_central_run_filter_ignores_target_required_workflow_placeholder(monkeypatch):
+    head_sha = "a" * 40
+    target_placeholder = {
+        "id": 9402,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+    queried_repositories = []
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        queried_repositories.append(repo)
+        return [target_placeholder] if repo == "owner/repo" else []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+    assert queried_repositories == ["ContextualWisdomLab/.github"]
+
+
+def test_central_run_filter_ignores_same_repository_required_workflow_placeholder(
+    monkeypatch,
+):
+    head_sha = "a" * 40
+    central_placeholder = {
+        "id": 9403,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [central_placeholder],
+    )
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "ContextualWisdomLab/.github",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
 
 
 def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):

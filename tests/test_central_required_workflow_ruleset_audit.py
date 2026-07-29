@@ -94,6 +94,13 @@ def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 
 
+def test_inherited_scope_allows_private_exclusion_outside_token_visibility() -> None:
+    payload = inherited_ruleset_payload()
+    payload[audit.INHERITED_SCOPE_FIELD].pop("IRT-bibliography-set")
+
+    assert audit.audit_ruleset(payload) == []
+
+
 def test_inherited_scope_reports_every_inclusion_and_exclusion_drift() -> None:
     payload = inherited_ruleset_payload()
     payload[audit.INHERITED_SCOPE_FIELD][".github"] = True

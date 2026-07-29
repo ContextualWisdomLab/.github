@@ -17,6 +17,10 @@ SOURCE_REF = "refs/heads/main"
 SOURCE_ORGANIZATION = "ContextualWisdomLab"
 INHERITED_SCOPE_FIELD = "_audit_repository_scope"
 EXPECTED_EXCLUSIONS = {".github", "IRT-bibliography-set", "noema"}
+# The workflow token can always enumerate these public repositories. Private
+# exclusions may be intentionally outside that token's repository visibility,
+# while still being validated from an organization-admin ruleset payload.
+REQUIRED_EXCLUSION_PROBES = {".github", "noema"}
 REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/close-empty-pr.yml",
     ".github/workflows/noema-review.yml",
@@ -73,7 +77,9 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
                 "inherited repository scope probes are not boolean for: "
                 f"{malformed_scope}"
             )
-        missing_exclusion_probes = sorted(EXPECTED_EXCLUSIONS - set(inherited_scope))
+        missing_exclusion_probes = sorted(
+            REQUIRED_EXCLUSION_PROBES - set(inherited_scope)
+        )
         if missing_exclusion_probes:
             errors.append(
                 "inherited repository scope probes omit expected exclusions: "
