@@ -135,7 +135,19 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert set(github_candidate_models).issubset(set(github_models))
     assert '"context": 256000' in workflow
     assert '"output": 64000' in workflow
-    assert '"response_format": {"type": "json_object"}' in workflow
+    generated_config_match = re.search(
+        r"jq -n '(\{.*?\})' >\"\$\{OPENCODE_REVIEW_WORKDIR\}/opencode\.jsonc\"",
+        workflow,
+        re.DOTALL,
+    )
+    assert generated_config_match is not None
+    generated_config = json.loads(generated_config_match.group(1))
+    assert (
+        generated_config["provider"]["opencode-free"]["models"][
+            "north-mini-code-free"
+        ]["options"]["response_format"]["type"]
+        == "json_object"
+    )
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
