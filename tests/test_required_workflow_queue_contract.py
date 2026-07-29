@@ -56,6 +56,47 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 2
 
 
+def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> None:
+    """Central single-PR dispatch must validate live metadata before cross-repo use."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    validation = workflow_step(workflow, "Validate targeted repository dispatch")
+    inspect = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert "TARGET_REPOSITORY_INPUT:" in validation
+    assert "TARGET_PR_NUMBER:" in validation
+    assert "TARGET_BASE_BRANCH_INPUT:" in validation
+    assert (
+        "ALLOWED_TARGET_REPOSITORIES: ${{ "
+        "vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}"
+    ) in validation
+    assert 'GITHUB_REPOSITORY" != "ContextualWisdomLab/.github"' in validation
+    assert "target_allowed=0" in validation
+    assert '"repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}"' in validation
+    assert '[ "$live_state" != "open" ]' in validation
+    assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
+    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
+    assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
+    assert "TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}" in inspect
+    assert (
+        "TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}"
+        in inspect
+    )
+    assert '--repo "$TARGET_REPOSITORY"' in inspect
+    assert '--base-branch "$TARGET_DEFAULT_BRANCH"' in inspect
+    assert 'args+=(--pr-number "$PULL_REQUEST_NUMBER")' in inspect
+    assert (
+        "github.event_name == 'repository_dispatch' && "
+        "github.event.client_payload.target_repository != '' && "
+        "(secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
+        "steps.scheduler_app_token.outputs.token) || github.token"
+    ) in inspect
+    assert (
+        "format('target-{0}-pr-{1}', "
+        "github.event.client_payload.target_repository, "
+        "github.event.client_payload.pr_number)"
+    ) in workflow
+
+
 def test_privileged_review_retries_use_default_branch_repository_dispatch() -> None:
     """Privileged retries must never load workflow code from a selected ref."""
     expected_types = {
