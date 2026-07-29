@@ -146,8 +146,12 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
     free_models = generated_config["provider"]["opencode-free"]["models"]
-    assert free_models["deepseek-v4-flash-free"]["tool_call"] is True
-    assert "response_format" not in free_models["north-mini-code-free"]["options"]
+    deepseek_model = free_models["deepseek-v4-flash-free"]
+    north_model = free_models["north-mini-code-free"]
+    assert deepseek_model["tool_call"] is True
+    assert "response_format" not in deepseek_model.get("options", {})
+    assert north_model["tool_call"] is True
+    assert "response_format" not in north_model["options"]
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
