@@ -3365,7 +3365,8 @@ jobs:
                     "tool_call": true,
                     "reasoning": true,
                     "options": {
-                      "reasoningEffort": "high"
+                      "reasoningEffort": "high",
+                      "response_format": {"type": "json_object"}
                     },
                     "variants": {
                       "high": {

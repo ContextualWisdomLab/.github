@@ -135,6 +135,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert set(github_candidate_models).issubset(set(github_models))
     assert '"context": 256000' in workflow
     assert '"output": 64000' in workflow
+    assert '"response_format": {"type": "json_object"}' in workflow
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
