@@ -275,6 +275,41 @@ jobs:
           mkdir -p "$(dirname "$COVERAGE_SOURCE_WORKDIR")"
           mv "$fetch_dir" "$COVERAGE_SOURCE_WORKDIR"
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
+          # Pre-fetch every locked crate graph in the merge tree (root and nested
+          # workspaces alike, matching the sandbox's nested-manifest coverage
+          # discovery) into the tree-local CARGO_HOME the network-isolated
+          # coverage sandbox already uses, so `cargo llvm-cov` can compile Rust
+          # coverage offline. Prefer the same pinned toolchain the sandbox
+          # measures with so lockfile parsing and cache layout cannot drift from
+          # the runner's default cargo. `cargo fetch` downloads content-addressed
+          # crates without executing any build scripts, and a failed prefetch
+          # keeps the same fail-closed sandbox behavior: the offline build
+          # surfaces the missing dependencies for this head.
+          prefetch_manifests="$(git -C "$COVERAGE_SOURCE_WORKDIR" ls-files 'Cargo.toml' '*/Cargo.toml')"
+          if [ -n "$prefetch_manifests" ]; then
+            prefetch_cargo=()
+            if command -v rustup >/dev/null 2>&1 \
+              && rustup toolchain install 1.94.1 --profile minimal --no-self-update >/dev/null 2>&1; then
+              prefetch_cargo=(rustup run 1.94.1 cargo)
+            elif command -v cargo >/dev/null 2>&1; then
+              prefetch_cargo=(cargo)
+            fi
+            if [ "${#prefetch_cargo[@]}" -eq 0 ]; then
+              echo "::warning::cargo is unavailable on this runner, so no locked crate graph was pre-fetched; offline Rust coverage for this head will fail with missing dependencies."
+            else
+              while IFS= read -r prefetch_manifest; do
+                [ -n "$prefetch_manifest" ] || continue
+                prefetch_dir="$(dirname "$prefetch_manifest")"
+                if [ ! -f "$COVERAGE_SOURCE_WORKDIR/$prefetch_dir/Cargo.lock" ]; then
+                  continue
+                fi
+                if ! CARGO_HOME="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo" \
+                  "${prefetch_cargo[@]}" fetch --locked --manifest-path "$COVERAGE_SOURCE_WORKDIR/$prefetch_manifest"; then
+                  echo "::warning::Locked cargo prefetch failed for ${prefetch_manifest}; offline Rust coverage will surface the missing dependencies for this head."
+                fi
+              done <<<"$prefetch_manifests"
+            fi
+          fi
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
 
       - name: Upload materialized pull request merge tree
@@ -589,6 +624,25 @@ jobs:
             && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
             && chmod 0755 /usr/local/bin/cargo-llvm-cov \
             && rm -f /tmp/cargo-llvm-cov.tar.gz
+          # Pinned rustup toolchain with llvm-tools-preview: the distribution
+          # rustc/cargo cannot parse modern version-4 Cargo.lock files and ships
+          # no llvm-cov/llvm-profdata, so `cargo llvm-cov` coverage evidence for
+          # Rust repositories needs this toolchain. The rustup-init binary is
+          # sha256-pinned and the toolchain channel is version-pinned. Only
+          # RUSTUP_HOME is exported for the runtime; CARGO_HOME is deliberately
+          # not baked into the image so the sandbox's tree-local CARGO_HOME
+          # (which holds the pre-fetched crate cache) is the only cargo home the
+          # measured commands ever see.
+          ENV RUSTUP_HOME=/usr/local/rustup
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/rustup-init \
+              https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init \
+            && echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' | sha256sum -c - \
+            && chmod 0755 /tmp/rustup-init \
+            && CARGO_HOME=/usr/local/cargo /tmp/rustup-init -y --no-modify-path --profile minimal \
+              --default-toolchain 1.94.1 --component llvm-tools-preview \
+            && ln -sf /usr/local/cargo/bin/* /usr/local/bin/ \
+            && chmod -R a+rX /usr/local/rustup /usr/local/cargo \
+            && rm -f /tmp/rustup-init
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/pnpm.tgz \
               https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz \
             && echo '7ac1c919341c213a34dc0d02afb7143c5c26ac26ee8c4782deea821b8ac64d2134a081fd8941dae6e29bbb48f58dfc2b7fbceeccc07cb2f09d219d342a4969ed  /tmp/pnpm.tgz' | sha512sum -c - \
@@ -1445,6 +1499,17 @@ jobs:
               failures=$((failures + 1))
               return 1
             fi
+            # The sandbox has no network access; make cargo resolve strictly from
+            # the crate cache the online coverage-source-tree job pre-fetched into
+            # the tree-local CARGO_HOME so missing dependencies fail fast with a
+            # clear offline error instead of a network timeout.
+            export CARGO_NET_OFFLINE=true
+            # Coverage always measures with the trusted image toolchain: a
+            # repository rust-toolchain(.toml) requesting any other channel would
+            # make the rustup proxy attempt a download the offline sandbox cannot
+            # perform. The env override takes precedence over directory overrides,
+            # keeping toolchain selection deterministic and offline-safe.
+            export RUSTUP_TOOLCHAIN=1.94.1
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
           }
