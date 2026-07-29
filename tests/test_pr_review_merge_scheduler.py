@@ -2272,6 +2272,65 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
     assert sched.force_cancel_workflow_runs("owner/repo", []) == {}
 
 
+def test_central_run_filter_ignores_target_required_workflow_placeholder(monkeypatch):
+    head_sha = "a" * 40
+    target_placeholder = {
+        "id": 9402,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+    queried_repositories = []
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        queried_repositories.append(repo)
+        return [target_placeholder] if repo == "owner/repo" else []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+    assert queried_repositories == ["ContextualWisdomLab/.github"]
+
+
+def test_central_run_filter_ignores_same_repository_required_workflow_placeholder(
+    monkeypatch,
+):
+    head_sha = "a" * 40
+    central_placeholder = {
+        "id": 9403,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "pull_requests": [{"number": 1}],
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [central_placeholder],
+    )
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "ContextualWisdomLab/.github",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+
+
 def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
     runs = [
         {
