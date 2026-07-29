@@ -3702,9 +3702,11 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           # High-sensitivity review candidates only. Public repositories first
-          # use OpenCode Zen's anonymous North Mini Code free endpoint. Zen's
-          # free-period privacy terms permit retention, so private repositories
-          # never include this candidate. The pool then falls through to
+          # use OpenCode Zen's anonymous DeepSeek V4 Flash Free endpoint, then
+          # North Mini Code Free as fallback. During their free periods,
+          # DeepSeek data may be used for improvement and North data may be
+          # retained and used for improvement, so private repositories never
+          # include either candidate. The pool then falls through to
           # DeepSeek V3, the direct GPT-5.6 Luna slot, pinned PAID
           # OpenRouter coder models (free-tier candidates hit the shared
           # free-models-per-day cap and hung for the full candidate timeout,
