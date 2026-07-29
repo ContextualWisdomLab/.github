@@ -499,7 +499,10 @@ jobs:
           # environment even after shell variables are unset. Execute all
           # pull-request-controlled tests in Docker's default private PID namespace with a
           # read-only trusted tree and no host Docker socket. The image is
-          # pinned to the reviewed linux/amd64 manifest digest.
+          # pinned to the reviewed linux/amd64 manifest digest. JavaScript
+          # registry access is likewise restricted to exact package inputs
+          # extracted from the live-validated base commit; the PR-head sandbox
+          # consumes only the resulting offline store.
           if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" != "1" ]; then
             host_github_output="$GITHUB_OUTPUT"
             sandbox_result_dir="${RUNNER_TEMP}/opencode-coverage-sandbox-result"
@@ -541,6 +544,10 @@ jobs:
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
               --output-dir "$coverage_build_dir/base-python-requirements"
+            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_javascript_packages.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --base-sha "$PR_BASE_SHA" \
+              --output-dir "$coverage_build_dir/base-javascript-packages"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
           ENV DEBIAN_FRONTEND=noninteractive
@@ -587,6 +594,25 @@ jobs:
             && ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
             && test "$(/usr/local/bin/pnpm --version)" = "11.5.3" \
             && rm -f /tmp/pnpm.tgz
+          COPY base-javascript-packages /tmp/base-javascript-packages
+          RUN set -eu; \
+              mkdir -p /opt/pnpm-store; \
+              jq -r '.[] | [.directory, .package_manager] | @tsv' \
+                /tmp/base-javascript-packages/manifest.json \
+                | while IFS="$(printf '\t')" read -r project_dir package_manager; do \
+                    [ -n "$project_dir" ] || continue; \
+                    if [ "$package_manager" != "pnpm@11.5.3" ]; then \
+                      printf 'Unsupported trusted base package manager: %s\n' "$package_manager" >&2; \
+                      exit 1; \
+                    fi; \
+                    cd "/tmp/base-javascript-packages/${project_dir}"; \
+                    pnpm fetch \
+                      --frozen-lockfile \
+                      --ignore-scripts \
+                      --store-dir /opt/pnpm-store; \
+                  done; \
+              chmod -R a+rX /opt/pnpm-store; \
+              rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
           RUN python3 -m pip install \
               --break-system-packages \
@@ -1047,7 +1073,12 @@ jobs:
                 fi
                 ;;
               pnpm)
-                run_and_capture "JavaScript/TypeScript dependencies (pnpm install, lifecycle hooks disabled)" pnpm install --frozen-lockfile --ignore-scripts
+                run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
+                  pnpm install \
+                    --offline \
+                    --frozen-lockfile \
+                    --ignore-scripts \
+                    --store-dir /opt/pnpm-store
                 ;;
               yarn)
                 run_and_capture "JavaScript/TypeScript dependencies (yarn install, lifecycle hooks disabled)" yarn install --immutable --mode=skip-builds
@@ -1188,7 +1219,7 @@ jobs:
           check_javascript_coverage_thresholds() {
             local summary_list
             summary_list="$(mktemp /tmp/javascript-coverage-summaries.XXXXXX)"
-            find . \
+            find "$COVERAGE_SOURCE_WORKDIR" \
               \( -path '*/coverage/coverage-summary.json' -o -path '*/coverage/coverage-final.json' \) \
               -type f \
               -not -path '*/node_modules/*' \
@@ -1206,7 +1237,7 @@ jobs:
 
             run_and_capture "JavaScript/TypeScript coverage threshold" \
               python3 "$GITHUB_WORKSPACE/scripts/ci/javascript_coverage_gate.py" \
-              --repo-root . \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
               --head-sha "$PR_HEAD_SHA" \
               --summary-list "$summary_list"
@@ -1494,6 +1525,7 @@ jobs:
           javascript_package_dirs="$(javascript_coverage_package_dirs)"
           if [ -n "$javascript_package_dirs" ]; then
             measured_any=1
+            javascript_coverage_ran_any=0
             while IFS= read -r package_dir; do
               [ -n "$package_dir" ] || continue
               pushd "$package_dir" >/dev/null
@@ -1557,10 +1589,13 @@ jobs:
               fi
 
               if [ "$javascript_coverage_ran" -eq 1 ]; then
-                check_javascript_coverage_thresholds
+                javascript_coverage_ran_any=1
               fi
               popd >/dev/null
             done <<<"$javascript_package_dirs"
+            if [ "$javascript_coverage_ran_any" -eq 1 ]; then
+              check_javascript_coverage_thresholds
+            fi
           fi
 
           if has_changed_tracked_files '*.R' '*.r' 'DESCRIPTION' 'renv.lock'; then
@@ -1932,6 +1967,7 @@ jobs:
               ContextualWisdomLab/.github:opencode.jsonc | \
               ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/javascript_coverage_gate.py | \
+              ContextualWisdomLab/.github:scripts/ci/materialize_base_javascript_packages.py | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \
               ContextualWisdomLab/.github:scripts/ci/pr_head_replay_guard.py | \
               ContextualWisdomLab/.github:scripts/ci/pr_review_merge_scheduler.py | \
@@ -1941,6 +1977,7 @@ jobs:
               ContextualWisdomLab/.github:scripts/ci/validate_opencode_failed_check_review.sh | \
               ContextualWisdomLab/.github:tests/test_changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \
+              ContextualWisdomLab/.github:tests/test_materialize_base_javascript_packages.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
               ContextualWisdomLab/.github:tests/test_opencode_model_pool_runner.py | \
               ContextualWisdomLab/.github:tests/test_pr_head_replay_guard.py | \
