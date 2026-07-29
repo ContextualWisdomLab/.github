@@ -1062,6 +1062,69 @@ jobs:
             [ -f package.json ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null
           }
 
+          writable_pnpm_store_dir=""
+          trusted_pnpm_lock_matches_base() {
+            local relative_dir
+            local relative_lock
+            local base_blob
+            local head_blob
+            local worktree_blob
+
+            case "$PWD" in
+              "$COVERAGE_SOURCE_WORKDIR")
+                relative_dir=""
+                ;;
+              "$COVERAGE_SOURCE_WORKDIR"/*)
+                relative_dir="${PWD#"$COVERAGE_SOURCE_WORKDIR"/}"
+                ;;
+              *)
+                echo "::error::pnpm project directory escaped the validated coverage worktree."
+                return 1
+                ;;
+            esac
+            relative_lock="${relative_dir:+${relative_dir}/}pnpm-lock.yaml"
+            if [ ! -f pnpm-lock.yaml ] || [ -L pnpm-lock.yaml ]; then
+              echo "::error::Current pnpm lock must be a regular non-symlink file."
+              return 1
+            fi
+
+            base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}" 2>/dev/null)" || {
+              echo "::error::Validated base does not contain ${relative_lock}; refusing to trust a PR-added lockfile."
+              return 1
+            }
+            head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}" 2>/dev/null)" || {
+              echo "::error::Validated head does not contain ${relative_lock}."
+              return 1
+            }
+            worktree_blob="$(trusted_git hash-object --no-filters -- "$relative_lock")" || {
+              echo "::error::Could not hash current pnpm lock ${relative_lock}."
+              return 1
+            }
+            if [ "$base_blob" != "$head_blob" ] || [ "$head_blob" != "$worktree_blob" ]; then
+              echo "::error::Current pnpm lock ${relative_lock} differs from the validated base; refusing --trust-lockfile for PR-controlled dependency resolution."
+              return 1
+            fi
+          }
+
+          prepare_writable_pnpm_store() {
+            if [ -n "$writable_pnpm_store_dir" ]; then
+              return
+            fi
+            if [ ! -d /opt/pnpm-store ] || [ -L /opt/pnpm-store ]; then
+              echo "::error::Trusted pnpm store must be a non-symlink directory."
+              return 1
+            fi
+
+            local destination
+            destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"
+            cp -R /opt/pnpm-store/. "$destination/"
+            chown -R --no-dereference \
+              "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" \
+              "$destination"
+            chmod -R u+rwX,go-rwx "$destination"
+            writable_pnpm_store_dir="$destination"
+          }
+
           install_package_dependencies() {
             local package_runner="$1"
             case "$package_runner" in
@@ -1073,12 +1136,15 @@ jobs:
                 fi
                 ;;
               pnpm)
+                trusted_pnpm_lock_matches_base
+                prepare_writable_pnpm_store
                 run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
                   pnpm install \
                     --offline \
                     --frozen-lockfile \
+                    --trust-lockfile \
                     --ignore-scripts \
-                    --store-dir /opt/pnpm-store
+                    --store-dir "$writable_pnpm_store_dir"
                 ;;
               yarn)
                 run_and_capture "JavaScript/TypeScript dependencies (yarn install, lifecycle hooks disabled)" yarn install --immutable --mode=skip-builds
