@@ -152,13 +152,7 @@ def run_failed_model(
     fake_opencode = fake_bin / "opencode"
     fake_opencode.write_text(
         "#!/usr/bin/env bash\n"
-        'if [ "${1:-}" = serve ]; then\n'
-        '  [ -z "${FAKE_OPENCODE_COMMAND_LOG:-}" ] || printf \'serve\\n\' >> "$FAKE_OPENCODE_COMMAND_LOG"\n'
-        "  trap 'exit 0' TERM INT\n"
-        "  while :; do sleep 1; done\n"
-        "fi\n"
         'if [ "${1:-}" = run ]; then\n'
-        '  [ -z "${FAKE_OPENCODE_COMMAND_LOG:-}" ] || printf \'run\\n\' >> "$FAKE_OPENCODE_COMMAND_LOG"\n'
         '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$2" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
         '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
         '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
@@ -174,70 +168,6 @@ def run_failed_model(
         encoding="utf-8",
     )
     fake_opencode.chmod(0o755)
-    fake_curl = fake_bin / "curl"
-    fake_curl.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-
-output_file=""
-data_argument=""
-url=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --output|-o)
-      output_file="$2"
-      shift 2
-      ;;
-    --data-binary)
-      data_argument="$2"
-      shift 2
-      ;;
-    --header|--request|--max-time|--write-out|-H|-X|-w)
-      shift 2
-      ;;
-    --silent|--show-error|--fail|-s|-S|-f)
-      shift
-      ;;
-    http://*)
-      url="$1"
-      shift
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
-
-case "$url" in
-  */global/health)
-    if [ -n "${FAKE_OPENCODE_COMMAND_LOG:-}" ]; then
-      for _ in $(seq 1 20); do
-        [ ! -s "$FAKE_OPENCODE_COMMAND_LOG" ] || break
-        sleep 0.05
-      done
-    fi
-    exit "${FAKE_CURL_HEALTH_EXIT:-0}"
-    ;;
-  */session)
-    printf '{"id":"session-fake"}\n' > "$output_file"
-    printf '%s' "${FAKE_CURL_SESSION_HTTP_STATUS:-200}"
-    ;;
-  */message)
-    if [ -n "${FAKE_CURL_REQUEST_CAPTURE:-}" ] && [[ "$data_argument" = @* ]]; then
-      cp "${data_argument#@}" "$FAKE_CURL_REQUEST_CAPTURE"
-    fi
-    printf '%s\n' "${FAKE_OPENCODE_STRUCTURED_RESPONSE:-}" > "$output_file"
-    printf '%s' "${FAKE_CURL_MESSAGE_HTTP_STATUS:-200}"
-    ;;
-  *)
-    printf 'unexpected fake curl URL: %s\n' "$url" >&2
-    exit 2
-    ;;
-esac
-""",
-        encoding="utf-8",
-    )
-    fake_curl.chmod(0o755)
     github_output = tmp_path / "github-output.txt"
     env = os.environ.copy()
     for name in CENTRAL_FALLBACK_ENV:
@@ -626,44 +556,6 @@ def test_only_final_assistant_message_reaches_control_validation(
     )
     assert result.returncode == 1
     assert candidate_output.read_text(encoding="utf-8") == "final control candidate\n"
-
-
-def test_zen_candidate_uses_json_schema_session_transport(tmp_path: Path) -> None:
-    """Zen review output is constrained before the existing semantic validator."""
-    request_capture = tmp_path / "structured-request.json"
-    command_log = tmp_path / "opencode-command.log"
-    structured = {"head_sha": "not-the-current-head"}
-    result = run_failed_model(
-        tmp_path,
-        model_candidates="opencode-free/north-mini-code-free",
-        extra_env={
-            "FAKE_CURL_REQUEST_CAPTURE": bash_path(request_capture),
-            "FAKE_OPENCODE_COMMAND_LOG": bash_path(command_log),
-            "FAKE_OPENCODE_STRUCTURED_RESPONSE": json.dumps(
-                {"info": {"structured": structured}}
-            ),
-        },
-    )
-
-    candidate_output = (
-        tmp_path
-        / "runner-temp"
-        / "opencode-review-opencode-free-north-mini-code-free.md"
-    )
-    request = json.loads(request_capture.read_text(encoding="utf-8"))
-    assert result.returncode == 1
-    assert command_log.read_text(encoding="utf-8").splitlines() == ["serve"]
-    assert json.loads(candidate_output.read_text(encoding="utf-8")) == structured
-    assert request["model"] == {
-        "providerID": "opencode-free",
-        "modelID": "north-mini-code-free",
-    }
-    assert request["agent"] == "ci-review-fallback"
-    assert request["format"]["type"] == "json_schema"
-    assert request["format"]["schema"]["properties"]["head_sha"]["enum"] == [
-        "1" * 40
-    ]
-    assert "kind=invalid-structured-control-output" in result.stdout
 
 
 def test_runner_never_cats_rejected_provider_artifacts() -> None:
