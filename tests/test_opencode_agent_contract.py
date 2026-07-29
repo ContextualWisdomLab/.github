@@ -1764,6 +1764,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "metadata changed before OIDC" in trust_step
     assert 'live_head_sha="$(jq -r' in trust_step
     assert '[ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]' in trust_step
+    assert (
+        "EXPECTED_IS_PRIVATE: "
+        "${{ needs.validate-pr-metadata.outputs.is_private }}"
+    ) in trust_step
+    assert (
+        'live_is_private="$(jq -r \'.base.repo.private | tostring\''
+    ) in trust_step
+    assert '! [[ "$EXPECTED_IS_PRIVATE" =~ ^(true|false)$ ]]' in trust_step
+    assert '! [[ "$live_is_private" =~ ^(true|false)$ ]]' in trust_step
+    assert '[ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]' in trust_step
     assert target_job.index(
         "Validate pull request head repository trust"
     ) < target_job.index(

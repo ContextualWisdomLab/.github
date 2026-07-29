@@ -1838,6 +1838,7 @@ jobs:
           EXPECTED_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           EXPECTED_HEAD_REF: ${{ needs.validate-pr-metadata.outputs.head_ref }}
           EXPECTED_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          EXPECTED_IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}
         run: |
           set -euo pipefail
           if ! [[ "$GH_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
@@ -1853,15 +1854,19 @@ jobs:
           live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
           live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          live_is_private="$(jq -r '.base.repo.private | tostring' <<<"$pull_request_json")"
           if [ "$live_state" != "open" ] ||
             [ "$base_repository" != "$GH_REPOSITORY" ] ||
             [ "$head_repository" != "$GH_REPOSITORY" ] ||
             [ "$live_base_ref" != "$EXPECTED_BASE_REF" ] ||
             [ "$live_base_sha" != "$EXPECTED_BASE_SHA" ] ||
             [ "$live_head_ref" != "$EXPECTED_HEAD_REF" ] ||
-            [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
-            printf '::error::OpenCode privileged review metadata changed before OIDC, review-token, CodeGraph, or model execution. target=%s#%s state=%s base_repo=%s base=%s/%s expected_base=%s/%s head_repo=%s head=%s/%s expected_head=%s/%s\n' \
-              "$GH_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${base_repository:-<missing>}" "${live_base_ref:-<missing>}" "${live_base_sha:-<missing>}" "$EXPECTED_BASE_REF" "$EXPECTED_BASE_SHA" "${head_repository:-<missing>}" "${live_head_ref:-<missing>}" "${live_head_sha:-<missing>}" "$EXPECTED_HEAD_REF" "$EXPECTED_HEAD_SHA"
+            [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ] ||
+            ! [[ "$EXPECTED_IS_PRIVATE" =~ ^(true|false)$ ]] ||
+            ! [[ "$live_is_private" =~ ^(true|false)$ ]] ||
+            [ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]; then
+            printf '::error::OpenCode privileged review metadata changed before OIDC, review-token, CodeGraph, or model execution. target=%s#%s state=%s base_repo=%s base=%s/%s expected_base=%s/%s head_repo=%s head=%s/%s expected_head=%s/%s private=%s expected_private=%s\n' \
+              "$GH_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${base_repository:-<missing>}" "${live_base_ref:-<missing>}" "${live_base_sha:-<missing>}" "$EXPECTED_BASE_REF" "$EXPECTED_BASE_SHA" "${head_repository:-<missing>}" "${live_head_ref:-<missing>}" "${live_head_sha:-<missing>}" "$EXPECTED_HEAD_REF" "$EXPECTED_HEAD_SHA" "${live_is_private:-<missing>}" "${EXPECTED_IS_PRIVATE:-<missing>}"
             exit 1
           fi
           printf 'Validated same-repository OpenCode review source for %s#%s (%s).\n' \

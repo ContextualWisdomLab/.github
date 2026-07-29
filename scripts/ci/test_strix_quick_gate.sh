@@ -517,6 +517,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Initialize CodeGraph index for OpenCode" "opencode review workflow initializes CodeGraph before review"
 	assert_file_contains "$workflow_file" "Validate pull request head repository trust" "opencode privileged review validates the live head repository before token exchange and PR-head tooling"
 	assert_file_contains "$workflow_file" "metadata changed before OIDC" "opencode privileged review fails closed for repository-dispatched fork or stale heads with a visible reason"
+	assert_file_contains "$workflow_file" 'EXPECTED_IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}' "opencode privileged review carries the validated privacy state into its final trust check"
+	assert_file_contains "$workflow_file" '[ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]' "opencode privileged review fails closed when a public repository becomes private before model execution"
 	assert_file_contains "$workflow_file" "actions: read" "opencode review workflow can read failed Actions logs without Actions write scope"
 	assert_file_contains "$workflow_file" "checks: read" "opencode review workflow can read failed check-run annotations for line-specific findings"
 	assert_file_contains "$workflow_file" "contents: read" "opencode review workflow uses read-only repository contents permission"
