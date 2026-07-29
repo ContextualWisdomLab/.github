@@ -153,12 +153,6 @@ def run_failed_model(
     fake_opencode.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "${1:-}" = run ]; then\n'
-        '  if [[ " $* " == *" --session "* ]] && [ -n "${FAKE_OPENCODE_REPAIR_JSON:-}" ]; then\n'
-        '    [ -z "${FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$4" > "$FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE"\n'
-        '    [ -z "${FAKE_OPENCODE_REPAIR_STATE_FILE:-}" ] || : > "$FAKE_OPENCODE_REPAIR_STATE_FILE"\n'
-        '    printf \'%s\\n\' "$FAKE_OPENCODE_REPAIR_JSON"\n'
-        '    exit "${FAKE_OPENCODE_REPAIR_EXIT:-0}"\n'
-        "  fi\n"
         '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$2" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
         '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
         '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
@@ -166,11 +160,7 @@ def run_failed_model(
         '  exit "${FAKE_OPENCODE_RUN_EXIT:-1}"\n'
         "fi\n"
         'if [ "${1:-}" = export ]; then\n'
-        '  if [ -n "${FAKE_OPENCODE_REPAIR_STATE_FILE:-}" ] && [ -f "$FAKE_OPENCODE_REPAIR_STATE_FILE" ] && [ -n "${FAKE_OPENCODE_REPAIR_EXPORT:-}" ]; then\n'
-        '    printf \'%s\\n\' "$FAKE_OPENCODE_REPAIR_EXPORT"\n'
-        "  else\n"
-        '    [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
-        "  fi\n"
+        '  [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
         '  exit "${FAKE_OPENCODE_EXPORT_EXIT:-0}"\n'
         "fi\n"
         "printf 'unexpected fake opencode command: %s\\n' \"$*\" >&2\n"
@@ -521,140 +511,6 @@ def test_invalid_control_output_suppresses_assistant_content(tmp_path: Path) -> 
     assert "output did not include a valid control conclusion" in result.stdout
     assert "kind=invalid-control-output" in result.stdout
     assert_secret_absent(result, secret)
-
-
-def test_free_model_repairs_invalid_control_in_the_same_session(tmp_path: Path) -> None:
-    """A free review can repair formatting without repeating repository analysis."""
-    changed_file = "scripts/ci/run_opencode_review_model_pool.sh"
-    repair_prompt = tmp_path / "repair-prompt.txt"
-    repair_state = tmp_path / "repair-state"
-    posture = "\n".join(
-        [
-            f"Approval sufficiency: affirmative evidence from {changed_file}.",
-            f"Verification posture: CodeGraph inspected {changed_file}.",
-            "Linter/static: passed.",
-            "TDD/regression: passed.",
-            "Coverage: coverage execution evidence proves 100%.",
-            "Docstring coverage: coverage execution evidence proves 100%.",
-            "DAG: checked.",
-            "PoC/execution: checked.",
-            "DDD/domain: checked.",
-            "CDD/context: checked.",
-            "Similar issues: checked.",
-            "Claim/concept check: checked.",
-            "Standards search: checked.",
-            "Compatibility/convention: checked.",
-            "Breaking-change/backcompat: checked.",
-            "Performance: checked.",
-            "Developer experience: checked.",
-            "User experience: checked.",
-            "Visual/DOM: no web surface.",
-            "Accessibility/i18n: checked.",
-            "Supply-chain/license: checked.",
-            "Packaging: checked.",
-            "Security/privacy: checked.",
-        ]
-    )
-    control = {
-        "head_sha": "1" * 40,
-        "run_id": "29189945378",
-        "run_attempt": "1",
-        "result": "APPROVE",
-        "reason": f"Reviewed current-head changed-file evidence in {changed_file}.",
-        "summary": posture,
-        "findings": [],
-    }
-    result = run_failed_model(
-        tmp_path,
-        json_line='{"type":"step_start","sessionID":"session-1"}',
-        model_candidates="opencode-free/north-mini-code-free",
-        changed_files=[changed_file],
-        extra_env={
-            "FAKE_OPENCODE_RUN_EXIT": "0",
-            "FAKE_OPENCODE_REPAIR_PROMPT_CAPTURE": bash_path(repair_prompt),
-            "FAKE_OPENCODE_REPAIR_STATE_FILE": bash_path(repair_state),
-            "FAKE_OPENCODE_EXPORT": json.dumps(
-                {
-                    "messages": [
-                        {
-                            "info": {"role": "assistant"},
-                            "parts": [{"type": "text", "text": "verbose review"}],
-                        }
-                    ]
-                }
-            ),
-            "FAKE_OPENCODE_REPAIR_JSON": json.dumps(
-                {
-                    "type": "text",
-                    "part": {"type": "text", "text": "streamed repair event"},
-                }
-            ),
-            "FAKE_OPENCODE_REPAIR_EXPORT": json.dumps(
-                {
-                    "messages": [
-                        {
-                            "info": {"role": "assistant"},
-                            "parts": [{"type": "text", "text": json.dumps(control)}],
-                        }
-                    ]
-                }
-            ),
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (
-        "Correct this validator rejection: CONTROL_REJECTED:"
-        in repair_prompt.read_text(encoding="utf-8")
-    )
-    assert json.loads(
-        (tmp_path / "selected-output.md").read_text(encoding="utf-8")
-    ) == control
-
-
-def test_only_final_assistant_message_reaches_control_validation(
-    tmp_path: Path,
-) -> None:
-    """Intermediate assistant turns cannot corrupt the final control candidate."""
-    result = run_failed_model(
-        tmp_path,
-        json_line='{"type":"step_start","sessionID":"session-1"}',
-        extra_env={
-            "FAKE_OPENCODE_RUN_EXIT": "0",
-            "FAKE_OPENCODE_EXPORT": json.dumps(
-                {
-                    "messages": [
-                        {
-                            "info": {"role": "assistant"},
-                            "parts": [
-                                {
-                                    "type": "text",
-                                    "text": "intermediate analysis must be ignored",
-                                }
-                            ],
-                        },
-                        {
-                            "info": {"role": "assistant"},
-                            "parts": [
-                                {
-                                    "type": "text",
-                                    "text": "final control candidate",
-                                }
-                            ],
-                        },
-                    ]
-                }
-            ),
-        },
-    )
-
-    candidate_output = (
-        tmp_path
-        / "runner-temp"
-        / "opencode-review-github-models-openai-gpt-5.md"
-    )
-    assert result.returncode == 1
-    assert candidate_output.read_text(encoding="utf-8") == "final control candidate\n"
 
 
 def test_runner_never_cats_rejected_provider_artifacts() -> None:
