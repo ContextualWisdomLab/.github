@@ -12,7 +12,7 @@ import sys
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-HASH_LOCK_NAMES = frozenset({"requirements-hashes.txt"})
+HASH_LOCK_NAMES = frozenset({"requirements-hashes.txt", "requirements.lock"})
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print(
-            "No tracked requirements-hashes.txt files exist at the validated base SHA."
+            "No tracked hash-pinned Python requirement locks exist at the validated base SHA."
         )
     return 0
 
