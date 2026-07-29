@@ -556,8 +556,6 @@ jobs:
               libxml2-dev \
               mesa-vulkan-drivers \
               libvulkan1 \
-              nodejs \
-              npm \
               pkg-config \
               r-base \
               r-cran-covr \
@@ -565,13 +563,30 @@ jobs:
               rustc \
               util-linux \
               vulkan-tools \
+              xz-utils \
             && rm -rf /var/lib/apt/lists/*
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \
+              https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
+            && echo '55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742  /tmp/node-linux-x64.tar.xz' | sha256sum -c - \
+            && tar --no-same-owner -xJf /tmp/node-linux-x64.tar.xz -C /usr/local --strip-components=1 \
+            && test "$(/usr/local/bin/node --version)" = "v24.18.0" \
+            && /usr/local/bin/npm --version >/dev/null \
+            && rm -f /tmp/node-linux-x64.tar.xz
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
               https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
             && echo '967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7  /tmp/cargo-llvm-cov.tar.gz' | sha256sum -c - \
             && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
             && chmod 0755 /usr/local/bin/cargo-llvm-cov \
             && rm -f /tmp/cargo-llvm-cov.tar.gz
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/pnpm.tgz \
+              https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz \
+            && echo '7ac1c919341c213a34dc0d02afb7143c5c26ac26ee8c4782deea821b8ac64d2134a081fd8941dae6e29bbb48f58dfc2b7fbceeccc07cb2f09d219d342a4969ed  /tmp/pnpm.tgz' | sha512sum -c - \
+            && mkdir -p /opt/pnpm \
+            && tar --no-same-owner -xzf /tmp/pnpm.tgz -C /opt/pnpm --strip-components=1 \
+            && chmod 0755 /opt/pnpm/bin/pnpm.cjs \
+            && ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
+            && test "$(/usr/local/bin/pnpm --version)" = "11.5.3" \
+            && rm -f /tmp/pnpm.tgz
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
           RUN python3 -m pip install \
               --break-system-packages \
