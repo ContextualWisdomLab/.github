@@ -501,7 +501,7 @@ run_one_model_attempt() {
 				env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 				-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
 				opencode run --session "$session_id" \
-				"Rewrite your preceding review as exactly one JSON control object using the schema already provided. Preserve its conclusion and findings; emit no prose or Markdown. Use head_sha=${HEAD_SHA}, run_id=${RUN_ID}, and run_attempt=${RUN_ATTEMPT}." \
+				"Rewrite your preceding review as exactly one JSON control object using the schema already provided; emit no prose or Markdown. Preserve every source-backed finding. REQUEST_CHANGES requires at least one complete source-backed finding; if none exists, use APPROVE with findings []. Use head_sha=${HEAD_SHA}, run_id=${RUN_ID}, and run_attempt=${RUN_ATTEMPT}." \
 				--pure --agent "$agent" --model "$model_candidate" --format json \
 				>"$repair_json_file" 2>>"$opencode_stderr_file"
 			repair_status=$?
