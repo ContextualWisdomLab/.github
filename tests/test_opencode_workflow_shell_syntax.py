@@ -27,7 +27,7 @@ def _extract_run_block(workflow_text: str, step_name: str) -> str:
 
 
 def test_opencode_review_run_blocks_are_valid_bash():
-    workflow_text = (REPO_ROOT / ".github/workflows/opencode-review.yml").read_text(
+    workflow_text = (REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml").read_text(
         encoding="utf-8"
     )
     assert 'gsub("`"; "&apos;")' in workflow_text

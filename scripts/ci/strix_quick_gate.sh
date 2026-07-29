@@ -3583,12 +3583,14 @@ opencode_config_source_candidates() {
 	resolved_scan_target="$(resolve_current_target_path "$TARGET_PATH" 2>/dev/null || true)"
 
 	if [ -n "$resolved_scan_target" ]; then
+		printf '%s\n' "$resolved_scan_target/.github/workflows/opencode-review-dispatch.yml"
 		printf '%s\n' "$resolved_scan_target/.github/workflows/opencode-review.yml"
 		printf '%s\n' "$resolved_scan_target/opencode.jsonc"
 	fi
 	if pull_request_head_blob_required || [ "$TARGET_PATH_IS_INTERNAL_PR_SCOPE" -eq 1 ]; then
 		return 0
 	fi
+	printf '%s\n' "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml"
 	printf '%s\n' "$REPO_ROOT/.github/workflows/opencode-review.yml"
 	printf '%s\n' "$REPO_ROOT/opencode.jsonc"
 }
