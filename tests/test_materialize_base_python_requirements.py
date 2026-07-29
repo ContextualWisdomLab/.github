@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import runpy
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -70,3 +72,160 @@ def test_rejects_invalid_base_sha(tmp_path: Path) -> None:
     """Git options and symbolic refs cannot cross the exact-SHA boundary."""
     with pytest.raises(ValueError, match="40 hexadecimal"):
         materializer.base_hash_locks(tmp_path, "--help")
+
+
+def test_git_failure_preserves_a_visible_reason(tmp_path: Path) -> None:
+    """A failed read-only git command reports its operation and stderr."""
+    with pytest.raises(RuntimeError, match=r"git rev-parse failed: fatal"):
+        materializer._git(tmp_path, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize(
+    ("tree_output", "message"),
+    [
+        (b"malformed\0", "malformed entry"),
+        (b"100644 blob\tfile\0", "malformed metadata"),
+    ],
+)
+def test_rejects_malformed_git_tree_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tree_output: bytes,
+    message: str,
+) -> None:
+    """Malformed git output cannot be interpreted as a trusted lock blob."""
+
+    def fake_git(_repo_root: Path, *_args: str) -> bytes:
+        return tree_output
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+
+    with pytest.raises(RuntimeError, match=message):
+        materializer.base_hash_locks(tmp_path, "a" * 40)
+
+
+def test_rejects_symlink_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symlink cannot redirect trusted lock materialization outside its context."""
+    target = tmp_path / "target"
+    target.mkdir()
+    output = tmp_path / "output"
+    output.symlink_to(target, target_is_directory=True)
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+
+
+def test_main_reports_each_materialized_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI identifies the exact trusted source and generated lock name."""
+
+    def fake_materialize(
+        _repo_root: Path, _base_sha: str, _output_dir: Path
+    ) -> list[dict[str, str]]:
+        return [{"file": "requirements-000.txt", "source": "backend/requirements-hashes.txt"}]
+
+    monkeypatch.setattr(materializer, "materialize", fake_materialize)
+
+    assert (
+        materializer.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--base-sha",
+                "a" * 40,
+                "--output-dir",
+                str(tmp_path / "output"),
+            ]
+        )
+        == 0
+    )
+    assert (
+        "Materialized trusted base Python lock backend/requirements-hashes.txt "
+        "as requirements-000.txt." in capsys.readouterr().out
+    )
+
+
+def test_main_reports_when_no_locks_exist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI distinguishes an empty trusted base from a failed extraction."""
+    monkeypatch.setattr(materializer, "materialize", lambda *_args: [])
+
+    assert (
+        materializer.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--base-sha",
+                "a" * 40,
+                "--output-dir",
+                str(tmp_path / "output"),
+            ]
+        )
+        == 0
+    )
+    assert "No tracked requirements-hashes.txt files exist" in capsys.readouterr().out
+
+
+def test_main_fails_with_the_materialization_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A materialization exception fails closed and remains diagnosable in CI."""
+
+    def fail_materialize(_repo_root: Path, _base_sha: str, _output_dir: Path) -> None:
+        raise OSError("fixture failure")
+
+    monkeypatch.setattr(materializer, "materialize", fail_materialize)
+
+    assert (
+        materializer.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--base-sha",
+                "a" * 40,
+                "--output-dir",
+                str(tmp_path / "output"),
+            ]
+        )
+        == 1
+    )
+    assert (
+        "::error::Could not materialize base Python locks: fixture failure"
+        in capsys.readouterr().err
+    )
+
+
+def test_script_entrypoint_exits_through_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The executable script propagates the fail-closed CLI status."""
+    module_path = Path(materializer.__file__)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(module_path),
+            "--repo-root",
+            str(tmp_path),
+            "--base-sha",
+            "invalid",
+            "--output-dir",
+            str(tmp_path / "output"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_path(str(module_path), run_name="__main__")
+
+    assert raised.value.code == 1

@@ -936,6 +936,11 @@ def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
 def is_opencode_context(node: dict[str, Any]) -> bool:
     """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
+        if (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip():
+            # Central reviews run through repository_dispatch and publish a commit
+            # status. Organization required-workflow CheckRuns are deliberately
+            # non-authoritative placeholders and must not suppress that dispatch.
+            return False
         workflow = (
             ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
             or {}
