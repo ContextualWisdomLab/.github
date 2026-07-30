@@ -287,7 +287,7 @@ jobs:
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
             exit 1
           fi
-          if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && [ -z "${NOEMA_LLM_API_URL:-}" ] && [ -z "${NOEMA_LLM_MODEL:-}" ]; then
+          if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ] && [ -z "${NOEMA_LLM_API_URL:-}" ] && [ -z "${NOEMA_LLM_MODEL:-}" ]; then
             export NOEMA_LLM_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
             export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
             export NOEMA_LLM_API_KEY="${NVIDIA_NIM_API_KEY:-}"

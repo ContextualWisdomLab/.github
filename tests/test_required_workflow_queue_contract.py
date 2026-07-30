@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -377,7 +378,10 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
         in workflow
     )
     assert "Resolve Noema target repository visibility" in workflow
-    assert 'if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ]' in workflow
+    assert (
+        'if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && '
+        '[ -n "${NVIDIA_NIM_API_KEY:-}" ]'
+    ) in workflow
     assert "https://integrate.api.nvidia.com/v1/chat/completions" in workflow
     assert 'export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"' in workflow
     assert "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
@@ -385,6 +389,71 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
     assert "mark_unconfigured()" not in workflow
     assert "review skipped until Noema is deployed" not in workflow
     assert "Noema app token is unavailable; review skipped." not in workflow
+
+
+def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
+    tmp_path: Path,
+) -> None:
+    strix_output = tmp_path / "strix-output"
+    strix = subprocess.run(
+        [
+            "bash",
+            "-c",
+            textwrap.dedent(
+                workflow_step(workflow_text("strix.yml"), "Gate Strix secrets")
+                .split("        run: |\n", 1)[1]
+            ),
+        ],
+        env={
+            **os.environ,
+            "GITHUB_OUTPUT": str(strix_output),
+            "STRIX_MODEL": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+            "STRIX_MODEL_REQUESTED": "",
+            "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
+            "STRIX_OPENROUTER_API_KEY": "",
+            "STRIX_NVIDIA_NIM_API_KEY": "",
+            "STRIX_VERTEX_CREDENTIALS": "",
+            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
+            "TARGET_REPOSITORY_PRIVATE": "false",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert strix.returncode == 0, strix.stderr
+    assert "provider_mode=openai_direct" in strix_output.read_text()
+
+    noema_probe = tmp_path / "noema-key"
+    noema_script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Run Noema LLM review and submit verdict",
+        ).split("        run: |\n", 1)[1]
+    )
+    noema = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"trap 'printf %s \"$NOEMA_LLM_API_KEY\" > {shlex.quote(str(noema_probe))}' EXIT\n"
+            + noema_script,
+        ],
+        env={
+            **os.environ,
+            "PR_NUMBER": "1",
+            "GH_TOKEN": "synthetic-review-token",
+            "NOEMA_LLM_API_URL": "",
+            "NOEMA_LLM_MODEL": "",
+            "NOEMA_LLM_API_KEY": "synthetic-openai-key",
+            "NVIDIA_NIM_API_KEY": "",
+            "TARGET_REPOSITORY_PRIVATE": "false",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert noema.returncode == 1
+    assert "Noema LLM is unconfigured" in noema.stdout
+    assert noema_probe.read_text() == "synthetic-openai-key"
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:

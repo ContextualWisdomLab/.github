@@ -444,6 +444,7 @@ jobs:
         id: gate
         env:
           STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b' || 'gpt-5.6-luna') }}
+          STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
           STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           STRIX_NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -452,6 +453,9 @@ jobs:
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
+            strix_model="gpt-5.6-luna"
+          fi
           case "$strix_model" in
             openai/gpt-5-mini* | openai/gpt-5-nano* | \
             openai/openai/gpt-5-mini* | openai/openai/gpt-5-nano* | \
