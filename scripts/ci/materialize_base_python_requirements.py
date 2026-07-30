@@ -43,14 +43,16 @@ def _requirement_lines(content: bytes) -> list[str]:
 
 
 def _is_hash_pinned(content: bytes) -> bool:
-    """Return whether lock content is fully hash-pinned and safe to materialize.
+    """Return whether content carries hash pins and is safe to preflight.
 
     Discovery is content-based rather than name-based so hash-pinned locks in any
     location (a service subdirectory, ``requirements-dev.txt``,
-    ``requirements-test.txt``) are installed for offline coverage, while an
+    ``requirements-test.txt``) can be considered for offline coverage, while an
     unpinned or PR-mutable requirements file is still excluded from the networked
-    build context. An empty file carries no installable dependency and is not
-    materialized.
+    build context. Hash syntax cannot prove that a file includes every transitive
+    dependency, so the trusted image installer separately preflights every
+    candidate as an independent ``--require-hashes`` closure. An empty file
+    carries no installable dependency and is not materialized.
     """
     lines = _requirement_lines(content)
     if not lines:
@@ -165,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print(
-            "No tracked hash-pinned Python requirement locks exist at the validated base SHA."
+            "No tracked hash-bearing Python requirement candidates exist at the validated base SHA."
         )
     return 0
 

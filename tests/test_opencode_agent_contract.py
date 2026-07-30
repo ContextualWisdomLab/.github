@@ -453,6 +453,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
+    assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
+    assert "COPY install-base-python-locks.py" in measure_step
+    assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
@@ -530,11 +533,17 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     trusted_requirements = Path(
         "requirements-opencode-review-ci-hashes.txt"
     ).read_text(encoding="utf-8")
+    base_python_installer = Path(
+        "scripts/ci/install_base_python_locks.py"
+    ).read_text(encoding="utf-8")
     compile_script = Path(
         "scripts/ci/compile_opencode_review_lock.sh"
     ).read_text(encoding="utf-8")
     normalized_compile_script = " ".join(compile_script.replace("\\\n", " ").split())
     assert "pytest-cov==7.1.0" in trusted_requirements
+    assert '"--dry-run"' in base_python_installer
+    assert '"--ignore-installed"' in base_python_installer
+    assert "not an independently" in base_python_installer
     assert (
         "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
         in trusted_requirements
@@ -1751,7 +1760,8 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "Trusted offline Python test toolchain" in measure
     assert "python3 -m coverage run -m pytest tests" in measure
     assert "materialize_base_python_requirements.py" in measure
-    assert "base-python-requirements/manifest.txt" in measure
+    assert "install_base_python_locks.py" in measure
+    assert "base-python-requirements" in measure
     assert "read directly from the live-validated base SHA" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci --ignore-scripts" in coverage_job
