@@ -618,7 +618,6 @@ jobs:
             "$PR_NUMBER" "$approval_actor"
 
       - name: Select independent Noema approval credential
-        if: steps.app_token.outputs.never == 'true'
         id: noema_credential
         env:
           NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
