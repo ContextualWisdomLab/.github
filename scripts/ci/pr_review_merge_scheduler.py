@@ -118,7 +118,11 @@ OPEN_PRS_PAGE_SIZE = 25
 DEFAULT_STALE_OPENCODE_MINUTES = 90
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
-OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
+OPENCODE_WORKFLOW_NAMES = {
+    "OpenCode Review",
+    "Required OpenCode Review",
+    "OpenCode Review Dispatch",
+}
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
@@ -1906,7 +1910,10 @@ def active_review_run_refs(
     )
     head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
-    dispatch_title_prefix = f"{run_title} {target_repo}#{number}@"
+    dispatch_title_prefixes = tuple(
+        f"{title} {target_repo}#{number}@"
+        for title in sorted({run_title, *workflow_aliases}, key=len, reverse=True)
+    )
     current: list[tuple[str, str]] = []
     stale: list[tuple[str, str]] = []
 
@@ -1924,10 +1931,15 @@ def active_review_run_refs(
                 continue
             run_ref = (run_repo, str(run_id))
             display_title = str(run_data.get("display_title") or "")
-            if (
-                run_data.get("event") == "repository_dispatch"
-                and display_title.startswith(dispatch_title_prefix)
-            ):
+            dispatch_title_prefix = next(
+                (
+                    prefix
+                    for prefix in dispatch_title_prefixes
+                    if display_title.startswith(prefix)
+                ),
+                None,
+            )
+            if run_data.get("event") == "repository_dispatch" and dispatch_title_prefix:
                 dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
