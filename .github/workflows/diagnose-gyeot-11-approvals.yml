@@ -178,10 +178,14 @@ jobs:
           test "$(jq -r '.name // empty' <<<"$review_run_json")" = \
             "$EXPECTED_REVIEW_RUN_NAME"
 
-          gh api -X POST \
-            "repos/${TARGET_REPOSITORY}/actions/runs/${REVIEW_RUN_ID}/force-cancel"
-          printf '::notice::Force-cancelled stale exact-head OpenCode review run %s for central PR #%s at %s.\n' \
-            "$REVIEW_RUN_ID" "$PR_NUMBER" "$OLD_REVIEW_HEAD_SHA"
+          if gh api -X POST \
+            "repos/${TARGET_REPOSITORY}/actions/runs/${REVIEW_RUN_ID}/cancel"; then
+            printf '::notice::Requested regular cancellation for stale exact-head OpenCode review run %s for central PR #%s at %s.\n' \
+              "$REVIEW_RUN_ID" "$PR_NUMBER" "$OLD_REVIEW_HEAD_SHA"
+          else
+            printf '::warning::GitHub rejected regular cancellation for stale run %s; current-head run 30552704517 remains queued for concurrency reconciliation.\n' \
+              "$REVIEW_RUN_ID"
+          fi
 
       - name: Restamp central PR head with the OpenCode App
         if: steps.app_token.outputs.never == 'true'
