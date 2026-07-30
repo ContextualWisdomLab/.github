@@ -91,6 +91,13 @@ def test_noema_state_ignores_reviews_for_other_heads():
     assert handoff.noema_review_state([reviews[0]], HEAD) is None
 
 
+def test_noema_state_ignores_forged_marker_from_other_actor():
+    forged = noema_review()
+    forged["user"] = {"login": "untrusted-reviewer"}
+
+    assert handoff.noema_review_state([forged], HEAD) is None
+
+
 def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):
     fake = FakeGitHub([[opencode_review()]], heads=[OTHER_HEAD])
 
@@ -159,7 +166,7 @@ def test_dispatches_exact_head_and_waits_for_noema_approval(capsys):
             },
         }
     ]
-    assert "after poll 2/3" in capsys.readouterr().err
+    assert "after poll 3/3" in capsys.readouterr().err
 
 
 def test_noema_changes_requested_is_terminal(capsys):
@@ -222,8 +229,76 @@ def test_missing_noema_verdict_times_out_closed(capsys):
     assert "did not publish an exact-head verdict after 1 polls" in capsys.readouterr().err
 
 
+def test_transient_poll_failure_retries_and_reaches_noema_verdict(capsys):
+    fake = FakeGitHub(
+        [
+            [opencode_review()],
+            [opencode_review(), noema_review()],
+        ]
+    )
+    review_calls = 0
+    observed_sleeps = []
+
+    def transient_runner(args, stdin=None):
+        nonlocal review_calls
+        path = next((value for value in args if value.startswith("repos/")), "")
+        if path.endswith("/reviews"):
+            review_calls += 1
+            if review_calls == 2:
+                raise RuntimeError("temporary GitHub API outage")
+        return fake(args, stdin)
+
+    result = handoff.run_handoff(
+        "ContextualWisdomLab/example",
+        7,
+        HEAD,
+        attempts=3,
+        interval_seconds=2,
+        runner=transient_runner,
+        sleeper=observed_sleeps.append,
+        approval_checker=lambda *_args, **_kwargs: True,
+    )
+
+    assert result == 0
+    assert observed_sleeps == [2, 2]
+    assert "Transient GitHub API failure" in capsys.readouterr().err
+
+
+def test_consecutive_initial_failures_use_bounded_exponential_backoff(capsys):
+    fake = FakeGitHub([[opencode_review(), noema_review()]])
+    head_calls = 0
+    observed_sleeps = []
+
+    def transient_runner(args, stdin=None):
+        nonlocal head_calls
+        path = next((value for value in args if value.startswith("repos/")), "")
+        if "/pulls/" in path and not path.endswith("/reviews"):
+            head_calls += 1
+            if head_calls < 3:
+                raise RuntimeError("rate limited")
+        return fake(args, stdin)
+
+    result = handoff.run_handoff(
+        "ContextualWisdomLab/example",
+        7,
+        HEAD,
+        attempts=3,
+        interval_seconds=2,
+        runner=transient_runner,
+        sleeper=observed_sleeps.append,
+        approval_checker=lambda *_args, **_kwargs: True,
+    )
+
+    assert result == 0
+    assert observed_sleeps == [2, 4]
+    assert "already published APPROVED" in capsys.readouterr().err
+
+
 def test_run_gh_returns_stdout_on_success(monkeypatch):
+    observed = {}
+
     def fake_run(*_args, **_kwargs):
+        observed.update(_kwargs)
         return CompletedProcess(
             args=["gh", "api"],
             returncode=0,
@@ -234,6 +309,17 @@ def test_run_gh_returns_stdout_on_success(monkeypatch):
     monkeypatch.setattr(handoff.subprocess, "run", fake_run)
 
     assert handoff.run_gh(["api", "repos/ContextualWisdomLab/example"]) == "current-head\n"
+    assert observed["timeout"] == handoff.GH_COMMAND_TIMEOUT_SECONDS
+
+
+def test_run_gh_turns_process_timeout_into_bounded_failure(monkeypatch):
+    def fake_run(*_args, **_kwargs):
+        raise handoff.subprocess.TimeoutExpired(["gh", "api"], 60)
+
+    monkeypatch.setattr(handoff.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="timed out after 60 seconds"):
+        handoff.run_gh(["api", "repos/ContextualWisdomLab/example"])
 
 
 def test_run_gh_redacts_credentials_from_failures(monkeypatch):

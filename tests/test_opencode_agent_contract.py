@@ -1248,7 +1248,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
     )
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 300", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 325", workflow)
     assert "timeout-minutes: 12" in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
@@ -1566,11 +1566,16 @@ def test_opencode_job_timeout_contains_full_sequential_review_budget():
         r"^      - name: Publish OpenCode review outcome\n"
         r"[\s\S]{0,1200}?^        timeout-minutes: (\d+)$"
     )
+    noema_handoff_timeout = timeout_minutes(
+        r"^      - name: Dispatch Noema after current-head OpenCode approval\n"
+        r"[\s\S]{0,500}?^        timeout-minutes: (\d+)$"
+    )
     setup_and_cleanup_margin = 30
     required_timeout = (
         evidence_timeout
         + model_pool_timeout
         + max(fast_publish_timeout, normal_publish_timeout)
+        + noema_handoff_timeout
         + setup_and_cleanup_margin
     )
 

@@ -1828,9 +1828,10 @@ jobs:
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
-    # 36-minute publication gate, and setup/cleanup overhead without truncating
-    # a late current-head verdict or its bounded failure reason.
-    timeout-minutes: 300
+    # 36-minute publication gate, the 18-minute Noema handoff, and setup/cleanup
+    # overhead without truncating a late current-head verdict, handoff, merge
+    # scheduler follow-up, or bounded failure reason.
+    timeout-minutes: 325
     permissions:
       actions: read
       checks: read
