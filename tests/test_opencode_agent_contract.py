@@ -141,6 +141,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["github-models", "openai/o3"],
         ["github-models", "deepseek/deepseek-r1-0528"],
         ["github-models", "deepseek/deepseek-r1"],
+        ["github-models", "mistral-ai/mistral-medium-2505"],
+        ["github-models", "meta/llama-4-maverick-17b-128e-instruct-fp8"],
+        ["github-models", "meta/llama-4-scout-17b-16e-instruct"],
     ]
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert openrouter_models == [
@@ -181,6 +184,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "openai/o3",
         "deepseek/deepseek-r1-0528",
         "deepseek/deepseek-r1",
+        "mistral-ai/mistral-medium-2505",
+        "meta/llama-4-maverick-17b-128e-instruct-fp8",
+        "meta/llama-4-scout-17b-16e-instruct",
     ]
     banned_review_candidates = {
         "gpt-5-nano",
