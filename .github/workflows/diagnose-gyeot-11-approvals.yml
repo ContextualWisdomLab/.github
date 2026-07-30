@@ -722,6 +722,27 @@ jobs:
           )"
           printf '::notice::gyeot_current_head_check_runs total=%s blockers=%s\n' \
             "$check_run_count" "$check_run_blockers"
+          while IFS=$'\t' read -r name status conclusion; do
+            detail="${name} status=${status} conclusion=${conclusion:-none}"
+            detail="${detail//%/%25}"
+            detail="${detail//$'\r'/%0D}"
+            detail="${detail//$'\n'/%0A}"
+            printf '::notice::gyeot_check_blocker=%s\n' "$detail"
+          done < <(
+            jq -r '
+              .[].check_runs[]
+              | select(
+                  .status != "completed"
+                  or (
+                    .conclusion != "success"
+                    and .conclusion != "neutral"
+                    and .conclusion != "skipped"
+                  )
+                )
+              | [.name, .status, (.conclusion // "")]
+              | @tsv
+            ' <<<"$check_runs_json"
+          )
 
       - name: Publish independent exact-head pipeline-defect approval
         id: noema_approval
