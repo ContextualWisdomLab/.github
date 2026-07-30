@@ -744,6 +744,27 @@ jobs:
             ' <<<"$check_runs_json"
           )
 
+      - name: Check out central scheduler
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Audit Gyeot open pull requests
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+        run: |
+          python3 scripts/ci/pr_review_merge_scheduler.py \
+            --repo ContextualWisdomLab/gyeot \
+            --base-branch develop \
+            --max-prs 100 \
+            --dry-run \
+            --no-trigger-reviews \
+            --review-dispatch-limit 0 \
+            --branch-update-limit 0 \
+            --no-enable-auto-merge \
+            --merge-mode disabled \
+            --no-update-branches
+
       - name: Publish independent exact-head pipeline-defect approval
         id: noema_approval
         env:
