@@ -208,11 +208,15 @@ jobs:
           test "$(jq -r '.event // empty' <<<"$review_run_json")" = repository_dispatch
           test "$(jq -r '.name // empty' <<<"$review_run_json")" = "$EXPECTED_REVIEW_RUN_NAME"
           if [ "$(jq -r '.status // empty' <<<"$review_run_json")" != completed ]; then
-            GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
+            if GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
               gh api -X POST \
-                "repos/${TARGET_REPOSITORY}/actions/runs/${ACTIVE_REVIEW_RUN_ID}/force-cancel"
-            printf '::notice::Force-cancelled exact current-head review run %s before pipeline-defect merge.\n' \
-              "$ACTIVE_REVIEW_RUN_ID"
+                "repos/${TARGET_REPOSITORY}/actions/runs/${ACTIVE_REVIEW_RUN_ID}/force-cancel"; then
+              printf '::notice::Force-cancelled exact current-head review run %s before pipeline-defect merge.\n' \
+                "$ACTIVE_REVIEW_RUN_ID"
+            else
+              printf '::warning::Could not force-cancel exact current-head review run %s; continuing the guarded pipeline-defect merge because the closed-PR path remains fail-safe.\n' \
+                "$ACTIVE_REVIEW_RUN_ID"
+            fi
           fi
 
           response_file="$(mktemp)"
