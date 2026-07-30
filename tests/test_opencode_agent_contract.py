@@ -95,11 +95,10 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "&& 'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
+        "opencode-free/laguna-s-2.1-free "
+        "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/nemotron-3-super-free "
-        "opencode-free/minimax-m2.5-free "
-        "opencode-free/mimo-v2.5-free "
-        "opencode-free/grok-code ' || '' }}"
+        "opencode-free/mimo-v2.5-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -107,11 +106,10 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/nemotron-3-ultra-free",
         "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
+        "opencode-free/laguna-s-2.1-free",
+        "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
-        "opencode-free/nemotron-3-super-free",
-        "opencode-free/minimax-m2.5-free",
         "opencode-free/mimo-v2.5-free",
-        "opencode-free/grok-code",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -132,11 +130,10 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
+        ["opencode-free", "laguna-s-2.1-free"],
+        ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
-        ["opencode-free", "nemotron-3-super-free"],
-        ["opencode-free", "minimax-m2.5-free"],
         ["opencode-free", "mimo-v2.5-free"],
-        ["opencode-free", "grok-code"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -164,6 +161,15 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
     free_models = generated_config["provider"]["opencode-free"]["models"]
+    assert set(free_models) == {
+        "nemotron-3-ultra-free",
+        "deepseek-v4-flash-free",
+        "north-mini-code-free",
+        "laguna-s-2.1-free",
+        "ling-3.0-flash-free",
+        "big-pickle",
+        "mimo-v2.5-free",
+    }
     nemotron_model = free_models["nemotron-3-ultra-free"]
     deepseek_model = free_models["deepseek-v4-flash-free"]
     north_model = free_models["north-mini-code-free"]
@@ -171,9 +177,26 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert nemotron_model["limit"] == {"context": 1000000, "output": 128000}
     assert "response_format" not in nemotron_model.get("options", {})
     assert deepseek_model["tool_call"] is True
+    assert deepseek_model["limit"] == {"context": 200000, "output": 128000}
     assert "response_format" not in deepseek_model.get("options", {})
     assert north_model["tool_call"] is True
     assert "response_format" not in north_model["options"]
+    assert free_models["laguna-s-2.1-free"]["limit"] == {
+        "context": 256000,
+        "output": 32000,
+    }
+    assert free_models["ling-3.0-flash-free"]["limit"] == {
+        "context": 262144,
+        "output": 32768,
+    }
+    assert free_models["big-pickle"]["limit"] == {
+        "context": 200000,
+        "output": 32000,
+    }
+    assert free_models["mimo-v2.5-free"]["limit"] == {
+        "context": 200000,
+        "output": 32000,
+    }
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -1242,7 +1265,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert "OpenCode model pool exceeded the outer" in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true",
         workflow,
@@ -1273,11 +1296,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
+        "opencode-free/laguna-s-2.1-free "
+        "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/nemotron-3-super-free "
-        "opencode-free/minimax-m2.5-free "
-        "opencode-free/mimo-v2.5-free "
-        "opencode-free/grok-code ' || ''"
+        "opencode-free/mimo-v2.5-free ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
@@ -1296,7 +1318,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert (
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
@@ -1312,10 +1334,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[
         1

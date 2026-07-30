@@ -709,7 +709,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review preserves legitimate full-hour provider sessions"
 	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "0"' "opencode model pool keeps cycling until the bounded retry budget or step timeout is exhausted"
+	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "1"' "opencode model pool exhausts each candidate only once before bounded fallback"
 	assert_file_not_contains "$workflow_file" 'opencode-exhausted-retry:' "opencode model exhaustion retries stay owned by the least-privilege central scheduler"
 	assert_file_not_contains "$workflow_file" 'RETRY_DISPATCH_TOKEN' "opencode does not retain a recursive write-token dispatch path"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model pool only runs after coverage evidence passed"
