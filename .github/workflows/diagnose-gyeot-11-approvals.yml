@@ -756,6 +756,7 @@ jobs:
           python3 scripts/ci/pr_review_merge_scheduler.py \
             --repo ContextualWisdomLab/gyeot \
             --base-branch develop \
+            --project-flow git-flow \
             --max-prs 100 \
             --dry-run \
             --no-trigger-reviews \
