@@ -588,10 +588,10 @@ jobs:
       ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
-      ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
-      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}
+      ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
+      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}
       ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}
-      ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}
+      ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
