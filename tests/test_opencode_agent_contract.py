@@ -168,6 +168,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert "response_format" not in deepseek_model.get("options", {})
     assert north_model["tool_call"] is True
     assert "response_format" not in north_model["options"]
+    for new_free_model in ("mimo-v2.5-free", "laguna-s-2.1-free", "ling-3.0-flash-free"):
+        new_free_config = free_models[new_free_model]
+        assert new_free_config["tool_call"] is True
+        assert new_free_config["limit"] == {"context": 131000, "output": 32000}
+        assert "response_format" not in new_free_config.get("options", {})
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
