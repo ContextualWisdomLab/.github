@@ -576,12 +576,39 @@ jobs:
               libvulkan1 \
               pkg-config \
               r-base \
+              r-base-dev \
               r-cran-covr \
               r-cran-testthat \
               rustc \
               util-linux \
               vulkan-tools \
               xz-utils \
+            && rm -rf /var/lib/apt/lists/*
+          # Provide the org's R package dependencies offline so R repositories
+          # (aFIPC/kaefa/nonnest2) can install and cover their packages inside the
+          # networkless sandbox. Each is optional and fail-soft: a name absent from
+          # the base image distribution only warns, so a missing R dependency never
+          # breaks the coverage image build for Python/JS/Rust repositories.
+          RUN apt-get update \
+            && for r_pkg in \
+                 r-cran-mirt \
+                 r-cran-lavaan \
+                 r-cran-sandwich \
+                 r-cran-mvtnorm \
+                 r-cran-mass \
+                 r-cran-psych \
+                 r-cran-plyr \
+                 r-cran-listenv \
+                 r-cran-progress \
+                 r-cran-shiny \
+                 r-cran-dt \
+                 r-cran-fitdistrplus \
+                 r-cran-future \
+                 r-cran-compquadform \
+                 r-cran-ncmisc ; do \
+                 apt-get install --no-install-recommends -y "$r_pkg" \
+                   || echo "::warning::optional R coverage dependency $r_pkg is unavailable in the base image distribution" ; \
+               done \
             && rm -rf /var/lib/apt/lists/*
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \
               https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
@@ -1344,6 +1371,8 @@ jobs:
               Rscript -e 'required <- c("covr", "testthat"); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("signed distribution coverage packages unavailable: ", paste(missing, collapse = ", "))'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
+                run_and_capture "R package installation for coverage" \
+                  R CMD INSTALL -l "$R_LIBS_USER" .
                 run_and_capture "R package testthat suite" \
                   Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); if (!requireNamespace("testthat", quietly = TRUE)) { message("testthat unavailable in coverage runner; deferring to required peer R CMD check evidence."); quit(status = 0) }; testthat::test_dir("tests/testthat")'
               else
