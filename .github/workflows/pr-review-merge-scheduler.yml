@@ -94,6 +94,7 @@ concurrency:
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
+    github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != '' && format('target-{0}-pr-{1}', github.event.client_payload.target_repository, github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.run_id ||
@@ -563,7 +564,11 @@ jobs:
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The complete organization walk exceeded the legacy 30-minute boundary in
+    # production. Keep one running and one latest pending */15 sweep through the
+    # schedule-specific concurrency key above, while allowing the current walk
+    # enough time to finish instead of cancelling before later repositories.
+    timeout-minutes: 60
     permissions:
       actions: write
       checks: read
@@ -583,10 +588,10 @@ jobs:
       ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
-      ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
-      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}
+      ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
+      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}
       ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}
-      ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}
+      ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
