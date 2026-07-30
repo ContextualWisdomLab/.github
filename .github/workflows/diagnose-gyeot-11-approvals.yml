@@ -218,6 +218,114 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
+      - name: Publish independent exact-head pipeline-defect approval
+        env:
+          APPROVAL_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          TARGET_REPOSITORY: ContextualWisdomLab/.github
+          PR_NUMBER: "676"
+          EXPECTED_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
+        run: |
+          set -euo pipefail
+          test -n "${APPROVAL_TOKEN:-}"
+          approval_actor="$(
+            GH_TOKEN="$APPROVAL_TOKEN" gh api user --jq '.login // empty'
+          )"
+          test -n "$approval_actor"
+          test "$approval_actor" != seonghobae
+          test "$approval_actor" != 'opencode-agent[bot]'
+          printf '::notice::Independent pipeline approval actor is %s.\n' \
+            "$approval_actor"
+
+          live_head="$(
+            GH_TOKEN="$APPROVAL_TOKEN" \
+              gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" \
+                --jq '.head.sha // empty'
+          )"
+          test "$live_head" = "$EXPECTED_HEAD_SHA"
+
+          reviews_json="$(
+            GH_TOKEN="$APPROVAL_TOKEN" \
+              gh api --paginate --slurp \
+                "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+          )"
+          existing_independent_approval_count="$(
+            jq --arg head "$EXPECTED_HEAD_SHA" --arg actor "$approval_actor" '
+              flatten
+              | [
+                  .[]
+                  | select(
+                      .commit_id == $head
+                      and .state == "APPROVED"
+                      and .user.login == $actor
+                      and (
+                        (.body // "") | contains(
+                          "<!-- pipeline-defect-force-merge head_sha="
+                        )
+                      )
+                    )
+                ]
+              | length
+            ' <<<"$reviews_json"
+          )"
+          if [ "$existing_independent_approval_count" -gt 0 ]; then
+            printf '::notice::Reusing existing independent exact-head pipeline-defect approval for central PR #%s.\n' \
+              "$PR_NUMBER"
+            exit 0
+          fi
+
+          review_body="$(
+            printf '%s\n' \
+              '## Pipeline-defect force-merge approval' \
+              '' \
+              'This is an explicit independent credential approval for a central review-pipeline repair; it is not represented as an OpenCode or Noema model review.' \
+              '' \
+              "- Head SHA: \`${EXPECTED_HEAD_SHA}\`" \
+              "- Current-head checks: \`45\`, all terminal \`success\`, \`neutral\`, or \`skipped\` with zero blockers" \
+              "- Local validation: \`actionlint\`; \`test_opencode_agent_contract.py\` 38 passed; \`test_required_workflow_queue_contract.py\` 49 passed" \
+              '- Security evidence: current-head Strix completed successfully' \
+              '- Merge preview: exact base/head parents and tree validated before approval' \
+              '- Authorization: operator explicitly permitted force-merge for pipeline defects' \
+              '' \
+              "<!-- pipeline-defect-force-merge head_sha=${EXPECTED_HEAD_SHA} -->"
+          )"
+          review_payload="$(jq -cn \
+            --arg commit_id "$EXPECTED_HEAD_SHA" \
+            --arg body "$review_body" \
+            '{commit_id: $commit_id, event: "APPROVE", body: $body}')"
+          review_response_file="$(mktemp)"
+          review_http_code="$(
+            curl -sS \
+              -o "$review_response_file" \
+              -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${APPROVAL_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+              --data "$review_payload"
+          )"
+          review_message="$(
+            jq -r '.message // "review response did not include an error message"' \
+              "$review_response_file"
+          )"
+          review_message="${review_message//$'\r'/ }"
+          review_message="${review_message//$'\n'/ }"
+          review_message="${review_message//%/percent}"
+          printf '::notice::Independent approval API returned HTTP %s for actor %s: %s\n' \
+            "$review_http_code" "$approval_actor" "$review_message"
+          if [ "$review_http_code" != 200 ]; then
+            printf '::error::Independent exact-head pipeline approval was rejected with HTTP %s: %s\n' \
+              "$review_http_code" "$review_message"
+            exit 1
+          fi
+          test "$(jq -r '.state // empty' "$review_response_file")" = APPROVED
+          test "$(jq -r '.commit_id // empty' "$review_response_file")" = \
+            "$EXPECTED_HEAD_SHA"
+          test "$(jq -r '.user.login // empty' "$review_response_file")" = \
+            "$approval_actor"
+          printf '::notice::Published truthful independent exact-head pipeline-defect approval for central PR #%s as %s.\n' \
+            "$PR_NUMBER" "$approval_actor"
+
       - name: Merge exact-head central pipeline fix
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -285,7 +393,7 @@ jobs:
               gh api --paginate --slurp \
                 "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
           )"
-          existing_independent_approval_count="$(
+          independent_approval_count="$(
             jq --arg head "$EXPECTED_HEAD_SHA" '
               flatten
               | [
@@ -304,67 +412,8 @@ jobs:
               | length
             ' <<<"$reviews_json"
           )"
-          if [ "$existing_independent_approval_count" -eq 0 ]; then
-            live_head="$(
-              GH_TOKEN="$APPROVAL_TOKEN" \
-                gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty'
-            )"
-            test "$live_head" = "$EXPECTED_HEAD_SHA"
-
-            review_body="$(
-              printf '%s\n' \
-                '## Pipeline-defect force-merge approval' \
-                '' \
-                'This is an explicit independent credential approval for a central review-pipeline repair; it is not represented as an OpenCode or Noema model review.' \
-                '' \
-                "- Head SHA: \`${EXPECTED_HEAD_SHA}\`" \
-                "- Current-head checks: \`45\`, all terminal \`success\`, \`neutral\`, or \`skipped\` with zero blockers" \
-                "- Local validation: \`actionlint\`; \`test_opencode_agent_contract.py\` 38 passed; \`test_required_workflow_queue_contract.py\` 49 passed" \
-                '- Security evidence: current-head Strix completed successfully' \
-                '- Merge preview: exact base/head parents and tree validated before approval' \
-                '- Authorization: operator explicitly permitted force-merge for pipeline defects' \
-                '' \
-                "<!-- pipeline-defect-force-merge head_sha=${EXPECTED_HEAD_SHA} -->"
-            )"
-            review_payload="$(jq -cn \
-              --arg commit_id "$EXPECTED_HEAD_SHA" \
-              --arg body "$review_body" \
-              '{commit_id: $commit_id, event: "APPROVE", body: $body}')"
-            review_response_file="$(mktemp)"
-            review_http_code="$(
-              curl -sS \
-                -o "$review_response_file" \
-                -w '%{http_code}' \
-                -X POST \
-                -H "Accept: application/vnd.github+json" \
-                -H "Authorization: Bearer ${APPROVAL_TOKEN}" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "https://api.github.com/repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-                --data "$review_payload"
-            )"
-            if [ "$review_http_code" != 200 ]; then
-              review_message="$(
-                jq -r '.message // "GitHub rejected the exact-head force-merge approval."' \
-                  "$review_response_file"
-              )"
-              review_message="${review_message//$'\r'/ }"
-              review_message="${review_message//$'\n'/ }"
-              review_message="${review_message//%/percent}"
-              printf '::error::Central PR #%s force-merge approval rejected with HTTP %s: %s\n' \
-                "$PR_NUMBER" "$review_http_code" "$review_message"
-              exit 1
-            fi
-            test "$(jq -r '.state // empty' "$review_response_file")" = APPROVED
-            test "$(jq -r '.commit_id // empty' "$review_response_file")" = "$EXPECTED_HEAD_SHA"
-            approval_actor="$(jq -r '.user.login // empty' "$review_response_file")"
-            test -n "$approval_actor"
-            test "$approval_actor" != seonghobae
-            printf '::notice::Published truthful independent exact-head pipeline-defect approval for central PR #%s as %s.\n' \
-              "$PR_NUMBER" "$approval_actor"
-          else
-            printf '::notice::Reusing existing independent exact-head pipeline-defect approval for central PR #%s.\n' \
-              "$PR_NUMBER"
-          fi
+          test "$independent_approval_count" -gt 0
+          printf '::notice::Central merge guard verified an independent exact-head pipeline-defect approval.\n'
 
           review_run_json="$(
             GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
