@@ -421,7 +421,14 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
         check=False,
     )
     assert strix.returncode == 0, strix.stderr
-    assert "provider_mode=openai_direct" in strix_output.read_text()
+    assert {
+        "provider_mode=openai_direct",
+        "strix_model=gpt-5.6-luna",
+    } <= set(strix_output.read_text().splitlines())
+    assert (
+        "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
+        in workflow_text("strix.yml")
+    )
 
     noema_probe = tmp_path / "noema-key"
     noema_script = textwrap.dedent(
