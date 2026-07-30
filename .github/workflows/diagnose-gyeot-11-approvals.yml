@@ -1048,10 +1048,6 @@ jobs:
           test "$blocking_check_count" -eq 0
           printf '::notice::Central merge guard validated %s current-head check runs with zero blockers.\n' \
             "$(jq -r '.total_count // 0' <<<"$check_runs_json")"
-          status_check_runs_json="$(
-            gh api \
-              "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
-          )"
           opencode_check_url="$(
             jq -r '
               [
@@ -1066,7 +1062,7 @@ jobs:
               | last
               | .details_url
               // empty
-            ' <<<"$status_check_runs_json"
+            ' <<<"$check_runs_json"
           )"
           [[ "$opencode_check_url" == https://github.com/ContextualWisdomLab/.github/actions/* ]]
           printf '::notice::Using successful exact-head OpenCode evidence at %s.\n' \
