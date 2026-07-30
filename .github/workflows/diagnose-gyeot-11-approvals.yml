@@ -734,32 +734,41 @@ jobs:
           EXPECTED_HEAD_SHA: 97aaa86a6034321f8e4532453db6fbcb9a4b8e9b
         run: |
           set -euo pipefail
-          check_runs_json="$(
-            gh api --paginate --slurp \
-              -H 'Accept: application/vnd.github+json' \
-              "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
-          )"
-          check_run_count="$(
-            jq '[.[].check_runs[]] | length' <<<"$check_runs_json"
-          )"
-          check_run_blockers="$(
-            jq '
-              [
-                .[].check_runs[]
-                | select(
-                    .status != "completed"
-                    or (
-                      .conclusion != "success"
-                      and .conclusion != "neutral"
-                      and .conclusion != "skipped"
+          check_runs_json=""
+          for check_attempt in {1..60}; do
+            check_runs_json="$(
+              gh api --paginate --slurp \
+                -H 'Accept: application/vnd.github+json' \
+                "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
+            )"
+            check_run_count="$(
+              jq '[.[].check_runs[]] | length' <<<"$check_runs_json"
+            )"
+            check_run_blockers="$(
+              jq '
+                [
+                  .[].check_runs[]
+                  | select(
+                      .status != "completed"
+                      or (
+                        .conclusion != "success"
+                        and .conclusion != "neutral"
+                        and .conclusion != "skipped"
+                      )
                     )
-                  )
-              ]
-              | length
-            ' <<<"$check_runs_json"
-          )"
-          printf '::notice::gyeot_current_head_check_runs total=%s blockers=%s\n' \
-            "$check_run_count" "$check_run_blockers"
+                ]
+                | length
+              ' <<<"$check_runs_json"
+            )"
+            printf '::notice::gyeot_current_head_check_runs attempt=%s total=%s blockers=%s\n' \
+              "$check_attempt" "$check_run_count" "$check_run_blockers"
+            if [ "$check_run_blockers" -eq 0 ]; then
+              break
+            fi
+            if [ "$check_attempt" -lt 60 ]; then
+              sleep 10
+            fi
+          done
           while IFS=$'\t' read -r name status conclusion; do
             detail="${name} status=${status} conclusion=${conclusion:-none}"
             detail="${detail//%/%25}"
