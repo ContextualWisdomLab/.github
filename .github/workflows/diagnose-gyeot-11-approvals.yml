@@ -145,3 +145,45 @@ jobs:
           commit_committer="$(jq -r '.committer.login // "none"' <<<"$commit_json")"
           printf '::notice::head_commit author=%s committer=%s\n' \
             "$commit_author" "$commit_committer"
+
+      - name: Dispatch exact-head OpenCode review
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          TARGET_REPOSITORY: ContextualWisdomLab/gyeot
+          PR_NUMBER: "11"
+          EXPECTED_BASE_REF: develop
+          EXPECTED_BASE_SHA: 1bcb340e78e78f187ac14c3794d1170b90b0f155
+          EXPECTED_HEAD_REF: feat/cbt-ema-integration
+          EXPECTED_HEAD_SHA: 54129babea5a5bc8f36317ec5fbb76dd962115b7
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          test "$(jq -r '.state // empty' <<<"$pr_json")" = open
+          test "$(jq -r '.base.ref // empty' <<<"$pr_json")" = "$EXPECTED_BASE_REF"
+          test "$(jq -r '.base.sha // empty' <<<"$pr_json")" = "$EXPECTED_BASE_SHA"
+          test "$(jq -r '.head.ref // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_REF"
+          test "$(jq -r '.head.sha // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_SHA"
+
+          payload_file="$(mktemp)"
+          jq -n \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_base_ref "$EXPECTED_BASE_REF" \
+            --arg pr_base_sha "$EXPECTED_BASE_SHA" \
+            --arg pr_head_ref "$EXPECTED_HEAD_REF" \
+            --arg pr_head_sha "$EXPECTED_HEAD_SHA" \
+            '{
+              event_type: "opencode-review",
+              client_payload: {
+                target_repository: $target_repository,
+                pr_number: $pr_number,
+                pr_base_ref: $pr_base_ref,
+                pr_base_sha: $pr_base_sha,
+                pr_head_ref: $pr_head_ref,
+                pr_head_sha: $pr_head_sha
+              }
+            }' >"$payload_file"
+          gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input "$payload_file"
+          printf '::notice::Dispatched exact-head OpenCode review for %s#%s at %s.\n' \
+            "$TARGET_REPOSITORY" "$PR_NUMBER" "$EXPECTED_HEAD_SHA"
