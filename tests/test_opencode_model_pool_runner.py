@@ -790,6 +790,37 @@ def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> Non
     ) in result.stdout
 
 
+def test_nvidia_nim_candidate_requires_key(tmp_path: Path) -> None:
+    """NVIDIA NIM is skipped cleanly when its scoped credential is unavailable."""
+    result = run_failed_model(
+        tmp_path,
+        model_candidates="nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
+    )
+
+    assert result.returncode == 1
+    assert "NVIDIA_NIM_API_KEY is not configured" in result.stdout
+    assert "attempt 1/1" not in result.stdout
+
+
+def test_nvidia_nim_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
+    """A stalled hosted NIM cannot consume a full paid-provider cadence slot."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "NVIDIA_NIM_API_KEY": "fake-nvidia-key",
+            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
+        },
+        model_candidates="nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b runtime cap "
+        "selected 3s instead of 9s because this provider has a bounded failover window."
+    ) in result.stdout
+
+
 def test_github_models_openai_prompt_references_evidence_without_inlining(
     tmp_path: Path,
 ) -> None:

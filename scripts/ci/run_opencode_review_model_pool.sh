@@ -345,6 +345,13 @@ is_openrouter_candidate() {
 	esac
 }
 
+is_nvidia_nim_candidate() {
+	case "$1" in
+	nvidia-nim/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 is_low_sensitivity_candidate() {
 	case "$1" in
 	openai/*-mini | openai/*-nano | \
@@ -372,6 +379,10 @@ should_skip_model_candidate() {
 		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
+	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
+		printf 'Skipping OpenCode %s because NVIDIA_NIM_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+		return 0
+	fi
 	return 1
 }
 
@@ -381,7 +392,7 @@ cap_model_run_timeout() {
 	local cap_seconds
 
 	case "$model_candidate" in
-	opencode-free/*)
+	opencode-free/* | nvidia-nim/*)
 		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 600)"
 		;;
 	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)

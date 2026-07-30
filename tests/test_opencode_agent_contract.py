@@ -134,6 +134,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
+        ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -160,6 +161,14 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     )
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
+    nvidia_provider = generated_config["provider"]["nvidia-nim"]
+    assert nvidia_provider["options"] == {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_NIM_API_KEY}",
+    }
+    assert nvidia_provider["models"]["nvidia/nemotron-3-ultra-550b-a55b"][
+        "limit"
+    ] == {"context": 1000000, "output": 32768}
     free_models = generated_config["provider"]["opencode-free"]["models"]
     assert set(free_models) == {
         "nemotron-3-ultra-free",
