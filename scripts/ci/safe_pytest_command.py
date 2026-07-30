@@ -72,12 +72,29 @@ def discover_commands(workflow_dir: pathlib.Path) -> list[list[str]]:
     return commands
 
 
+def _project_python_path(project_dir: pathlib.Path) -> str:
+    """Return the ``PYTHONPATH`` for a project, honoring a ``src`` package layout.
+
+    Repositories that keep their importable package under ``src/`` (a
+    ``src``-layout such as ``src/<package>``) cannot import it with the project
+    root alone on the path, so an offline coverage run started from the project
+    root fails at collection with ``ModuleNotFoundError``. When a ``src``
+    directory exists it is prepended to the path so both ``src``-layout and
+    flat-layout suites import correctly; otherwise the path is just the project
+    root, preserving the previous behavior.
+    """
+    entries = ["."]
+    if (project_dir / "src").is_dir():
+        entries.insert(0, "src")
+    return os.pathsep.join(entries)
+
+
 def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
     """Execute validated pytest argv directly in one project directory."""
     if not _is_pytest_argv(argv) or any(_has_shell_control(arg) for arg in argv):
         raise ValueError("configured command is not a safe direct pytest invocation")
     env = os.environ.copy()
-    env["PYTHONPATH"] = "."
+    env["PYTHONPATH"] = _project_python_path(project_dir)
     virtualenv_bin = project_dir.resolve() / ".venv" / "bin"
     if virtualenv_bin.is_dir():
         inherited_path = env.get("PATH")
