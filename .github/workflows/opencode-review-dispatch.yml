@@ -601,8 +601,13 @@ jobs:
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
+            trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
+              exit 1
+            fi
+            if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
+              echo "::error::Trusted base Python lock installer must be a regular non-symlink file."
               exit 1
             fi
             sudo rm -rf "$coverage_build_dir"
@@ -610,6 +615,8 @@ jobs:
             chmod 0700 "$coverage_build_dir"
             install -m 0644 "$trusted_ci_requirements" \
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
+            install -m 0755 "$trusted_base_python_installer" \
+              "$coverage_build_dir/install-base-python-locks.py"
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
@@ -710,26 +717,12 @@ jobs:
               --only-binary=:all: \
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
+          COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           COPY base-python-requirements /tmp/base-python-requirements
-          # Base-lock materialization is best-effort provisioning, not evidence:
-          # a repository may pin locks for a different interpreter (for example
-          # a Python 3.12/3.13 tool lock whose pins have no 3.14 wheels), and
-          # such a lock must not abort the whole trusted image build. The
-          # offline test run remains the fail-closed gate and surfaces any
-          # genuinely missing dependency for the measured suite.
-          RUN set -eu; \
-              while IFS= read -r requirements_file; do \
-                [ -n "$requirements_file" ] || continue; \
-                if ! python3 -m pip install \
-                  --break-system-packages \
-                  --disable-pip-version-check \
-                  --require-hashes \
-                  --only-binary=:all: \
-                  -r "/tmp/base-python-requirements/${requirements_file}"; then \
-                  echo "WARNING: base lock ${requirements_file} is not installable on the sandbox interpreter; the offline test run will surface any genuinely missing dependencies." >&2; \
-                fi; \
-              done </tmp/base-python-requirements/manifest.txt; \
-              rm -rf /tmp/base-python-requirements
+          RUN python3 -I /usr/local/libexec/install-base-python-locks.py \
+                --requirements-root /tmp/base-python-requirements \
+            && rm -rf /tmp/base-python-requirements \
+            && rm -f /usr/local/libexec/install-base-python-locks.py
           DOCKERFILE
             if ! docker build --pull --no-cache --network=default \
               --tag "$coverage_tool_image" \

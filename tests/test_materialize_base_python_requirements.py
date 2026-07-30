@@ -311,7 +311,7 @@ def test_main_reports_when_no_locks_exist(
         == 0
     )
     assert (
-        "No tracked hash-pinned Python requirement locks exist"
+        "No tracked hash-bearing Python requirement candidates exist"
         in capsys.readouterr().out
     )
 
