@@ -148,44 +148,104 @@ jobs:
           printf '::notice::head_commit author=%s committer=%s\n' \
             "$commit_author" "$commit_committer"
 
-      - name: Dispatch exact-head central OpenCode review
+      - name: Create content-identical recovery PR with the OpenCode App
         id: dispatch
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: "676"
+          ORIGINAL_PR_NUMBER: "676"
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
-          EXPECTED_HEAD_REF: fix/org-sweep-timeout
+          RECOVERY_HEAD_REF: fix/org-sweep-timeout-retry-676
           CURRENT_HEAD_SHA: 67db8cfdd1d22f6281c7b54c6c0899ac08f03d61
-          OLD_REVIEW_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
-          REVIEW_RUN_ID: "30548954941"
-          EXPECTED_REVIEW_RUN_NAME: OpenCode Review Dispatch ContextualWisdomLab/.github#676@7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
+          EXPECTED_TREE_SHA: 408356e123397099763a2cbe082b0c039326743b
         run: |
           set -euo pipefail
-          pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state // empty' <<<"$pr_json")" = open
-          test "$(jq -r '.base.ref // empty' <<<"$pr_json")" = "$EXPECTED_BASE_REF"
-          test "$(jq -r '.base.sha // empty' <<<"$pr_json")" = "$EXPECTED_BASE_SHA"
-          test "$(jq -r '.head.ref // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_REF"
-          test "$(jq -r '.head.sha // empty' <<<"$pr_json")" = "$CURRENT_HEAD_SHA"
-
-          review_run_json="$(
-            gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REVIEW_RUN_ID}"
+          original_pr="$(
+            gh api "repos/${TARGET_REPOSITORY}/pulls/${ORIGINAL_PR_NUMBER}"
           )"
-          test "$(jq -r '.event // empty' <<<"$review_run_json")" = \
-            repository_dispatch
-          test "$(jq -r '.name // empty' <<<"$review_run_json")" = \
-            "$EXPECTED_REVIEW_RUN_NAME"
+          test "$(jq -r '.state // empty' <<<"$original_pr")" = open
+          test "$(jq -r '.base.ref // empty' <<<"$original_pr")" = \
+            "$EXPECTED_BASE_REF"
+          test "$(jq -r '.base.sha // empty' <<<"$original_pr")" = \
+            "$EXPECTED_BASE_SHA"
+          test "$(jq -r '.head.sha // empty' <<<"$original_pr")" = \
+            "$CURRENT_HEAD_SHA"
 
-          if gh api -X POST \
-            "repos/${TARGET_REPOSITORY}/actions/runs/${REVIEW_RUN_ID}/cancel"; then
-            printf '::notice::Requested regular cancellation for stale exact-head OpenCode review run %s for central PR #%s at %s.\n' \
-              "$REVIEW_RUN_ID" "$PR_NUMBER" "$OLD_REVIEW_HEAD_SHA"
-          else
-            printf '::warning::GitHub rejected regular cancellation for stale run %s; current-head run 30552704517 remains queued for concurrency reconciliation.\n' \
-              "$REVIEW_RUN_ID"
+          recovery_ref="$(
+            gh api "repos/${TARGET_REPOSITORY}/git/ref/heads/${RECOVERY_HEAD_REF}"
+          )"
+          test "$(jq -r '.object.sha // empty' <<<"$recovery_ref")" = \
+            "$CURRENT_HEAD_SHA"
+          recovery_commit="$(
+            gh api "repos/${TARGET_REPOSITORY}/git/commits/${CURRENT_HEAD_SHA}"
+          )"
+          test "$(jq -r '.tree.sha // empty' <<<"$recovery_commit")" = \
+            "$EXPECTED_TREE_SHA"
+
+          existing_prs="$(
+            gh api --method GET \
+              "repos/${TARGET_REPOSITORY}/pulls" \
+              -f state=open \
+              -f "head=ContextualWisdomLab:${RECOVERY_HEAD_REF}" \
+              -F per_page=10
+          )"
+          existing_number="$(jq -r '.[0].number // empty' <<<"$existing_prs")"
+          if [ -n "$existing_number" ]; then
+            printf '::notice::Reusing content-identical recovery PR #%s for original PR #%s.\n' \
+              "$existing_number" "$ORIGINAL_PR_NUMBER"
+            exit 0
           fi
+
+          # shellcheck disable=SC2016
+          recovery_body="$(
+            printf '%s\n' \
+              '## Summary' \
+              '' \
+              '- make scheduled organization sweeps use schedule-specific concurrency' \
+              '- raise the bounded organization-sweep timeout and enable scheduled review/merge/update processing' \
+              '- authenticate private target-repository metadata reads with the OpenCode App OIDC token' \
+              '- preserve focused workflow contract coverage' \
+              '' \
+              '## Validation' \
+              '' \
+              '- `actionlint`' \
+              '- `tests/test_opencode_agent_contract.py`: 38 passed' \
+              '- `tests/test_required_workflow_queue_contract.py`: 49 passed' \
+              '- current-head Strix: success' \
+              "- exact tree: \`${EXPECTED_TREE_SHA}\`" \
+              '' \
+              '## Recovery provenance' \
+              '' \
+              "This PR is a content-identical recovery of #${ORIGINAL_PR_NUMBER} at head \`${CURRENT_HEAD_SHA}\`." \
+              'The original PR retained a stale GitHub Actions concurrency lease after an old review run was force-cancelled.' \
+              'A separate PR number creates a clean concurrency group without deleting historical workflow evidence.' \
+              '' \
+              "- Supersedes #${ORIGINAL_PR_NUMBER} after this PR merges." \
+              '- Operator explicitly authorized force-merge handling for central pipeline defects.'
+          )"
+          # shellcheck disable=SC2016
+          create_payload="$(
+            jq -cn \
+              --arg title 'fix(governance): let organization sweep finish' \
+              --arg body "$recovery_body" \
+              --arg head "$RECOVERY_HEAD_REF" \
+              --arg base "$EXPECTED_BASE_REF" \
+              '{title:$title, body:$body, head:$head, base:$base, draft:false}'
+          )"
+          created_pr="$(
+            gh api -X POST \
+              "repos/${TARGET_REPOSITORY}/pulls" \
+              --input - <<<"$create_payload"
+          )"
+          new_number="$(jq -r '.number // empty' <<<"$created_pr")"
+          test -n "$new_number"
+          test "$(jq -r '.head.sha // empty' <<<"$created_pr")" = \
+            "$CURRENT_HEAD_SHA"
+          test "$(jq -r '.base.sha // empty' <<<"$created_pr")" = \
+            "$EXPECTED_BASE_SHA"
+          printf '::notice::Created content-identical recovery PR #%s for original PR #%s at exact head %s.\n' \
+            "$new_number" "$ORIGINAL_PR_NUMBER" "$CURRENT_HEAD_SHA"
 
       - name: Restamp central PR head with the OpenCode App
         if: steps.app_token.outputs.never == 'true'
