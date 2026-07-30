@@ -208,6 +208,34 @@ def test_rejects_invalid_base_package_inputs(
         materializer.base_pnpm_projects(tmp_path, "a" * 40)
 
 
+def test_skips_npm_project_with_vestigial_pnpm_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An npm project's stray pnpm-lock.yaml is skipped, not fail-closed.
+
+    A base tree with a ``pnpm-lock.yaml`` plus a sibling ``package-lock.json``
+    and no exact pnpm ``packageManager`` is npm-managed, so pnpm materialization
+    is skipped (the downstream npm install path owns it) rather than failing the
+    whole coverage-evidence job.
+    """
+    regular_paths = {
+        "frontend/package.json",
+        "frontend/pnpm-lock.yaml",
+        "frontend/package-lock.json",
+    }
+    monkeypatch.setattr(
+        materializer, "_regular_base_paths", lambda *_args: regular_paths
+    )
+
+    def fake_git(_repo_root: Path, _command: str, object_spec: str) -> bytes:
+        if object_spec.endswith(":frontend/package.json"):
+            return b"{}"
+        raise AssertionError(f"unexpected git object: {object_spec}")
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+    assert materializer.base_pnpm_projects(tmp_path, "a" * 40) == []
+
+
 def test_rejects_mutable_or_non_pnpm_package_manager(tmp_path: Path) -> None:
     """Only an exact pnpm runner specification may populate the trusted store."""
     repo, base_sha = fixture_repo(tmp_path)
