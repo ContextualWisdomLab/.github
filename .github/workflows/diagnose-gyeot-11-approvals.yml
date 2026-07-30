@@ -941,6 +941,7 @@ jobs:
             "$PR_NUMBER" "$approval_actor"
 
       - name: Refresh central required OpenCode check
+        id: refresh_opencode_check
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
@@ -970,6 +971,7 @@ jobs:
           [[ "$opencode_job_id" =~ ^[1-9][0-9]*$ ]]
           gh api -X POST \
             "repos/${TARGET_REPOSITORY}/actions/jobs/${opencode_job_id}/rerun"
+          echo "job_id=$opencode_job_id" >>"$GITHUB_OUTPUT"
           printf '::notice::Requested a fresh ruleset evaluation from successful OpenCode job %s.\n' \
             "$opencode_job_id"
 
@@ -979,6 +981,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APPROVAL_TOKEN: ${{ steps.app_token.outputs.token }}
           SCHEDULER_ACTIONS_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          PREVIOUS_OPENCODE_JOB_ID: ${{ steps.refresh_opencode_check.outputs.job_id }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           PR_NUMBER: "678"
           EXPECTED_BASE_REF: main
@@ -1017,6 +1020,7 @@ jobs:
             "$merge_preview_sha" "$preview_tree"
 
           blocking_check_count=1
+          fresh_opencode_success_count=0
           for check_attempt in $(seq 1 60); do
             check_runs_json="$(
               GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
@@ -1038,7 +1042,22 @@ jobs:
                 | length
               ' <<<"$check_runs_json"
             )"
-            if [ "$blocking_check_count" -eq 0 ]; then
+            fresh_opencode_success_count="$(
+              jq --argjson previous_job_id "$PREVIOUS_OPENCODE_JOB_ID" '
+                [
+                  .check_runs[]
+                  | select(
+                      .name == "opencode-review"
+                      and .status == "completed"
+                      and .conclusion == "success"
+                      and .id != $previous_job_id
+                    )
+                ]
+                | length
+              ' <<<"$check_runs_json"
+            )"
+            if [ "$blocking_check_count" -eq 0 ] &&
+              [ "$fresh_opencode_success_count" -gt 0 ]; then
               break
             fi
             if [ "$check_attempt" -lt 60 ]; then
@@ -1046,16 +1065,18 @@ jobs:
             fi
           done
           test "$blocking_check_count" -eq 0
+          test "$fresh_opencode_success_count" -gt 0
           printf '::notice::Central merge guard validated %s current-head check runs with zero blockers.\n' \
             "$(jq -r '.total_count // 0' <<<"$check_runs_json")"
           opencode_check_url="$(
-            jq -r '
+            jq -r --argjson previous_job_id "$PREVIOUS_OPENCODE_JOB_ID" '
               [
                 .check_runs[]
                 | select(
                     .name == "opencode-review"
                     and .status == "completed"
                     and .conclusion == "success"
+                    and .id != $previous_job_id
                   )
               ]
               | sort_by(.completed_at)
