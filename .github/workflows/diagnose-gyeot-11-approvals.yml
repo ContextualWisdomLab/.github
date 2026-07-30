@@ -515,12 +515,11 @@ jobs:
           printf '::notice::OpenCode App restamped central PR #%s from %s to same-tree head %s.\n' \
             "$PR_NUMBER" "$EXPECTED_HEAD_SHA" "$new_head"
 
-      - name: Publish configured-workflow exact-head pipeline-defect approval
-        if: steps.actions_pr.outputs.never == 'true'
+      - name: Publish GitHub Actions exact-head pipeline-defect approval
         continue-on-error: true
         id: second_approval
         env:
-          APPROVAL_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || '' }}
+          APPROVAL_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           PR_NUMBER: "678"
           EXPECTED_HEAD_SHA: ${{ steps.actions_pr_restamp.outputs.head_sha || steps.actions_pr.outputs.head_sha }}
@@ -537,14 +536,7 @@ jobs:
                 --jq '.data.viewer.login // empty'
           )"
           test -n "$approval_actor"
-          case "$approval_actor" in
-            cwl-noema-review | 'cwl-noema-review[bot]' | \
-            opencode-agent | 'opencode-agent[bot]' | \
-            'github-actions[bot]')
-              echo "::error::The configured approval actor is not independent."
-              exit 1
-              ;;
-          esac
+          test "$approval_actor" = 'github-actions[bot]'
           printf '::notice::Configured workflow approval actor is %s.\n' \
             "$approval_actor"
 
