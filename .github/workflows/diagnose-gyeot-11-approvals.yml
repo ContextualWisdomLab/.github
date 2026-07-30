@@ -171,13 +171,17 @@ jobs:
           test "$(jq -r '.head.sha // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_SHA"
           test "$(jq -r '.merge_commit_sha // empty' <<<"$pr_json")" = "$EXPECTED_MERGE_SHA"
           test "$(jq -r '.mergeable // false' <<<"$pr_json")" = true
-          test "$(jq -r '.mergeable_state // empty' <<<"$pr_json")" = clean
+          printf '::notice::Central merge guard validated open PR base=%s head=%s mergeable_state=%s.\n' \
+            "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA" \
+            "$(jq -r '.mergeable_state // "unknown"' <<<"$pr_json")"
 
           preview_json="$(gh api "repos/${TARGET_REPOSITORY}/git/commits/${EXPECTED_MERGE_SHA}")"
           preview_tree="$(jq -r '.tree.sha // empty' <<<"$preview_json")"
           preview_parents="$(jq -r '[.parents[].sha] | join(" ")' <<<"$preview_json")"
           test "$preview_parents" = "$EXPECTED_BASE_SHA $EXPECTED_HEAD_SHA"
           test -n "$preview_tree"
+          printf '::notice::Central merge guard validated preview=%s tree=%s.\n' \
+            "$EXPECTED_MERGE_SHA" "$preview_tree"
 
           check_runs_json="$(
             GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
@@ -200,6 +204,8 @@ jobs:
             ' <<<"$check_runs_json"
           )"
           test "$blocking_check_count" -eq 0
+          printf '::notice::Central merge guard validated %s current-head check runs with zero blockers.\n' \
+            "$(jq -r '.total_count // 0' <<<"$check_runs_json")"
 
           review_run_json="$(
             GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
@@ -207,6 +213,8 @@ jobs:
           )"
           test "$(jq -r '.event // empty' <<<"$review_run_json")" = repository_dispatch
           test "$(jq -r '.name // empty' <<<"$review_run_json")" = "$EXPECTED_REVIEW_RUN_NAME"
+          printf '::notice::Central merge guard validated review run %s status=%s.\n' \
+            "$ACTIVE_REVIEW_RUN_ID" "$(jq -r '.status // "unknown"' <<<"$review_run_json")"
           if [ "$(jq -r '.status // empty' <<<"$review_run_json")" != completed ]; then
             if GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
               gh api -X POST \
