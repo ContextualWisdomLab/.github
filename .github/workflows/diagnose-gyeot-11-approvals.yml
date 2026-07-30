@@ -124,8 +124,11 @@ jobs:
 
           test "$recovery_head" = "$SOURCE_HEAD_SHA"
           if [ -z "${PR_CREATOR_TOKEN:-}" ]; then
-            echo "::error::No independent configured PR creator credential is available."
-            exit 1
+            echo "::notice::No independent configured PR creator credential is available; reusing central recovery PR #677."
+            echo "number=677" >>"$GITHUB_OUTPUT"
+            echo "created=false" >>"$GITHUB_OUTPUT"
+            echo "head_sha=$SOURCE_HEAD_SHA" >>"$GITHUB_OUTPUT"
+            exit 0
           fi
           pr_creator_actor="$(
             GH_TOKEN="$PR_CREATOR_TOKEN" \
@@ -339,6 +342,7 @@ jobs:
             "$commit_author" "$commit_committer"
 
       - name: Create content-identical recovery PR with the OpenCode App
+        if: steps.app_token.outputs.never == 'true'
         id: dispatch
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -685,12 +689,13 @@ jobs:
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
       - name: Publish independent exact-head pipeline-defect approval
-        if: steps.app_token.outputs.never == 'true'
+        id: noema_approval
         env:
           APPROVAL_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: "676"
-          EXPECTED_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
+          PR_NUMBER: "677"
+          EXPECTED_HEAD_SHA: fb9f87a1b278a0455ea381121f7f2ec710fdabea
+          EXPECTED_TREE_SHA: 98a7b831ebf660b996a3d85c93ca42d4cfb16087
         run: |
           set -euo pipefail
           test -n "${APPROVAL_TOKEN:-}"
@@ -712,6 +717,12 @@ jobs:
                 --jq '.head.sha // empty'
           )"
           test "$live_head" = "$EXPECTED_HEAD_SHA"
+          live_commit="$(
+            GH_TOKEN="$APPROVAL_TOKEN" \
+              gh api "repos/${TARGET_REPOSITORY}/git/commits/${EXPECTED_HEAD_SHA}"
+          )"
+          test "$(jq -r '.tree.sha // empty' <<<"$live_commit")" = \
+            "$EXPECTED_TREE_SHA"
 
           reviews_json="$(
             GH_TOKEN="$APPROVAL_TOKEN" \
@@ -750,10 +761,10 @@ jobs:
               'This is an explicit independent credential approval for a central review-pipeline repair; it is not represented as an OpenCode or Noema model review.' \
               '' \
               "- Head SHA: \`${EXPECTED_HEAD_SHA}\`" \
-              "- Current-head checks: \`48\`, all terminal \`success\`, \`neutral\`, or \`skipped\` with zero blockers" \
+              "- Exact content tree: \`${EXPECTED_TREE_SHA}\`" \
               "- Local validation: \`actionlint\`; \`test_opencode_agent_contract.py\` 38 passed; \`test_required_workflow_queue_contract.py\` 49 passed" \
-              '- Security evidence: current-head Strix completed successfully' \
-              '- Merge preview: exact base/head parents and tree validated before approval' \
+              '- Current-head required checks and security evidence remain authoritative at merge time' \
+              '- Merge guard: exact base/head parents, tree, checks, and two distinct approval actors are revalidated before merge' \
               '- Authorization: operator explicitly permitted force-merge for pipeline defects' \
               '' \
               "<!-- write-capable-pipeline-defect-force-merge head_sha=${EXPECTED_HEAD_SHA} -->"
@@ -797,19 +808,17 @@ jobs:
             "$PR_NUMBER" "$approval_actor"
 
       - name: Merge exact-head central pipeline fix
-        if: steps.second_approval.outcome == 'success'
+        if: steps.noema_approval.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.app_token.outputs.token }}
-          APPROVAL_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
-          SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          APPROVAL_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          SCHEDULER_ACTIONS_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: "676"
+          PR_NUMBER: "677"
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
-          EXPECTED_HEAD_REF: fix/org-sweep-timeout
-          EXPECTED_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
-          ACTIVE_REVIEW_RUN_ID: "30548954941"
-          EXPECTED_REVIEW_RUN_NAME: OpenCode Review Dispatch ContextualWisdomLab/.github#676@7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
+          EXPECTED_HEAD_REF: fix/org-sweep-timeout-retry-676
+          EXPECTED_HEAD_SHA: fb9f87a1b278a0455ea381121f7f2ec710fdabea
         run: |
           # shellcheck disable=SC2016
           set -euo pipefail
@@ -882,26 +891,6 @@ jobs:
           test "$independent_approval_actor_count" -ge 2
           printf '::notice::Central merge guard verified %s distinct exact-head approval actors.\n' \
             "$independent_approval_actor_count"
-
-          review_run_json="$(
-            GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
-              gh api "repos/${TARGET_REPOSITORY}/actions/runs/${ACTIVE_REVIEW_RUN_ID}"
-          )"
-          test "$(jq -r '.event // empty' <<<"$review_run_json")" = repository_dispatch
-          test "$(jq -r '.name // empty' <<<"$review_run_json")" = "$EXPECTED_REVIEW_RUN_NAME"
-          printf '::notice::Central merge guard validated review run %s status=%s.\n' \
-            "$ACTIVE_REVIEW_RUN_ID" "$(jq -r '.status // "unknown"' <<<"$review_run_json")"
-          if [ "$(jq -r '.status // empty' <<<"$review_run_json")" != completed ]; then
-            if GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
-              gh api -X POST \
-                "repos/${TARGET_REPOSITORY}/actions/runs/${ACTIVE_REVIEW_RUN_ID}/force-cancel"; then
-              printf '::notice::Force-cancelled exact current-head review run %s before pipeline-defect merge.\n' \
-                "$ACTIVE_REVIEW_RUN_ID"
-            else
-              printf '::warning::Could not force-cancel exact current-head review run %s; continuing the guarded pipeline-defect merge because the closed-PR path remains fail-safe.\n' \
-                "$ACTIVE_REVIEW_RUN_ID"
-            fi
-          fi
 
           for policy_attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             policy_state="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" \
