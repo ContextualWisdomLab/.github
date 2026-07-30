@@ -6,7 +6,7 @@ on:
       - ops/diagnose-gyeot-11
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -148,7 +148,7 @@ jobs:
 
       - name: Dispatch exact-head OpenCode review
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/gyeot
           PR_NUMBER: "11"
           EXPECTED_BASE_REF: develop
