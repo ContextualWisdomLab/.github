@@ -253,7 +253,7 @@ jobs:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/gyeot
           PR_NUMBER: "11"
-          EXPECTED_HEAD_SHA: 54129babea5a5bc8f36317ec5fbb76dd962115b7
+          EXPECTED_HEAD_SHA: d6637899085c1702af734564eea8b771ba8355b7
         run: |
           set -euo pipefail
 
@@ -317,6 +317,33 @@ jobs:
           )"
           printf '::notice::current_head_review_counts total=%s approvals=%s\n' \
             "$current_review_count" "$current_approval_count"
+
+          check_runs_json="$(
+            gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
+          )"
+          check_run_count="$(
+            jq '[.[].check_runs[]] | length' <<<"$check_runs_json"
+          )"
+          check_run_blockers="$(
+            jq '
+              [
+                .[].check_runs[]
+                | select(
+                    .status != "completed"
+                    or (
+                      .conclusion != "success"
+                      and .conclusion != "neutral"
+                      and .conclusion != "skipped"
+                    )
+                  )
+              ]
+              | length
+            ' <<<"$check_runs_json"
+          )"
+          printf '::notice::current_head_check_runs total=%s blockers=%s\n' \
+            "$check_run_count" "$check_run_blockers"
 
           while IFS=$'\t' read -r author state commit_id submitted_at; do
             test "$commit_id" = "$EXPECTED_HEAD_SHA"
