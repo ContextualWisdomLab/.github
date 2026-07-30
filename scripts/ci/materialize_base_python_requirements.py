@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import pathlib
 import re
@@ -12,7 +13,52 @@ import sys
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-HASH_LOCK_NAMES = frozenset({"requirements-hashes.txt", "requirements.lock"})
+
+
+def _is_candidate_lock_name(name: str) -> bool:
+    """Return whether a file name is a possible pip requirements lock."""
+    return name == "requirements.lock" or (
+        fnmatch.fnmatch(name, "requirements*.txt")
+        and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+    )
+
+
+def _requirement_lines(content: bytes) -> list[str]:
+    """Return logical requirement lines, joining backslash line-continuations.
+
+    ``pip-compile``/``uv export`` write each requirement as a spec line ending in
+    a backslash followed by indented ``--hash=`` continuation lines. Joining the
+    continuations first keeps a spec and its hashes on one logical line so the
+    hash-pin check sees them together.
+    """
+    text = content.decode("utf-8", errors="ignore").replace("\r\n", "\n")
+    joined = text.replace("\\\n", " ")
+    lines: list[str] = []
+    for raw_line in joined.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _is_hash_pinned(content: bytes) -> bool:
+    """Return whether lock content is fully hash-pinned and safe to materialize.
+
+    Discovery is content-based rather than name-based so hash-pinned locks in any
+    location (a service subdirectory, ``requirements-dev.txt``,
+    ``requirements-test.txt``) are installed for offline coverage, while an
+    unpinned or PR-mutable requirements file is still excluded from the networked
+    build context. An empty file carries no installable dependency and is not
+    materialized.
+    """
+    lines = _requirement_lines(content)
+    if not lines:
+        return False
+    return any(line == "--require-hashes" for line in lines) or all(
+        "--hash=" in line or line.startswith(("-r ", "--requirement "))
+        for line in lines
+    )
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -55,10 +101,13 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
             or not mode.startswith("100")
             or candidate.is_absolute()
             or ".." in candidate.parts
-            or candidate.name not in HASH_LOCK_NAMES
+            or not _is_candidate_lock_name(candidate.name)
         ):
             continue
-        locks.append((path, _git(repo_root, "show", f"{base_sha}:{path}")))
+        content = _git(repo_root, "show", f"{base_sha}:{path}")
+        if not _is_hash_pinned(content):
+            continue
+        locks.append((path, content))
     return sorted(locks, key=lambda item: item[0])
 
 
