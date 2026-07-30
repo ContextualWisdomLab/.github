@@ -3413,7 +3413,7 @@ jobs:
             "$schema": "https://opencode.ai/config.json",
             "model": "github-models/deepseek/deepseek-r1-0528",
             "small_model": "github-models/deepseek/deepseek-v3-0324",
-            "enabled_providers": ["opencode-free", "openai", "openrouter", "github-models"],
+            "enabled_providers": ["opencode-free", "opencode", "openai", "openrouter", "github-models"],
             "lsp": false,
             "mcp": {},
             "permission": {
@@ -3596,6 +3596,33 @@ jobs:
                     "limit": {
                       "context": 200000,
                       "output": 32000
+                    }
+                  }
+                }
+              },
+              "opencode": {
+                "npm": "@ai-sdk/openai",
+                "name": "OpenCode Zen",
+                "options": {
+                  "baseURL": "https://opencode.ai/zen/v1",
+                  "apiKey": "{env:OPENCODE_API_KEY}"
+                },
+                "models": {
+                  "gpt-5.6-terra": {
+                    "name": "OpenCode Zen GPT-5.6 Terra",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
+                    "limit": {
+                      "context": 1000000,
+                      "output": 128000
                     }
                   }
                 }
@@ -3908,6 +3935,7 @@ jobs:
           # api.openai.com directly with the org OPENAI_API_KEY gives the lead
           # model a working, un-throttled backend. Resolves {env:OPENAI_API_KEY}
           # in the opencode.jsonc "openai" provider block.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SHARE: "false"
@@ -3919,7 +3947,8 @@ jobs:
           # may be logged, retained, or used for product/model improvement, so
           # private repositories never include them. The pool then falls
           # through to
-          # DeepSeek V3, the direct GPT-5.6 Luna slot, pinned PAID
+          # OpenCode Zen GPT-5.6 Terra, DeepSeek V3, the direct GPT-5.6 Luna
+          # slot, pinned PAID
           # OpenRouter coder models (free-tier candidates hit the shared
           # free-models-per-day cap and hung for the full candidate timeout,
           # so the OpenRouter slots use cheap paid models billed against the
@@ -3929,7 +3958,7 @@ jobs:
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
