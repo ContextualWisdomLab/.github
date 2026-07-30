@@ -253,7 +253,7 @@ jobs:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/gyeot
           PR_NUMBER: "11"
-          EXPECTED_HEAD_SHA: d6637899085c1702af734564eea8b771ba8355b7
+          EXPECTED_HEAD_SHA: a949501710e516485a8486c52577fb57c05ec59b
         run: |
           set -euo pipefail
 
@@ -693,7 +693,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/gyeot
-          EXPECTED_HEAD_SHA: d6637899085c1702af734564eea8b771ba8355b7
+          EXPECTED_HEAD_SHA: a949501710e516485a8486c52577fb57c05ec59b
         run: |
           set -euo pipefail
           check_runs_json="$(
