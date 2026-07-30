@@ -7580,6 +7580,124 @@ EOF
 	rm -rf "$tmp_dir"
 }
 
+run_full_head_scope_skips_gitlink_case() {
+	# Regression for the full PR-head blob scope path
+	# (build_pull_request_head_tree_scope_dir): when a PR triggers full-head
+	# context (e.g. a Dockerfile change) in a repository that contains a git
+	# submodule, the gitlink tree entry (mode 160000 / type commit) must be
+	# skipped during full-tree materialization, not treated as a non-blob
+	# entry that fails the scope closed. Without the skip, every
+	# submodule-bearing repository fails Strix on any Dockerfile/compose PR.
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	# The full-head scope must materialize the changed Dockerfile and the
+	# unchanged docs context, and must never materialize the gitlink as a path.
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+target_path=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
+		target_path="$2"
+		break
+	fi
+	shift
+done
+dockerfile="$target_path/Dockerfile"
+if [ ! -f "$dockerfile" ] || ! grep -Fq -- 'FROM python:3.12-slim AS head' "$dockerfile"; then
+	echo "Error: changed Dockerfile missing head content" >&2
+	exit 61
+fi
+context_file="$target_path/docs/full-scope-context.md"
+if [ ! -f "$context_file" ] || ! grep -Fq -- 'HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED' "$context_file"; then
+	echo "Error: full PR head scoped context missing" >&2
+	exit 65
+fi
+if [ -e "$target_path/vendor/newsdom-api" ]; then
+	echo "Error: gitlink must not be materialized as a path" >&2
+	exit 69
+fi
+echo "scan ok with PR head content"
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		echo 'seed' >README.md
+		mkdir -p docs
+		printf '%s\n' 'BASE_FULL_SCOPE_CONTEXT_SHOULD_NOT_BE_SCANNED' >docs/full-scope-context.md
+		printf '%s\n' 'FROM python:3.12-slim AS base' >Dockerfile
+		git add .
+		git commit -qm 'base commit'
+	)
+	local seed_sha
+	seed_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	# Add the SAME unchanged gitlink to both base and head, so the regression
+	# proves an *unchanged* submodule pointer is skipped in the full tree.
+	git -C "$repo_root_dir" update-index --add --cacheinfo "160000,$seed_sha,vendor/newsdom-api"
+	git -C "$repo_root_dir" commit -qm 'add gitlink to base'
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		printf '%s\n' 'HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED' >docs/full-scope-context.md
+		printf '%s\n' 'FROM python:3.12-slim AS head' >Dockerfile
+		# Stage only the changed files. `git add .` would stage removal of the
+		# not-checked-out gitlink and drop it from the head tree, so the full-tree
+		# materialization would never see the submodule pointer this case exists
+		# to exercise.
+		git add docs/full-scope-context.md Dockerfile
+		git commit -qm 'head commit changes Dockerfile'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH \
+			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_NUMBER="123" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="Dockerfile" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "full-head-scope gitlink skip exits successfully"
+	assert_file_contains "$output_log" "scan ok with PR head content" "full-head-scope gitlink skip scans head content"
+	assert_file_contains "$output_log" "git submodule pointer; excluding content from PR-scoped Strix input: vendor/newsdom-api" "full-head-scope gitlink skip reason is visible"
+
+	rm -rf "$tmp_dir"
+}
+
 run_pull_request_target_rejects_unsafe_changed_path_case() {
 	local case_name="$1"
 	local changed_file="$2"
@@ -8808,6 +8926,8 @@ run_pull_request_target_irregular_head_entry_fails_closed_case \
 	"infra/deploy.sh"
 
 run_pull_request_target_gitlink_is_explicitly_skipped_case
+
+run_full_head_scope_skips_gitlink_case
 
 run_pull_request_target_aborts_on_pr_head_blob_failure_case \
 	"pull-request-target-modified-file-pr-head-tree-lookup-failure" \
