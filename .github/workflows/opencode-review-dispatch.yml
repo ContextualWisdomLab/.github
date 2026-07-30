@@ -703,15 +703,23 @@ jobs:
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
           COPY base-python-requirements /tmp/base-python-requirements
+          # Base-lock materialization is best-effort provisioning, not evidence:
+          # a repository may pin locks for a different interpreter (for example
+          # a Python 3.12/3.13 tool lock whose pins have no 3.14 wheels), and
+          # such a lock must not abort the whole trusted image build. The
+          # offline test run remains the fail-closed gate and surfaces any
+          # genuinely missing dependency for the measured suite.
           RUN set -eu; \
               while IFS= read -r requirements_file; do \
                 [ -n "$requirements_file" ] || continue; \
-                python3 -m pip install \
+                if ! python3 -m pip install \
                   --break-system-packages \
                   --disable-pip-version-check \
                   --require-hashes \
                   --only-binary=:all: \
-                  -r "/tmp/base-python-requirements/${requirements_file}"; \
+                  -r "/tmp/base-python-requirements/${requirements_file}"; then \
+                  echo "WARNING: base lock ${requirements_file} is not installable on the sandbox interpreter; the offline test run will surface any genuinely missing dependencies." >&2; \
+                fi; \
               done </tmp/base-python-requirements/manifest.txt; \
               rm -rf /tmp/base-python-requirements
           DOCKERFILE
