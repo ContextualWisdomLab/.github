@@ -376,6 +376,11 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
         "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
         in workflow
     )
+    assert "Resolve Noema target repository visibility" in workflow
+    assert 'if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ]' in workflow
+    assert "https://integrate.api.nvidia.com/v1/chat/completions" in workflow
+    assert 'export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"' in workflow
+    assert "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
     assert "Noema LLM is unconfigured:" in workflow
     assert "mark_unconfigured()" not in workflow
     assert "review skipped until Noema is deployed" not in workflow

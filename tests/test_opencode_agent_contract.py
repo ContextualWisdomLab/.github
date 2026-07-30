@@ -98,7 +98,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || '' }}"
+        "opencode-free/mimo-v2.5-free "
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -110,6 +111,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -126,6 +128,10 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
 
     assert candidate_pairs
+    assert all(
+        not candidate.startswith("nvidia-nim/")
+        for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
+    )
     assert candidate_pairs == [
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
@@ -1314,7 +1320,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || ''"
+        "opencode-free/mimo-v2.5-free "
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
