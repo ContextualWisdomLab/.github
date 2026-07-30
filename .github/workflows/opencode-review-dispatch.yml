@@ -1828,9 +1828,10 @@ jobs:
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
-    # 36-minute publication gate, and setup/cleanup overhead without truncating
-    # a late current-head verdict or its bounded failure reason.
-    timeout-minutes: 300
+    # 36-minute publication gate, the 18-minute Noema handoff, and setup/cleanup
+    # overhead without truncating a late current-head verdict, handoff, merge
+    # scheduler follow-up, or bounded failure reason.
+    timeout-minutes: 325
     permissions:
       actions: read
       checks: read
@@ -3461,6 +3462,14 @@ jobs:
                     "name": "Big Pickle",
                     "tool_call": true,
                     "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
                     "limit": {
                       "context": 200000,
                       "output": 32000
@@ -3470,6 +3479,14 @@ jobs:
                     "name": "Laguna S 2.1 Free",
                     "tool_call": true,
                     "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
                     "limit": {
                       "context": 256000,
                       "output": 32000
@@ -3479,6 +3496,14 @@ jobs:
                     "name": "Ling-3.0-flash Free",
                     "tool_call": true,
                     "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
                     "limit": {
                       "context": 262144,
                       "output": 32768
@@ -3488,6 +3513,14 @@ jobs:
                     "name": "MiMo V2.5 Free",
                     "tool_call": true,
                     "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
                     "limit": {
                       "context": 200000,
                       "output": 32000
@@ -7390,6 +7423,37 @@ jobs:
             -f target_url="$RUN_URL" \
             -f description="$description" >/dev/null
 
+      - name: Dispatch Noema after current-head OpenCode approval
+        if: >-
+          always()
+          && github.event_name == 'repository_dispatch'
+          && needs.validate-pr-metadata.outputs.target_repository != ''
+          && needs.validate-pr-metadata.outputs.pr_number != ''
+          && needs.validate-pr-metadata.outputs.head_sha != ''
+        continue-on-error: true
+        timeout-minutes: 18
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::Noema handoff skipped because no target-repository dispatch credential was available."
+            exit 1
+          fi
+          python3 scripts/ci/noema_review_handoff.py \
+            --repo "$GH_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --head-sha "$PR_HEAD_SHA" \
+            --attempts 90 \
+            --interval-seconds 10
+
       - name: Run merge scheduler after approval
         continue-on-error: true
         env:
@@ -7401,6 +7465,10 @@ jobs:
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
