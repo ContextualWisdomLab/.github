@@ -82,6 +82,78 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
     )
 
 
+def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
+    tmp_path: Path,
+) -> None:
+    """Hash-pinned locks in service subdirs and dev/test files are materialized.
+
+    Discovery is content-based: a hash-pinned ``requirements-dev.txt`` under a
+    service directory and a hash-pinned ``requirements-test.txt`` are installed
+    for offline coverage, while a non-requirements ``uv.lock`` (excluded by name)
+    and an unpinned ``requirements-extra.txt`` (excluded by content) are not.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+
+    service = repo / "services" / "account_unification"
+    service.mkdir(parents=True)
+    (service / "requirements-dev.txt").write_text(
+        "fastapi==1 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    (repo / "requirements-test.txt").write_text(
+        "hypothesis==6 --hash=sha256:" + ("b" * 64) + "\n",
+        encoding="utf-8",
+    )
+    (repo / "uv.lock").write_text(
+        "version = 1\n[[package]]\nname = 'x'\n", encoding="utf-8"
+    )
+    (repo / "requirements-extra.txt").write_text("unpinned==1\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert [entry["source"] for entry in manifest] == [
+        "requirements-test.txt",
+        "services/account_unification/requirements-dev.txt",
+    ]
+
+
+def test_lock_name_candidates_are_pip_requirements_files() -> None:
+    """Requirements files and requirements.lock are candidates; other names are not."""
+    assert materializer._is_candidate_lock_name("requirements.lock")
+    assert materializer._is_candidate_lock_name("requirements-dev.txt")
+    assert materializer._is_candidate_lock_name("requirements.txt")
+    assert not materializer._is_candidate_lock_name(
+        "requirements-opencode-review-ci-hashes.txt"
+    )
+    assert not materializer._is_candidate_lock_name("uv.lock")
+    assert not materializer._is_candidate_lock_name("pyproject.toml")
+
+
+def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
+    """Only fully hash-pinned, non-empty lock content is materialized."""
+    assert not materializer._is_hash_pinned(b"# comment only\n\n")
+    assert materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert materializer._is_hash_pinned(b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")
+    assert materializer._is_hash_pinned(b"-r other-hashes.txt\n")
+    assert not materializer._is_hash_pinned(b"untrusted==1\n")
+    # uv export / pip-compile multi-line continuation format (spec, then --hash= lines).
+    assert materializer._is_hash_pinned(
+        b"foo==1 \\\n    --hash=sha256:"
+        + b"a" * 64
+        + b" \\\n    --hash=sha256:"
+        + b"b" * 64
+        + b"\n"
+    )
+
+
 def test_rejects_invalid_base_sha(tmp_path: Path) -> None:
     """Git options and symbolic refs cannot cross the exact-SHA boundary."""
     with pytest.raises(ValueError, match="40 hexadecimal"):

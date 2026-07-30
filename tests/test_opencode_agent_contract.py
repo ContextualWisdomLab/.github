@@ -92,11 +92,15 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidates_match is not None
     conditional_public_candidate = (
         "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'opencode-free/north-mini-code-free ' || '' }}"
+        "&& 'opencode-free/nemotron-3-ultra-free "
+        "opencode-free/deepseek-v4-flash-free "
+        "opencode-free/north-mini-code-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
+        "opencode-free/nemotron-3-ultra-free",
+        "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
@@ -115,6 +119,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
 
     assert candidate_pairs
     assert candidate_pairs == [
+        ["opencode-free", "nemotron-3-ultra-free"],
+        ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
@@ -135,6 +141,24 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert set(github_candidate_models).issubset(set(github_models))
     assert '"context": 256000' in workflow
     assert '"output": 64000' in workflow
+    generated_config_match = re.search(
+        r"jq -n '(\{.*?\})' >\"\$\{OPENCODE_REVIEW_WORKDIR\}/opencode\.jsonc\"",
+        workflow,
+        re.DOTALL,
+    )
+    assert generated_config_match is not None
+    generated_config = json.loads(generated_config_match.group(1))
+    free_models = generated_config["provider"]["opencode-free"]["models"]
+    nemotron_model = free_models["nemotron-3-ultra-free"]
+    deepseek_model = free_models["deepseek-v4-flash-free"]
+    north_model = free_models["north-mini-code-free"]
+    assert nemotron_model["tool_call"] is True
+    assert nemotron_model["limit"] == {"context": 1000000, "output": 128000}
+    assert "response_format" not in nemotron_model.get("options", {})
+    assert deepseek_model["tool_call"] is True
+    assert "response_format" not in deepseek_model.get("options", {})
+    assert north_model["tool_call"] is True
+    assert "response_format" not in north_model["options"]
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -1212,7 +1236,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'opencode-free/north-mini-code-free ' || ''"
+        "'opencode-free/nemotron-3-ultra-free "
+        "opencode-free/deepseek-v4-flash-free "
+        "opencode-free/north-mini-code-free ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
