@@ -17,7 +17,10 @@ SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 def _is_candidate_lock_name(name: str) -> bool:
     """Return whether a file name is a possible pip requirements lock."""
-    return name == "requirements.lock" or fnmatch.fnmatch(name, "requirements*.txt")
+    return name == "requirements.lock" or (
+        fnmatch.fnmatch(name, "requirements*.txt")
+        and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+    )
 
 
 def _requirement_lines(content: bytes) -> list[str]:
