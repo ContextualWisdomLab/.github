@@ -3758,6 +3758,7 @@ jobs:
           OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
           OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"
+          OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "600"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a
