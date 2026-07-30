@@ -708,6 +708,25 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
+      - name: Request human review for Zen recovery
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          TARGET_REPOSITORY: ContextualWisdomLab/.github
+          PR_NUMBER: "678"
+          EXPECTED_HEAD_SHA: 11d74988361c45e52f725afe185731e422fdeffe
+        run: |
+          set -euo pipefail
+          live_head="$(
+            gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '.head.sha // empty'
+          )"
+          test "$live_head" = "$EXPECTED_HEAD_SHA"
+          jq -cn '{reviewers:["seonghobae"]}' |
+            gh api -X POST \
+              "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+              --input - >/dev/null
+          echo "::notice::Requested seonghobae review for Zen recovery PR #678."
+
       - name: Audit Gyeot PR 11 current-head checks
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
