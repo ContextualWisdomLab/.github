@@ -189,6 +189,22 @@ def test_safe_pytest_executor_never_uses_a_shell(monkeypatch: pytest.MonkeyPatch
     assert observed["env"]["PATH"].split(os.pathsep)[0] == str(virtualenv_bin)
 
 
+def test_safe_pytest_executor_adds_src_layout_to_pythonpath(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A ``src``-layout project imports its package: ``src`` is prepended to PYTHONPATH."""
+    observed: dict[str, object] = {}
+    (tmp_path / "src").mkdir()
+
+    def fake_run(argv, *, cwd, env, shell, check):
+        observed.update(env=env)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
+    assert safe_pytest.execute_command(tmp_path, ["pytest", "tests"]) == 0
+    assert observed["env"]["PYTHONPATH"] == os.pathsep.join(("src", "."))
+
+
 def test_configured_pytest_discovery_drops_injected_workflow_command(tmp_path: Path) -> None:
     """Only supported one-line pytest argv are returned from a PR-controlled workflow file."""
     workflow_dir = tmp_path / ".github" / "workflows"
