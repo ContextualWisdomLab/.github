@@ -60,7 +60,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCODE_APP_TOKEN: ${{ steps.app_token.outputs.token }}
-          PR_CREATOR_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || secrets.NOEMA_REVIEW_TOKEN || '' }}
+          PR_CREATOR_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || secrets.NOEMA_REVIEW_TOKEN || github.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
