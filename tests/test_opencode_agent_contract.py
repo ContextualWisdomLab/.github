@@ -197,6 +197,12 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "context": 200000,
         "output": 32000,
     }
+    for model_name, model_config in free_models.items():
+        if model_config.get("reasoning") is True:
+            assert model_config["options"]["reasoningEffort"] == "high", model_name
+            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
+                model_name
+            )
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
