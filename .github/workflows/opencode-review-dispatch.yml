@@ -730,6 +730,7 @@ jobs:
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
           summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
           failures=0
+          r_peer_check_required=0
 
           append() {
             printf '%s\n' "$*" >>"$summary_file"
@@ -798,6 +799,61 @@ jobs:
               failures=$((failures + 1))
             else
               append "- Result: PASS"
+            fi
+            append ""
+            rm -f "$log_file"
+          }
+
+          run_r_package_testthat() {
+            local package_name="$1"
+            local log_file rc classification
+            log_file="$(mktemp)"
+            append "### R package testthat suite"
+            append ""
+            append '```text'
+            append_command \
+              Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); testthat::test_dir("tests/testthat")'
+            set +e
+            timeout --kill-after=20 900 setpriv \
+              --reuid "$OPENCODE_SANDBOX_UID" \
+              --regid "$OPENCODE_SANDBOX_GID" \
+              --clear-groups \
+              env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GH_TOKEN \
+              -u GITHUB_TOKEN \
+              GITHUB_ENV=/dev/null \
+              GITHUB_PATH=/dev/null \
+              GITHUB_OUTPUT=/dev/null \
+              GITHUB_STEP_SUMMARY=/dev/null \
+              BASH_ENV=/dev/null \
+              UV_NO_BUILD=1 \
+              HOME=/work/.opencode-sandbox-home \
+              XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); testthat::test_dir("tests/testthat")' \
+              >"$log_file" 2>&1
+            rc=$?
+            set -e
+            emit_captured_log "$log_file"
+            append '```'
+            append ""
+            if [ "$rc" -eq 0 ]; then
+              append "- Result: PASS"
+            elif classification="$(
+              python3 -I "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \
+                classify-testthat \
+                --log "$log_file" \
+                --package "$package_name" 2>/dev/null
+            )"; then
+              append "- Result: PASS"
+              append "- Reason: ${classification}; direct sandbox failures are deferred only to a successful current-head peer R CMD check."
+              r_peer_check_required=1
+            else
+              append "- Result: FAIL (exit ${rc})"
+              failures=$((failures + 1))
             fi
             append ""
             rm -f "$log_file"
@@ -1326,6 +1382,7 @@ jobs:
           }
 
           run_r_test_coverage() {
+            local package_name
             ensure_r_runtime
             if ! command -v Rscript >/dev/null 2>&1; then
               append "### R test coverage"
@@ -1344,8 +1401,10 @@ jobs:
               Rscript -e 'required <- c("covr", "testthat"); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("signed distribution coverage packages unavailable: ", paste(missing, collapse = ", "))'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
-                run_and_capture "R package testthat suite" \
-                  Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); if (!requireNamespace("testthat", quietly = TRUE)) { message("testthat unavailable in coverage runner; deferring to required peer R CMD check evidence."); quit(status = 0) }; testthat::test_dir("tests/testthat")'
+                package_name="$(
+                  Rscript -e 'pkg <- tryCatch(read.dcf("DESCRIPTION")[1, "Package"], error = function(e) ""); cat(pkg)'
+                )"
+                run_r_package_testthat "$package_name"
               else
                 append "### R package testthat suite"
                 append ""
@@ -1706,6 +1765,9 @@ jobs:
             else
               append "- Test evidence: supported repository test suites passed"
               append "- Docstring evidence: configured repository docstring gates passed or docstring coverage was advisory"
+              if [ "$r_peer_check_required" -eq 1 ]; then
+                append "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
+              fi
             fi
           else
             append "- Result: FAIL"
@@ -3374,8 +3436,8 @@ jobs:
                     "name": "DeepSeek V4 Flash Free",
                     "tool_call": true,
                     "limit": {
-                      "context": 256000,
-                      "output": 64000
+                      "context": 200000,
+                      "output": 128000
                     }
                   },
                   "north-mini-code-free": {
@@ -3393,6 +3455,42 @@ jobs:
                     "limit": {
                       "context": 256000,
                       "output": 64000
+                    }
+                  },
+                  "big-pickle": {
+                    "name": "Big Pickle",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 200000,
+                      "output": 32000
+                    }
+                  },
+                  "laguna-s-2.1-free": {
+                    "name": "Laguna S 2.1 Free",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 256000,
+                      "output": 32000
+                    }
+                  },
+                  "ling-3.0-flash-free": {
+                    "name": "Ling-3.0-flash Free",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 262144,
+                      "output": 32768
+                    }
+                  },
+                  "mimo-v2.5-free": {
+                    "name": "MiMo V2.5 Free",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 200000,
+                      "output": 32000
                     }
                   }
                 }
@@ -3711,8 +3809,8 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           # High-sensitivity review candidates only. Public repositories first
-          # use OpenCode Zen's anonymous Nemotron 3 Ultra, DeepSeek V4 Flash,
-          # and North Mini Code free endpoints. Their trial/free-period data
+          # use OpenCode Zen's anonymous active, zero-cost model endpoints.
+          # Their trial/free-period data
           # may be logged, retained, or used for product/model improvement, so
           # private repositories never include them. The pool then falls
           # through to
@@ -3726,7 +3824,7 @@ jobs:
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free ' || '' }}github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -3739,11 +3837,11 @@ jobs:
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"
           OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"
-          # Keep cycling through the high-sensitivity candidate catalog until
-          # the retry budget or step timeout is exhausted; a single invalid
-          # cycle can be all provider formatting noise rather than review
-          # evidence.
-          OPENCODE_POOL_MAX_CYCLES: "0"
+          # A second pass through the same provider catalog repeats the same
+          # quota/format failures and can occupy the required check for hours.
+          # Exhaust each distinct candidate once, then publish the bounded
+          # model-unavailable fallback with current-head evidence.
+          OPENCODE_POOL_MAX_CYCLES: "1"
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
@@ -3757,14 +3855,14 @@ jobs:
           OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
           OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
           OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
-          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"
+          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
           OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "600"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a
           # full medium/large cadence slot after the long-context candidate.
           OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"
-          OPENCODE_DYNAMIC_MAX_CYCLES: "0"
+          OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"
@@ -6527,6 +6625,40 @@ jobs:
             return 2
           }
 
+          coverage_defers_to_r_cmd_check() {
+            printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" |
+              grep -Fq -- "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
+          }
+
+          collect_successful_r_cmd_check_evidence() {
+            local output_file="$1"
+            if ! gh pr checks "$PR_NUMBER" \
+              --repo "$GH_REPOSITORY" \
+              --json name,state,workflow >"$output_file"; then
+              return 1
+            fi
+            python3 "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \
+              require-check \
+              --checks-json "$output_file" >/dev/null
+          }
+
+          require_r_cmd_check_for_deferred_coverage() {
+            local checks_file
+            if ! coverage_defers_to_r_cmd_check; then
+              return 0
+            fi
+            checks_file="$(mktemp)"
+            if collect_github_checks_with_retry \
+              collect_successful_r_cmd_check_evidence "$checks_file"; then
+              rm -f "$checks_file"
+              printf 'Verified successful current-head R CMD check after bounded R coverage deferral.\n'
+              return 0
+            fi
+            rm -f "$checks_file"
+            printf '::notice::R package-load coverage deferral cannot authorize approval without a successful current-head R CMD check.\n'
+            return 1
+          }
+
           stop_without_review_after_model_unavailable() {
             local body
             body="$(printf '%s\n' \
@@ -6641,6 +6773,10 @@ jobs:
               } >"$failed_check_review_body_file"
               create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
               return 0
+            fi
+
+            if ! require_r_cmd_check_for_deferred_coverage; then
+              return 1
             fi
 
             failed_check_evidence_file="$(mktemp)"
@@ -7026,6 +7162,27 @@ jobs:
                 else
                   stop_failed_check_fallback_unavailable
                 fi
+              fi
+              if ! require_r_cmd_check_for_deferred_coverage; then
+                body="$(printf '%s\n' \
+                  "## Pull request overview" \
+                  "" \
+                  "OpenCode reviewed the current-head source evidence but R package tests were deferred after bounded package-load-only failures." \
+                  "" \
+                  "## Approval hold" \
+                  "" \
+                  "### Successful current-head R CMD check evidence is required" \
+                  "- Problem: coverage-evidence deferred package-load-only testthat failures, but no successful current-head R CMD check was found." \
+                  "- Root cause: deterministic coverage deferral is safe only when the repository's peer R CMD check installs dependencies and passes on this exact head." \
+                  "- Fix: add or repair the R CMD check workflow and rerun it successfully on the current head." \
+                  "- Regression test: Keep deferred R coverage fail-closed unless a successful R CMD check is present." \
+                  "" \
+                  "- Result: WAITING_FOR_R_CMD_CHECK" \
+                  "- Head SHA: \`${HEAD_SHA}\`" \
+                  "- Workflow run: ${RUN_ID}" \
+                  "- Workflow attempt: ${RUN_ATTEMPT}"
+                )"
+                hold_approval_without_review "WAITING_FOR_R_CMD_CHECK" "$body"
               fi
               unresolved_reviewer_threads_file="$(mktemp)"
               reviewer_thread_review_body_file="$(mktemp)"
