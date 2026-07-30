@@ -228,7 +228,10 @@ jobs:
           set -euo pipefail
           test -n "${APPROVAL_TOKEN:-}"
           approval_actor="$(
-            GH_TOKEN="$APPROVAL_TOKEN" gh api user --jq '.login // empty'
+            GH_TOKEN="$APPROVAL_TOKEN" \
+              gh api graphql \
+                -f query='{ viewer { login } }' \
+                --jq '.data.viewer.login // empty'
           )"
           test -n "$approval_actor"
           test "$approval_actor" != seonghobae
