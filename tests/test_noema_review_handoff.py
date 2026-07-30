@@ -94,8 +94,11 @@ def test_noema_state_ignores_reviews_for_other_heads():
 def test_noema_state_ignores_forged_marker_from_other_actor():
     forged = noema_review()
     forged["user"] = {"login": "untrusted-reviewer"}
+    unmarked = noema_review()
+    unmarked["body"] = "review without the authenticated Noema marker"
 
     assert handoff.noema_review_state([forged], HEAD) is None
+    assert handoff.noema_review_state([unmarked], HEAD) is None
 
 
 def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):
@@ -292,6 +295,103 @@ def test_consecutive_initial_failures_use_bounded_exponential_backoff(capsys):
     assert result == 0
     assert observed_sleeps == [2, 4]
     assert "already published APPROVED" in capsys.readouterr().err
+
+
+def test_final_transient_poll_failure_exhausts_without_dispatch(capsys):
+    observed_sleeps = []
+
+    def failing_runner(_args, _stdin=None):
+        raise RuntimeError(
+            "authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456"
+        )
+
+    result = handoff.run_handoff(
+        "ContextualWisdomLab/example",
+        7,
+        HEAD,
+        attempts=2,
+        interval_seconds=2,
+        runner=failing_runner,
+        sleeper=observed_sleeps.append,
+        approval_checker=lambda *_args, **_kwargs: True,
+    )
+
+    log = capsys.readouterr().err
+    assert result == 1
+    assert observed_sleeps == [2]
+    assert "exhausted its bounded polls" in log
+    assert "was not dispatched after 2 bounded polls" in log
+    assert "ghp_" not in log
+    assert "[REDACTED]" in log
+
+
+def test_transient_dispatch_failure_retries_then_reaches_verdict(capsys):
+    fake = FakeGitHub(
+        [
+            [opencode_review()],
+            [opencode_review()],
+            [opencode_review(), noema_review()],
+        ]
+    )
+    dispatch_calls = 0
+    observed_sleeps = []
+
+    def transient_runner(args, stdin=None):
+        nonlocal dispatch_calls
+        path = next((value for value in args if value.startswith("repos/")), "")
+        if path.endswith("/dispatches"):
+            dispatch_calls += 1
+            if dispatch_calls == 1:
+                raise RuntimeError(
+                    "authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456"
+                )
+        return fake(args, stdin)
+
+    result = handoff.run_handoff(
+        "ContextualWisdomLab/example",
+        7,
+        HEAD,
+        attempts=3,
+        interval_seconds=2,
+        runner=transient_runner,
+        sleeper=observed_sleeps.append,
+        approval_checker=lambda *_args, **_kwargs: True,
+    )
+
+    log = capsys.readouterr().err
+    assert result == 0
+    assert observed_sleeps == [2, 2]
+    assert dispatch_calls == 2
+    assert len(fake.dispatch_payloads) == 1
+    assert "Transient GitHub API failure while dispatching Noema" in log
+    assert "ghp_" not in log
+    assert "[REDACTED]" in log
+
+
+def test_final_dispatch_failure_exhausts_without_dispatch(capsys):
+    fake = FakeGitHub([[opencode_review()]])
+
+    def failing_dispatch_runner(args, stdin=None):
+        path = next((value for value in args if value.startswith("repos/")), "")
+        if path.endswith("/dispatches"):
+            raise RuntimeError("temporary dispatch outage")
+        return fake(args, stdin)
+
+    result = handoff.run_handoff(
+        "ContextualWisdomLab/example",
+        7,
+        HEAD,
+        attempts=1,
+        interval_seconds=0,
+        runner=failing_dispatch_runner,
+        approval_checker=lambda *_args, **_kwargs: True,
+    )
+
+    log = capsys.readouterr().err
+    assert result == 1
+    assert fake.dispatch_payloads == []
+    assert "dispatch exhausted its bounded polls" in log
+    assert "was not dispatched after 1 bounded polls" in log
 
 
 def test_run_gh_returns_stdout_on_success(monkeypatch):
