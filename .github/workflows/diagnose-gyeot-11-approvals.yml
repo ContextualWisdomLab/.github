@@ -148,7 +148,8 @@ jobs:
 
       - name: Dispatch exact-head OpenCode review
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/gyeot
           PR_NUMBER: "11"
           EXPECTED_BASE_REF: develop
@@ -184,6 +185,7 @@ jobs:
                 pr_head_sha: $pr_head_sha
               }
             }' >"$payload_file"
-          gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input "$payload_file"
+          GH_TOKEN="$SCHEDULER_DISPATCH_TOKEN" \
+            gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input "$payload_file"
           printf '::notice::Dispatched exact-head OpenCode review for %s#%s at %s.\n' \
             "$TARGET_REPOSITORY" "$PR_NUMBER" "$EXPECTED_HEAD_SHA"
