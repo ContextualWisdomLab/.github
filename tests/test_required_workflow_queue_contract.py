@@ -443,6 +443,55 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
         assert permission in workflow
 
 
+def test_opencode_dispatch_hands_approved_head_to_noema_before_merge() -> None:
+    """The two-reviewer chain must run Noema before the direct merge follow-up."""
+    workflow = workflow_text("opencode-review-dispatch.yml")
+    handoff = workflow_step(
+        workflow, "Dispatch Noema after current-head OpenCode approval"
+    )
+
+    assert workflow.index(
+        "      - name: Dispatch Noema after current-head OpenCode approval"
+    ) < workflow.index("      - name: Run merge scheduler after approval")
+    assert "always()" in handoff
+    assert "github.event_name == 'repository_dispatch'" in handoff
+    assert (
+        "needs.validate-pr-metadata.outputs.target_repository != github.repository"
+        not in handoff
+    )
+    assert "continue-on-error: true" in handoff
+    assert "timeout-minutes: 18" in handoff
+    assert (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || "
+        "steps.opencode_app_token.outputs.token || github.token }}"
+    ) in handoff
+    assert "python3 scripts/ci/noema_review_handoff.py" in handoff
+    assert '--repo "$GH_REPOSITORY"' in handoff
+    assert '--pr-number "$PR_NUMBER"' in handoff
+    assert '--head-sha "$PR_HEAD_SHA"' in handoff
+    assert "--attempts 90" in handoff
+    assert "--interval-seconds 10" in handoff
+    for sealed_env in (
+        "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt",
+        "OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ "
+        "steps.seal_artifacts.outputs.manifest_sha256 }}",
+        "OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head",
+        'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"',
+    ):
+        assert sealed_env in handoff
+
+    merge_follow_up = workflow_step(workflow, "Run merge scheduler after approval")
+    for sealed_env in (
+        "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt",
+        "OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ "
+        "steps.seal_artifacts.outputs.manifest_sha256 }}",
+        "OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head",
+        'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"',
+    ):
+        assert sealed_env in merge_follow_up
+
+
 def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
     noema = workflow_text("noema-review.yml")
     scheduler = workflow_text("pr-review-merge-scheduler.yml")
