@@ -56,79 +56,16 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
-      - name: Dispatch exact-head OpenCode review for seedream PR 166
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DISPATCH_REPOSITORY: ContextualWisdomLab/.github
-          TARGET_REPOSITORY: ContextualWisdomLab/seedream_evasepic
-          PR_NUMBER: "166"
-          EXPECTED_BASE_REF: develop
-          EXPECTED_BASE_SHA: 13e8e40b51a18ff9303ab1e35a639b0ffacbea36
-          EXPECTED_HEAD_REF: sentinel-terminal-output-injection-5279163291488012066
-          EXPECTED_HEAD_SHA: 5dc80e45029c7fa526fa7bbb65455508beba69f6
-        run: |
-          set -euo pipefail
-          pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.state // empty' <<<"$pr_json")" = open
-          test "$(jq -r '.base.ref // empty' <<<"$pr_json")" = \
-            "$EXPECTED_BASE_REF"
-          test "$(jq -r '.base.sha // empty' <<<"$pr_json")" = \
-            "$EXPECTED_BASE_SHA"
-          test "$(jq -r '.head.ref // empty' <<<"$pr_json")" = \
-            "$EXPECTED_HEAD_REF"
-          test "$(jq -r '.head.sha // empty' <<<"$pr_json")" = \
-            "$EXPECTED_HEAD_SHA"
-
-          payload="$(
-            jq -cn \
-              --arg event_type opencode-review \
-              --arg target_repository "$TARGET_REPOSITORY" \
-              --argjson pr_number "$PR_NUMBER" \
-              --arg pr_base_ref "$EXPECTED_BASE_REF" \
-              --arg pr_base_sha "$EXPECTED_BASE_SHA" \
-              --arg pr_head_ref "$EXPECTED_HEAD_REF" \
-              --arg pr_head_sha "$EXPECTED_HEAD_SHA" \
-              '{
-                event_type: $event_type,
-                client_payload: {
-                  target_repository: $target_repository,
-                  pr_number: $pr_number,
-                  pr_base_ref: $pr_base_ref,
-                  pr_base_sha: $pr_base_sha,
-                  pr_head_ref: $pr_head_ref,
-                  pr_head_sha: $pr_head_sha
-                }
-              }'
-          )"
-          gh api -X POST \
-            "repos/${DISPATCH_REPOSITORY}/dispatches" \
-            --input - <<<"$payload"
-          printf '::notice::Dispatched exact-head OpenCode review for %s#%s at %s.\n' \
-            "$TARGET_REPOSITORY" "$PR_NUMBER" "$EXPECTED_HEAD_SHA"
-
-      - name: Mint Noema PR creator token
-        id: noema_pr_creator
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
-          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
-          owner: ContextualWisdomLab
-          repositories: .github
-          permission-contents: read
-          permission-metadata: read
-          permission-pull-requests: write
-
-      - name: Create independently authored Zen recovery PR
+      - name: Create GitHub Actions-authored Zen recovery PR
         id: actions_pr
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCODE_APP_TOKEN: ${{ steps.app_token.outputs.token }}
-          PR_CREATOR_TOKEN: ${{ steps.noema_pr_creator.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
-          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions
-          SOURCE_HEAD_SHA: fb9f87a1b278a0455ea381121f7f2ec710fdabea
+          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions-reviewable
+          SOURCE_HEAD_SHA: 11d74988361c45e52f725afe185731e422fdeffe
           EXPECTED_TREE_SHA: 98a7b831ebf660b996a3d85c93ca42d4cfb16087
         run: |
           set -euo pipefail
@@ -186,27 +123,13 @@ jobs:
           fi
 
           test "$recovery_head" = "$SOURCE_HEAD_SHA"
-          if [ -z "${PR_CREATOR_TOKEN:-}" ]; then
-            echo "::notice::No independent configured PR creator credential is available; reusing central recovery PR #677."
-            echo "number=677" >>"$GITHUB_OUTPUT"
-            echo "created=false" >>"$GITHUB_OUTPUT"
-            echo "head_sha=$SOURCE_HEAD_SHA" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
           pr_creator_actor="$(
-            GH_TOKEN="$PR_CREATOR_TOKEN" \
-              gh api graphql \
-                -f query='{ viewer { login } }' \
-                --jq '.data.viewer.login // empty'
+            gh api graphql \
+              -f query='{ viewer { login } }' \
+              --jq '.data.viewer.login // empty'
           )"
-          test -n "$pr_creator_actor"
-          case "$pr_creator_actor" in
-            opencode-agent | 'opencode-agent[bot]')
-              echo "::error::The PR creator must be independent from the OpenCode reviewer."
-              exit 1
-              ;;
-          esac
-          printf '::notice::Creating the Zen recovery PR as independent actor %s.\n' \
+          test "$pr_creator_actor" = "github-actions[bot]"
+          printf '::notice::Creating the Zen recovery PR as workflow actor %s.\n' \
             "$pr_creator_actor"
           recovery_body="$(
             printf '%s\n' \
@@ -225,9 +148,9 @@ jobs:
               '' \
               '## Recovery provenance' \
               '' \
-              'This PR is intentionally authored by an independent configured workflow actor so the OpenCode App can submit a real-model review.' \
+              'This PR is intentionally authored by GitHub Actions so the OpenCode and Noema Apps can submit two independent real-model reviews.' \
               'Its branch is immediately restamped by the OpenCode App to trigger the normal pull-request workflows.' \
-              'It supersedes #676 and #677 after merge.'
+              'It supersedes #676, #677, and #678 after merge.'
           )"
           create_payload="$(
             jq -cn \
@@ -238,8 +161,7 @@ jobs:
               '{title:$title, body:$body, head:$head, base:$base, draft:false}'
           )"
           created_pr="$(
-            GH_TOKEN="$PR_CREATOR_TOKEN" gh api -X POST \
-              "repos/${TARGET_REPOSITORY}/pulls" \
+            gh api -X POST "repos/${TARGET_REPOSITORY}/pulls" \
               --input - <<<"$create_payload"
           )"
           new_number="$(jq -r '.number // empty' <<<"$created_pr")"
@@ -263,8 +185,8 @@ jobs:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           PR_NUMBER: ${{ steps.actions_pr.outputs.number }}
-          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions
-          SOURCE_HEAD_SHA: fb9f87a1b278a0455ea381121f7f2ec710fdabea
+          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions-reviewable
+          SOURCE_HEAD_SHA: 11d74988361c45e52f725afe185731e422fdeffe
           EXPECTED_TREE_SHA: 98a7b831ebf660b996a3d85c93ca42d4cfb16087
         run: |
           set -euo pipefail
