@@ -1048,6 +1048,10 @@ jobs:
           test "$blocking_check_count" -eq 0
           printf '::notice::Central merge guard validated %s current-head check runs with zero blockers.\n' \
             "$(jq -r '.total_count // 0' <<<"$check_runs_json")"
+          status_check_runs_json="$(
+            gh api \
+              "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
+          )"
           opencode_check_url="$(
             jq -r '
               [
@@ -1061,16 +1065,42 @@ jobs:
               | sort_by(.completed_at)
               | last
               | .details_url
-            ' <<<"$check_runs_json"
+              // empty
+            ' <<<"$status_check_runs_json"
           )"
           [[ "$opencode_check_url" == https://github.com/ContextualWisdomLab/.github/actions/* ]]
-          gh api -X POST \
-            "repos/${TARGET_REPOSITORY}/statuses/${EXPECTED_HEAD_SHA}" \
-            -f state=success \
-            -f context=opencode-review \
-            -f target_url="$opencode_check_url" \
-            -f description='Exact-head required OpenCode job completed successfully.' \
-            >/dev/null
+          printf '::notice::Using successful exact-head OpenCode evidence at %s.\n' \
+            "$opencode_check_url"
+          status_response_file="$(mktemp)"
+          status_http_code="$(
+            curl -sS \
+              -o "$status_response_file" \
+              -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${TARGET_REPOSITORY}/statuses/${EXPECTED_HEAD_SHA}" \
+              --data "$(
+                jq -cn \
+                  --arg target_url "$opencode_check_url" \
+                  '{
+                    state: "success",
+                    context: "opencode-review",
+                    target_url: $target_url,
+                    description: "Exact-head required OpenCode job completed successfully."
+                  }'
+              )"
+          )"
+          if [ "$status_http_code" != 201 ]; then
+            status_message="$(
+              jq -r '.message // "GitHub rejected the exact-head status update."' \
+                "$status_response_file"
+            )"
+            printf '::error::Exact-head opencode-review status update rejected with HTTP %s: %s\n' \
+              "$status_http_code" "$status_message"
+            exit 1
+          fi
           printf '::notice::Replaced stale legacy opencode-review status with exact-head success evidence.\n'
 
           reviews_json="$(
