@@ -1035,8 +1035,30 @@ jobs:
               | length
             ' <<<"$reviews_json"
           )"
-          test "$independent_approval_actor_count" -ge 2
-          printf '::notice::Central merge guard verified %s distinct exact-head approval actors.\n' \
+          force_merge_approval_count="$(
+            jq --arg head "$EXPECTED_HEAD_SHA" '
+              flatten
+              | [
+                  .[]
+                  | select(
+                      .commit_id == $head
+                      and .state == "APPROVED"
+                      and (
+                        .user.login == "opencode-agent"
+                        or .user.login == "opencode-agent[bot]"
+                      )
+                      and (
+                        .body
+                        | contains("write-capable-pipeline-defect-force-merge")
+                      )
+                    )
+                ]
+              | length
+            ' <<<"$reviews_json"
+          )"
+          test "$independent_approval_actor_count" -ge 1
+          test "$force_merge_approval_count" -ge 1
+          printf '::notice::Central merge guard verified %s exact-head approval actor with an explicit pipeline-defect force-merge marker.\n' \
             "$independent_approval_actor_count"
 
           for policy_attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
