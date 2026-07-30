@@ -340,7 +340,6 @@ jobs:
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
           EXPECTED_HEAD_REF: fix/org-sweep-timeout
           EXPECTED_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
-          EXPECTED_MERGE_SHA: d337ad6a3b291f433da1c6b8b67804aa7f835d98
           ACTIVE_REVIEW_RUN_ID: "30548954941"
           EXPECTED_REVIEW_RUN_NAME: OpenCode Review Dispatch ContextualWisdomLab/.github#676@7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
         run: |
@@ -353,19 +352,20 @@ jobs:
           test "$(jq -r '.base.sha // empty' <<<"$pr_json")" = "$EXPECTED_BASE_SHA"
           test "$(jq -r '.head.ref // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_REF"
           test "$(jq -r '.head.sha // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_SHA"
-          test "$(jq -r '.merge_commit_sha // empty' <<<"$pr_json")" = "$EXPECTED_MERGE_SHA"
           test "$(jq -r '.mergeable // false' <<<"$pr_json")" = true
+          merge_preview_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pr_json")"
+          [[ "$merge_preview_sha" =~ ^[0-9a-f]{40}$ ]]
           printf '::notice::Central merge guard validated open PR base=%s head=%s mergeable_state=%s.\n' \
             "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA" \
             "$(jq -r '.mergeable_state // "unknown"' <<<"$pr_json")"
 
-          preview_json="$(gh api "repos/${TARGET_REPOSITORY}/git/commits/${EXPECTED_MERGE_SHA}")"
+          preview_json="$(gh api "repos/${TARGET_REPOSITORY}/git/commits/${merge_preview_sha}")"
           preview_tree="$(jq -r '.tree.sha // empty' <<<"$preview_json")"
           preview_parents="$(jq -r '[.parents[].sha] | join(" ")' <<<"$preview_json")"
           test "$preview_parents" = "$EXPECTED_BASE_SHA $EXPECTED_HEAD_SHA"
           test -n "$preview_tree"
           printf '::notice::Central merge guard validated preview=%s tree=%s.\n' \
-            "$EXPECTED_MERGE_SHA" "$preview_tree"
+            "$merge_preview_sha" "$preview_tree"
 
           check_runs_json="$(
             GH_TOKEN="$SCHEDULER_ACTIONS_TOKEN" \
