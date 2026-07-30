@@ -307,6 +307,13 @@ jobs:
               echo "::warning::cargo is unavailable on this runner, so no locked crate graph was pre-fetched; offline Rust coverage for this head will fail with missing dependencies."
             else
               prefetch_home="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cargo-prefetch.XXXXXX")"
+              # Redirecting HOME isolates cargo from pull-request-controlled
+              # configuration, but rustup resolves its toolchain store from
+              # RUSTUP_HOME (default $HOME/.rustup). Pin it to the runner's
+              # own runner-owned install resolved before the override so
+              # `rustup run 1.94.1` keeps finding the toolchain provisioned
+              # above; the temporary cargo cache behavior is unchanged.
+              prefetch_rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
               while IFS= read -r prefetch_manifest; do
                 [ -n "$prefetch_manifest" ] || continue
                 prefetch_dir="$(dirname "$prefetch_manifest")"
@@ -317,6 +324,7 @@ jobs:
                   cd "$prefetch_home" \
                     && HOME="$prefetch_home" \
                       CARGO_HOME="$prefetch_home/.cargo" \
+                      RUSTUP_HOME="$prefetch_rustup_home" \
                       "${prefetch_cargo[@]}" fetch --locked \
                       --manifest-path "$COVERAGE_SOURCE_WORKDIR/$prefetch_manifest"
                 ); then
