@@ -26,6 +26,19 @@ from typing import Any, TextIO
 
 
 GENERATED_LOCK_RE = re.compile(r"^requirements-[0-9]{3}\.txt$")
+DEFERABLE_PREFLIGHT_FAILURES = (
+    re.compile(
+        r"In --require-hashes mode, all requirements must have their versions "
+        r"pinned with ==",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"Hashes are required in --require-hashes mode, but they are missing "
+        r"from some requirements",
+        re.IGNORECASE,
+    ),
+    re.compile(r"requires a different Python", re.IGNORECASE),
+)
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -97,9 +110,7 @@ def _manifest_entries(
     return entries
 
 
-def _pip_command(
-    requirements: Sequence[pathlib.Path], *, preflight: bool
-) -> list[str]:
+def _pip_command(requirements: Sequence[pathlib.Path], *, preflight: bool) -> list[str]:
     """Build a hash-enforced pip command for one candidate or recovery group."""
     command = [
         sys.executable,
@@ -133,6 +144,40 @@ def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
             *lines[-trailing_lines:],
         ]
     )
+
+
+def _is_deferable_preflight_failure(output: str) -> bool:
+    """Return whether a failed candidate may be grouped or safely skipped.
+
+    A hash-bearing supplement can fail pip's independent-closure check because a
+    transitive pin/hash lives in a sibling lock, and a base lock can explicitly
+    reject the pinned coverage-image interpreter. Those states are safe to
+    recover through a same-directory group or defer to the later networkless
+    coverage run. Hash mismatches, resolver crashes, empty diagnostics, and
+    registry/network failures remain fatal so a broken trusted build cannot be
+    mistaken for an optional lock.
+    """
+    return bool(output.strip()) and any(
+        pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
+    )
+
+
+def _report_fatal_preflight_failure(
+    entry_label: str,
+    output: str,
+    *,
+    stderr: TextIO,
+) -> None:
+    """Publish one bounded, source-aware fatal preflight failure."""
+    print(
+        "::error::Trusted base Python lock preflight failed for "
+        f"{entry_label}; only incomplete hash closures or explicit Python "
+        "interpreter incompatibility may be deferred.",
+        file=stderr,
+    )
+    failure_output = _bounded_failure_output(output)
+    if failure_output:
+        print(failure_output, file=stderr)
 
 
 def install_materialized_locks(
@@ -170,6 +215,13 @@ def install_materialized_locks(
         preflight_results[entry.generated_file] = preflight
         if preflight.returncode == 0:
             independently_valid.add(entry.generated_file)
+        elif not _is_deferable_preflight_failure(preflight.stdout or ""):
+            _report_fatal_preflight_failure(
+                entry.source,
+                preflight.stdout or "",
+                stderr=stderr,
+            )
+            return preflight.returncode or 1
 
     by_source_directory: dict[str, list[LockCandidate]] = defaultdict(list)
     for entry in entries:
@@ -200,6 +252,13 @@ def install_materialized_locks(
             text=True,
         )
         if group_preflight.returncode != 0:
+            if not _is_deferable_preflight_failure(group_preflight.stdout or ""):
+                _report_fatal_preflight_failure(
+                    ", ".join(entry.source for entry in directory_entries),
+                    group_preflight.stdout or "",
+                    stderr=stderr,
+                )
+                return group_preflight.returncode or 1
             continue
         install_plans.append(directory_entries)
         covered_files.update(entry.generated_file for entry in directory_entries)
@@ -229,8 +288,7 @@ def install_materialized_locks(
         failure_output = _bounded_failure_output(
             preflight_results[entry.generated_file].stdout or ""
         )
-        if failure_output:
-            print(failure_output, file=stderr)
+        print(failure_output, file=stderr)
 
     for plan in install_plans:
         plan_sources = ", ".join(entry.source for entry in plan)

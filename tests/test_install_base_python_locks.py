@@ -140,7 +140,14 @@ def test_failed_same_directory_group_still_skips_partial_candidates(tmp_path) ->
 
     def fake_runner(command: list[str], **kwargs):
         commands.append(command)
-        return subprocess.CompletedProcess(command, 1, stdout="still incomplete")
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                "ERROR: In --require-hashes mode, all requirements must have "
+                "their versions pinned with ==: httpx>=0.27"
+            ),
+        )
 
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -155,11 +162,21 @@ def test_failed_same_directory_group_still_skips_partial_candidates(tmp_path) ->
     assert len(commands) == 3
     assert commands[-1].count("-r") == 2
     assert "installed=0 skipped=2" in stdout.getvalue()
-    assert stderr.getvalue().count("still incomplete") == 2
+    assert stderr.getvalue().count("httpx>=0.27") == 2
 
 
-def test_empty_preflight_failure_output_is_not_printed(tmp_path) -> None:
-    """A resolver with no detail still emits the source-aware policy warning."""
+@pytest.mark.parametrize(
+    "failure_output",
+    [
+        "",
+        ("ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE"),
+        "WARNING: Retrying after connection broken by ConnectionError",
+        "ERROR: Could not fetch URL https://pypi.org/simple/demo/",
+        "pip resolver crashed without a classified dependency error",
+    ],
+)
+def test_unclassified_preflight_failure_is_fatal(tmp_path, failure_output: str) -> None:
+    """Hash, network, empty, and unknown preflight failures fail closed."""
     write_candidate(
         tmp_path,
         generated_file="requirements-000.txt",
@@ -167,7 +184,7 @@ def test_empty_preflight_failure_output_is_not_printed(tmp_path) -> None:
     )
 
     def fake_runner(command: list[str], **kwargs):
-        return subprocess.CompletedProcess(command, 1, stdout="")
+        return subprocess.CompletedProcess(command, 23, stdout=failure_output)
 
     stderr = io.StringIO()
     result = installer.install_materialized_locks(
@@ -176,9 +193,87 @@ def test_empty_preflight_failure_output_is_not_printed(tmp_path) -> None:
         stderr=stderr,
     )
 
-    assert result == 0
-    assert stderr.getvalue().count("\n") == 1
+    assert result == 23
+    assert "only incomplete hash closures" in stderr.getvalue()
     assert "requirements-hashes.txt" in stderr.getvalue()
+    if failure_output:
+        assert failure_output in stderr.getvalue()
+
+
+def test_explicit_python_incompatibility_is_visible_and_nonfatal(tmp_path) -> None:
+    """A base lock for another interpreter may defer to coverage execution."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="requirements-hashes.txt",
+    )
+
+    def fake_runner(command: list[str], **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                "ERROR: Package 'demo' requires a different Python: "
+                "3.14.0 not in '<3.14,>=3.10'"
+            ),
+        )
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    result = installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "requires a different Python" in stderr.getvalue()
+    assert "candidates=1 installed=0 skipped=1" in stdout.getvalue()
+
+
+def test_fatal_same_directory_group_failure_aborts(tmp_path) -> None:
+    """A group cannot turn a registry or integrity failure into a skip."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="backend/requirements-agent.txt",
+    )
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-001.txt",
+        source="backend/requirements-hashes.txt",
+    )
+    call_count = 0
+
+    def fake_runner(command: list[str], **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=(
+                    "ERROR: In --require-hashes mode, all requirements must have "
+                    "their versions pinned with ==: httpx>=0.27"
+                ),
+            )
+        return subprocess.CompletedProcess(
+            command,
+            29,
+            stdout="ERROR: Could not fetch URL https://pypi.org/simple/httpx/",
+        )
+
+    stderr = io.StringIO()
+    result = installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stderr=stderr,
+    )
+
+    assert result == 29
+    assert call_count == 3
+    assert "Could not fetch URL" in stderr.getvalue()
 
 
 @pytest.mark.parametrize(
