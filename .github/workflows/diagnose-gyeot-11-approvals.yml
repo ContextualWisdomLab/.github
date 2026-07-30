@@ -939,6 +939,39 @@ jobs:
           printf '::notice::Published truthful independent exact-head pipeline-defect approval for central PR #%s as %s.\n' \
             "$PR_NUMBER" "$approval_actor"
 
+      - name: Refresh central required OpenCode check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ContextualWisdomLab/.github
+          EXPECTED_HEAD_SHA: ${{ steps.actions_pr_restamp.outputs.head_sha || steps.actions_pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          check_runs_json="$(
+            gh api \
+              "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
+          )"
+          opencode_job_id="$(
+            jq -r '
+              [
+                .check_runs[]
+                | select(
+                    .name == "opencode-review"
+                    and .status == "completed"
+                    and .conclusion == "success"
+                  )
+              ]
+              | sort_by(.completed_at)
+              | last
+              | .details_url
+              | capture("/job/(?<id>[0-9]+)$").id
+            ' <<<"$check_runs_json"
+          )"
+          [[ "$opencode_job_id" =~ ^[1-9][0-9]*$ ]]
+          gh api -X POST \
+            "repos/${TARGET_REPOSITORY}/actions/jobs/${opencode_job_id}/rerun"
+          printf '::notice::Requested a fresh ruleset evaluation from successful OpenCode job %s.\n' \
+            "$opencode_job_id"
+
       - name: Merge exact-head central pipeline fix
         if: steps.opencode_approval.outcome == 'success'
         env:
