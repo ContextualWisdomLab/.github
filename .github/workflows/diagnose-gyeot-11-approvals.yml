@@ -1,0 +1,147 @@
+name: Diagnose Gyeot PR 11 approvals
+
+on:
+  push:
+    branches:
+      - ops/diagnose-gyeot-11
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Exchange OpenCode app token
+        id: app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::OIDC request environment is unavailable."
+            exit 1
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+          oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          test -n "$oidc_token"
+
+          token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          test -n "$app_token"
+          echo "::add-mask::$app_token"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
+      - name: Report bounded current-head approval metadata
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          TARGET_REPOSITORY: ContextualWisdomLab/gyeot
+          PR_NUMBER: "11"
+          EXPECTED_HEAD_SHA: 54129babea5a5bc8f36317ec5fbb76dd962115b7
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$pr_json")"
+          test "$live_head" = "$EXPECTED_HEAD_SHA"
+
+          rest_mergeable_state="$(jq -r '.mergeable_state // "unknown"' <<<"$pr_json")"
+          auto_merge_actor="$(jq -r '.auto_merge.enabled_by.login // "none"' <<<"$pr_json")"
+          printf '::notice::pr_state head=%s mergeable_state=%s auto_merge_actor=%s\n' \
+            "$live_head" "$rest_mergeable_state" "$auto_merge_actor"
+
+          # shellcheck disable=SC2016
+          graph_json="$(
+            gh api graphql \
+              -f owner=ContextualWisdomLab \
+              -f name=gyeot \
+              -F number="$PR_NUMBER" \
+              -f query='
+                query($owner: String!, $name: String!, $number: Int!) {
+                  viewer { login }
+                  repository(owner: $owner, name: $name) {
+                    pullRequest(number: $number) {
+                      reviewDecision
+                      mergeable
+                      mergeStateStatus
+                      autoMergeRequest {
+                        enabledAt
+                        enabledBy { login }
+                      }
+                    }
+                  }
+                }
+              '
+          )"
+          token_actor="$(jq -r '.data.viewer.login // "unknown"' <<<"$graph_json")"
+          review_decision="$(
+            jq -r '.data.repository.pullRequest.reviewDecision // "none"' <<<"$graph_json"
+          )"
+          mergeable="$(jq -r '.data.repository.pullRequest.mergeable // "unknown"' <<<"$graph_json")"
+          merge_state="$(
+            jq -r '.data.repository.pullRequest.mergeStateStatus // "unknown"' <<<"$graph_json"
+          )"
+          printf '::notice::graphql_state token_actor=%s review_decision=%s mergeable=%s merge_state=%s\n' \
+            "$token_actor" "$review_decision" "$mergeable" "$merge_state"
+
+          reviews_json="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
+          current_review_count="$(
+            jq -s --arg head "$EXPECTED_HEAD_SHA" '
+              add
+              | [.[] | select(.commit_id == $head)]
+              | length
+            ' <<<"$reviews_json"
+          )"
+          current_approval_count="$(
+            jq -s --arg head "$EXPECTED_HEAD_SHA" '
+              add
+              | [.[] | select(.commit_id == $head and .state == "APPROVED")]
+              | length
+            ' <<<"$reviews_json"
+          )"
+          printf '::notice::current_head_review_counts total=%s approvals=%s\n' \
+            "$current_review_count" "$current_approval_count"
+
+          while IFS=$'\t' read -r author state commit_id submitted_at; do
+            test "$commit_id" = "$EXPECTED_HEAD_SHA"
+            [[ "$author" =~ ^[A-Za-z0-9_.-]+(\[bot\])?$ ]]
+            [[ "$state" =~ ^[A-Z_]+$ ]]
+            [[ "$submitted_at" =~ ^[0-9TZ:.-]+$ ]]
+            printf '::notice::current_head_review author=%s state=%s commit=%s submitted_at=%s\n' \
+              "$author" "$state" "$commit_id" "$submitted_at"
+          done < <(
+            jq -rs --arg head "$EXPECTED_HEAD_SHA" '
+              add
+              | .[]
+              | select(.commit_id == $head)
+              | [.user.login, .state, .commit_id, .submitted_at]
+              | @tsv
+            ' <<<"$reviews_json"
+          )
+
+          commit_json="$(gh api "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}")"
+          commit_author="$(jq -r '.author.login // "none"' <<<"$commit_json")"
+          commit_committer="$(jq -r '.committer.login // "none"' <<<"$commit_json")"
+          printf '::notice::head_commit author=%s committer=%s\n' \
+            "$commit_author" "$commit_committer"
