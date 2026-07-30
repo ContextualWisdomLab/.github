@@ -6692,6 +6692,29 @@ jobs:
             return 1
           }
 
+          hold_for_missing_r_cmd_check() {
+            local body
+            body="$(printf '%s\n' \
+              "## Pull request overview" \
+              "" \
+              "OpenCode reviewed the current-head source evidence but R package tests were deferred after bounded package-load-only failures." \
+              "" \
+              "## Approval hold" \
+              "" \
+              "### Successful current-head R CMD check evidence is required" \
+              "- Problem: coverage-evidence deferred package-load-only testthat failures, but no successful current-head R CMD check was found." \
+              "- Root cause: deterministic coverage deferral is safe only when the repository's peer R CMD check installs dependencies and passes on this exact head." \
+              "- Fix: add or repair the R CMD check workflow and rerun it successfully on the current head." \
+              "- Regression test: Keep deferred R coverage fail-closed unless a successful R CMD check is present." \
+              "" \
+              "- Result: WAITING_FOR_R_CMD_CHECK" \
+              "- Head SHA: \`${HEAD_SHA}\`" \
+              "- Workflow run: ${RUN_ID}" \
+              "- Workflow attempt: ${RUN_ATTEMPT}"
+            )"
+            hold_approval_without_review "WAITING_FOR_R_CMD_CHECK" "$body"
+          }
+
           stop_without_review_after_model_unavailable() {
             local body
             body="$(printf '%s\n' \
@@ -6809,7 +6832,7 @@ jobs:
             fi
 
             if ! require_r_cmd_check_for_deferred_coverage; then
-              return 1
+              hold_for_missing_r_cmd_check
             fi
 
             failed_check_evidence_file="$(mktemp)"
@@ -7197,25 +7220,7 @@ jobs:
                 fi
               fi
               if ! require_r_cmd_check_for_deferred_coverage; then
-                body="$(printf '%s\n' \
-                  "## Pull request overview" \
-                  "" \
-                  "OpenCode reviewed the current-head source evidence but R package tests were deferred after bounded package-load-only failures." \
-                  "" \
-                  "## Approval hold" \
-                  "" \
-                  "### Successful current-head R CMD check evidence is required" \
-                  "- Problem: coverage-evidence deferred package-load-only testthat failures, but no successful current-head R CMD check was found." \
-                  "- Root cause: deterministic coverage deferral is safe only when the repository's peer R CMD check installs dependencies and passes on this exact head." \
-                  "- Fix: add or repair the R CMD check workflow and rerun it successfully on the current head." \
-                  "- Regression test: Keep deferred R coverage fail-closed unless a successful R CMD check is present." \
-                  "" \
-                  "- Result: WAITING_FOR_R_CMD_CHECK" \
-                  "- Head SHA: \`${HEAD_SHA}\`" \
-                  "- Workflow run: ${RUN_ID}" \
-                  "- Workflow attempt: ${RUN_ATTEMPT}"
-                )"
-                hold_approval_without_review "WAITING_FOR_R_CMD_CHECK" "$body"
+                hold_for_missing_r_cmd_check
               fi
               unresolved_reviewer_threads_file="$(mktemp)"
               reviewer_thread_review_body_file="$(mktemp)"

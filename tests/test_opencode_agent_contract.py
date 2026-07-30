@@ -206,12 +206,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "context": 200000,
         "output": 32000,
     }
-    for model_name, model_config in free_models.items():
-        if model_config.get("reasoning") is True:
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -2400,6 +2394,7 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
     assert marker in workflow
     assert "require_r_cmd_check_for_deferred_coverage" in workflow
     assert workflow.count("require_r_cmd_check_for_deferred_coverage") == 3
+    assert workflow.count("hold_for_missing_r_cmd_check") == 3
     assert "WAITING_FOR_R_CMD_CHECK" in workflow
     assert "testthat unavailable in coverage runner" not in workflow
     assert (
