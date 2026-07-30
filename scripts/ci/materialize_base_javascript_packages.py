@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Materialize pnpm locks from a validated pull-request base commit."""
+"""Materialize pnpm locks from a validated pull-request base commit.
+
+A ``pnpm-lock.yaml`` whose sibling ``package.json`` does not pin an exact pnpm
+``packageManager`` is treated as a genuine pnpm project only when no sibling
+``package-lock.json`` exists; otherwise it is a vestigial second lockfile in an
+npm-managed project and is skipped so the downstream npm install path handles it
+instead of failing coverage evidence.
+"""
 
 from __future__ import annotations
 
@@ -97,6 +104,14 @@ def base_pnpm_projects(
         if not isinstance(package_manager, str) or not PNPM_SPEC_RE.fullmatch(
             package_manager
         ):
+            if str(project_root / "package-lock.json") in regular_paths:
+                # A sibling package-lock.json means npm owns this project and
+                # the pnpm-lock.yaml is a vestigial second lockfile. Skip pnpm
+                # materialization so the downstream npm (package-lock.json)
+                # install path handles it, instead of failing the whole
+                # coverage-evidence job. A genuine pnpm-only project (no sibling
+                # package-lock.json) still must pin an exact pnpm packageManager.
+                continue
             raise ValueError(
                 f"trusted base package manifest {package_path} must declare an exact pnpm packageManager version"
             )
