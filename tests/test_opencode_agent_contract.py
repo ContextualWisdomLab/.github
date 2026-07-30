@@ -95,9 +95,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "&& 'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
-        "opencode-free/big-pickle "
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
+        "opencode-free/big-pickle "
         "opencode-free/mimo-v2.5-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
@@ -106,9 +106,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/nemotron-3-ultra-free",
         "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
-        "opencode-free/big-pickle",
         "opencode-free/laguna-s-2.1-free",
         "opencode-free/ling-3.0-flash-free",
+        "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
@@ -130,9 +130,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
-        ["opencode-free", "big-pickle"],
         ["opencode-free", "laguna-s-2.1-free"],
         ["opencode-free", "ling-3.0-flash-free"],
+        ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
@@ -161,6 +161,15 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
     free_models = generated_config["provider"]["opencode-free"]["models"]
+    assert set(free_models) == {
+        "nemotron-3-ultra-free",
+        "deepseek-v4-flash-free",
+        "north-mini-code-free",
+        "laguna-s-2.1-free",
+        "ling-3.0-flash-free",
+        "big-pickle",
+        "mimo-v2.5-free",
+    }
     nemotron_model = free_models["nemotron-3-ultra-free"]
     deepseek_model = free_models["deepseek-v4-flash-free"]
     north_model = free_models["north-mini-code-free"]
@@ -168,18 +177,26 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert nemotron_model["limit"] == {"context": 1000000, "output": 128000}
     assert "response_format" not in nemotron_model.get("options", {})
     assert deepseek_model["tool_call"] is True
+    assert deepseek_model["limit"] == {"context": 200000, "output": 128000}
     assert "response_format" not in deepseek_model.get("options", {})
     assert north_model["tool_call"] is True
     assert "response_format" not in north_model["options"]
-    for extra_free_model_name in (
-        "big-pickle",
-        "laguna-s-2.1-free",
-        "ling-3.0-flash-free",
-        "mimo-v2.5-free",
-    ):
-        extra_free_model = free_models[extra_free_model_name]
-        assert extra_free_model["tool_call"] is True
-        assert "response_format" not in extra_free_model.get("options", {})
+    assert free_models["laguna-s-2.1-free"]["limit"] == {
+        "context": 256000,
+        "output": 32000,
+    }
+    assert free_models["ling-3.0-flash-free"]["limit"] == {
+        "context": 262144,
+        "output": 32768,
+    }
+    assert free_models["big-pickle"]["limit"] == {
+        "context": 200000,
+        "output": 32000,
+    }
+    assert free_models["mimo-v2.5-free"]["limit"] == {
+        "context": 200000,
+        "output": 32000,
+    }
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -1248,7 +1265,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert "OpenCode model pool exceeded the outer" in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true",
         workflow,
@@ -1279,9 +1296,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
-        "opencode-free/big-pickle "
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
+        "opencode-free/big-pickle "
         "opencode-free/mimo-v2.5-free ' || ''"
     ) in workflow
     assert (
@@ -1301,7 +1318,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
-    assert 'OPENCODE_POOL_MAX_CYCLES: "0"' in workflow
+    assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert (
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
@@ -1317,10 +1334,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
-    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
+    assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[
         1
@@ -1785,11 +1802,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert syntax_step < measure_step
     assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
     assert 'UV_NO_BUILD: "1"' in measure
-    assert measure.count("GITHUB_ENV=/dev/null") == 2
-    assert measure.count("GITHUB_PATH=/dev/null") == 2
-    assert measure.count("GITHUB_OUTPUT=/dev/null") == 2
-    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 2
-    assert measure.count("BASH_ENV=/dev/null") == 2
+    assert measure.count("GITHUB_ENV=/dev/null") == 3
+    assert measure.count("GITHUB_PATH=/dev/null") == 3
+    assert measure.count("GITHUB_OUTPUT=/dev/null") == 3
+    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 3
+    assert measure.count("BASH_ENV=/dev/null") == 3
     assert "uv sync --project" not in measure
     assert "uv run --no-project" not in measure
     assert "uv run --no-build" not in measure
@@ -2341,3 +2358,28 @@ def test_slow_peer_wait_matches_only_image_validation_checks():
             or re.search(package_build_pattern, candidate, re.IGNORECASE) is not None
         )
         assert slow_build_match is slow_build_expected, candidate
+
+
+def test_r_package_load_deferral_requires_current_head_r_cmd_check():
+    """R package-load-only failures may defer only to explicit peer evidence."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    marker = (
+        "- R test evidence: deferred package-load failures require a successful "
+        "current-head peer R CMD check"
+    )
+
+    assert "run_r_package_testthat" in workflow
+    assert "r_coverage_peer_gate.py" in workflow
+    assert marker in workflow
+    assert "require_r_cmd_check_for_deferred_coverage" in workflow
+    assert workflow.count("require_r_cmd_check_for_deferred_coverage") == 3
+    assert "WAITING_FOR_R_CMD_CHECK" in workflow
+    assert "testthat unavailable in coverage runner" not in workflow
+    assert (
+        "pkg <- tryCatch(read.dcf(\"DESCRIPTION\")[1, \"Package\"]" in workflow
+    )
+    assert (
+        "if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))" not in workflow
+    )
