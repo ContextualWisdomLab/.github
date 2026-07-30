@@ -56,11 +56,12 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
-      - name: Create GitHub Actions-authored Zen recovery PR
+      - name: Create independently authored Zen recovery PR
         id: actions_pr
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCODE_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+          PR_CREATOR_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
@@ -123,13 +124,22 @@ jobs:
           fi
 
           test "$recovery_head" = "$SOURCE_HEAD_SHA"
+          test -n "${PR_CREATOR_TOKEN:-}"
           pr_creator_actor="$(
-            gh api graphql \
-              -f query='{ viewer { login } }' \
-              --jq '.data.viewer.login // empty'
+            GH_TOKEN="$PR_CREATOR_TOKEN" \
+              gh api graphql \
+                -f query='{ viewer { login } }' \
+                --jq '.data.viewer.login // empty'
           )"
-          test "$pr_creator_actor" = "github-actions[bot]"
-          printf '::notice::Creating the Zen recovery PR as workflow actor %s.\n' \
+          case "$pr_creator_actor" in
+            cwl-noema-review | 'cwl-noema-review[bot]' | \
+            opencode-agent | 'opencode-agent[bot]' | \
+            'github-actions[bot]' | '')
+              echo "::error::The configured PR creator is not independent."
+              exit 1
+              ;;
+          esac
+          printf '::notice::Creating the Zen recovery PR as independent actor %s.\n' \
             "$pr_creator_actor"
           recovery_body="$(
             printf '%s\n' \
@@ -148,7 +158,7 @@ jobs:
               '' \
               '## Recovery provenance' \
               '' \
-              'This PR is intentionally authored by GitHub Actions so the OpenCode and Noema Apps can submit two independent real-model reviews.' \
+              'This PR is intentionally authored by an independent configured actor so the OpenCode and Noema Apps can submit two independent real-model reviews.' \
               'Its branch is immediately restamped by the OpenCode App to trigger the normal pull-request workflows.' \
               'It supersedes #676, #677, and #678 after merge.'
           )"
@@ -161,8 +171,9 @@ jobs:
               '{title:$title, body:$body, head:$head, base:$base, draft:false}'
           )"
           created_pr="$(
-            gh api -X POST "repos/${TARGET_REPOSITORY}/pulls" \
-              --input - <<<"$create_payload"
+            GH_TOKEN="$PR_CREATOR_TOKEN" \
+              gh api -X POST "repos/${TARGET_REPOSITORY}/pulls" \
+                --input - <<<"$create_payload"
           )"
           new_number="$(jq -r '.number // empty' <<<"$created_pr")"
           test -n "$new_number"
