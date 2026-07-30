@@ -148,6 +148,52 @@ jobs:
           printf '::notice::head_commit author=%s committer=%s\n' \
             "$commit_author" "$commit_committer"
 
+      - name: Dispatch exact-head central OpenCode review
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ContextualWisdomLab/.github
+          PR_NUMBER: "676"
+          EXPECTED_BASE_REF: main
+          EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
+          EXPECTED_HEAD_REF: fix/org-sweep-timeout
+          EXPECTED_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          test "$(jq -r '.state // empty' <<<"$pr_json")" = open
+          test "$(jq -r '.base.ref // empty' <<<"$pr_json")" = "$EXPECTED_BASE_REF"
+          test "$(jq -r '.base.sha // empty' <<<"$pr_json")" = "$EXPECTED_BASE_SHA"
+          test "$(jq -r '.head.ref // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_REF"
+          test "$(jq -r '.head.sha // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_SHA"
+
+          dispatch_payload="$(
+            jq -cn \
+              --arg event_type opencode-review \
+              --arg target_repository "$TARGET_REPOSITORY" \
+              --argjson pr_number "$PR_NUMBER" \
+              --arg pr_base_ref "$EXPECTED_BASE_REF" \
+              --arg pr_base_sha "$EXPECTED_BASE_SHA" \
+              --arg pr_head_ref "$EXPECTED_HEAD_REF" \
+              --arg pr_head_sha "$EXPECTED_HEAD_SHA" \
+              '{
+                event_type:$event_type,
+                client_payload:{
+                  target_repository:$target_repository,
+                  pr_number:$pr_number,
+                  pr_base_ref:$pr_base_ref,
+                  pr_base_sha:$pr_base_sha,
+                  pr_head_ref:$pr_head_ref,
+                  pr_head_sha:$pr_head_sha
+                }
+              }'
+          )"
+          gh api -X POST \
+            "repos/${TARGET_REPOSITORY}/dispatches" \
+            --input - <<<"$dispatch_payload"
+          printf '::notice::Dispatched exact-head OpenCode review for central PR #%s at %s.\n' \
+            "$PR_NUMBER" "$EXPECTED_HEAD_SHA"
+
       - name: Restamp central PR head with the OpenCode App
         if: steps.app_token.outputs.never == 'true'
         id: restamp
@@ -210,6 +256,7 @@ jobs:
             "$PR_NUMBER" "$EXPECTED_HEAD_SHA" "$new_head"
 
       - name: Publish configured-workflow exact-head pipeline-defect approval
+        if: steps.dispatch.outputs.never == 'true'
         id: second_approval
         env:
           APPROVAL_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
