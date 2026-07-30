@@ -396,3 +396,70 @@ def test_main_forwards_requirements_root(monkeypatch, tmp_path) -> None:
 
     assert installer.main(["--requirements-root", str(tmp_path)]) == 7
     assert seen == [tmp_path]
+
+
+def test_reachable_index_missing_pinned_version_is_visible_and_nonfatal(
+    tmp_path,
+) -> None:
+    """A pin the reachable index no longer offers (yanked / no wheel for the
+    coverage interpreter) defers to coverage execution instead of aborting."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="fuzz/requirements-atheris.txt",
+    )
+
+    def fake_runner(command: list[str], **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                "ERROR: Could not find a version that satisfies the requirement "
+                "atheris==3.0.0 (from versions: 3.1.0)\n"
+                "ERROR: No matching distribution found for atheris==3.0.0"
+            ),
+        )
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    result = installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "candidates=1 installed=0 skipped=1" in stdout.getvalue()
+
+
+def test_unreachable_index_from_versions_none_stays_fatal(tmp_path) -> None:
+    """An empty/unreachable index ("(from versions: none)") is not deferrable:
+    it must remain fatal so a registry outage cannot masquerade as an optional
+    lock."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="fuzz/requirements-atheris.txt",
+    )
+
+    def fake_runner(command: list[str], **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                "ERROR: Could not find a version that satisfies the requirement "
+                "atheris==3.0.0 (from versions: none)\n"
+                "ERROR: No matching distribution found for atheris==3.0.0"
+            ),
+        )
+
+    stderr = io.StringIO()
+    result = installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stderr=stderr,
+    )
+
+    assert result == 1
+    assert "preflight failed" in stderr.getvalue()
