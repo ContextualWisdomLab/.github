@@ -576,6 +576,111 @@ def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -
     assert "logged a fatal provider error while still running" not in result.stdout
 
 
+def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) -> None:
+    """A delisted pinned OpenRouter model dies seconds after a model-unavailable error."""
+    start = time.monotonic()
+    result = run_failed_model(
+        tmp_path,
+        json_line=(
+            '{"type":"error","error":{"name":"ProviderModelNotFoundError","data":'
+            '{"message":"No endpoints found for nvidia/nemotron-3-ultra-550b-a55b:free."}}}'
+        ),
+        model_candidates="openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        extra_env={
+            "OPENROUTER_API_KEY": "fake-openrouter-key",
+            "FAKE_OPENCODE_HANG_SECONDS": "120",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "120",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "240",
+        },
+    )
+    elapsed = time.monotonic() - start
+
+    assert result.returncode == 1
+    assert "logged a fatal provider error while still running" in result.stdout
+    assert "skipping remaining attempts for this model" in result.stdout
+    assert "class=model-unavailable" in result.stdout
+    assert elapsed < 25
+
+
+def test_credit_exhausted_402_ends_pool_without_further_spend(tmp_path: Path) -> None:
+    """A paid candidate hitting HTTP 402 is dead for the run instead of cycling."""
+    start = time.monotonic()
+    result = run_failed_model(
+        tmp_path,
+        json_line=(
+            '{"type":"error","error":{"name":"AI_APICallError","data":'
+            '{"message":"Insufficient credits. Add more using '
+            'https://openrouter.ai/settings/credits","statusCode":402}}}'
+        ),
+        model_candidates="openrouter/deepseek/deepseek-v3.2",
+        extra_env={
+            "OPENROUTER_API_KEY": "fake-openrouter-key",
+            "OPENCODE_POOL_MAX_CYCLES": "0",
+        },
+    )
+    elapsed = time.monotonic() - start
+
+    assert result.returncode == 1
+    assert "provider credits are exhausted" in result.stdout
+    assert "marking this candidate failed for the rest of the run" in result.stdout
+    assert "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    assert "class=credit-exhausted" in result.stdout
+    assert "Restarting OpenCode model pool" not in result.stdout
+    assert elapsed < 20
+
+
+def test_invalid_control_output_cap_marks_candidate_failed(tmp_path: Path) -> None:
+    """Repeated control-rejected output stops retrying at the cap, not the budget."""
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {"type": "text", "text": "not a control conclusion"}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_MODEL_ATTEMPTS": "3",
+            "OPENCODE_INVALID_CONTROL_OUTPUT_CAP": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "1",
+            "OPENCODE_POOL_MAX_CYCLES": "0",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "produced 2 control-rejected outputs" in result.stdout
+    assert "marking this candidate failed for the rest of the run" in result.stdout
+    assert "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    assert "attempt 3/3" not in result.stdout
+
+
+def test_attempt_ceiling_bounds_provider_spend(tmp_path: Path) -> None:
+    """The per-run attempt ceiling ends the pool before the retry budget elapses."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "OPENCODE_MODEL_ATTEMPTS": "3",
+            "OPENCODE_POOL_MAX_TOTAL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "1",
+            "OPENCODE_POOL_MAX_CYCLES": "0",
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        "reached the per-run provider attempt ceiling of 2 attempts" in result.stdout
+    )
+    assert "attempt 3/3" not in result.stdout
+
+
 def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> None:
     """Small PRs fail through hung/unavailable providers quickly with a visible budget reason."""
     result = run_failed_model(
@@ -654,7 +759,7 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert (
         "OpenCode github-models/openai/gpt-5 runtime cap selected 3s instead of 9s "
-        "because this installation has returned a constrained request-body limit for that endpoint."
+        "because this provider has a bounded failover window."
     ) in result.stdout
     attempt_budget = re.search(
         r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
@@ -665,6 +770,24 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     run_timeout, remaining_budget = map(int, attempt_budget.groups())
     assert run_timeout == 3
     assert run_timeout <= remaining_budget <= 30
+
+
+def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
+    """A stalled free provider cannot consume a full paid-provider cadence slot."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
+        },
+        model_candidates="opencode-free/nemotron-3-ultra-free",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode opencode-free/nemotron-3-ultra-free runtime cap selected 3s "
+        "instead of 9s because this provider has a bounded failover window."
+    ) in result.stdout
 
 
 def test_github_models_openai_prompt_references_evidence_without_inlining(

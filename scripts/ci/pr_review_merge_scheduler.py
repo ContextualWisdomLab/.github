@@ -118,7 +118,11 @@ OPEN_PRS_PAGE_SIZE = 25
 DEFAULT_STALE_OPENCODE_MINUTES = 90
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
-OPENCODE_WORKFLOW_NAMES = {"OpenCode Review", "Required OpenCode Review"}
+OPENCODE_WORKFLOW_NAMES = {
+    "OpenCode Review",
+    "Required OpenCode Review",
+    "OpenCode Review Dispatch",
+}
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
@@ -626,12 +630,16 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "stream error",
     "temporary failure",
     "timeout",
+    "unexpected end of JSON input",
+    "unexpected EOF",
     "received from peer",
 )
 
 
-def is_transient_github_api_error(exc: RuntimeError) -> bool:
+def is_transient_github_api_error(exc: Exception) -> bool:
     """Return whether a GitHub API failure is worth retrying in the same run."""
+    if isinstance(exc, json.JSONDecodeError):
+        return True
     message = str(exc)
     folded = message.lower()
     return any(marker in message or marker.lower() in folded for marker in TRANSIENT_GITHUB_API_ERRORS)
@@ -647,7 +655,7 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
     for attempt in range(1, max_attempts + 1):  # pragma: no branch - last failed attempt always raises
         try:
             return json.loads(run_github_read(cmd, stdin=query))
-        except RuntimeError as exc:
+        except (RuntimeError, json.JSONDecodeError) as exc:
             if attempt >= max_attempts or not is_transient_github_api_error(exc):
                 raise
             delay = min(2 ** (attempt - 1), 8)
@@ -932,6 +940,11 @@ def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
 def is_opencode_context(node: dict[str, Any]) -> bool:
     """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
+        if (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip():
+            # Central reviews run through repository_dispatch and publish a commit
+            # status. Organization required-workflow CheckRuns are deliberately
+            # non-authoritative placeholders and must not suppress that dispatch.
+            return False
         workflow = (
             ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
             or {}
@@ -1892,14 +1905,23 @@ def active_review_run_refs(
     """Return repository-qualified current and stale review workflow runs."""
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
-    repositories = tuple(dict.fromkeys((target_repo, dispatch_repo)))
+    centralized_dispatch = bool(
+        (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    )
     head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
-    dispatch_title_prefix = f"{run_title} {target_repo}#{number}@"
+    dispatch_title_prefixes = tuple(
+        f"{title} {target_repo}#{number}@"
+        for title in sorted({run_title, *workflow_aliases}, key=len, reverse=True)
+    )
     current: list[tuple[str, str]] = []
     stale: list[tuple[str, str]] = []
 
-    for run_repo in repositories:
+    # Only the repository_dispatch receiver hosts the privileged review run.
+    # When organization required workflows are materialized in a target
+    # repository, their pull_request_target jobs are evidence placeholders and
+    # must not suppress the central authenticated reviewer.
+    for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
             if run_name != workflow and run_name not in workflow_aliases:
@@ -1909,16 +1931,21 @@ def active_review_run_refs(
                 continue
             run_ref = (run_repo, str(run_id))
             display_title = str(run_data.get("display_title") or "")
-            if (
-                run_data.get("event") == "repository_dispatch"
-                and display_title.startswith(dispatch_title_prefix)
-            ):
+            dispatch_title_prefix = next(
+                (
+                    prefix
+                    for prefix in dispatch_title_prefixes
+                    if display_title.startswith(prefix)
+                ),
+                None,
+            )
+            if run_data.get("event") == "repository_dispatch" and dispatch_title_prefix:
                 dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
                 continue
-            if run_repo != target_repo:
+            if centralized_dispatch:
                 continue
             run_head = str(run_data.get("head_sha") or "").lower()
             pull_requests = run_data.get("pull_requests") or []
