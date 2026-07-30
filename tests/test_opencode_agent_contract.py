@@ -1665,7 +1665,9 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "github.event_name == 'pull_request_target'" in workflow
     status_step = workflow.split(
         "      - name: Publish repository_dispatch OpenCode status", 1
-    )[1].split("      - name: Run merge scheduler after approval", 1)[0]
+    )[1].split(
+        "      - name: Dispatch Noema after current-head OpenCode approval", 1
+    )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
