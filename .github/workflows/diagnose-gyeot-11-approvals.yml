@@ -159,6 +159,7 @@ jobs:
           EXPECTED_HEAD_REF: fix/org-sweep-timeout
           EXPECTED_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
           REVIEW_RUN_ID: "30548954941"
+          REVIEW_JOB_ID: "90892850908"
           EXPECTED_REVIEW_RUN_NAME: OpenCode Review Dispatch ContextualWisdomLab/.github#676@7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
         run: |
           set -euo pipefail
@@ -176,12 +177,18 @@ jobs:
             repository_dispatch
           test "$(jq -r '.name // empty' <<<"$review_run_json")" = \
             "$EXPECTED_REVIEW_RUN_NAME"
-          test "$(jq -r '.status // empty' <<<"$review_run_json")" = completed
 
+          review_job_json="$(
+            gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REVIEW_JOB_ID}"
+          )"
+          test "$(jq -r '.run_id // empty' <<<"$review_job_json")" = \
+            "$REVIEW_RUN_ID"
+          test "$(jq -r '.status // empty' <<<"$review_job_json")" = completed
+          test "$(jq -r '.conclusion // empty' <<<"$review_job_json")" = cancelled
           gh api -X POST \
-            "repos/${TARGET_REPOSITORY}/actions/runs/${REVIEW_RUN_ID}/rerun"
-          printf '::notice::Reran exact-head OpenCode review run %s for central PR #%s at %s.\n' \
-            "$REVIEW_RUN_ID" "$PR_NUMBER" "$EXPECTED_HEAD_SHA"
+            "repos/${TARGET_REPOSITORY}/actions/jobs/${REVIEW_JOB_ID}/rerun"
+          printf '::notice::Reran cancelled exact-head OpenCode review job %s from run %s for central PR #%s at %s.\n' \
+            "$REVIEW_JOB_ID" "$REVIEW_RUN_ID" "$PR_NUMBER" "$EXPECTED_HEAD_SHA"
 
       - name: Restamp central PR head with the OpenCode App
         if: steps.app_token.outputs.never == 'true'
