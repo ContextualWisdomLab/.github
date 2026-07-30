@@ -749,18 +749,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Audit Gyeot open pull requests
+      - name: Dispatch Gyeot current-head review
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          GITHUB_ACTIONS: "true"
+          SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
+          SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
         run: |
           python3 scripts/ci/pr_review_merge_scheduler.py \
             --repo ContextualWisdomLab/gyeot \
             --base-branch develop \
             --project-flow git-flow \
             --max-prs 100 \
-            --dry-run \
-            --no-trigger-reviews \
-            --review-dispatch-limit 0 \
+            --trigger-reviews \
+            --review-dispatch-limit 1 \
             --branch-update-limit 0 \
             --no-enable-auto-merge \
             --merge-mode disabled \
