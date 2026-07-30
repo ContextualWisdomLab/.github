@@ -655,6 +655,16 @@ def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
     assert "python3 -m coverage run -m pytest tests" in measure
     assert "python3 -m coverage report --show-missing" in measure
     assert "python3 -m pytest tests/test_docstrings.py" in measure
+    # src-layout packages (e.g. src/<pkg>) must be importable from the project
+    # root; the coverage and docstring runners prepend src to PYTHONPATH when a
+    # src directory exists, falling back to the project root otherwise.
+    assert "PYTHONPATH=. python3 -m coverage run -m pytest tests" not in measure
+    assert "[ -d src ] && printf src:. || printf ." in measure
+    assert "PYTHONPATH=. python3 -m pytest tests/test_docstrings.py" not in measure
+    assert (
+        'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" '
+        "python3 -m pytest tests/test_docstrings.py"
+    ) in measure
 
 
 def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
