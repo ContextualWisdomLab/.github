@@ -6,6 +6,7 @@ on:
       - ops/diagnose-gyeot-11
 
 permissions:
+  actions: write
   contents: write
   id-token: write
 
@@ -145,6 +146,28 @@ jobs:
           commit_committer="$(jq -r '.committer.login // "none"' <<<"$commit_json")"
           printf '::notice::head_commit author=%s committer=%s\n' \
             "$commit_author" "$commit_committer"
+
+      - name: Cancel exact stale central review run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STALE_RUN_ID: "30545354430"
+          EXPECTED_RUN_NAME: OpenCode Review Dispatch ContextualWisdomLab/.github#676@0a7460387e8e5647aed2f297b09041b2b70ab95d
+        run: |
+          set -euo pipefail
+
+          run_json="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${STALE_RUN_ID}")"
+          test "$(jq -r '.event // empty' <<<"$run_json")" = repository_dispatch
+          test "$(jq -r '.name // empty' <<<"$run_json")" = "$EXPECTED_RUN_NAME"
+          run_status="$(jq -r '.status // empty' <<<"$run_json")"
+          if [ "$run_status" = completed ]; then
+            printf '::notice::Stale central review run %s is already completed; no cancellation needed.\n' \
+              "$STALE_RUN_ID"
+          else
+            gh api -X POST \
+              "repos/ContextualWisdomLab/.github/actions/runs/${STALE_RUN_ID}/force-cancel"
+            printf '::notice::Force-cancelled exact stale central review run %s.\n' \
+              "$STALE_RUN_ID"
+          fi
 
       - name: Dispatch exact-head central PR review
         env:
