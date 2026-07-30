@@ -59,6 +59,7 @@ jobs:
         id: actions_pr
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENCODE_APP_TOKEN: ${{ steps.app_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
@@ -79,6 +80,7 @@ jobs:
           )"
           test "$(jq -r '.object.sha // empty' <<<"$base_ref")" = \
             "$EXPECTED_BASE_SHA"
+          echo "::notice::Validated the pinned Zen source tree and main base."
 
           recovery_ref="$(
             gh api "repos/${TARGET_REPOSITORY}/git/ref/heads/${RECOVERY_HEAD_REF}" \
@@ -92,13 +94,15 @@ jobs:
                 '{ref:$ref, sha:$sha}'
             )"
             recovery_ref="$(
-              gh api -X POST \
+              GH_TOKEN="$OPENCODE_APP_TOKEN" gh api -X POST \
                 "repos/${TARGET_REPOSITORY}/git/refs" \
                 --input - <<<"$ref_payload"
             )"
           fi
           recovery_head="$(jq -r '.object.sha // empty' <<<"$recovery_ref")"
           test -n "$recovery_head"
+          printf '::notice::Resolved Zen recovery branch %s at %s.\n' \
+            "$RECOVERY_HEAD_REF" "$recovery_head"
 
           existing_prs="$(
             gh api --method GET \
