@@ -109,7 +109,12 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/minimax-m2-free "
         "opencode-free/qwen3-max-free "
         "opencode-free/deepseek-v3.1-free "
-        "opencode-free/glm-4.7-free ' || '' }}"
+        "opencode-free/glm-4.7-free "
+        "opencode-free/minimax-m2.5-free "
+        "opencode-free/mimo-v2-pro-free "
+        "opencode-free/mimo-v2-omni-free "
+        "opencode-free/nemotron-3-super-free "
+        "opencode-free/qwen3.6-plus-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -132,6 +137,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/qwen3-max-free",
         "opencode-free/deepseek-v3.1-free",
         "opencode-free/glm-4.7-free",
+        "opencode-free/minimax-m2.5-free",
+        "opencode-free/mimo-v2-pro-free",
+        "opencode-free/mimo-v2-omni-free",
+        "opencode-free/nemotron-3-super-free",
+        "opencode-free/qwen3.6-plus-free",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -167,6 +177,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "qwen3-max-free"],
         ["opencode-free", "deepseek-v3.1-free"],
         ["opencode-free", "glm-4.7-free"],
+        ["opencode-free", "minimax-m2.5-free"],
+        ["opencode-free", "mimo-v2-pro-free"],
+        ["opencode-free", "mimo-v2-omni-free"],
+        ["opencode-free", "nemotron-3-super-free"],
+        ["opencode-free", "qwen3.6-plus-free"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -213,6 +228,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "qwen3-max-free",
         "deepseek-v3.1-free",
         "glm-4.7-free",
+        "minimax-m2.5-free",
+        "mimo-v2-pro-free",
+        "mimo-v2-omni-free",
+        "nemotron-3-super-free",
+        "qwen3.6-plus-free",
     }
     nemotron_model = free_models["nemotron-3-ultra-free"]
     deepseek_model = free_models["deepseek-v4-flash-free"]
@@ -1354,7 +1374,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/minimax-m2-free "
         "opencode-free/qwen3-max-free "
         "opencode-free/deepseek-v3.1-free "
-        "opencode-free/glm-4.7-free ' || ''"
+        "opencode-free/glm-4.7-free "
+        "opencode-free/minimax-m2.5-free "
+        "opencode-free/mimo-v2-pro-free "
+        "opencode-free/mimo-v2-omni-free "
+        "opencode-free/nemotron-3-super-free "
+        "opencode-free/qwen3.6-plus-free ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
