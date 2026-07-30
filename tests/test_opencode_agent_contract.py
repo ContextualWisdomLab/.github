@@ -98,7 +98,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || '' }}"
+        "opencode-free/mimo-v2.5-free "
+        "openrouter/deepseek/deepseek-v3.2:free "
+        "openrouter/qwen/qwen3-coder:free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -110,6 +112,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
+        "openrouter/deepseek/deepseek-v3.2:free",
+        "openrouter/qwen/qwen3-coder:free",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -134,6 +138,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
+        ["openrouter", "deepseek/deepseek-v3.2:free"],
+        ["openrouter", "qwen/qwen3-coder:free"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -147,6 +153,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert openrouter_models == [
+        "deepseek/deepseek-v3.2:free",
+        "qwen/qwen3-coder:free",
         "deepseek/deepseek-v3.2",
         "qwen/qwen3-coder",
     ]
@@ -1299,7 +1307,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || ''"
+        "opencode-free/mimo-v2.5-free "
+        "openrouter/deepseek/deepseek-v3.2:free "
+        "openrouter/qwen/qwen3-coder:free ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
