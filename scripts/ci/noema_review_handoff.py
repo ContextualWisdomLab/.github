@@ -12,11 +12,18 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Any, TextIO
 
-from scripts.ci.opencode_existing_approval_gate import (
-    flatten_reviews,
-    has_reusable_real_model_approval,
-)
-from scripts.ci.redact_sensitive_log import redact_text
+if __package__:
+    from scripts.ci.opencode_existing_approval_gate import (
+        flatten_reviews,
+        has_reusable_real_model_approval,
+    )
+    from scripts.ci.redact_sensitive_log import redact_text
+else:  # pragma: no cover - exercised by the standalone CLI regression test
+    from opencode_existing_approval_gate import (
+        flatten_reviews,
+        has_reusable_real_model_approval,
+    )
+    from redact_sensitive_log import redact_text
 
 
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
