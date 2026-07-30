@@ -146,16 +146,16 @@ jobs:
           printf '::notice::head_commit author=%s committer=%s\n' \
             "$commit_author" "$commit_committer"
 
-      - name: Dispatch exact-head OpenCode review
+      - name: Dispatch exact-head central PR review
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ContextualWisdomLab/gyeot
-          PR_NUMBER: "11"
-          EXPECTED_BASE_REF: develop
-          EXPECTED_BASE_SHA: 1bcb340e78e78f187ac14c3794d1170b90b0f155
-          EXPECTED_HEAD_REF: feat/cbt-ema-integration
-          EXPECTED_HEAD_SHA: 54129babea5a5bc8f36317ec5fbb76dd962115b7
+          TARGET_REPOSITORY: ContextualWisdomLab/.github
+          PR_NUMBER: "676"
+          EXPECTED_BASE_REF: main
+          EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
+          EXPECTED_HEAD_REF: fix/org-sweep-timeout
+          EXPECTED_HEAD_SHA: 7b6c41c1aa4d2c03f6ca5c553b5fe30e6336b403
         run: |
           set -euo pipefail
 
