@@ -184,6 +184,12 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert "response_format" not in deepseek_model.get("options", {})
     assert north_model["tool_call"] is True
     assert "response_format" not in north_model["options"]
+    for model_name, model_config in free_models.items():
+        if model_config.get("reasoning") is True:
+            assert model_config["options"]["reasoningEffort"] == "high", model_name
+            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
+                model_name
+            )
     assert free_models["laguna-s-2.1-free"]["limit"] == {
         "context": 256000,
         "output": 32000,
