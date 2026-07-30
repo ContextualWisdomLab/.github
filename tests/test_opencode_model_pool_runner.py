@@ -1050,7 +1050,7 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert (
         "OpenCode github-models/openai/gpt-5 runtime cap selected 3s instead of 9s "
-        "because this installation has returned a constrained request-body limit for that endpoint."
+        "because this provider has a bounded failover window."
     ) in result.stdout
     attempt_budget = re.search(
         r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
@@ -1061,6 +1061,24 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     run_timeout, remaining_budget = map(int, attempt_budget.groups())
     assert run_timeout == 3
     assert run_timeout <= remaining_budget <= 30
+
+
+def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
+    """A stalled free provider cannot consume a full paid-provider cadence slot."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
+        },
+        model_candidates="opencode-free/nemotron-3-ultra-free",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode opencode-free/nemotron-3-ultra-free runtime cap selected 3s "
+        "instead of 9s because this provider has a bounded failover window."
+    ) in result.stdout
 
 
 def test_github_models_openai_prompt_references_evidence_without_inlining(

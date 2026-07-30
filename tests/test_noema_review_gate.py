@@ -191,9 +191,22 @@ def test_check_helpers_and_existing_noema_review():
     assert "ci: FAILURE" in blockers
     assert "CI / lint: FAILURE" in blockers
     assert "CI / slow: IN_PROGRESS" in blockers
+    noema_marker = "<!-- noema-review-gate head_sha=head -->"
     assert noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}),
+        make_pr(reviews={"nodes": [review(login="noema", body=noema_marker)]}),
         "noema",
+    )
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(login="human", body=noema_marker)]}),
+        "noema",
+    )
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(login="noema", body="review without gate marker")]}),
+        "noema",
+    )
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(login="", body=noema_marker)]}),
+        "",
     )
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
