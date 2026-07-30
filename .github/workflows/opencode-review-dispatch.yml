@@ -1096,6 +1096,18 @@ jobs:
                 ;;
             esac
 
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              # An npm lockfile is authoritative: npm owns this project even when a
+              # vestigial pnpm-lock.yaml or yarn.lock is also committed. This mirrors
+              # the base materializer (materialize_base_javascript_packages.py), which
+              # already treats a pnpm-lock.yaml with a sibling package-lock.json and no
+              # exact packageManager as a vestigial second lockfile. Without this the
+              # runtime runner selected pnpm/yarn and refused on the missing exact
+              # packageManager, failing coverage-evidence for npm projects that also
+              # carry a stray pnpm-lock.yaml.
+              command -v npm >/dev/null 2>&1 && printf '%s\n' "npm"
+              return
+            fi
             if [ -f pnpm-lock.yaml ]; then
               ensure_corepack_runner pnpm "$declared_spec" && printf '%s\n' "pnpm"
               return

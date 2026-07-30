@@ -741,6 +741,13 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
         "elif command -v npm"
     )
+    # A committed npm lockfile is authoritative: an npm project that also carries a
+    # vestigial pnpm-lock.yaml / yarn.lock must resolve to npm rather than refuse on
+    # a missing exact packageManager (mirrors materialize_base_javascript_packages.py).
+    # The npm-lockfile check therefore precedes the pnpm/yarn lockfile fallback.
+    assert select_function.index(
+        "[ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]"
+    ) < select_function.index("[ -f pnpm-lock.yaml ]")
 
     declared_pnpm_start = select_function.index("              pnpm)")
     declared_pnpm_end = select_function.index(
