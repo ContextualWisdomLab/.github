@@ -1760,11 +1760,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert syntax_step < measure_step
     assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
     assert 'UV_NO_BUILD: "1"' in measure
-    assert measure.count("GITHUB_ENV=/dev/null") == 2
-    assert measure.count("GITHUB_PATH=/dev/null") == 2
-    assert measure.count("GITHUB_OUTPUT=/dev/null") == 2
-    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 2
-    assert measure.count("BASH_ENV=/dev/null") == 2
+    assert measure.count("GITHUB_ENV=/dev/null") == 3
+    assert measure.count("GITHUB_PATH=/dev/null") == 3
+    assert measure.count("GITHUB_OUTPUT=/dev/null") == 3
+    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 3
+    assert measure.count("BASH_ENV=/dev/null") == 3
     assert "uv sync --project" not in measure
     assert "uv run --no-project" not in measure
     assert "uv run --no-build" not in measure
@@ -2316,3 +2316,28 @@ def test_slow_peer_wait_matches_only_image_validation_checks():
             or re.search(package_build_pattern, candidate, re.IGNORECASE) is not None
         )
         assert slow_build_match is slow_build_expected, candidate
+
+
+def test_r_package_load_deferral_requires_current_head_r_cmd_check():
+    """R package-load-only failures may defer only to explicit peer evidence."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    marker = (
+        "- R test evidence: deferred package-load failures require a successful "
+        "current-head peer R CMD check"
+    )
+
+    assert "run_r_package_testthat" in workflow
+    assert "r_coverage_peer_gate.py" in workflow
+    assert marker in workflow
+    assert "require_r_cmd_check_for_deferred_coverage" in workflow
+    assert workflow.count("require_r_cmd_check_for_deferred_coverage") == 3
+    assert "WAITING_FOR_R_CMD_CHECK" in workflow
+    assert "testthat unavailable in coverage runner" not in workflow
+    assert (
+        "pkg <- tryCatch(read.dcf(\"DESCRIPTION\")[1, \"Package\"]" in workflow
+    )
+    assert (
+        "if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))" not in workflow
+    )

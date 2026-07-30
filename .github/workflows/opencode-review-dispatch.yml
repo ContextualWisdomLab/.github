@@ -730,6 +730,7 @@ jobs:
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
           summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
           failures=0
+          r_peer_check_required=0
 
           append() {
             printf '%s\n' "$*" >>"$summary_file"
@@ -798,6 +799,61 @@ jobs:
               failures=$((failures + 1))
             else
               append "- Result: PASS"
+            fi
+            append ""
+            rm -f "$log_file"
+          }
+
+          run_r_package_testthat() {
+            local package_name="$1"
+            local log_file rc classification
+            log_file="$(mktemp)"
+            append "### R package testthat suite"
+            append ""
+            append '```text'
+            append_command \
+              Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); testthat::test_dir("tests/testthat")'
+            set +e
+            timeout --kill-after=20 900 setpriv \
+              --reuid "$OPENCODE_SANDBOX_UID" \
+              --regid "$OPENCODE_SANDBOX_GID" \
+              --clear-groups \
+              env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GH_TOKEN \
+              -u GITHUB_TOKEN \
+              GITHUB_ENV=/dev/null \
+              GITHUB_PATH=/dev/null \
+              GITHUB_OUTPUT=/dev/null \
+              GITHUB_STEP_SUMMARY=/dev/null \
+              BASH_ENV=/dev/null \
+              UV_NO_BUILD=1 \
+              HOME=/work/.opencode-sandbox-home \
+              XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); testthat::test_dir("tests/testthat")' \
+              >"$log_file" 2>&1
+            rc=$?
+            set -e
+            emit_captured_log "$log_file"
+            append '```'
+            append ""
+            if [ "$rc" -eq 0 ]; then
+              append "- Result: PASS"
+            elif classification="$(
+              python3 -I "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \
+                classify-testthat \
+                --log "$log_file" \
+                --package "$package_name" 2>/dev/null
+            )"; then
+              append "- Result: PASS"
+              append "- Reason: ${classification}; direct sandbox failures are deferred only to a successful current-head peer R CMD check."
+              r_peer_check_required=1
+            else
+              append "- Result: FAIL (exit ${rc})"
+              failures=$((failures + 1))
             fi
             append ""
             rm -f "$log_file"
@@ -1326,6 +1382,7 @@ jobs:
           }
 
           run_r_test_coverage() {
+            local package_name
             ensure_r_runtime
             if ! command -v Rscript >/dev/null 2>&1; then
               append "### R test coverage"
@@ -1344,8 +1401,10 @@ jobs:
               Rscript -e 'required <- c("covr", "testthat"); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop("signed distribution coverage packages unavailable: ", paste(missing, collapse = ", "))'
             if [ -f DESCRIPTION ]; then
               if [ -d tests/testthat ]; then
-                run_and_capture "R package testthat suite" \
-                  Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); if (!requireNamespace("testthat", quietly = TRUE)) { message("testthat unavailable in coverage runner; deferring to required peer R CMD check evidence."); quit(status = 0) }; testthat::test_dir("tests/testthat")'
+                package_name="$(
+                  Rscript -e 'pkg <- tryCatch(read.dcf("DESCRIPTION")[1, "Package"], error = function(e) ""); cat(pkg)'
+                )"
+                run_r_package_testthat "$package_name"
               else
                 append "### R package testthat suite"
                 append ""
@@ -1706,6 +1765,9 @@ jobs:
             else
               append "- Test evidence: supported repository test suites passed"
               append "- Docstring evidence: configured repository docstring gates passed or docstring coverage was advisory"
+              if [ "$r_peer_check_required" -eq 1 ]; then
+                append "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
+              fi
             fi
           else
             append "- Result: FAIL"
@@ -6527,6 +6589,40 @@ jobs:
             return 2
           }
 
+          coverage_defers_to_r_cmd_check() {
+            printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" |
+              grep -Fq -- "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
+          }
+
+          collect_successful_r_cmd_check_evidence() {
+            local output_file="$1"
+            if ! gh pr checks "$PR_NUMBER" \
+              --repo "$GH_REPOSITORY" \
+              --json name,state,workflow >"$output_file"; then
+              return 1
+            fi
+            python3 "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \
+              require-check \
+              --checks-json "$output_file" >/dev/null
+          }
+
+          require_r_cmd_check_for_deferred_coverage() {
+            local checks_file
+            if ! coverage_defers_to_r_cmd_check; then
+              return 0
+            fi
+            checks_file="$(mktemp)"
+            if collect_github_checks_with_retry \
+              collect_successful_r_cmd_check_evidence "$checks_file"; then
+              rm -f "$checks_file"
+              printf 'Verified successful current-head R CMD check after bounded R coverage deferral.\n'
+              return 0
+            fi
+            rm -f "$checks_file"
+            printf '::notice::R package-load coverage deferral cannot authorize approval without a successful current-head R CMD check.\n'
+            return 1
+          }
+
           stop_without_review_after_model_unavailable() {
             local body
             body="$(printf '%s\n' \
@@ -6641,6 +6737,10 @@ jobs:
               } >"$failed_check_review_body_file"
               create_pull_review "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")"
               return 0
+            fi
+
+            if ! require_r_cmd_check_for_deferred_coverage; then
+              return 1
             fi
 
             failed_check_evidence_file="$(mktemp)"
@@ -7026,6 +7126,27 @@ jobs:
                 else
                   stop_failed_check_fallback_unavailable
                 fi
+              fi
+              if ! require_r_cmd_check_for_deferred_coverage; then
+                body="$(printf '%s\n' \
+                  "## Pull request overview" \
+                  "" \
+                  "OpenCode reviewed the current-head source evidence but R package tests were deferred after bounded package-load-only failures." \
+                  "" \
+                  "## Approval hold" \
+                  "" \
+                  "### Successful current-head R CMD check evidence is required" \
+                  "- Problem: coverage-evidence deferred package-load-only testthat failures, but no successful current-head R CMD check was found." \
+                  "- Root cause: deterministic coverage deferral is safe only when the repository's peer R CMD check installs dependencies and passes on this exact head." \
+                  "- Fix: add or repair the R CMD check workflow and rerun it successfully on the current head." \
+                  "- Regression test: Keep deferred R coverage fail-closed unless a successful R CMD check is present." \
+                  "" \
+                  "- Result: WAITING_FOR_R_CMD_CHECK" \
+                  "- Head SHA: \`${HEAD_SHA}\`" \
+                  "- Workflow run: ${RUN_ID}" \
+                  "- Workflow attempt: ${RUN_ATTEMPT}"
+                )"
+                hold_approval_without_review "WAITING_FOR_R_CMD_CHECK" "$body"
               fi
               unresolved_reviewer_threads_file="$(mktemp)"
               reviewer_thread_review_body_file="$(mktemp)"
