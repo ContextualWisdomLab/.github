@@ -94,7 +94,10 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
         "&& 'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
-        "opencode-free/north-mini-code-free ' || '' }}"
+        "opencode-free/north-mini-code-free "
+        "opencode-free/mimo-v2.5-free "
+        "opencode-free/laguna-s-2.1-free "
+        "opencode-free/ling-3.0-flash-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -102,6 +105,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/nemotron-3-ultra-free",
         "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
+        "opencode-free/mimo-v2.5-free",
+        "opencode-free/laguna-s-2.1-free",
+        "opencode-free/ling-3.0-flash-free",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -122,6 +128,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
+        ["opencode-free", "mimo-v2.5-free"],
+        ["opencode-free", "laguna-s-2.1-free"],
+        ["opencode-free", "ling-3.0-flash-free"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -1238,7 +1247,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "needs.validate-pr-metadata.outputs.is_private == 'false' && "
         "'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
-        "opencode-free/north-mini-code-free ' || ''"
+        "opencode-free/north-mini-code-free "
+        "opencode-free/mimo-v2.5-free "
+        "opencode-free/laguna-s-2.1-free "
+        "opencode-free/ling-3.0-flash-free ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
