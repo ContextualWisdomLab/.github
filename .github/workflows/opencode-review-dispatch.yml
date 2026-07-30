@@ -931,14 +931,14 @@ jobs:
                 done <<<"$configured_commands_json"
             else
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
-                bash -c 'cd "$1" && PYTHONPATH=. python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+                bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
                 run_and_capture "Python coverage with missing-line report" \
-                  bash -c 'PYTHONPATH=. python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
+                  bash -c 'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
               elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
               else
@@ -1057,7 +1057,7 @@ jobs:
               if [ -f "${project_dir}/tests/test_docstrings.py" ]; then
                 measured_projects=1
                 run_and_capture "Python docstring coverage (${project_dir})" \
-                  bash -c 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
+                  bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
               fi
             done < <(tracked_python_projects_with_tests)
             [ "$measured_projects" -eq 1 ]
@@ -3758,6 +3758,7 @@ jobs:
           OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
           OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"
+          OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "600"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a

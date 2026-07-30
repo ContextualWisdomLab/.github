@@ -655,6 +655,16 @@ def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
     assert "python3 -m coverage run -m pytest tests" in measure
     assert "python3 -m coverage report --show-missing" in measure
     assert "python3 -m pytest tests/test_docstrings.py" in measure
+    # src-layout packages (e.g. src/<pkg>) must be importable from the project
+    # root; the coverage and docstring runners prepend src to PYTHONPATH when a
+    # src directory exists, falling back to the project root otherwise.
+    assert "PYTHONPATH=. python3 -m coverage run -m pytest tests" not in measure
+    assert "[ -d src ] && printf src:. || printf ." in measure
+    assert "PYTHONPATH=. python3 -m pytest tests/test_docstrings.py" not in measure
+    assert (
+        'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" '
+        "python3 -m pytest tests/test_docstrings.py"
+    ) in measure
 
 
 def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
@@ -1283,6 +1293,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "0"' in workflow
+    assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "0"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
@@ -1341,7 +1352,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "while :" in model_pool_runner
     assert "should_skip_model_candidate" in model_pool_runner
     assert "cap_model_run_timeout" in model_pool_runner
-    assert "constrained request-body limit" in model_pool_runner
+    assert "bounded failover window" in model_pool_runner
     assert "run_central_adversarial_harness" not in model_pool_runner
     assert "finish_pool_without_model" in model_pool_runner
     assert "central-current-head-adversarial-harness" not in model_pool_runner

@@ -381,6 +381,9 @@ cap_model_run_timeout() {
 	local cap_seconds
 
 	case "$model_candidate" in
+	opencode-free/*)
+		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 600)"
+		;;
 	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
 		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
 		;;
@@ -610,7 +613,7 @@ main() {
 				uncapped_run_timeout="$OPENCODE_RUN_TIMEOUT_SECONDS"
 				OPENCODE_RUN_TIMEOUT_SECONDS="$(cap_model_run_timeout "$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS")"
 				if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -lt "$uncapped_run_timeout" ]; then
-					printf 'OpenCode %s runtime cap selected %ss instead of %ss because this installation has returned a constrained request-body limit for that endpoint.\n' \
+					printf 'OpenCode %s runtime cap selected %ss instead of %ss because this provider has a bounded failover window.\n' \
 						"$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$uncapped_run_timeout"
 				fi
 				export OPENCODE_RUN_TIMEOUT_SECONDS
