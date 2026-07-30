@@ -73,11 +73,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCODE_APP_TOKEN: ${{ steps.app_token.outputs.token }}
-          PR_CREATOR_TOKEN: ${{ github.token }}
+          PR_CREATOR_TOKEN: ${{ steps.noema_pr_creator.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
-          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions-gha
+          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions
           SOURCE_HEAD_SHA: fb9f87a1b278a0455ea381121f7f2ec710fdabea
           EXPECTED_TREE_SHA: 98a7b831ebf660b996a3d85c93ca42d4cfb16087
         run: |
@@ -213,7 +213,7 @@ jobs:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           PR_NUMBER: ${{ steps.actions_pr.outputs.number }}
-          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions-gha
+          RECOVERY_HEAD_REF: fix/org-sweep-timeout-zen-actions
           SOURCE_HEAD_SHA: fb9f87a1b278a0455ea381121f7f2ec710fdabea
           EXPECTED_TREE_SHA: 98a7b831ebf660b996a3d85c93ca42d4cfb16087
         run: |
@@ -709,75 +709,12 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
-      - name: Publish Noema exact-head pipeline-defect approval
-        env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
-          TARGET_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: ${{ steps.actions_pr.outputs.number }}
-          EXPECTED_HEAD_SHA: ${{ steps.actions_pr_restamp.outputs.head_sha || steps.actions_pr.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          approval_actor="$(
-            gh api graphql \
-              -f query='{ viewer { login } }' \
-              --jq '.data.viewer.login // empty'
-          )"
-          case "$approval_actor" in
-            cwl-noema-review | 'cwl-noema-review[bot]') ;;
-            *)
-              echo "::error::Expected the Noema App approval actor."
-              exit 1
-              ;;
-          esac
-
-          pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(jq -r '.head.sha // empty' <<<"$pr_json")" = "$EXPECTED_HEAD_SHA"
-          test "$(jq -r '.user.login // empty' <<<"$pr_json")" = 'github-actions[bot]'
-
-          reviews_json="$(
-            gh api --paginate --slurp \
-              "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
-          )"
-          existing_approval_count="$(
-            jq --arg head "$EXPECTED_HEAD_SHA" --arg actor "$approval_actor" '
-              flatten
-              | [
-                  .[]
-                  | select(
-                      .commit_id == $head
-                      and .state == "APPROVED"
-                      and .user.login == $actor
-                    )
-                ]
-              | length
-            ' <<<"$reviews_json"
-          )"
-          if [ "$existing_approval_count" -gt 0 ]; then
-            echo "::notice::Reusing Noema exact-head approval for central PR #${PR_NUMBER}."
-            exit 0
-          fi
-
-          review_response="$(
-            jq -cn \
-              --arg body "Noema independently approves the exact-head central pipeline repair at ${EXPECTED_HEAD_SHA}." \
-              '{event:"APPROVE", body:$body}' |
-              gh api -X POST \
-                "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-                --input -
-          )"
-          test "$(jq -r '.state // empty' <<<"$review_response")" = APPROVED
-          test "$(jq -r '.commit_id // empty' <<<"$review_response")" = \
-            "$EXPECTED_HEAD_SHA"
-          test "$(jq -r '.user.login // empty' <<<"$review_response")" = \
-            "$approval_actor"
-          echo "::notice::Published Noema exact-head approval for central PR #${PR_NUMBER}."
-
       - name: Request human review for Zen recovery
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: ${{ steps.actions_pr.outputs.number }}
-          EXPECTED_HEAD_SHA: ${{ steps.actions_pr_restamp.outputs.head_sha || steps.actions_pr.outputs.head_sha }}
+          PR_NUMBER: "678"
+          EXPECTED_HEAD_SHA: 11d74988361c45e52f725afe185731e422fdeffe
         run: |
           set -euo pipefail
           live_head="$(
@@ -884,7 +821,7 @@ jobs:
         env:
           APPROVAL_TOKEN: ${{ steps.app_token.outputs.token }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: ${{ steps.actions_pr.outputs.number }}
+          PR_NUMBER: "678"
           EXPECTED_HEAD_SHA: ${{ steps.actions_pr_restamp.outputs.head_sha || steps.actions_pr.outputs.head_sha }}
           EXPECTED_TREE_SHA: 98a7b831ebf660b996a3d85c93ca42d4cfb16087
         run: |
@@ -1046,10 +983,10 @@ jobs:
           SCHEDULER_ACTIONS_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           PREVIOUS_OPENCODE_JOB_ID: ${{ steps.refresh_opencode_check.outputs.job_id }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
-          PR_NUMBER: ${{ steps.actions_pr.outputs.number }}
+          PR_NUMBER: "678"
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
-          EXPECTED_HEAD_REF: fix/org-sweep-timeout-zen-actions-gha
+          EXPECTED_HEAD_REF: fix/org-sweep-timeout-zen-actions
           EXPECTED_HEAD_SHA: ${{ steps.actions_pr_restamp.outputs.head_sha || steps.actions_pr.outputs.head_sha }}
           EXPECTED_TREE_SHA: 98a7b831ebf660b996a3d85c93ca42d4cfb16087
         run: |
