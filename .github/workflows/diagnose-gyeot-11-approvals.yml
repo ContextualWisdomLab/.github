@@ -55,11 +55,12 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
-      - name: Create GitHub Actions-authored Zen recovery PR
+      - name: Create independently authored Zen recovery PR
         id: actions_pr
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCODE_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+          PR_CREATOR_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || secrets.NOEMA_REVIEW_TOKEN || '' }}
           TARGET_REPOSITORY: ContextualWisdomLab/.github
           EXPECTED_BASE_REF: main
           EXPECTED_BASE_SHA: 32973e9c1364169253c2f82ca526f930df3de1d3
@@ -122,6 +123,25 @@ jobs:
           fi
 
           test "$recovery_head" = "$SOURCE_HEAD_SHA"
+          if [ -z "${PR_CREATOR_TOKEN:-}" ]; then
+            echo "::error::No independent configured PR creator credential is available."
+            exit 1
+          fi
+          pr_creator_actor="$(
+            GH_TOKEN="$PR_CREATOR_TOKEN" \
+              gh api graphql \
+                -f query='{ viewer { login } }' \
+                --jq '.data.viewer.login // empty'
+          )"
+          test -n "$pr_creator_actor"
+          case "$pr_creator_actor" in
+            opencode-agent | 'opencode-agent[bot]')
+              echo "::error::The PR creator must be independent from the OpenCode reviewer."
+              exit 1
+              ;;
+          esac
+          printf '::notice::Creating the Zen recovery PR as independent actor %s.\n' \
+            "$pr_creator_actor"
           recovery_body="$(
             printf '%s\n' \
               '## Summary' \
@@ -139,7 +159,7 @@ jobs:
               '' \
               '## Recovery provenance' \
               '' \
-              'This PR is intentionally authored by `github-actions[bot]` so the OpenCode App can submit a real-model review.' \
+              'This PR is intentionally authored by an independent configured workflow actor so the OpenCode App can submit a real-model review.' \
               'Its branch is immediately restamped by the OpenCode App to trigger the normal pull-request workflows.' \
               'It supersedes #676 and #677 after merge.'
           )"
@@ -152,14 +172,14 @@ jobs:
               '{title:$title, body:$body, head:$head, base:$base, draft:false}'
           )"
           created_pr="$(
-            gh api -X POST \
+            GH_TOKEN="$PR_CREATOR_TOKEN" gh api -X POST \
               "repos/${TARGET_REPOSITORY}/pulls" \
               --input - <<<"$create_payload"
           )"
           new_number="$(jq -r '.number // empty' <<<"$created_pr")"
           test -n "$new_number"
           test "$(jq -r '.user.login // empty' <<<"$created_pr")" = \
-            "github-actions[bot]"
+            "$pr_creator_actor"
           test "$(jq -r '.head.sha // empty' <<<"$created_pr")" = \
             "$SOURCE_HEAD_SHA"
           test "$(jq -r '.base.sha // empty' <<<"$created_pr")" = \
@@ -167,8 +187,8 @@ jobs:
           echo "number=$new_number" >>"$GITHUB_OUTPUT"
           echo "created=true" >>"$GITHUB_OUTPUT"
           echo "head_sha=$SOURCE_HEAD_SHA" >>"$GITHUB_OUTPUT"
-          printf '::notice::Created GitHub Actions-authored Zen recovery PR #%s at %s.\n' \
-            "$new_number" "$SOURCE_HEAD_SHA"
+          printf '::notice::Created independently authored Zen recovery PR #%s as %s at %s.\n' \
+            "$new_number" "$pr_creator_actor" "$SOURCE_HEAD_SHA"
 
       - name: Restamp Zen recovery PR with the OpenCode App
         if: steps.actions_pr.outputs.created == 'true'
