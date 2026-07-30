@@ -137,6 +137,53 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
     assert not materializer._is_candidate_lock_name("pyproject.toml")
 
 
+def test_lock_path_candidates_include_requirements_directory_txt_files() -> None:
+    """Any .txt inside a requirements/ directory is a name candidate."""
+    from pathlib import PurePosixPath
+
+    assert materializer._is_candidate_lock_path(PurePosixPath("requirements/ci.txt"))
+    assert materializer._is_candidate_lock_path(
+        PurePosixPath("subproject/requirements/package.txt")
+    )
+    assert materializer._is_candidate_lock_path(PurePosixPath("requirements-dev.txt"))
+    assert not materializer._is_candidate_lock_path(PurePosixPath("requirements/ci.in"))
+    assert not materializer._is_candidate_lock_path(PurePosixPath("docs/notes.txt"))
+    assert not materializer._is_candidate_lock_path(PurePosixPath("ci.txt"))
+
+
+def test_materializes_hash_pinned_locks_inside_a_requirements_directory(
+    tmp_path: Path,
+) -> None:
+    """A requirements/ci.txt-style compiled lock is discovered and materialized.
+
+    Repositories such as fast-mlsirm keep pip-compile outputs under a
+    ``requirements/`` directory with non-``requirements*`` basenames; the
+    hash-pinned compiled lock must be installed for offline coverage while its
+    unpinned ``.in`` input stays excluded by content.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+
+    requirements_dir = repo / "requirements"
+    requirements_dir.mkdir()
+    (requirements_dir / "ci.txt").write_text(
+        "numpy==2 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    (requirements_dir / "ci.in").write_text("numpy\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert [entry["source"] for entry in manifest] == ["requirements/ci.txt"]
+
+
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")

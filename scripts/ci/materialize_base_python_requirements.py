@@ -23,6 +23,24 @@ def _is_candidate_lock_name(name: str) -> bool:
     )
 
 
+def _is_candidate_lock_path(candidate: pathlib.PurePosixPath) -> bool:
+    """Return whether a repository path can hold a pip requirements lock.
+
+    Besides ``requirements*.txt`` basenames anywhere in the tree, a repository
+    may keep its compiled locks inside a ``requirements/`` directory under
+    other basenames (for example ``requirements/ci.txt`` compiled from
+    ``requirements/ci.in``). Those are name candidates too; the content-based
+    hash-pin check remains the safety gate that excludes unpinned inputs.
+    """
+    if _is_candidate_lock_name(candidate.name):
+        return True
+    return (
+        len(candidate.parts) >= 2
+        and candidate.parts[-2] == "requirements"
+        and candidate.name.endswith(".txt")
+    )
+
+
 def _requirement_lines(content: bytes) -> list[str]:
     """Return logical requirement lines, joining backslash line-continuations.
 
@@ -101,7 +119,7 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
             or not mode.startswith("100")
             or candidate.is_absolute()
             or ".." in candidate.parts
-            or not _is_candidate_lock_name(candidate.name)
+            or not _is_candidate_lock_path(candidate)
         ):
             continue
         content = _git(repo_root, "show", f"{base_sha}:{path}")
