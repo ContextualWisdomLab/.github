@@ -95,7 +95,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "&& 'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
-        "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
         "opencode-free/mimo-v2.5-free ' || '' }}"
@@ -106,7 +105,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/nemotron-3-ultra-free",
         "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
-        "opencode-free/laguna-s-2.1-free",
         "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
@@ -130,7 +128,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
-        ["opencode-free", "laguna-s-2.1-free"],
         ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
@@ -165,7 +162,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "nemotron-3-ultra-free",
         "deepseek-v4-flash-free",
         "north-mini-code-free",
-        "laguna-s-2.1-free",
         "ling-3.0-flash-free",
         "big-pickle",
         "mimo-v2.5-free",
@@ -181,10 +177,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert "response_format" not in deepseek_model.get("options", {})
     assert north_model["tool_call"] is True
     assert "response_format" not in north_model["options"]
-    assert free_models["laguna-s-2.1-free"]["limit"] == {
-        "context": 256000,
-        "output": 32000,
-    }
     assert free_models["ling-3.0-flash-free"]["limit"] == {
         "context": 262144,
         "output": 32768,
@@ -1296,7 +1288,6 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "'opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
-        "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
         "opencode-free/mimo-v2.5-free ' || ''"
