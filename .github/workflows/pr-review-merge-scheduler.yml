@@ -94,6 +94,7 @@ concurrency:
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
+    github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != '' && format('target-{0}-pr-{1}', github.event.client_payload.target_repository, github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.run_id ||
@@ -563,7 +564,11 @@ jobs:
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The complete organization walk exceeded the legacy 30-minute boundary in
+    # production. Keep one running and one latest pending */15 sweep through the
+    # schedule-specific concurrency key above, while allowing the current walk
+    # enough time to finish instead of cancelling before later repositories.
+    timeout-minutes: 60
     permissions:
       actions: write
       checks: read

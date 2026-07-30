@@ -535,7 +535,9 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. The sweep runs
     every 15 minutes so an approval that lands after a PR's last event is
-    auto-updated/merged within ~15 minutes instead of idling for up to an hour.
+    auto-updated/merged promptly instead of idling indefinitely. Its cron has a
+    distinct concurrency key from the separate 30-minute scan, and the job has
+    enough runtime headroom to finish a complete organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -544,6 +546,14 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
     assert "github.event.schedule == '*/15 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
+    assert (
+        "github.event_name == 'schedule' && format('schedule-{0}', "
+        "github.event.schedule)"
+    ) in workflow
+    org_sweep_header = workflow.split("  org-queue-sweep:", 1)[1].split(
+        "    permissions:", 1
+    )[0]
+    assert "timeout-minutes: 60" in org_sweep_header
     # The single-repository scan must not double-run on the sweep cron.
     assert "github.event.schedule != '*/15 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep != true" in workflow
