@@ -346,6 +346,23 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "  coverage-source-tree:\n" in workflow
     assert "  coverage-evidence:\n" in workflow
 
+    metadata_start = workflow.index("  validate-pr-metadata:\n")
+    metadata_end = workflow.index("\n  coverage-source-tree:", metadata_start)
+    metadata_job = workflow[metadata_start:metadata_end]
+    assert "id-token: write" in metadata_job
+    assert (
+        "Exchange OpenCode app token for target repository metadata reads"
+        in metadata_job
+    )
+    assert (
+        "GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+    ) in metadata_job
+    assert (
+        "github.event.client_payload.target_repository != github.repository"
+        in metadata_job
+    )
+
     source_start = workflow.index("  coverage-source-tree:\n")
     source_end = workflow.index("\n  coverage-evidence:", source_start)
     source_job = workflow[source_start:source_end]
