@@ -318,33 +318,6 @@ jobs:
           printf '::notice::current_head_review_counts total=%s approvals=%s\n' \
             "$current_review_count" "$current_approval_count"
 
-          check_runs_json="$(
-            gh api --paginate --slurp \
-              -H 'Accept: application/vnd.github+json' \
-              "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
-          )"
-          check_run_count="$(
-            jq '[.[].check_runs[]] | length' <<<"$check_runs_json"
-          )"
-          check_run_blockers="$(
-            jq '
-              [
-                .[].check_runs[]
-                | select(
-                    .status != "completed"
-                    or (
-                      .conclusion != "success"
-                      and .conclusion != "neutral"
-                      and .conclusion != "skipped"
-                    )
-                  )
-              ]
-              | length
-            ' <<<"$check_runs_json"
-          )"
-          printf '::notice::current_head_check_runs total=%s blockers=%s\n' \
-            "$check_run_count" "$check_run_blockers"
-
           while IFS=$'\t' read -r author state commit_id submitted_at; do
             test "$commit_id" = "$EXPECTED_HEAD_SHA"
             [[ "$author" =~ ^[A-Za-z0-9_.-]+(\[bot\])?$ ]]
@@ -673,7 +646,9 @@ jobs:
           client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
           owner: ContextualWisdomLab
-          repositories: .github
+          repositories: |
+            .github
+            gyeot
           permission-actions: read
           permission-checks: read
           permission-contents: read
@@ -713,6 +688,40 @@ jobs:
           test -n "$app_token"
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
+      - name: Audit Gyeot PR 11 current-head checks
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          TARGET_REPOSITORY: ContextualWisdomLab/gyeot
+          EXPECTED_HEAD_SHA: d6637899085c1702af734564eea8b771ba8355b7
+        run: |
+          set -euo pipefail
+          check_runs_json="$(
+            gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${TARGET_REPOSITORY}/commits/${EXPECTED_HEAD_SHA}/check-runs?per_page=100"
+          )"
+          check_run_count="$(
+            jq '[.[].check_runs[]] | length' <<<"$check_runs_json"
+          )"
+          check_run_blockers="$(
+            jq '
+              [
+                .[].check_runs[]
+                | select(
+                    .status != "completed"
+                    or (
+                      .conclusion != "success"
+                      and .conclusion != "neutral"
+                      and .conclusion != "skipped"
+                    )
+                  )
+              ]
+              | length
+            ' <<<"$check_runs_json"
+          )"
+          printf '::notice::gyeot_current_head_check_runs total=%s blockers=%s\n' \
+            "$check_run_count" "$check_run_blockers"
 
       - name: Publish independent exact-head pipeline-defect approval
         id: noema_approval
