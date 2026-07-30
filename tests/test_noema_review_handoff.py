@@ -81,6 +81,35 @@ def test_existing_noema_approval_avoids_duplicate_dispatch(capsys):
     assert "already published APPROVED" in capsys.readouterr().err
 
 
+def test_noema_state_ignores_reviews_for_other_heads():
+    reviews = [
+        noema_review("APPROVED", OTHER_HEAD),
+        noema_review("COMMENTED", HEAD),
+    ]
+
+    assert handoff.noema_review_state(reviews, HEAD) == "COMMENTED"
+    assert handoff.noema_review_state([reviews[0]], HEAD) is None
+
+
+def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):
+    fake = FakeGitHub([[opencode_review()]], heads=[OTHER_HEAD])
+
+    result = handoff.run_handoff(
+        "ContextualWisdomLab/example",
+        7,
+        HEAD,
+        attempts=2,
+        interval_seconds=0,
+        runner=fake,
+        approval_checker=lambda *_args, **_kwargs: True,
+    )
+
+    assert result == 2
+    assert fake.review_pages == [[opencode_review()]]
+    assert fake.dispatch_payloads == []
+    assert "refused stale input" in capsys.readouterr().err
+
+
 def test_missing_primary_approval_never_dispatches(capsys):
     fake = FakeGitHub([[]])
 
@@ -175,6 +204,38 @@ def test_head_change_stops_polling(capsys):
     assert "head changed" in capsys.readouterr().err
 
 
+def test_missing_noema_verdict_times_out_closed(capsys):
+    fake = FakeGitHub([[opencode_review()]])
+
+    result = handoff.run_handoff(
+        "ContextualWisdomLab/example",
+        7,
+        HEAD,
+        attempts=1,
+        interval_seconds=0,
+        runner=fake,
+        approval_checker=lambda *_args, **_kwargs: True,
+    )
+
+    assert result == 1
+    assert len(fake.dispatch_payloads) == 1
+    assert "did not publish an exact-head verdict after 1 polls" in capsys.readouterr().err
+
+
+def test_run_gh_returns_stdout_on_success(monkeypatch):
+    def fake_run(*_args, **_kwargs):
+        return CompletedProcess(
+            args=["gh", "api"],
+            returncode=0,
+            stdout="current-head\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(handoff.subprocess, "run", fake_run)
+
+    assert handoff.run_gh(["api", "repos/ContextualWisdomLab/example"]) == "current-head\n"
+
+
 def test_run_gh_redacts_credentials_from_failures(monkeypatch):
     def fake_run(*_args, **_kwargs):
         return CompletedProcess(
@@ -191,3 +252,107 @@ def test_run_gh_redacts_credentials_from_failures(monkeypatch):
 
     assert "ghp_" not in str(error.value)
     assert "[REDACTED]" in str(error.value)
+
+
+def test_run_gh_reports_exit_code_when_cli_has_no_output(monkeypatch):
+    def fake_run(*_args, **_kwargs):
+        return CompletedProcess(args=["gh", "api"], returncode=9, stdout="", stderr="")
+
+    monkeypatch.setattr(handoff.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="exit code 9"):
+        handoff.run_gh(["api", "repos/ContextualWisdomLab/example"])
+
+
+def test_parse_args_accepts_valid_handoff():
+    args = handoff.parse_args(
+        [
+            "--repo",
+            "ContextualWisdomLab/example",
+            "--pr-number",
+            "7",
+            "--head-sha",
+            HEAD,
+            "--attempts",
+            "3",
+            "--interval-seconds",
+            "0.5",
+        ]
+    )
+
+    assert args.repo == "ContextualWisdomLab/example"
+    assert args.pr_number == 7
+    assert args.head_sha == HEAD
+    assert args.attempts == 3
+    assert args.interval_seconds == 0.5
+
+
+@pytest.mark.parametrize(
+    ("argument", "value", "message"),
+    [
+        ("--repo", "external/example", "ContextualWisdomLab repository"),
+        ("--pr-number", "0", "pr-number must be positive"),
+        ("--head-sha", "short", "40-character Git SHA"),
+        ("--attempts", "0", "attempts must be positive"),
+        ("--interval-seconds", "-1", "interval-seconds must be non-negative"),
+    ],
+)
+def test_parse_args_rejects_unsafe_inputs(argument, value, message, capsys):
+    argv = [
+        "--repo",
+        "ContextualWisdomLab/example",
+        "--pr-number",
+        "7",
+        "--head-sha",
+        HEAD,
+        "--attempts",
+        "3",
+        "--interval-seconds",
+        "0",
+    ]
+    argv[argv.index(argument) + 1] = value
+
+    with pytest.raises(SystemExit, match="2"):
+        handoff.parse_args(argv)
+
+    assert message in capsys.readouterr().err
+
+
+def test_main_passes_validated_arguments_to_handoff(monkeypatch):
+    observed = {}
+
+    def fake_handoff(repo, number, head_sha, *, attempts, interval_seconds):
+        observed.update(
+            repo=repo,
+            number=number,
+            head_sha=head_sha,
+            attempts=attempts,
+            interval_seconds=interval_seconds,
+        )
+        return 17
+
+    monkeypatch.setattr(handoff, "run_handoff", fake_handoff)
+
+    result = handoff.main(
+        [
+            "--repo",
+            "ContextualWisdomLab/example",
+            "--pr-number",
+            "7",
+            "--head-sha",
+            HEAD,
+            "--attempts",
+            "4",
+            "--interval-seconds",
+            "1.25",
+        ]
+    )
+
+    assert result == 17
+    assert observed == {
+        "repo": "ContextualWisdomLab/example",
+        "number": 7,
+        "head_sha": HEAD,
+        "attempts": 4,
+        "interval_seconds": 1.25,
+    }
