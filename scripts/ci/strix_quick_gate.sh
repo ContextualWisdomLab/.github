@@ -1497,6 +1497,15 @@ build_pull_request_head_tree_scope_dir() {
 		[ -n "$metadata" ] || continue
 		# shellcheck disable=SC2086 # metadata is exactly git ls-tree's mode/type/object tuple.
 		read -r mode object_type object_hash <<<"$metadata"
+		# Git submodule pointers (gitlinks) list as mode 160000 / type commit in
+		# the recursive tree. They carry no scannable blob content in this
+		# repository (the submodule's files live in a separate repository), so
+		# skip them here exactly as the changed-file scope path does, instead of
+		# failing closed on a legitimately non-blob tree entry.
+		if [ "$mode" = "160000" ] || [ "$object_type" = "commit" ]; then
+			echo "INFO: pull request head tree entry is a git submodule pointer; excluding content from PR-scoped Strix input: $relative_path" >&2
+			continue
+		fi
 		if [ "$object_type" != "blob" ]; then
 			echo "ERROR: pull request head tree entry is not a blob; failing closed: $relative_path" >&2
 			return 2
