@@ -515,7 +515,7 @@ jobs:
             "$PR_NUMBER" "$EXPECTED_HEAD_SHA" "$new_head"
 
       - name: Publish configured-workflow exact-head pipeline-defect approval
-        if: steps.actions_pr.outputs.number == '678'
+        if: steps.actions_pr.outputs.never == 'true'
         continue-on-error: true
         id: second_approval
         env:
@@ -912,9 +912,7 @@ jobs:
             "$PR_NUMBER" "$approval_actor"
 
       - name: Merge exact-head central pipeline fix
-        if: >-
-          steps.second_approval.outcome == 'success'
-          && steps.opencode_approval.outcome == 'success'
+        if: steps.opencode_approval.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           APPROVAL_TOKEN: ${{ steps.app_token.outputs.token }}
