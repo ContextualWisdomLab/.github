@@ -345,6 +345,13 @@ is_openrouter_candidate() {
 	esac
 }
 
+is_omniroute_candidate() {
+	case "$1" in
+	omniroute/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 is_low_sensitivity_candidate() {
 	case "$1" in
 	openai/*-mini | openai/*-nano | \
@@ -372,6 +379,10 @@ should_skip_model_candidate() {
 		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
+	if is_omniroute_candidate "$model_candidate" && [ -z "${OMNIROUTE_API_BASE_URL:-}" ]; then
+		printf 'Skipping OpenCode %s because OMNIROUTE_API_BASE_URL is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+		return 0
+	fi
 	return 1
 }
 
@@ -381,7 +392,7 @@ cap_model_run_timeout() {
 	local cap_seconds
 
 	case "$model_candidate" in
-	opencode-free/*)
+	opencode-free/* | omniroute/*)
 		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 600)"
 		;;
 	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)

@@ -790,6 +790,44 @@ def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> Non
     ) in result.stdout
 
 
+def test_omniroute_candidate_requires_base_url(tmp_path: Path) -> None:
+    """The keyless OmniRoute gateway is skipped when its base URL is not configured."""
+    result = run_failed_model(
+        tmp_path,
+        model_candidates="omniroute/auto",
+        extra_env={"OMNIROUTE_API_BASE_URL": ""},
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Skipping OpenCode omniroute/auto because OMNIROUTE_API_BASE_URL is not "
+        "configured; falling back to the next provider-qualified candidate."
+    ) in result.stdout
+    assert (
+        "OpenCode model pool exhausted before producing a valid control conclusion."
+        in result.stdout
+    )
+
+
+def test_omniroute_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
+    """A stalled keyless OmniRoute gateway cannot consume a full paid-provider slot."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "OMNIROUTE_API_BASE_URL": "https://omniroute.example/v1",
+            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
+        },
+        model_candidates="omniroute/auto",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode omniroute/auto runtime cap selected 3s "
+        "instead of 9s because this provider has a bounded failover window."
+    ) in result.stdout
+
+
 def test_github_models_openai_prompt_references_evidence_without_inlining(
     tmp_path: Path,
 ) -> None:

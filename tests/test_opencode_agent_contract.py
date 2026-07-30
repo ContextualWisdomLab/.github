@@ -98,7 +98,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || '' }}"
+        "opencode-free/mimo-v2.5-free "
+        "omniroute/auto ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -110,6 +111,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
+        "omniroute/auto",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -134,6 +136,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
+        ["omniroute", "auto"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -197,6 +200,16 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "context": 200000,
         "output": 32000,
     }
+    omniroute_provider = generated_config["provider"]["omniroute"]
+    assert omniroute_provider["options"]["baseURL"] == "{env:OMNIROUTE_API_BASE_URL}"
+    assert omniroute_provider["options"]["apiKey"] == "{env:OMNIROUTE_API_KEY}"
+    omniroute_models = omniroute_provider["models"]
+    assert set(omniroute_models) == {"auto"}
+    assert omniroute_models["auto"]["tool_call"] is True
+    assert omniroute_models["auto"]["limit"] == {
+        "context": 200000,
+        "output": 32768,
+    }
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -218,6 +231,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
     assert '"openrouter": {' in workflow
     assert '"apiKey": "{env:OPENROUTER_API_KEY}"' in workflow
+    assert '"omniroute": {' in workflow
+    assert '"baseURL": "{env:OMNIROUTE_API_BASE_URL}"' in workflow
+    assert '"apiKey": "{env:OMNIROUTE_API_KEY}"' in workflow
     for model_name in direct_openai_models + openrouter_models + github_candidate_models:
         assert f'"{model_name}": {{' in workflow
 
@@ -1299,7 +1315,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || ''"
+        "opencode-free/mimo-v2.5-free "
+        "omniroute/auto ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
@@ -1401,6 +1418,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "is_low_sensitivity_candidate" in model_pool_runner
     assert "mini/nano review models are disabled" in model_pool_runner
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
+    assert "OMNIROUTE_API_BASE_URL is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert (
         "OpenCode dynamic review cadence selected %ss per attempt" in model_pool_runner
