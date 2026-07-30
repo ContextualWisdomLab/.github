@@ -1,4 +1,7 @@
 import json
+import subprocess
+import sys
+from pathlib import Path
 from subprocess import CompletedProcess
 
 import pytest
@@ -8,6 +11,23 @@ from scripts.ci import noema_review_handoff as handoff
 
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
+
+
+def test_standalone_cli_starts_outside_repository_root(tmp_path):
+    """The workflow's direct script invocation must not depend on its cwd."""
+    completed = subprocess.run(
+        [sys.executable, str(Path(handoff.__file__).resolve()), "--help"],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0
+    assert "noema_review_handoff.py" in completed.stdout
+    assert "ModuleNotFoundError" not in completed.stderr
 
 
 def opencode_review(head: str = HEAD) -> dict:
