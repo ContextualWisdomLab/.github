@@ -2459,6 +2459,7 @@ jobs:
                       | select((.name // "") != "Required OpenCode Review")
                       | select((.name // "") != "OpenCode PR Review")
                       | select((.name // "") != "metadata-only gate evaluation")
+                      | select((.name // "") != "scan-pr-queue")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
@@ -4033,21 +4034,22 @@ jobs:
           # in the opencode.jsonc "openai" provider block.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Org secret NVIDIA_NIM_API_KEY preferred; fallback NVIDIA_API_KEY.
-          # opencode.jsonc expects env NVIDIA_API_KEY for nvidia-nim/* models.
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
+          # The scoped NVIDIA_NIM_API_KEY is the only NIM credential source.
+          # opencode.jsonc expects that same scoped value in NVIDIA_API_KEY.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           # High-sensitivity review candidates only. Public repositories first
-          # use OpenCode Zen's anonymous active, zero-cost model endpoints.
-          # Their trial/free-period data
-          # may be logged, retained, or used for product/model improvement, so
-          # private repositories never include them. The pool then falls
-          # through to
-          # OpenCode Zen GPT-5.6 Terra, DeepSeek V3, the direct GPT-5.6 Luna
-          # slot, pinned PAID
+          # try NVIDIA NIM when its scoped secret is available, then OpenCode
+          # Zen's anonymous active, zero-cost models, followed by the existing
+          # provider fallbacks. Trial/free-period data may be logged, retained,
+          # or used for product/model improvement, so private repositories
+          # include neither NIM nor anonymous free candidates and start at the
+          # existing keyed fallback list: OpenCode Zen GPT-5.6 Terra, DeepSeek
+          # V3, the direct GPT-5.6 Luna slot, and pinned PAID
           # OpenRouter coder models (free-tier candidates hit the shared
           # free-models-per-day cap and hung for the full candidate timeout,
           # so the OpenRouter slots use cheap paid models billed against the
@@ -4057,7 +4059,7 @@ jobs:
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -4089,6 +4091,8 @@ jobs:
           OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
           OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
+          OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"
           OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
@@ -4456,7 +4460,7 @@ jobs:
           self_check_filter='
             def self_check:
               (.name // "") as $n
-              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation"] | index($n);
+              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation", "scan-pr-queue"] | index($n);
             def latest_peer_checks:
               [
                 (.check_runs // [])[]
@@ -4691,9 +4695,10 @@ jobs:
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
           # failed-check diagnosis opencode run that shares this config.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Org secret NVIDIA_NIM_API_KEY preferred; fallback NVIDIA_API_KEY.
-          # opencode.jsonc expects env NVIDIA_API_KEY for nvidia-nim/* models.
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
+          # The scoped NVIDIA_NIM_API_KEY is the only NIM credential source.
+          # opencode.jsonc expects that same scoped value in NVIDIA_API_KEY.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -6269,6 +6274,7 @@ jobs:
                   | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence","metadata-only gate evaluation"] | index($n)) | not)
                   | select((.status // "") == "completed")
                   | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
+                  | select((.name // "") != "scan-pr-queue")
                   | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
                   | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review") | not)
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.conclusion // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
@@ -6282,6 +6288,7 @@ jobs:
                   | map(last)
                   | .[]?
                   | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence","metadata-only gate evaluation"] | index($n)) | not)
+                  | select((.name // "") != "scan-pr-queue")
                   | select((.status // "") != "completed")
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.status // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
                 '
@@ -6581,7 +6588,7 @@ jobs:
                       | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
                       | select((.name // "") != "metadata-only gate evaluation")
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.workflow // "") == "CodeQL") | not)
-                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")) | not)
+                      | select((.name // "") != "scan-pr-queue")
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review" and ((.workflow // "") == "Noema Review" or (.workflow // "") == "Required Noema Review")) | not)
                       | "- " + (.label // "check") + ": " + (.conclusion // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
@@ -6713,6 +6720,7 @@ jobs:
                       | select((.workflow // "") != "Required OpenCode Review")
                       | select((.workflow // "") != "OpenCode PR Review")
                       | select((.name // "") != "metadata-only gate evaluation")
+                      | select((.name // "") != "scan-pr-queue")
                       | select((.status // "") != "COMPLETED")
                       | "- " + (.label // "check") + ": " + (.status // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
                     elif .kind == "status" then
