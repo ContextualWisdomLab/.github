@@ -39,3 +39,8 @@ For this merge-aid hotfix only:
 Remove the `nvidia-nim/*` prefixes from `OPENCODE_MODEL_CANDIDATES`, drop the
 `nvidia-nim` provider block, and delete this note once GitHub Models / OpenCode
 catalog reliability is restored.
+
+## Secret name
+
+Org secret is **`NVIDIA_NIM_API_KEY`**. Workflows bind it to process env `NVIDIA_API_KEY`
+(fallback: `secrets.NVIDIA_API_KEY` if present) so `opencode.jsonc` `{env:NVIDIA_API_KEY}` resolves.

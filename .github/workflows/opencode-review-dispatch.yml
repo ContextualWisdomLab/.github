@@ -4033,7 +4033,7 @@ jobs:
           # in the opencode.jsonc "openai" provider block.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -4689,7 +4689,7 @@ jobs:
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
           # failed-check diagnosis opencode run that shares this config.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
           OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
