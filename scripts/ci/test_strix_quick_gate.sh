@@ -14,8 +14,15 @@ REPO_ROOT="$(
 GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
 
 FAILURES=0
-TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-10}"
-TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-30}"
+TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
+TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-60}"
+
+if ! [[ "$TIMEOUT_TEST_PROCESS_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+	! [[ "$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+	[ "$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" -le "$TIMEOUT_TEST_PROCESS_SECONDS" ]; then
+	printf 'STRIX_TEST_FAKE_SLEEP_SECONDS must be a positive integer greater than STRIX_TEST_PROCESS_TIMEOUT_SECONDS.\n' >&2
+	exit 2
+fi
 
 # Keep local developer/provider secrets from changing fake Strix model routing.
 unset STRIX_LLM
@@ -7898,7 +7905,7 @@ run_timeout_cleanup_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-sleep 30 &
+sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}" &
 child_pid=$!
 printf '%s' "$child_pid" > "${FAKE_STRIX_CHILD_PID_FILE:?}"
 sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
