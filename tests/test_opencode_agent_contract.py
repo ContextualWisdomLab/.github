@@ -198,6 +198,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert nvidia_provider["models"]["nvidia/nemotron-3-ultra-550b-a55b"][
         "limit"
     ] == {"context": 131072, "output": 8192}
+    scoped_provider_binding = (
+        "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
+    )
+    assert workflow.count(scoped_provider_binding) == 2
+    assert "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" not in workflow
     free_models = generated_config["provider"]["opencode-free"]["models"]
     paid_zen_models = generated_config["provider"]["opencode"]["models"]
     assert set(free_models) == {
@@ -1647,11 +1652,20 @@ def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
         {"name": "scan-pr-queue", "conclusion": "FAILURE"},
         {"name": "real-peer-check", "conclusion": "FAILURE"},
     ]
-    retained = [
-        check
-        for check in fixtures
-        if check.get("name", "") != "scan-pr-queue"
-    ]
+    extracted_filter = re.search(
+        rf"^\s+\|\s+({re.escape(unconditional_filter)})$",
+        workflow,
+        re.MULTILINE,
+    )
+    assert extracted_filter is not None
+    jq_result = subprocess.run(
+        ["jq", "-c", f"[.[] | {extracted_filter.group(1)}]"],
+        input=json.dumps(fixtures),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    retained = json.loads(jq_result.stdout)
     assert retained == [{"name": "real-peer-check", "conclusion": "FAILURE"}]
 
 

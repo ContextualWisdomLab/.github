@@ -891,7 +891,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode model pool has no configured model candidates." "opencode model pool fails fast when no candidates are configured"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OPENAI_API_KEY is not configured" "opencode model pool skips native OpenAI candidates when the org secret is absent"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OPENROUTER_API_KEY is not configured" "opencode model pool skips OpenRouter candidates when the org secret is absent"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "NVIDIA_API_KEY is not configured" "opencode model pool skips NVIDIA NIM candidates when the normalized provider credential is absent"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "scoped NVIDIA_NIM_API_KEY is not configured" "opencode model pool skips NVIDIA NIM candidates when the scoped credential is absent"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "configured max cycle count" "opencode model pool exits before the job timeout after configured cycles"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500' "opencode model pool keeps a bounded default retry budget unless the workflow explicitly disables it"
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
@@ -1090,7 +1090,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'select((.name // "") != "scan-pr-queue")' "opencode approval ignores scheduler queue self-checks for every failed or pending state"
 	scheduler_self_check_filter_count="$(grep -Fc 'select((.name // "") != "scan-pr-queue")' "$workflow_file")"
 	if [ "$scheduler_self_check_filter_count" -lt 5 ]; then
-		fail "opencode GraphQL and commit-check failed/pending paths all ignore scheduler queue self-checks (found ${scheduler_self_check_filter_count}, expected at least 5)"
+		record_failure "opencode GraphQL and commit-check failed/pending paths all ignore scheduler queue self-checks (found ${scheduler_self_check_filter_count}, expected at least 5)"
 	fi
 	assert_file_not_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode scheduler cancellation classification does not depend on optional workflow metadata"
 	assert_file_contains "$workflow_file" 'grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"' "opencode approval avoids duplicate supplemental Strix workflow-run blockers when statusCheckRollup already has the Strix check"
@@ -1242,7 +1242,8 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review keeps paid Zen, DeepSeek V3, and full-size GPT fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528" "opencode review keeps a reachable DeepSeek R1 reasoning fallback model"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324" "opencode review has a reachable DeepSeek V3 fallback model"
-	assert_file_contains "$workflow_file" "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" "opencode review binds org NVIDIA_NIM_API_KEY into NVIDIA_API_KEY env"
+	assert_file_not_contains "$workflow_file" "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" "opencode review never falls back from the scoped NVIDIA NIM secret to the legacy provider secret"
+	assert_file_contains "$workflow_file" 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}' "opencode review binds only the scoped NVIDIA NIM secret into the provider environment"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "NVIDIA_NIM_API_KEY" "model pool normalizes NVIDIA_NIM_API_KEY to NVIDIA_API_KEY"
 
 	assert_file_contains "$workflow_file" "github-models/openai/gpt-5" "opencode review still has a bounded GPT-5 fallback model"

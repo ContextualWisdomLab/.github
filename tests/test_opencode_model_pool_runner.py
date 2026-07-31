@@ -808,11 +808,12 @@ def test_nvidia_nim_candidate_requires_key(
     monkeypatch.setenv("NVIDIA_API_KEY", "ambient-provider-key")
     result = run_failed_model(
         tmp_path,
+        extra_env={"NVIDIA_API_KEY": "legacy-provider-key"},
         model_candidates="nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
     )
 
     assert result.returncode == 1
-    assert "NVIDIA_API_KEY is not configured" in result.stdout
+    assert "scoped NVIDIA_NIM_API_KEY is not configured" in result.stdout
     assert "attempt 1/1" not in result.stdout
 
 

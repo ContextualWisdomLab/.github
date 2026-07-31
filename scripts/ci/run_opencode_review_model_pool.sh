@@ -354,10 +354,12 @@ is_nvidia_nim_candidate() {
 
 # Org secret name is NVIDIA_NIM_API_KEY (GitHub Actions / org secrets UI).
 # opencode.jsonc nvidia-nim provider block resolves {env:NVIDIA_API_KEY}.
-# Workflow maps secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY → env NVIDIA_API_KEY.
-# Normalize here too so local/CLI runs with only NVIDIA_NIM_API_KEY set do not skip nim/*.
-if [ -z "${NVIDIA_API_KEY:-}" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
+# Normalize only the scoped secret and discard any legacy provider credential so
+# it cannot activate NIM candidates outside the explicit governance boundary.
+if [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
 	export NVIDIA_API_KEY="$NVIDIA_NIM_API_KEY"
+else
+	unset NVIDIA_API_KEY
 fi
 
 is_low_sensitivity_candidate() {
@@ -387,8 +389,8 @@ should_skip_model_candidate() {
 		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
-	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because NVIDIA_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
+		printf 'Skipping OpenCode %s because scoped NVIDIA_NIM_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
 	return 1

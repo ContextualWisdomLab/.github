@@ -4034,22 +4034,22 @@ jobs:
           # in the opencode.jsonc "openai" provider block.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Org secret NVIDIA_NIM_API_KEY preferred; fallback NVIDIA_API_KEY.
-          # opencode.jsonc expects env NVIDIA_API_KEY for nvidia-nim/* models.
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
+          # The scoped NVIDIA_NIM_API_KEY is the only NIM credential source.
+          # opencode.jsonc expects that same scoped value in NVIDIA_API_KEY.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           # High-sensitivity review candidates only. Public repositories first
-          # use OpenCode Zen's anonymous active, zero-cost model endpoints.
-          # Their trial/free-period data
-          # may be logged, retained, or used for product/model improvement, so
-          # private repositories never include them. The pool then falls
-          # through to
-          # NVIDIA NIM, OpenCode Zen GPT-5.6 Terra, DeepSeek V3, the direct
-          # GPT-5.6 Luna slot, and pinned PAID
+          # try NVIDIA NIM when its scoped secret is available, then OpenCode
+          # Zen's anonymous active, zero-cost models, followed by the existing
+          # provider fallbacks. Trial/free-period data may be logged, retained,
+          # or used for product/model improvement, so private repositories
+          # include neither NIM nor anonymous free candidates and start at the
+          # existing keyed fallback list: OpenCode Zen GPT-5.6 Terra, DeepSeek
+          # V3, the direct GPT-5.6 Luna slot, and pinned PAID
           # OpenRouter coder models (free-tier candidates hit the shared
           # free-models-per-day cap and hung for the full candidate timeout,
           # so the OpenRouter slots use cheap paid models billed against the
@@ -4695,9 +4695,10 @@ jobs:
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
           # failed-check diagnosis opencode run that shares this config.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Org secret NVIDIA_NIM_API_KEY preferred; fallback NVIDIA_API_KEY.
-          # opencode.jsonc expects env NVIDIA_API_KEY for nvidia-nim/* models.
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
+          # The scoped NVIDIA_NIM_API_KEY is the only NIM credential source.
+          # opencode.jsonc expects that same scoped value in NVIDIA_API_KEY.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
