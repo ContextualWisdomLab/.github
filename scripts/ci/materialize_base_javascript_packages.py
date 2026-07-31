@@ -16,6 +16,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import urllib.parse
 from typing import Any
 
 
@@ -23,6 +24,8 @@ SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 PNPM_SPEC_RE = re.compile(r"^pnpm@[0-9]+\.[0-9]+\.[0-9]+(?:[+-][A-Za-z0-9._+-]+)?$")
 PNPM_BASE_INPUT_NAMES = ("package.json", "pnpm-workspace.yaml", ".pnpmfile.cjs")
 NPM_LOCK_NAMES = ("npm-shrinkwrap.json", "package-lock.json")
+NPM_REGISTRY_HOST = "registry.npmjs.org"
+SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -202,9 +205,7 @@ def base_npm_projects(
                 f"trusted base npm lock {lock_path} is invalid JSON: {exc}"
             ) from exc
         if not isinstance(lock_data, dict):
-            raise ValueError(
-                f"trusted base npm lock {lock_path} must be a JSON object"
-            )
+            raise ValueError(f"trusted base npm lock {lock_path} must be a JSON object")
 
         base_inputs = {
             "package.json": _git(repo_root, "show", f"{base_sha}:{package_path}"),
@@ -234,23 +235,168 @@ def base_npm_projects(
     return projects
 
 
+def _lock_blob_sha(repo_root: pathlib.Path, revision_sha: str, lock_path: str) -> str:
+    """Return the exact Git blob SHA for one validated revision lockfile."""
+    raw_blob = _git(repo_root, "rev-parse", f"{revision_sha}:{lock_path}")
+    blob_sha = raw_blob.decode("ascii", errors="strict").strip()
+    if not SHA_RE.fullmatch(blob_sha):
+        raise RuntimeError(
+            f"git rev-parse returned an invalid blob SHA for {lock_path}"
+        )
+    return blob_sha.lower()
+
+
+def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
+    """Fail closed unless a changed HEAD npm lock is registry- and hash-bounded."""
+    try:
+        lock_data: Any = json.loads(lock_content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"current-head npm lock {lock_path} is invalid JSON: {exc}"
+        ) from exc
+    if not isinstance(lock_data, dict):
+        raise ValueError(f"current-head npm lock {lock_path} must be a JSON object")
+    lockfile_version = lock_data.get("lockfileVersion")
+    if (
+        not isinstance(lockfile_version, int)
+        or isinstance(lockfile_version, bool)
+        or lockfile_version not in (2, 3)
+    ):
+        raise ValueError(
+            f"current-head npm lock {lock_path} must use lockfileVersion 2 or 3"
+        )
+    packages = lock_data.get("packages")
+    if not isinstance(packages, dict):
+        raise ValueError(
+            f"current-head npm lock {lock_path} must contain an object-valued packages map"
+        )
+
+    for package_path, metadata in sorted(packages.items()):
+        if not isinstance(package_path, str) or not isinstance(metadata, dict):
+            raise ValueError(
+                f"current-head npm lock {lock_path} contains malformed package metadata"
+            )
+        if "\\" in package_path:
+            raise ValueError(
+                f"current-head npm lock {lock_path} contains unsafe package path {package_path!r}"
+            )
+        candidate = pathlib.PurePosixPath(package_path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(
+                f"current-head npm lock {lock_path} contains unsafe package path {package_path!r}"
+            )
+        if not package_path or "node_modules" not in candidate.parts:
+            continue
+
+        resolved = metadata.get("resolved")
+        if metadata.get("link") is True:
+            if not isinstance(resolved, str) or not resolved or "\\" in resolved:
+                raise ValueError(
+                    f"current-head npm lock {lock_path} contains an unsafe workspace link for {package_path}"
+                )
+            link_target = pathlib.PurePosixPath(resolved)
+            if (
+                link_target.is_absolute()
+                or ".." in link_target.parts
+                or "node_modules" in link_target.parts
+            ):
+                raise ValueError(
+                    f"current-head npm lock {lock_path} contains an unsafe workspace link for {package_path}"
+                )
+            continue
+
+        integrity = metadata.get("integrity")
+        if not isinstance(resolved, str) or not isinstance(integrity, str):
+            raise ValueError(
+                f"current-head npm lock {lock_path} package {package_path} must pin a registry tarball and SHA-512 integrity"
+            )
+        parsed = urllib.parse.urlsplit(resolved)
+        try:
+            parsed_port = parsed.port
+        except ValueError as exc:
+            raise ValueError(
+                f"current-head npm lock {lock_path} package {package_path} has an invalid registry URL"
+            ) from exc
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != NPM_REGISTRY_HOST
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed_port is not None
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.startswith("/")
+            or not parsed.path.endswith(".tgz")
+        ):
+            raise ValueError(
+                f"current-head npm lock {lock_path} package {package_path} must resolve from https://{NPM_REGISTRY_HOST}/"
+            )
+        if not SHA512_SRI_RE.fullmatch(integrity):
+            raise ValueError(
+                f"current-head npm lock {lock_path} package {package_path} must use one SHA-512 integrity value"
+            )
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
+    head_sha: str | None = None,
 ) -> list[dict[str, str]]:
-    """Write base JavaScript package inputs under Docker-context-safe paths."""
+    """Write trusted base and bounded HEAD inputs under Docker-context-safe paths."""
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: list[dict[str, str]] = []
-    projects = base_pnpm_projects(repo_root, base_sha) + base_npm_projects(
+    projects: list[tuple[str, str, dict[str, bytes], str, str]] = []
+    for source_path, package_manager, base_inputs in base_pnpm_projects(
         repo_root, base_sha
-    )
-    for index, (source_path, package_manager, base_inputs) in enumerate(
-        sorted(projects, key=lambda project: project[0])
-    ):
+    ) + base_npm_projects(repo_root, base_sha):
+        projects.append(
+            (
+                source_path,
+                package_manager,
+                base_inputs,
+                base_sha.lower(),
+                _lock_blob_sha(repo_root, base_sha, source_path),
+            )
+        )
+
+    if head_sha is not None:
+        if not SHA_RE.fullmatch(head_sha):
+            raise ValueError("head SHA must be exactly 40 hexadecimal characters")
+        base_npm_blobs = {
+            source_path: _lock_blob_sha(repo_root, base_sha, source_path)
+            for source_path, _package_manager, _base_inputs in base_npm_projects(
+                repo_root, base_sha
+            )
+        }
+        for source_path, package_manager, head_inputs in base_npm_projects(
+            repo_root, head_sha
+        ):
+            head_blob = _lock_blob_sha(repo_root, head_sha, source_path)
+            if base_npm_blobs.get(source_path) == head_blob:
+                continue
+            lock_name = pathlib.PurePosixPath(source_path).name
+            validate_head_npm_lock(source_path, head_inputs[lock_name])
+            projects.append(
+                (
+                    source_path,
+                    package_manager,
+                    head_inputs,
+                    head_sha.lower(),
+                    head_blob,
+                )
+            )
+
+    for index, (
+        source_path,
+        package_manager,
+        base_inputs,
+        revision_sha,
+        lock_blob,
+    ) in enumerate(sorted(projects, key=lambda project: (project[0], project[3]))):
         directory = f"project-{index:03d}"
         project_dir = output_dir / directory
         project_dir.mkdir()
@@ -261,7 +407,9 @@ def materialize(
         manifest.append(
             {
                 "directory": directory,
+                "lock_blob": lock_blob,
                 "package_manager": package_manager,
+                "revision_sha": revision_sha,
                 "source": source_path,
             }
         )
@@ -274,15 +422,21 @@ def materialize(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Materialize base JavaScript locks and report the trusted inputs."""
+    """Materialize trusted JavaScript locks and report their exact revisions."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)
+    parser.add_argument("--head-sha")
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
 
     try:
-        manifest = materialize(args.repo_root, args.base_sha, args.output_dir)
+        manifest = materialize(
+            args.repo_root,
+            args.base_sha,
+            args.output_dir,
+            head_sha=args.head_sha,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
             f"::error::Could not materialize base JavaScript package locks: {exc}",
@@ -293,9 +447,10 @@ def main(argv: list[str] | None = None) -> int:
     if manifest:
         for entry in manifest:
             print(
-                "Materialized trusted base JavaScript lock "
+                "Materialized trusted JavaScript lock "
                 f"{entry['source']} for {entry['package_manager']} "
-                f"as {entry['directory']}/{pathlib.PurePosixPath(entry['source']).name}."
+                f"from {entry['revision_sha']} as "
+                f"{entry['directory']}/{pathlib.PurePosixPath(entry['source']).name}."
             )
     else:
         print(

@@ -161,7 +161,9 @@ def test_materializes_only_exact_base_pnpm_inputs(tmp_path: Path) -> None:
     assert manifest == [
         {
             "directory": "project-000",
+            "lock_blob": git(repo, "rev-parse", f"{base_sha}:frontend/pnpm-lock.yaml"),
             "package_manager": "pnpm@11.5.3",
+            "revision_sha": base_sha,
             "source": "frontend/pnpm-lock.yaml",
         }
     ]
@@ -199,21 +201,32 @@ def test_materializes_only_exact_base_npm_inputs(tmp_path: Path) -> None:
     assert manifest == [
         {
             "directory": "project-000",
+            "lock_blob": git(repo, "rev-parse", f"{base_sha}:package-lock.json"),
             "package_manager": "npm",
+            "revision_sha": base_sha,
             "source": "package-lock.json",
         }
     ]
-    assert json.loads(
-        (output / "project-000" / "package.json").read_text(encoding="utf-8")
-    )["name"] == "trusted-base"
-    assert json.loads(
-        (output / "project-000" / "package-lock.json").read_text(encoding="utf-8")
-    )["name"] == "trusted-base"
-    assert json.loads(
-        (output / "project-000" / "packages" / "worker" / "package.json").read_text(
-            encoding="utf-8"
-        )
-    )["name"] == "@fixture/worker"
+    assert (
+        json.loads(
+            (output / "project-000" / "package.json").read_text(encoding="utf-8")
+        )["name"]
+        == "trusted-base"
+    )
+    assert (
+        json.loads(
+            (output / "project-000" / "package-lock.json").read_text(encoding="utf-8")
+        )["name"]
+        == "trusted-base"
+    )
+    assert (
+        json.loads(
+            (output / "project-000" / "packages" / "worker" / "package.json").read_text(
+                encoding="utf-8"
+            )
+        )["name"]
+        == "@fixture/worker"
+    )
     assert "untrusted-head" not in (
         output / "project-000" / "package-lock.json"
     ).read_text(encoding="utf-8")
@@ -237,6 +250,122 @@ def test_npm_shrinkwrap_takes_precedence_over_package_lock(tmp_path: Path) -> No
     assert projects[0][0] == "npm-shrinkwrap.json"
     assert "npm-shrinkwrap.json" in projects[0][2]
     assert "package-lock.json" not in projects[0][2]
+
+
+def test_materializes_strict_changed_head_npm_lock_after_base(
+    tmp_path: Path,
+) -> None:
+    """A bounded exact-head npm lock is cached alongside the trusted base."""
+    repo, base_sha = npm_fixture_repo(tmp_path)
+    head_package = {
+        "name": "head",
+        "version": "1.0.0",
+        "resolved": "https://registry.npmjs.org/head/-/head-1.0.0.tgz",
+        "integrity": "sha512-" + ("A" * 86) + "==",
+    }
+    (repo / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": "untrusted-head",
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "untrusted-head"},
+                    "node_modules/head": head_package,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "package-lock.json")
+    git(repo, "commit", "-m", "bounded npm head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+    output = tmp_path / "output"
+
+    manifest = materializer.materialize(repo, base_sha, output, head_sha=head_sha)
+
+    assert {entry["revision_sha"] for entry in manifest} == {base_sha, head_sha}
+    assert [entry["source"] for entry in manifest] == ["package-lock.json"] * 2
+    head_entry = next(entry for entry in manifest if entry["revision_sha"] == head_sha)
+    assert head_entry["lock_blob"] == git(
+        repo, "rev-parse", f"{head_sha}:package-lock.json"
+    )
+    assert (
+        json.loads(
+            (output / head_entry["directory"] / "package-lock.json").read_text(
+                encoding="utf-8"
+            )
+        )["packages"]["node_modules/head"]
+        == head_package
+    )
+
+
+@pytest.mark.parametrize(
+    ("lock_data", "message"),
+    [
+        (
+            {"lockfileVersion": 1, "packages": {}},
+            "lockfileVersion 2 or 3",
+        ),
+        (
+            {"lockfileVersion": 3, "packages": []},
+            "object-valued packages map",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {"../escape": {}},
+            },
+            "unsafe package path",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/pkg": {
+                        "resolved": "https://example.invalid/pkg.tgz",
+                        "integrity": "sha512-" + ("A" * 86) + "==",
+                    }
+                },
+            },
+            "must resolve from https://registry.npmjs.org/",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/pkg": {
+                        "resolved": "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
+                        "integrity": "sha256-unsafe",
+                    }
+                },
+            },
+            "one SHA-512 integrity",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/workspace": {
+                        "resolved": "../escape",
+                        "link": True,
+                    }
+                },
+            },
+            "unsafe workspace link",
+        ),
+    ],
+)
+def test_rejects_unbounded_changed_head_npm_lock(
+    lock_data: dict[str, object],
+    message: str,
+) -> None:
+    """Changed HEAD locks cannot introduce registry, path, or hash ambiguity."""
+    with pytest.raises(ValueError, match=message):
+        materializer.validate_head_npm_lock(
+            "package-lock.json",
+            (json.dumps(lock_data) + "\n").encode(),
+        )
 
 
 def test_skips_npm_lock_when_exact_pnpm_declaration_owns_project(
@@ -467,10 +596,12 @@ def test_main_reports_materialized_lock(
     monkeypatch.setattr(
         materializer,
         "materialize",
-        lambda *_args: [
+        lambda *_args, **_kwargs: [
             {
                 "directory": "project-000",
+                "lock_blob": "b" * 40,
                 "package_manager": "pnpm@11.5.3",
+                "revision_sha": "a" * 40,
                 "source": "frontend/pnpm-lock.yaml",
             }
         ],
@@ -490,8 +621,9 @@ def test_main_reports_materialized_lock(
         == 0
     )
     assert (
-        "Materialized trusted base JavaScript lock frontend/pnpm-lock.yaml "
-        "for pnpm@11.5.3 as project-000/pnpm-lock.yaml." in capsys.readouterr().out
+        "Materialized trusted JavaScript lock frontend/pnpm-lock.yaml "
+        f"for pnpm@11.5.3 from {'a' * 40} as project-000/pnpm-lock.yaml."
+        in capsys.readouterr().out
     )
 
 
@@ -501,7 +633,7 @@ def test_main_reports_empty_base(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The CLI distinguishes an empty trusted base from extraction failure."""
-    monkeypatch.setattr(materializer, "materialize", lambda *_args: [])
+    monkeypatch.setattr(materializer, "materialize", lambda *_args, **_kwargs: [])
     assert (
         materializer.main(
             [
@@ -528,7 +660,12 @@ def test_main_preserves_failure_reason(
 ) -> None:
     """Materialization failures remain diagnosable and fail closed."""
 
-    def fail_materialize(_repo_root: Path, _base_sha: str, _output_dir: Path) -> None:
+    def fail_materialize(
+        _repo_root: Path,
+        _base_sha: str,
+        _output_dir: Path,
+        **_kwargs: object,
+    ) -> None:
         raise OSError("fixture failure")
 
     monkeypatch.setattr(materializer, "materialize", fail_materialize)

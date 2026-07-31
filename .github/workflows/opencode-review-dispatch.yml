@@ -576,9 +576,9 @@ jobs:
           # pull-request-controlled tests in Docker's default private PID namespace with a
           # read-only trusted tree and no host Docker socket. The image is
           # pinned to the reviewed linux/amd64 manifest digest. JavaScript
-          # registry access is likewise restricted to exact package inputs
-          # extracted from the live-validated base commit; the PR-head sandbox
-          # consumes only the resulting offline store.
+          # registry access is likewise restricted to exact base package inputs
+          # or strictly registry/hash-bounded npm inputs from the live-validated
+          # HEAD; the PR-head sandbox consumes only the resulting offline store.
           if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" != "1" ]; then
             host_github_output="$GITHUB_OUTPUT"
             sandbox_result_dir="${RUNNER_TEMP}/opencode-coverage-sandbox-result"
@@ -600,9 +600,10 @@ jobs:
 
             # Build the coverage tool image before the pull-request tree is
             # mounted anywhere. The networked build context contains only this
-            # trusted Dockerfile, the reviewed CI requirements, and hash-pinned
-            # dependency locks read directly from the live-validated base SHA.
-            # It never contains PR-head source, manifests, credentials, or runner
+            # trusted Dockerfile, the reviewed CI requirements, exact base
+            # dependency locks, and strictly registry/hash-bounded npm locks
+            # read directly from the live-validated HEAD SHA. It never contains
+            # PR-head source, credentials, lifecycle execution, or runner
             # command files.
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
@@ -630,6 +631,7 @@ jobs:
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_javascript_packages.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
+              --head-sha "$PR_HEAD_SHA" \
               --output-dir "$coverage_build_dir/base-javascript-packages"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
@@ -679,7 +681,9 @@ jobs:
             && rm -f /tmp/pnpm.tgz
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
-              mkdir -p /opt/npm-cache /opt/pnpm-store; \
+              mkdir -p /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
+              install -m 0444 /tmp/base-javascript-packages/manifest.json \
+                /opt/javascript-package-locks/manifest.json; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
                 /tmp/base-javascript-packages/manifest.json \
                 | while IFS="$(printf '\t')" read -r project_dir package_manager; do \
@@ -1219,13 +1223,13 @@ jobs:
 
           writable_npm_cache_dir=""
           writable_pnpm_store_dir=""
-          trusted_npm_lock_matches_base() {
+          trusted_npm_lock_is_materialized() {
             local relative_dir
             local lock_name
             local relative_lock
-            local base_blob
             local head_blob
             local worktree_blob
+            local trust_manifest
 
             case "$PWD" in
               "$COVERAGE_SOURCE_WORKDIR")
@@ -1249,10 +1253,6 @@ jobs:
             fi
             relative_lock="${relative_dir:+${relative_dir}/}${lock_name}"
 
-            base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}" 2>/dev/null)" || {
-              echo "::error::Validated base does not contain ${relative_lock}; refusing to trust a PR-added npm lockfile."
-              return 1
-            }
             head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}" 2>/dev/null)" || {
               echo "::error::Validated head does not contain ${relative_lock}."
               return 1
@@ -1264,8 +1264,29 @@ jobs:
               echo "::error::Could not hash current npm lock ${relative_lock}."
               return 1
             }
-            if [ "$base_blob" != "$head_blob" ] || [ "$head_blob" != "$worktree_blob" ]; then
-              echo "::error::Current npm lock ${relative_lock} differs from the validated base; refusing PR-controlled dependency resolution in the network-isolated coverage sandbox."
+            if [ "$head_blob" != "$worktree_blob" ]; then
+              echo "::error::Current npm lock ${relative_lock} does not match the live-validated HEAD blob."
+              return 1
+            fi
+
+            trust_manifest="/opt/javascript-package-locks/manifest.json"
+            if [ ! -f "$trust_manifest" ] || [ -L "$trust_manifest" ]; then
+              echo "::error::Trusted JavaScript package lock manifest must be a regular non-symlink file."
+              return 1
+            fi
+            if ! jq -e \
+              --arg source "$relative_lock" \
+              --arg package_manager "npm" \
+              --arg base_sha "${PR_BASE_SHA,,}" \
+              --arg head_sha "${PR_HEAD_SHA,,}" \
+              --arg lock_blob "${head_blob,,}" \
+              'any(.[];
+                .source == $source
+                and .package_manager == $package_manager
+                and .lock_blob == $lock_blob
+                and (.revision_sha == $base_sha or .revision_sha == $head_sha)
+              )' "$trust_manifest" >/dev/null; then
+              echo "::error::Current npm lock ${relative_lock} was not hash-bounded and materialized from the validated base or HEAD."
               return 1
             fi
           }
@@ -1359,7 +1380,7 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-                  trusted_npm_lock_matches_base
+                  trusted_npm_lock_is_materialized
                   prepare_writable_npm_cache
                   run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
                     npm ci \

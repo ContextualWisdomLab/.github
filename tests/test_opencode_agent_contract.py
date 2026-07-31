@@ -545,26 +545,29 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm" in measure_step
     assert 'test "$(/usr/local/bin/pnpm --version)" = "11.5.3"' in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
+    assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
+    assert (
+        "install -m 0444 /tmp/base-javascript-packages/manifest.json"
+        in measure_step
+    )
+    assert "/opt/javascript-package-locks/manifest.json" in measure_step
     assert "npm ci" in measure_step
     assert "--cache /opt/npm-cache" in measure_step
     assert "npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
-    assert "trusted_npm_lock_matches_base()" in measure_step
-    assert (
-        'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
-        in measure_step
-    )
+    assert "trusted_npm_lock_is_materialized()" in measure_step
     assert (
         'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
         in measure_step
     )
     assert (
-        "refusing PR-controlled dependency resolution in the network-isolated "
-        "coverage sandbox"
+        "was not hash-bounded and materialized from the validated base or HEAD"
         in measure_step
     )
+    assert ".lock_blob == $lock_blob" in measure_step
+    assert ".revision_sha == $base_sha or .revision_sha == $head_sha" in measure_step
     assert "prepare_writable_npm_cache()" in measure_step
     assert (
         'destination="$(mktemp -d /tmp/opencode-npm-cache.XXXXXX)"'
@@ -2062,7 +2065,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "materialize_base_python_requirements.py" in measure
     assert "install_base_python_locks.py" in measure
     assert "base-python-requirements" in measure
-    assert "read directly from the live-validated base SHA" in measure
+    assert "strictly registry/hash-bounded npm inputs from the live-validated" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci \\" in coverage_job
     assert "--offline" in coverage_job
