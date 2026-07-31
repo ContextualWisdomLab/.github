@@ -798,7 +798,7 @@ def test_nvidia_nim_candidate_requires_key(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 1
-    assert "NVIDIA_NIM_API_KEY is not configured" in result.stdout
+    assert "NVIDIA_API_KEY is not configured" in result.stdout
     assert "attempt 1/1" not in result.stdout
 
 

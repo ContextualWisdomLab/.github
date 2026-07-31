@@ -3412,9 +3412,9 @@ jobs:
 
           jq -n '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "github-models/deepseek/deepseek-r1-0528",
-            "small_model": "github-models/deepseek/deepseek-v3-0324",
-            "enabled_providers": ["opencode-free", "opencode", "nvidia-nim", "openai", "openrouter", "github-models"],
+            "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+            "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
+            "enabled_providers": ["nvidia-nim", "opencode-free", "opencode", "openai", "openrouter", "github-models"],
             "lsp": false,
             "mcp": {},
             "permission": {
@@ -3601,24 +3601,6 @@ jobs:
                   }
                 }
               },
-              "nvidia-nim": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "NVIDIA NIM",
-                "options": {
-                  "baseURL": "https://integrate.api.nvidia.com/v1",
-                  "apiKey": "{env:NVIDIA_NIM_API_KEY}"
-                },
-                "models": {
-                  "nvidia/nemotron-3-ultra-550b-a55b": {
-                    "name": "NVIDIA Nemotron 3 Ultra 550B A55B",
-                    "tool_call": true,
-                    "limit": {
-                      "context": 1000000,
-                      "output": 32768
-                    }
-                  }
-                }
-              },
               "opencode": {
                 "npm": "@ai-sdk/openai",
                 "name": "OpenCode Zen",
@@ -3729,6 +3711,96 @@ jobs:
                     "limit": {
                       "context": 262144,
                       "output": 65536
+                    }
+                  }
+                }
+              },
+              "nvidia-nim": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "NVIDIA NIM",
+                "options": {
+                  "baseURL": "https://integrate.api.nvidia.com/v1",
+                  "apiKey": "{env:NVIDIA_API_KEY}"
+                },
+                "models": {
+                  "nvidia/llama-3.3-nemotron-super-49b-v1.5": {
+                    "name": "NVIDIA Llama 3.3 Nemotron Super 49B v1.5",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "nvidia/llama-3.1-nemotron-ultra-253b-v1": {
+                    "name": "NVIDIA Llama 3.1 Nemotron Ultra 253B",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "nvidia/nemotron-3-super-120b-a12b": {
+                    "name": "NVIDIA Nemotron 3 Super 120B",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "nvidia/nemotron-3-ultra-550b-a55b": {
+                    "name": "NVIDIA Nemotron 3 Ultra 550B",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "meta/llama-3.3-70b-instruct": {
+                    "name": "Meta Llama 3.3 70B Instruct (NIM)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "meta/llama-3.1-70b-instruct": {
+                    "name": "Meta Llama 3.1 70B Instruct (NIM)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "deepseek-ai/deepseek-v4-pro": {
+                    "name": "DeepSeek V4 Pro (NIM)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "mistralai/mistral-large-2-instruct": {
+                    "name": "Mistral Large 2 Instruct (NIM)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
+                    }
+                  },
+                  "mistralai/codestral-22b-instruct-v0.1": {
+                    "name": "Codestral 22B Instruct (NIM)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 32768,
+                      "output": 8192
+                    }
+                  },
+                  "google/gemma-4-31b-it": {
+                    "name": "Gemma 4 31B IT (NIM)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 131072,
+                      "output": 8192
                     }
                   }
                 }
@@ -3939,6 +4011,12 @@ jobs:
             }
           }' >"${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
 
+
+          if ! grep -Fq 'nvidia-nim' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
+            || ! grep -Fq 'integrate.api.nvidia.com' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
+            echo '::error::Generated isolated opencode.jsonc is missing the nvidia-nim provider; refusing to run the model pool without NIM priority.'
+            exit 1
+          fi
           printf 'Prepared isolated OpenCode review workspace: %s\n' "$OPENCODE_REVIEW_WORKDIR"
 
       - name: Run OpenCode PR Review model pool
@@ -3956,6 +4034,7 @@ jobs:
           # in the opencode.jsonc "openai" provider block.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           SHARE: "false"
@@ -3978,7 +4057,7 @@ jobs:
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -4612,6 +4691,7 @@ jobs:
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
           # failed-check diagnosis opencode run that shares this config.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
           OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
