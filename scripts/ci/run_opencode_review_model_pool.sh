@@ -345,6 +345,13 @@ is_openrouter_candidate() {
 	esac
 }
 
+is_nvidia_nim_candidate() {
+	case "$1" in
+	nvidia-nim/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 is_low_sensitivity_candidate() {
 	case "$1" in
 	openai/*-mini | openai/*-nano | \
@@ -370,6 +377,10 @@ should_skip_model_candidate() {
 	fi
 	if is_openrouter_candidate "$model_candidate" && [ -z "${OPENROUTER_API_KEY:-}" ]; then
 		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+		return 0
+	fi
+	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_API_KEY:-}" ]; then
+		printf 'Skipping OpenCode %s because NVIDIA_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
 	return 1
