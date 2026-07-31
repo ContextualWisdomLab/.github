@@ -2626,6 +2626,10 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
 
     assert "run_r_package_testthat" in workflow
     assert "r_coverage_peer_gate.py" in workflow
+    assert 'description_snapshot="$(mktemp "$RUNNER_TEMP/r-description.XXXXXX")"' in workflow
+    assert '[ -L DESCRIPTION ]' in workflow
+    assert 'install -m 0444 -- DESCRIPTION "$description_snapshot"' in workflow
+    assert '--description "$description_snapshot"' in workflow
     assert marker in workflow
     assert "require_r_cmd_check_for_deferred_coverage" in workflow
     assert workflow.count("require_r_cmd_check_for_deferred_coverage") == 3

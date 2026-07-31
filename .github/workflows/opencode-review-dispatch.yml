@@ -898,10 +898,20 @@ jobs:
 
           run_r_package_testthat() {
             local package_name="$1"
-            local log_file rc classification
+            local log_file rc classification description_snapshot
             log_file="$(mktemp)"
             append "### R package testthat suite"
             append ""
+            description_snapshot="$(mktemp "$RUNNER_TEMP/r-description.XXXXXX")"
+            if [ ! -f DESCRIPTION ] || [ -L DESCRIPTION ] ||
+              ! install -m 0444 -- DESCRIPTION "$description_snapshot"; then
+              append "- Result: FAIL"
+              append "- Reason: DESCRIPTION must be a regular non-symlink file that can be snapshotted before untrusted tests run."
+              append ""
+              failures=$((failures + 1))
+              rm -f "$log_file" "$description_snapshot"
+              return
+            fi
             append '```text'
             append_command \
               Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); testthat::test_dir("tests/testthat")'
@@ -941,7 +951,8 @@ jobs:
               python3 -I "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \
                 classify-testthat \
                 --log "$log_file" \
-                --package "$package_name" 2>/dev/null
+                --package "$package_name" \
+                --description "$description_snapshot" 2>/dev/null
             )"; then
               append "- Result: PASS"
               append "- Reason: ${classification}; direct sandbox failures are deferred only to a successful current-head peer R CMD check."
@@ -951,7 +962,7 @@ jobs:
               failures=$((failures + 1))
             fi
             append ""
-            rm -f "$log_file"
+            rm -f "$log_file" "$description_snapshot"
           }
 
           run_and_capture_advisory() {
