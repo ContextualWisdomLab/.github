@@ -2459,6 +2459,7 @@ jobs:
                       | select((.name // "") != "Required OpenCode Review")
                       | select((.name // "") != "OpenCode PR Review")
                       | select((.name // "") != "metadata-only gate evaluation")
+                      | select((.name // "") != "scan-pr-queue")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "Required OpenCode Review")
                       | select((.checkSuite.workflowRun.workflow.name // "") != "OpenCode PR Review")
@@ -4376,7 +4377,7 @@ jobs:
           self_check_filter='
             def self_check:
               (.name // "") as $n
-              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation"] | index($n);
+              | ["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation", "scan-pr-queue"] | index($n);
             def latest_peer_checks:
               [
                 (.check_runs // [])[]
@@ -6186,6 +6187,7 @@ jobs:
                   | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence","metadata-only gate evaluation"] | index($n)) | not)
                   | select((.status // "") == "completed")
                   | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
+                  | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue") | not)
                   | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
                   | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review") | not)
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.conclusion // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
@@ -6199,6 +6201,7 @@ jobs:
                   | map(last)
                   | .[]?
                   | select(((.name // "" | ascii_downcase) as $n | ["opencode-review","coverage-evidence","metadata-only gate evaluation"] | index($n)) | not)
+                  | select((.name // "") != "scan-pr-queue")
                   | select((.status // "") != "completed")
                   | "- " + (if (.name // "") == "strix" then "Strix Security Scan/strix" else ((.name // "check") + " check run") end) + ": " + (.status // "unknown") + (if (.details_url // .html_url // "") != "" then " (" + (.details_url // .html_url) + ")" else "" end)
                 '
@@ -6498,7 +6501,7 @@ jobs:
                       | select((.conclusion // "" | ascii_upcase) as $c | ["FAILURE","TIMED_OUT","ACTION_REQUIRED","CANCELLED","STARTUP_FAILURE"] | index($c))
                       | select((.name // "") != "metadata-only gate evaluation")
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.isRequired // false) | not) and (.workflow // "") == "CodeQL") | not)
-                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")) | not)
+                      | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue") | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and ((.name // "") | contains("$" + "{{"))) | not)
                       | select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "noema-review" and ((.workflow // "") == "Noema Review" or (.workflow // "") == "Required Noema Review")) | not)
                       | "- " + (.label // "check") + ": " + (.conclusion // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
@@ -6630,6 +6633,7 @@ jobs:
                       | select((.workflow // "") != "Required OpenCode Review")
                       | select((.workflow // "") != "OpenCode PR Review")
                       | select((.name // "") != "metadata-only gate evaluation")
+                      | select((.name // "") != "scan-pr-queue")
                       | select((.status // "") != "COMPLETED")
                       | "- " + (.label // "check") + ": " + (.status // "unknown") + (if (.detailsUrl // "") != "" then " (" + .detailsUrl + ")" else "" end)
                     elif .kind == "status" then

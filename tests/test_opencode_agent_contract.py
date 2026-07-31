@@ -1520,7 +1520,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         '["opencode-review", "coverage-evidence", "coverage-source-tree", '
-        '"required-workflow-bootstrap", "metadata-only gate evaluation"]' in workflow
+        '"required-workflow-bootstrap", "metadata-only gate evaluation", '
+        '"scan-pr-queue"]' in workflow
     )
     assert "falling back to current-head REST check-runs" in workflow
 

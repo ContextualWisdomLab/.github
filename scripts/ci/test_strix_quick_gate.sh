@@ -1078,7 +1078,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'map(sort_by(.completedAt // "") | last)' "opencode approval considers only the latest completed statusCheckRollup entry per check label"
 	assert_file_contains "$workflow_file" '(.workflow // "") == "CodeQL"' "opencode approval can distinguish CodeQL dynamic setup checks"
 	assert_file_contains "$workflow_file" '((.isRequired // false) | not) and (.workflow // "") == "CodeQL"' "opencode approval ignores non-required cancelled CodeQL checks without source evidence"
-	assert_file_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode approval ignores cancelled scheduler queue replacement checks without source evidence"
+	assert_file_contains "$workflow_file" 'select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue") | not)' "opencode approval ignores cancelled scheduler queue replacement checks without workflow metadata"
+	scheduler_cancelled_filter_count="$(grep -Fc 'select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue") | not)' "$workflow_file")"
+	if [ "$scheduler_cancelled_filter_count" -lt 2 ]; then
+		fail "opencode GraphQL and commit-check fallback both ignore cancelled scheduler queue replacements (found ${scheduler_cancelled_filter_count}, expected at least 2)"
+	fi
+	assert_file_not_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode scheduler cancellation classification does not depend on optional workflow metadata"
 	assert_file_contains "$workflow_file" 'grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"' "opencode approval avoids duplicate supplemental Strix workflow-run blockers when statusCheckRollup already has the Strix check"
 	assert_file_contains "$workflow_file" 'current_head_manual_strix_success_status()' "opencode approval can identify same-head manual Strix success status evidence"
 	assert_file_contains "$workflow_file" 'manual_run_line="$(latest_current_head_manual_strix_run || true)"' "opencode approval falls back to same-head manual Strix check-run success when commit status publication is unavailable"
@@ -1112,7 +1117,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.name // "") != "metadata-only gate evaluation")' "failed-check evidence ignores metadata-only review-state gates even when GitHub misattributes their workflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'isRequired(pullRequestId: $prId)' "failed-check evidence reads PR-required status for check runs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.isRequired // false) | not) and (.checkSuite.workflowRun.workflow.name // "") == "CodeQL"' "failed-check evidence ignores non-required cancelled CodeQL checks without logs"
-	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")' "failed-check evidence ignores cancelled scheduler queue replacement checks"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select(((.conclusion // "" | ascii_downcase) == "cancelled" and (.name // "") == "scan-pr-queue") | not)' "failed-check evidence ignores cancelled scheduler queue replacement checks without workflow metadata"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.name // "") | contains("${{"))' "failed-check evidence ignores cancelled matrix-template helper checks without logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "noema-review"' "failed-check evidence ignores cancelled Noema queue replacement checks without source logs"
 	assert_file_contains "$workflow_file" 'select((.name // "") != "metadata-only gate evaluation")' "opencode ignores metadata-only review-state gates without trusting GitHub workflow attribution"
@@ -1120,8 +1125,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	if [ "$metadata_gate_filter_count" -lt 3 ]; then
 		fail "opencode pre-model, failed-check, and pending-check collection all ignore metadata-only review-state gates (found ${metadata_gate_filter_count}, expected at least 3)"
 	fi
-	assert_file_contains "$workflow_file" '["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation"]' "central fast approval ignores its dependent metadata-only review-state gate"
+	assert_file_contains "$workflow_file" '["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation", "scan-pr-queue"]' "central fast approval ignores its dependent review and scheduler control-plane checks"
 	assert_file_contains "$workflow_file" '["opencode-review","coverage-evidence","metadata-only gate evaluation"]' "opencode supplemental check-run collection ignores review-state helper gates"
+	scheduler_pending_filter_count="$(grep -Fc 'select((.name // "") != "scan-pr-queue")' "$workflow_file")"
+	if [ "$scheduler_pending_filter_count" -lt 3 ]; then
+		fail "opencode pre-model, rollup, and commit-check pending collection all ignore the scheduler control-plane cycle (found ${scheduler_pending_filter_count}, expected at least 3)"
+	fi
 	assert_file_contains "$workflow_file" '((.name // "") | contains("$" + "{{"))' "opencode failed-check collection ignores cancelled matrix-template helper checks without logs without exposing a raw Actions expression"
 	assert_file_contains "$workflow_file" '(.name // "") == "noema-review"' "opencode failed-check collection ignores cancelled Noema queue replacement checks without source logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '"strix security scan/"*' "failed-check evidence maps stale Strix workflow helper checks to the manual strix evidence status"
