@@ -546,8 +546,34 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'test "$(/usr/local/bin/pnpm --version)" = "11.5.3"' in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
+    assert "npm ci" in measure_step
+    assert "--cache /opt/npm-cache" in measure_step
+    assert "npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
+    assert "trusted_npm_lock_matches_base()" in measure_step
+    assert (
+        'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
+        in measure_step
+    )
+    assert (
+        'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
+        in measure_step
+    )
+    assert (
+        "refusing PR-controlled dependency resolution in the network-isolated "
+        "coverage sandbox"
+        in measure_step
+    )
+    assert "prepare_writable_npm_cache()" in measure_step
+    assert (
+        'destination="$(mktemp -d /tmp/opencode-npm-cache.XXXXXX)"'
+        in measure_step
+    )
+    assert 'cp -R /opt/npm-cache/. "$destination/"' in measure_step
+    assert 'chmod -R u+rwX,go-rwx "$destination"' in measure_step
+    assert '--cache "$writable_npm_cache_dir"' in measure_step
+    assert "npm offline ci" in measure_step
     assert "trusted_pnpm_lock_matches_base()" in measure_step
     assert (
         'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
@@ -2038,7 +2064,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "base-python-requirements" in measure
     assert "read directly from the live-validated base SHA" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
-    assert "npm ci --ignore-scripts" in coverage_job
+    assert "npm ci \\" in coverage_job
+    assert "--offline" in coverage_job
+    assert '--cache "$writable_npm_cache_dir"' in coverage_job
+    assert "prepare_writable_npm_cache" in coverage_job
+    assert "npm install --ignore-scripts" not in coverage_job
     assert "pnpm install \\" in coverage_job
     assert "--offline" in coverage_job
     assert "--frozen-lockfile" in coverage_job

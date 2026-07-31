@@ -679,22 +679,35 @@ jobs:
             && rm -f /tmp/pnpm.tgz
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
-              mkdir -p /opt/pnpm-store; \
+              mkdir -p /opt/npm-cache /opt/pnpm-store; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
                 /tmp/base-javascript-packages/manifest.json \
                 | while IFS="$(printf '\t')" read -r project_dir package_manager; do \
                     [ -n "$project_dir" ] || continue; \
-                    if [ "$package_manager" != "pnpm@11.5.3" ]; then \
-                      printf 'Unsupported trusted base package manager: %s\n' "$package_manager" >&2; \
-                      exit 1; \
-                    fi; \
                     cd "/tmp/base-javascript-packages/${project_dir}"; \
-                    pnpm fetch \
-                      --frozen-lockfile \
-                      --ignore-scripts \
-                      --store-dir /opt/pnpm-store; \
+                    case "$package_manager" in \
+                      npm) \
+                        npm ci \
+                          --ignore-scripts \
+                          --cache /opt/npm-cache \
+                          --no-audit \
+                          --no-fund; \
+                        rm -rf node_modules; \
+                        ;; \
+                      pnpm@11.5.3) \
+                        pnpm fetch \
+                          --frozen-lockfile \
+                          --ignore-scripts \
+                          --store-dir /opt/pnpm-store; \
+                        ;; \
+                      *) \
+                        printf 'Unsupported trusted base package manager: %s\n' "$package_manager" >&2; \
+                        exit 1; \
+                        ;; \
+                    esac; \
                   done; \
-              chmod -R a+rX /opt/pnpm-store; \
+              npm cache verify --cache /opt/npm-cache; \
+              chmod -R a+rX /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
           RUN python3 -m pip install \
@@ -1204,7 +1217,78 @@ jobs:
             [ -f package.json ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null
           }
 
+          writable_npm_cache_dir=""
           writable_pnpm_store_dir=""
+          trusted_npm_lock_matches_base() {
+            local relative_dir
+            local lock_name
+            local relative_lock
+            local base_blob
+            local head_blob
+            local worktree_blob
+
+            case "$PWD" in
+              "$COVERAGE_SOURCE_WORKDIR")
+                relative_dir=""
+                ;;
+              "$COVERAGE_SOURCE_WORKDIR"/*)
+                relative_dir="${PWD#"$COVERAGE_SOURCE_WORKDIR"/}"
+                ;;
+              *)
+                echo "::error::npm project directory escaped the validated coverage worktree."
+                return 1
+                ;;
+            esac
+            if [ -f npm-shrinkwrap.json ] && [ ! -L npm-shrinkwrap.json ]; then
+              lock_name="npm-shrinkwrap.json"
+            elif [ -f package-lock.json ] && [ ! -L package-lock.json ]; then
+              lock_name="package-lock.json"
+            else
+              echo "::error::Current npm lock must be a regular non-symlink package-lock.json or npm-shrinkwrap.json."
+              return 1
+            fi
+            relative_lock="${relative_dir:+${relative_dir}/}${lock_name}"
+
+            base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}" 2>/dev/null)" || {
+              echo "::error::Validated base does not contain ${relative_lock}; refusing to trust a PR-added npm lockfile."
+              return 1
+            }
+            head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}" 2>/dev/null)" || {
+              echo "::error::Validated head does not contain ${relative_lock}."
+              return 1
+            }
+            worktree_blob="$(
+              trusted_git hash-object --no-filters -- \
+                "$COVERAGE_SOURCE_WORKDIR/$relative_lock"
+            )" || {
+              echo "::error::Could not hash current npm lock ${relative_lock}."
+              return 1
+            }
+            if [ "$base_blob" != "$head_blob" ] || [ "$head_blob" != "$worktree_blob" ]; then
+              echo "::error::Current npm lock ${relative_lock} differs from the validated base; refusing PR-controlled dependency resolution in the network-isolated coverage sandbox."
+              return 1
+            fi
+          }
+
+          prepare_writable_npm_cache() {
+            if [ -n "$writable_npm_cache_dir" ]; then
+              return
+            fi
+            if [ ! -d /opt/npm-cache ] || [ -L /opt/npm-cache ]; then
+              echo "::error::Trusted npm cache must be a non-symlink directory."
+              return 1
+            fi
+
+            local destination
+            destination="$(mktemp -d /tmp/opencode-npm-cache.XXXXXX)"
+            cp -R /opt/npm-cache/. "$destination/"
+            chown -R --no-dereference \
+              "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" \
+              "$destination"
+            chmod -R u+rwX,go-rwx "$destination"
+            writable_npm_cache_dir="$destination"
+          }
+
           trusted_pnpm_lock_matches_base() {
             local relative_dir
             local relative_lock
@@ -1275,9 +1359,18 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-                  run_and_capture "JavaScript/TypeScript dependencies (npm ci, lifecycle hooks disabled)" npm ci --ignore-scripts
+                  trusted_npm_lock_matches_base
+                  prepare_writable_npm_cache
+                  run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
+                    npm ci \
+                      --offline \
+                      --ignore-scripts \
+                      --cache "$writable_npm_cache_dir" \
+                      --no-audit \
+                      --no-fund
                 else
-                  run_and_capture "JavaScript/TypeScript dependencies (npm install, lifecycle hooks disabled)" npm install --ignore-scripts
+                  echo "::error::Offline npm coverage requires a tracked package-lock.json or npm-shrinkwrap.json at the validated base and current head."
+                  return 1
                 fi
                 ;;
               pnpm)

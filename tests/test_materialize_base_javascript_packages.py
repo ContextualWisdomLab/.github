@@ -81,6 +81,76 @@ def fixture_repo(tmp_path: Path) -> tuple[Path, str]:
     return repo, base_sha
 
 
+def npm_fixture_repo(tmp_path: Path) -> tuple[Path, str]:
+    """Create an npm workspace whose head mutates all trusted package inputs."""
+    repo = tmp_path / "npm-repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+
+    workspace = repo / "packages" / "worker"
+    workspace.mkdir(parents=True)
+    (repo / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "trusted-base",
+                "private": True,
+                "workspaces": ["packages/*"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (workspace / "package.json").write_text(
+        json.dumps({"name": "@fixture/worker", "version": "1.0.0"}) + "\n",
+        encoding="utf-8",
+    )
+    (repo / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": "trusted-base",
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "trusted-base", "workspaces": ["packages/*"]},
+                    "packages/worker": {
+                        "name": "@fixture/worker",
+                        "version": "1.0.0",
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "npm base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "package.json").write_text(
+        json.dumps({"name": "untrusted-head", "private": True}) + "\n",
+        encoding="utf-8",
+    )
+    (workspace / "package.json").write_text(
+        json.dumps({"name": "@fixture/head", "version": "9.0.0"}) + "\n",
+        encoding="utf-8",
+    )
+    (repo / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": "untrusted-head",
+                "lockfileVersion": 3,
+                "packages": {"": {"name": "untrusted-head"}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "npm head")
+    return repo, base_sha
+
+
 def test_materializes_only_exact_base_pnpm_inputs(tmp_path: Path) -> None:
     """PR-modified package metadata cannot enter the networked build context."""
     repo, base_sha = fixture_repo(tmp_path)
@@ -119,10 +189,79 @@ def test_materializes_only_exact_base_pnpm_inputs(tmp_path: Path) -> None:
     )
 
 
+def test_materializes_only_exact_base_npm_inputs(tmp_path: Path) -> None:
+    """PR-modified npm metadata cannot enter the networked build context."""
+    repo, base_sha = npm_fixture_repo(tmp_path)
+    output = tmp_path / "output"
+
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert manifest == [
+        {
+            "directory": "project-000",
+            "package_manager": "npm",
+            "source": "package-lock.json",
+        }
+    ]
+    assert json.loads(
+        (output / "project-000" / "package.json").read_text(encoding="utf-8")
+    )["name"] == "trusted-base"
+    assert json.loads(
+        (output / "project-000" / "package-lock.json").read_text(encoding="utf-8")
+    )["name"] == "trusted-base"
+    assert json.loads(
+        (output / "project-000" / "packages" / "worker" / "package.json").read_text(
+            encoding="utf-8"
+        )
+    )["name"] == "@fixture/worker"
+    assert "untrusted-head" not in (
+        output / "project-000" / "package-lock.json"
+    ).read_text(encoding="utf-8")
+
+
+def test_npm_shrinkwrap_takes_precedence_over_package_lock(tmp_path: Path) -> None:
+    """npm-shrinkwrap is materialized once with npm's documented precedence."""
+    repo, _base_sha = npm_fixture_repo(tmp_path)
+    (repo / "npm-shrinkwrap.json").write_text(
+        json.dumps({"name": "shrinkwrapped", "lockfileVersion": 3, "packages": {}})
+        + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "npm-shrinkwrap.json")
+    git(repo, "commit", "-m", "add shrinkwrap")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    projects = materializer.base_npm_projects(repo, base_sha)
+
+    assert len(projects) == 1
+    assert projects[0][0] == "npm-shrinkwrap.json"
+    assert "npm-shrinkwrap.json" in projects[0][2]
+    assert "package-lock.json" not in projects[0][2]
+
+
+def test_skips_npm_lock_when_exact_pnpm_declaration_owns_project(
+    tmp_path: Path,
+) -> None:
+    """A vestigial npm lock cannot duplicate an exact pnpm project."""
+    repo, base_sha = fixture_repo(tmp_path)
+    git(repo, "checkout", base_sha)
+    (repo / "frontend" / "package-lock.json").write_text(
+        '{"lockfileVersion":3,"packages":{}}\n', encoding="utf-8"
+    )
+    git(repo, "add", "frontend/package-lock.json")
+    git(repo, "commit", "-m", "add vestigial npm lock")
+    current_sha = git(repo, "rev-parse", "HEAD")
+
+    assert materializer.base_npm_projects(repo, current_sha) == []
+    assert len(materializer.base_pnpm_projects(repo, current_sha)) == 1
+
+
 def test_rejects_invalid_base_sha(tmp_path: Path) -> None:
     """Git options and symbolic refs cannot cross the exact-SHA boundary."""
     with pytest.raises(ValueError, match="40 hexadecimal"):
         materializer.base_pnpm_projects(tmp_path, "--help")
+    with pytest.raises(ValueError, match="40 hexadecimal"):
+        materializer.base_npm_projects(tmp_path, "--help")
 
 
 def test_git_failure_preserves_command_reason(tmp_path: Path) -> None:
@@ -167,6 +306,60 @@ def test_rejects_lock_without_sibling_package_manifest(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="no regular sibling package.json"):
         materializer.base_pnpm_projects(repo, git(repo, "rev-parse", "HEAD"))
+
+
+def test_rejects_npm_lock_without_sibling_package_manifest(tmp_path: Path) -> None:
+    """An npm lock without its exact base package manifest fails closed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "package-lock.json").write_text(
+        '{"lockfileVersion":3,"packages":{}}\n', encoding="utf-8"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+
+    with pytest.raises(ValueError, match="no regular sibling package.json"):
+        materializer.base_npm_projects(repo, git(repo, "rev-parse", "HEAD"))
+
+
+@pytest.mark.parametrize(
+    ("package_content", "lock_content", "message"),
+    [
+        (b"not-json", b'{"lockfileVersion":3}', "invalid JSON"),
+        (b"[]", b'{"lockfileVersion":3}', "must be a JSON object"),
+        (b"{}", b"\n", "npm lock frontend/package-lock.json is empty"),
+        (b"{}", b"not-json", "invalid JSON"),
+        (b"{}", b"[]", "must be a JSON object"),
+    ],
+)
+def test_rejects_invalid_base_npm_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    package_content: bytes,
+    lock_content: bytes,
+    message: str,
+) -> None:
+    """Malformed exact-base npm manifests and locks fail before use."""
+    regular_paths = {"frontend/package.json", "frontend/package-lock.json"}
+    monkeypatch.setattr(
+        materializer,
+        "_regular_base_paths",
+        lambda *_args: regular_paths,
+    )
+
+    def fake_git(_repo_root: Path, _command: str, object_spec: str) -> bytes:
+        if object_spec.endswith(":frontend/package.json"):
+            return package_content
+        if object_spec.endswith(":frontend/package-lock.json"):
+            return lock_content
+        raise AssertionError(f"unexpected git object: {object_spec}")
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+    with pytest.raises(ValueError, match=message):
+        materializer.base_npm_projects(tmp_path, "a" * 40)
 
 
 @pytest.mark.parametrize(
@@ -297,7 +490,7 @@ def test_main_reports_materialized_lock(
         == 0
     )
     assert (
-        "Materialized trusted base pnpm lock frontend/pnpm-lock.yaml "
+        "Materialized trusted base JavaScript lock frontend/pnpm-lock.yaml "
         "for pnpm@11.5.3 as project-000/pnpm-lock.yaml." in capsys.readouterr().out
     )
 
@@ -322,7 +515,10 @@ def test_main_reports_empty_base(
         )
         == 0
     )
-    assert "No tracked pnpm-lock.yaml files exist" in capsys.readouterr().out
+    assert (
+        "No tracked supported JavaScript package lockfiles exist"
+        in capsys.readouterr().out
+    )
 
 
 def test_main_preserves_failure_reason(
