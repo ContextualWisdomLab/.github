@@ -849,7 +849,10 @@ def test_nvidia_nim_combined_budget_preserves_fallback_attempt(
             "OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS": "1",
             "OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS": "1",
             "OPENCODE_RUN_TIMEOUT_SECONDS": "5",
-            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "6",
+            # Keep the outer pool deadline well above the three one-second
+            # attempt caps so scheduler load cannot turn this into a
+            # global-deadline boundary test.
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "15",
         },
         model_candidates=(
             "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
