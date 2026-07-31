@@ -162,7 +162,12 @@ def test_run_split_repo_and_graphql(monkeypatch):
     with pytest.raises(ValueError):
         sched.split_repo("/repo")
 
-    assert sched.validate_git_ref("feature/safe.branch-1") == "feature/safe.branch-1"
+    for valid_ref in (
+        "feature/safe.branch-1",
+        "🎨-palette-ux-improvement-13325911538352561627",
+        "기능/달력-개선",
+    ):
+        assert sched.validate_git_ref(valid_ref) == valid_ref
     for bad_ref in (
         "",
         "-bad",
@@ -172,8 +177,11 @@ def test_run_split_repo_and_graphql(monkeypatch):
         "feature/./main",
         "feature//main",
         "feature/main.",
+        "feature/main.lock",
         "feature/@{upstream}",
         "feat;echo pwned",
+        "feature/\u00a0hidden",
+        "feature/\u200bhidden",
     ):
         with pytest.raises(ValueError):
             sched.validate_git_ref(bad_ref)

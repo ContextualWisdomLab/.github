@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import time
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -126,7 +127,7 @@ OPENCODE_WORKFLOW_NAMES = {
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
-GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
+GIT_REF_ASCII_SAFE_CHARS = frozenset("._/-")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
@@ -529,12 +530,24 @@ def split_repo(repo: str) -> tuple[str, str]:
 
 
 def validate_git_ref(ref: str) -> str:
-    """Return a conservative Git ref name for gh workflow dispatch fields."""
+    """Return a conservative Unicode-capable Git ref for structured argv/JSON fields."""
+    has_unsafe_character = isinstance(ref, str) and any(
+        (
+            character.isascii()
+            and not (character.isalnum() or character in GIT_REF_ASCII_SAFE_CHARS)
+        )
+        or (
+            not character.isascii()
+            and unicodedata.category(character)[0] in {"C", "Z"}
+        )
+        for character in ref
+    )
     if (
         not isinstance(ref, str)
         or not ref
-        or not GIT_REF_RE.fullmatch(ref)
+        or has_unsafe_character
         or ref == "HEAD"
+        or ref.startswith("-")
         or ref.startswith("/")
         or ref.endswith(("/", "."))
         or "@{" in ref
@@ -542,7 +555,10 @@ def validate_git_ref(ref: str) -> str:
         or "//" in ref
     ):
         raise ValueError(f"invalid git ref: {ref!r}")
-    if any(part == "." or part.startswith(".") for part in ref.split("/")):
+    if any(
+        part == "." or part.startswith(".") or part.endswith(".lock")
+        for part in ref.split("/")
+    ):
         raise ValueError(f"invalid git ref: {ref!r}")
     return ref
 
