@@ -616,7 +616,9 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. The sweep runs
     every 15 minutes so an approval that lands after a PR's last event is
-    auto-updated/merged within ~15 minutes instead of idling for up to an hour.
+    auto-updated/merged promptly instead of idling indefinitely. Its cron has a
+    distinct concurrency key from the separate 30-minute scan, and the job has
+    enough runtime headroom to finish a complete organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -625,6 +627,20 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
     assert "github.event.schedule == '*/15 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
+    assert (
+        "github.event_name == 'schedule' && format('schedule-{0}', "
+        "github.event.schedule)"
+    ) in workflow
+    org_sweep_header = workflow.split("  org-queue-sweep:", 1)[1].split(
+        "    permissions:", 1
+    )[0]
+    assert "timeout-minutes: 60" in org_sweep_header
+    for setting in (
+        "ORG_SWEEP_TRIGGER_REVIEWS",
+        "ORG_SWEEP_ENABLE_AUTO_MERGE",
+        "ORG_SWEEP_UPDATE_BRANCHES",
+    ):
+        assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
     # The single-repository scan must not double-run on the sweep cron.
     assert "github.event.schedule != '*/15 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep != true" in workflow
@@ -717,18 +733,18 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
         "ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
     ) in workflow
     assert (
-        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}"
+        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}"
         in workflow
     )
     assert (
-        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}"
+        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}"
     ) in workflow
     assert (
         "ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}"
         in workflow
     )
     assert (
-        "ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}"
+        "ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}"
         in workflow
     )
     assert 'if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then' in workflow

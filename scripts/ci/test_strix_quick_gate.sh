@@ -14,6 +14,8 @@ REPO_ROOT="$(
 GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
 
 FAILURES=0
+TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-10}"
+TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-30}"
 
 # Keep local developer/provider secrets from changing fake Strix model routing.
 unset STRIX_LLM
@@ -732,7 +734,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review includes a broad catalog fallback pool"
 	assert_file_not_contains "$workflow_file" "steps.opencode_review_model_pool.outcome == 'success'" "opencode approval gate still runs after model pool failure to publish a reason"
 	assert_file_contains "$workflow_file" "opencode-free/north-mini-code-free" "opencode review starts public repository reviews with a free coding model"
-	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review retains DeepSeek V3 before full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review retains paid Zen and DeepSeek V3 before full-size GPT fallbacks"
 	assert_file_contains "$workflow_file" "The publish gate re-runs source-backed validation against PR-head data" "opencode review publish gate validates model output against the PR-head worktree"
 	assert_file_contains "$workflow_file" '"openai/o3"' "opencode config declares OpenAI o3 fallback"
 	assert_file_contains "$workflow_file" '"openai/o4-mini"' "opencode config declares OpenAI o4-mini fallback"
@@ -882,7 +884,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog fallback preserves legitimate full-hour provider sessions"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
-	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries DeepSeek V3 before OpenAI fallbacks"
+	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries paid Zen and DeepSeek V3 before OpenAI fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1" "opencode review keeps DeepSeek reasoning fallback coverage after OpenAI candidates"
 	assert_file_contains "$workflow_file" "coverage-source-tree:" "opencode workflow materializes coverage source before running PR-head tests"
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
@@ -1212,7 +1214,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'repos/${GH_REPOSITORY}' "opencode review workflow uses env-backed repository context in shell commands"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review starts the central model pool"
 	assert_file_contains "$workflow_file" "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b" "opencode review tries the current NVIDIA NIM Nemotron model"
-	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review starts with DeepSeek V3 before full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review starts with paid Zen before DeepSeek V3 and full-size GPT fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528" "opencode review keeps a reachable DeepSeek R1 reasoning fallback model"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324" "opencode review has a reachable DeepSeek V3 fallback model"
 	assert_file_contains "$workflow_file" "github-models/openai/gpt-5" "opencode review still has a bounded GPT-5 fallback model"
@@ -1460,8 +1462,13 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "scheduler must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
+	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.run_id" "scheduler keeps manual queue scans isolated per run"
 	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
+	assert_file_contains "$workflow_file" "timeout-minutes: 60" "organization sweep has enough headroom to finish the complete repository walk"
+	assert_file_contains "$workflow_file" "ORG_SWEEP_TRIGGER_REVIEWS: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps retry missing current-head OpenCode reviews"
+	assert_file_contains "$workflow_file" "ORG_SWEEP_ENABLE_AUTO_MERGE: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps merge approved current heads"
+	assert_file_contains "$workflow_file" "ORG_SWEEP_UPDATE_BRANCHES: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps refresh eligible stale branches"
 	assert_file_contains "$workflow_file" 'github.event.workflow_run.pull_requests[0].number' "scheduler scopes OpenCode workflow_run events to the completed review PR"
 	assert_file_contains "$workflow_file" "github.event.client_payload.trigger_reviews != false" "scheduler enables review dispatch by default for default-branch dispatch events"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' || github.event_name == 'push'" "scheduler can dispatch a bounded follow-up OpenCode review after review workflow completion"
@@ -3263,7 +3270,7 @@ REPORT
 		exit 0
 		;;
 	slow-timeout)
-		sleep 2
+		sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 		exit 0
 		;;
 	timeout-disabled-success)
@@ -4288,7 +4295,7 @@ EOS
 			echo "│  Penetration test in progress                                                │"
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
-			sleep 4
+			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 			exit 0
 			;;
 		*)
@@ -4304,11 +4311,11 @@ EOS
 			echo "│  Penetration test in progress                                                │"
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
-			sleep 4
+			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 			exit 0
 			;;
 		vertex_ai/fallback-one)
-			sleep 4
+			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 			exit 0
 			;;
 		*)
@@ -4328,11 +4335,11 @@ EOS
 			echo "│  Penetration test in progress                                                │"
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
-			sleep 4
+			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 			exit 0
 			;;
 		vertex_ai/fallback-one)
-			sleep 4
+			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 			exit 0
 			;;
 		*)
@@ -5393,6 +5400,7 @@ PY
 		FAKE_STRIX_API_BASE_LOG="$api_base_log"
 		FAKE_STRIX_TARGET_LOG="$target_log"
 		FAKE_STRIX_RUNTIME_ENV_LOG="$runtime_env_log"
+		FAKE_STRIX_TIMEOUT_SLEEP_SECONDS="$TIMEOUT_TEST_FAKE_SLEEP_SECONDS"
 		STRIX_LLM_DEFAULT_PROVIDER="$default_provider"
 		FAKE_STRIX_STATE_FILE="$state_file"
 		STRIX_TRANSIENT_RETRY_PER_MODEL="$transient_retry_per_model"
@@ -5878,10 +5886,73 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"" \
 			"" \
-			"2" \
+			"$TIMEOUT_TEST_PROCESS_SECONDS" \
 			"0" \
 			"pull_request" \
 			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		;;
+	zero-findings-timeout-all-models)
+		run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
+			"vertex_ai/zero-timeout-primary" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Strix reported zero vulnerabilities before provider infrastructure failure; failing closed because provider infrastructure failures are not clean scan evidence." \
+			"2" \
+			"vertex_ai/zero-timeout-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"$TIMEOUT_TEST_PROCESS_SECONDS" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
+			"vertex_ai/zero-timeout-primary" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Configured Vertex model and fallback models were unavailable." \
+			"2" \
+			"vertex_ai/zero-timeout-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"$TIMEOUT_TEST_PROCESS_SECONDS" \
+			"0" \
+			"push"
+		;;
+	slow-timeout)
+		run_gate_case_allow_provider_signal "slow-timeout" \
+			"vertex_ai/slow-primary" \
+			"" \
+			"1" \
+			"Strix run timed out after ${TIMEOUT_TEST_PROCESS_SECONDS}s." \
+			"3" \
+			"vertex_ai/slow-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+			"<unset>|<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"$TIMEOUT_TEST_PROCESS_SECONDS"
+		;;
+	timeout-cleanup)
+		run_timeout_cleanup_case
 		;;
 	vertex-primary-notfound-fallback-success)
 		run_gate_case "vertex-primary-notfound-fallback-success" \
@@ -7830,7 +7901,7 @@ set -euo pipefail
 sleep 30 &
 child_pid=$!
 printf '%s' "$child_pid" > "${FAKE_STRIX_CHILD_PID_FILE:?}"
-sleep 5
+sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'vertex_ai/timeout-cleanup-primary' >"$strix_llm_file"
@@ -7845,9 +7916,10 @@ EOF
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CHILD_PID_FILE="$child_pid_file" \
+			FAKE_STRIX_TIMEOUT_SLEEP_SECONDS="$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" \
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
-			STRIX_PROCESS_TIMEOUT_SECONDS="1" \
+			STRIX_PROCESS_TIMEOUT_SECONDS="$TIMEOUT_TEST_PROCESS_SECONDS" \
 			STRIX_VERTEX_FALLBACK_MODELS="" \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
 			STRIX_TARGET_PATH="." \
@@ -7857,7 +7929,7 @@ EOF
 	set -e
 
 	assert_equals "1" "$rc" "timeout cleanup exit code"
-	assert_file_contains "$output_log" "Strix run timed out after 1s." "timeout cleanup output"
+	assert_file_contains "$output_log" "Strix run timed out after ${TIMEOUT_TEST_PROCESS_SECONDS}s." "timeout cleanup output"
 	local _
 	for _ in $(seq 1 12); do
 		if [ -f "$child_pid_file" ]; then
@@ -8790,6 +8862,14 @@ assert_opencode_failed_check_fallback_does_not_anchor_unmapped_strix_reports_to_
 assert_opencode_failed_check_fallback_maps_strix_status_permission_smoke_failure
 
 run_filtered_gate_case_if_requested
+if [ -n "${STRIX_TEST_CASE_FILTER:-}" ]; then
+	if [ "$FAILURES" -ne 0 ]; then
+		echo "test_strix_quick_gate: filtered case '${STRIX_TEST_CASE_FILTER}' had ${FAILURES} failure(s)" >&2
+		exit 1
+	fi
+	echo "test_strix_quick_gate: filtered case '${STRIX_TEST_CASE_FILTER}' PASS"
+	exit 0
+fi
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-modified-file-uses-head-blob" \
@@ -9648,7 +9728,7 @@ run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
 	"0" \
 	"" \
 	"" \
-	"2" \
+	"$TIMEOUT_TEST_PROCESS_SECONDS" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
@@ -9669,7 +9749,7 @@ run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
 	"0" \
 	"" \
 	"" \
-	"2" \
+	"$TIMEOUT_TEST_PROCESS_SECONDS" \
 	"0" \
 	"push"
 
@@ -9689,7 +9769,7 @@ run_gate_case_allow_provider_signal "zero-findings-sticky-across-fallback" \
 	"0" \
 	"" \
 	"" \
-	"2" \
+	"$TIMEOUT_TEST_PROCESS_SECONDS" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
@@ -9710,7 +9790,7 @@ run_gate_case_allow_provider_signal "zero-findings-with-low-report-timeout" \
 	"0" \
 	"" \
 	"" \
-	"2" \
+	"$TIMEOUT_TEST_PROCESS_SECONDS" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
@@ -9731,7 +9811,7 @@ run_gate_case "strict-zero-findings-timeout-fails-pr" \
 	"0" \
 	"" \
 	"" \
-	"2" \
+	"$TIMEOUT_TEST_PROCESS_SECONDS" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
@@ -10495,7 +10575,7 @@ run_gate_case_allow_provider_signal "slow-timeout" \
 	"vertex_ai/slow-primary" \
 	"" \
 	"1" \
-	"Strix run timed out after 1s." \
+	"Strix run timed out after ${TIMEOUT_TEST_PROCESS_SECONDS}s." \
 	"3" \
 	"vertex_ai/slow-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
 	"<unset>|<unset>|<unset>" \
@@ -10507,7 +10587,7 @@ run_gate_case_allow_provider_signal "slow-timeout" \
 	"0" \
 	"" \
 	"" \
-	"1"
+	"$TIMEOUT_TEST_PROCESS_SECONDS"
 
 run_gate_case "timeout-disabled-success" \
 	"vertex_ai/timeout-disabled-primary" \

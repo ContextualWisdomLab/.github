@@ -37,6 +37,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      id-token: write
     outputs:
       target_repository: ${{ steps.validate.outputs.target_repository }}
       pr_number: ${{ steps.validate.outputs.pr_number }}
@@ -46,10 +47,81 @@ jobs:
       head_sha: ${{ steps.validate.outputs.head_sha }}
       is_private: ${{ steps.validate.outputs.is_private }}
     steps:
+      - name: Exchange OpenCode app token for target repository metadata reads
+        id: metadata_read_app_token
+        if: >-
+          github.event_name == 'repository_dispatch'
+          && github.event.client_payload.target_repository != ''
+          && github.event.client_payload.target_repository != github.repository
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Bind workflow inputs to live organization pull request metadata
         id: validate
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
           # A rerun retains github.actor from the original dispatch; authorize
           # the identity that initiated the current run or rerun instead.
@@ -3341,7 +3413,7 @@ jobs:
             "$schema": "https://opencode.ai/config.json",
             "model": "github-models/deepseek/deepseek-r1-0528",
             "small_model": "github-models/deepseek/deepseek-v3-0324",
-            "enabled_providers": ["opencode-free", "nvidia-nim", "openai", "openrouter", "github-models"],
+            "enabled_providers": ["opencode-free", "opencode", "nvidia-nim", "openai", "openrouter", "github-models"],
             "lsp": false,
             "mcp": {},
             "permission": {
@@ -3542,6 +3614,33 @@ jobs:
                     "limit": {
                       "context": 1000000,
                       "output": 32768
+                    }
+                  }
+                }
+              },
+              "opencode": {
+                "npm": "@ai-sdk/openai",
+                "name": "OpenCode Zen",
+                "options": {
+                  "baseURL": "https://opencode.ai/zen/v1",
+                  "apiKey": "{env:OPENCODE_API_KEY}"
+                },
+                "models": {
+                  "gpt-5.6-terra": {
+                    "name": "OpenCode Zen GPT-5.6 Terra",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
+                    "variants": {
+                      "high": {
+                        "reasoningEffort": "high"
+                      }
+                    },
+                    "limit": {
+                      "context": 1000000,
+                      "output": 128000
                     }
                   }
                 }
@@ -3854,6 +3953,7 @@ jobs:
           # api.openai.com directly with the org OPENAI_API_KEY gives the lead
           # model a working, un-throttled backend. Resolves {env:OPENAI_API_KEY}
           # in the opencode.jsonc "openai" provider block.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -3865,7 +3965,9 @@ jobs:
           # Their trial/free-period data
           # may be logged, retained, or used for product/model improvement, so
           # private repositories never include them. The pool then falls
-          # through to NVIDIA NIM, DeepSeek V3, the direct GPT-5.6 Luna slot, pinned PAID
+          # through to
+          # NVIDIA NIM, OpenCode Zen GPT-5.6 Terra, DeepSeek V3, the direct
+          # GPT-5.6 Luna slot, and pinned PAID
           # OpenRouter coder models (free-tier candidates hit the shared
           # free-models-per-day cap and hung for the full candidate timeout,
           # so the OpenRouter slots use cheap paid models billed against the
@@ -3875,7 +3977,7 @@ jobs:
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b ' || '' }}github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.

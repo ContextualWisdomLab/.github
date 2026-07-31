@@ -92,18 +92,19 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidates_match is not None
     conditional_public_candidate = (
         "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'opencode-free/nemotron-3-ultra-free "
+        "&& 'nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
+        "opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free "
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b ' || '' }}"
+        "opencode-free/mimo-v2.5-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
         "opencode-free/nemotron-3-ultra-free",
         "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
@@ -111,12 +112,14 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
     direct_openai_models = [
         model_name for provider, model_name in candidate_pairs if provider == "openai"
+    ]
+    zen_models = [
+        model_name for provider, model_name in candidate_pairs if provider == "opencode"
     ]
     openrouter_models = [
         model_name for provider, model_name in candidate_pairs if provider == "openrouter"
@@ -133,6 +136,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
     )
     assert candidate_pairs == [
+        ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
@@ -140,7 +144,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
-        ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
+        ["opencode", "gpt-5.6-terra"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -152,6 +156,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["github-models", "deepseek/deepseek-r1-0528"],
         ["github-models", "deepseek/deepseek-r1"],
     ]
+    assert zen_models == ["gpt-5.6-terra"]
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert openrouter_models == [
         "deepseek/deepseek-v3.2",
@@ -176,6 +181,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "limit"
     ] == {"context": 1000000, "output": 32768}
     free_models = generated_config["provider"]["opencode-free"]["models"]
+    paid_zen_models = generated_config["provider"]["opencode"]["models"]
     assert set(free_models) == {
         "nemotron-3-ultra-free",
         "deepseek-v4-flash-free",
@@ -185,6 +191,13 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "big-pickle",
         "mimo-v2.5-free",
     }
+    assert set(paid_zen_models) == {"gpt-5.6-terra"}
+    terra_model = paid_zen_models["gpt-5.6-terra"]
+    assert terra_model["tool_call"] is True
+    assert terra_model["reasoning"] is True
+    assert terra_model["options"]["reasoningEffort"] == "high"
+    assert terra_model["variants"]["high"]["reasoningEffort"] == "high"
+    assert terra_model["limit"] == {"context": 1000000, "output": 128000}
     nemotron_model = free_models["nemotron-3-ultra-free"]
     deepseek_model = free_models["deepseek-v4-flash-free"]
     north_model = free_models["north-mini-code-free"]
@@ -235,6 +248,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert banned_review_candidates.isdisjoint(
         set(direct_openai_models) | set(openrouter_models) | set(github_candidate_models)
     )
+    assert '"opencode": {' in workflow
+    assert '"apiKey": "{env:OPENCODE_API_KEY}"' in workflow
+    assert "OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}" in workflow
     assert '"openai": {' in workflow
     assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
     assert '"openrouter": {' in workflow
@@ -360,6 +376,23 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert "  coverage-source-tree:\n" in workflow
     assert "  coverage-evidence:\n" in workflow
+
+    metadata_start = workflow.index("  validate-pr-metadata:\n")
+    metadata_end = workflow.index("\n  coverage-source-tree:", metadata_start)
+    metadata_job = workflow[metadata_start:metadata_end]
+    assert "id-token: write" in metadata_job
+    assert (
+        "Exchange OpenCode app token for target repository metadata reads"
+        in metadata_job
+    )
+    assert (
+        "GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+    ) in metadata_job
+    assert (
+        "github.event.client_payload.target_repository != github.repository"
+        in metadata_job
+    )
 
     source_start = workflow.index("  coverage-source-tree:\n")
     source_end = workflow.index("\n  coverage-evidence:", source_start)
@@ -1314,16 +1347,17 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'opencode-free/nemotron-3-ultra-free "
+        "'nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
+        "opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free "
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b ' || ''"
+        "opencode-free/mimo-v2.5-free ' || ''"
     ) in workflow
     assert (
+        "opencode/gpt-5.6-terra "
         "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
