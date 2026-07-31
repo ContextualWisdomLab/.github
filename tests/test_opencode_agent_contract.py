@@ -201,7 +201,34 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     scoped_provider_binding = (
         "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
     )
-    assert workflow.count(scoped_provider_binding) == 2
+    jobs_text = workflow[workflow.index("\njobs:\n") + len("\njobs:\n") :]
+    job_headers = list(
+        re.finditer(r"^  ([A-Za-z0-9_-]+):\n", jobs_text, re.MULTILINE)
+    )
+    job_blocks = {
+        match.group(1): jobs_text[
+            match.start() : (
+                job_headers[index + 1].start()
+                if index + 1 < len(job_headers)
+                else len(jobs_text)
+            )
+        ]
+        for index, match in enumerate(job_headers)
+    }
+    privileged_review_job = job_blocks["opencode-review-target"]
+
+    assert privileged_review_job.count(scoped_provider_binding) == 2
+    assert (
+        privileged_review_job.count(
+            "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
+        )
+        == 2
+    )
+    for job_name, job_block in job_blocks.items():
+        if job_name == "opencode-review-target":
+            continue
+        assert "secrets.NVIDIA_NIM_API_KEY" not in job_block, job_name
+        assert "secrets.NVIDIA_API_KEY" not in job_block, job_name
     assert "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" not in workflow
     free_models = generated_config["provider"]["opencode-free"]["models"]
     paid_zen_models = generated_config["provider"]["opencode"]["models"]
