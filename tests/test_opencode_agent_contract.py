@@ -1619,6 +1619,40 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "forced smooth scrolling" in prompt_template
 
 
+def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
+    """Never diagnose the central scheduler's own queue check as a peer failure."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    unconditional_filter = 'select((.name // "") != "scan-pr-queue")'
+    cancelled_only_filter = (
+        'select(((.conclusion // "" | ascii_downcase) == "cancelled" '
+        'and (.name // "") == "scan-pr-queue") | not)'
+    )
+
+    # Both failed-check collectors and both pending-check collectors exclude the
+    # scheduler check by name, independently of its current state or conclusion.
+    assert workflow.count(unconditional_filter) >= 5
+    assert cancelled_only_filter not in workflow
+    failed_check_collector = Path(
+        "scripts/ci/collect_failed_check_evidence.sh"
+    ).read_text(encoding="utf-8")
+    assert unconditional_filter in failed_check_collector
+    assert cancelled_only_filter not in failed_check_collector
+
+    fixtures = [
+        {"name": "scan-pr-queue", "conclusion": "CANCELLED"},
+        {"name": "scan-pr-queue", "conclusion": "FAILURE"},
+        {"name": "real-peer-check", "conclusion": "FAILURE"},
+    ]
+    retained = [
+        check
+        for check in fixtures
+        if check.get("name", "") != "scan-pr-queue"
+    ]
+    assert retained == [{"name": "real-peer-check", "conclusion": "FAILURE"}]
+
+
 def test_opencode_job_timeout_contains_full_sequential_review_budget():
     """Keep the outer job alive through evidence, review, and publication."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
