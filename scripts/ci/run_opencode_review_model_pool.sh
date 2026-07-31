@@ -354,10 +354,12 @@ is_nvidia_nim_candidate() {
 
 # Org secret name is NVIDIA_NIM_API_KEY (GitHub Actions / org secrets UI).
 # opencode.jsonc nvidia-nim provider block resolves {env:NVIDIA_API_KEY}.
-# Workflow maps secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY → env NVIDIA_API_KEY.
-# Normalize here too so local/CLI runs with only NVIDIA_NIM_API_KEY set do not skip nim/*.
-if [ -z "${NVIDIA_API_KEY:-}" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
+# Normalize only the scoped secret and discard any legacy provider credential so
+# it cannot activate NIM candidates outside the explicit governance boundary.
+if [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
 	export NVIDIA_API_KEY="$NVIDIA_NIM_API_KEY"
+else
+	unset NVIDIA_API_KEY
 fi
 
 is_low_sensitivity_candidate() {
@@ -387,8 +389,8 @@ should_skip_model_candidate() {
 		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
-	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because NVIDIA_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
+		printf 'Skipping OpenCode %s because scoped NVIDIA_NIM_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
 	return 1
@@ -400,6 +402,9 @@ cap_model_run_timeout() {
 	local cap_seconds
 
 	case "$model_candidate" in
+	nvidia-nim/*)
+		cap_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180)"
+		;;
 	opencode-free/*)
 		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600)"
 		;;
@@ -519,6 +524,8 @@ main() {
 	local uncapped_run_timeout
 	local changed_file_count small_file_threshold medium_file_threshold
 	local invalid_control_cap max_total_attempts total_attempts alive_candidates
+	local nim_budget_seconds nim_elapsed_seconds nim_remaining_seconds
+	local nim_attempt_started nim_attempt_elapsed non_nim_candidate_count
 	local -A dead_candidate_reasons invalid_control_counts
 	local -a model_candidates
 
@@ -582,8 +589,23 @@ main() {
 		fi
 		exit 1
 	fi
-	printf 'Configured OpenCode model pool: candidates=%s attempts=%s per-model-timeout=%ss retry-budget=%ss max-cycles=%s.\n' \
-		"${#model_candidates[@]}" "$attempts" "$original_run_timeout" "$budget_seconds" "$max_cycles"
+	nim_budget_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 900)"
+	nim_elapsed_seconds=0
+	non_nim_candidate_count=0
+	for model_candidate in "${model_candidates[@]}"; do
+		if ! is_nvidia_nim_candidate "$model_candidate"; then
+			non_nim_candidate_count=$((non_nim_candidate_count + 1))
+		fi
+	done
+	if [ "$non_nim_candidate_count" -gt 0 ] &&
+		[ "$budget_seconds" -gt 0 ] &&
+		[ "$nim_budget_seconds" -ge "$budget_seconds" ]; then
+		nim_budget_seconds=$((budget_seconds / 2))
+		printf 'OpenCode NVIDIA NIM combined runtime budget was capped at %ss so %s non-NIM fallback candidate(s) retain retry budget.\n' \
+			"$nim_budget_seconds" "$non_nim_candidate_count"
+	fi
+	printf 'Configured OpenCode model pool: candidates=%s attempts=%s per-model-timeout=%ss retry-budget=%ss max-cycles=%s NVIDIA-NIM-combined-budget=%ss.\n' \
+		"${#model_candidates[@]}" "$attempts" "$original_run_timeout" "$budget_seconds" "$max_cycles" "$nim_budget_seconds"
 
 	cycle=1
 	while :; do
@@ -597,6 +619,12 @@ main() {
 			if should_skip_model_candidate "$model_candidate"; then
 				continue
 			fi
+			if is_nvidia_nim_candidate "$model_candidate" &&
+				[ "$nim_elapsed_seconds" -ge "$nim_budget_seconds" ]; then
+				printf 'Skipping OpenCode %s because the NVIDIA NIM combined runtime budget of %ss is exhausted; preserving the remaining retry budget for fallback candidates.\n' \
+					"$model_candidate" "$nim_budget_seconds"
+				continue
+			fi
 			assert_reasoning_effort_for_candidate "$model_candidate"
 			safe_model="${model_candidate//[\/:]/-}"
 			prompt_file="${RUNNER_TEMP}/opencode-review-${safe_model}-prompt.md"
@@ -606,6 +634,12 @@ main() {
 			write_prompt "$model_candidate" "$prompt_file"
 			for attempt in $(seq 1 "$attempts"); do
 				now="$SECONDS"
+				if is_nvidia_nim_candidate "$model_candidate" &&
+					[ "$nim_elapsed_seconds" -ge "$nim_budget_seconds" ]; then
+					printf 'Stopping OpenCode %s retries because the NVIDIA NIM combined runtime budget of %ss is exhausted.\n' \
+						"$model_candidate" "$nim_budget_seconds"
+					break
+				fi
 				if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then
 					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$attempts"
 					if finish_pool_without_model; then
@@ -629,6 +663,14 @@ main() {
 				if [ "$deadline" -gt 0 ] && [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -gt "$remaining" ]; then
 					OPENCODE_RUN_TIMEOUT_SECONDS="$remaining"
 				fi
+				if is_nvidia_nim_candidate "$model_candidate"; then
+					nim_remaining_seconds=$((nim_budget_seconds - nim_elapsed_seconds))
+					if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -gt "$nim_remaining_seconds" ]; then
+						printf 'OpenCode %s combined NVIDIA NIM budget cap selected %ss instead of %ss so fallback candidates retain retry budget.\n' \
+							"$model_candidate" "$nim_remaining_seconds" "$OPENCODE_RUN_TIMEOUT_SECONDS"
+						OPENCODE_RUN_TIMEOUT_SECONDS="$nim_remaining_seconds"
+					fi
+				fi
 				uncapped_run_timeout="$OPENCODE_RUN_TIMEOUT_SECONDS"
 				OPENCODE_RUN_TIMEOUT_SECONDS="$(cap_model_run_timeout "$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS")"
 				if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -lt "$uncapped_run_timeout" ]; then
@@ -642,6 +684,7 @@ main() {
 					agent="$OPENCODE_FIRST_ATTEMPT_AGENT"
 				fi
 				run_status=0
+				nim_attempt_started="$SECONDS"
 				if run_one_model_attempt "$model_candidate" "$attempt" "$attempts" "$agent" "$prompt_file" "$candidate_output_file" "$opencode_json_file" "$opencode_export_file"; then
 					cp "$candidate_output_file" "$OPENCODE_OUTPUT_FILE"
 					record_review_model "$model_candidate"
@@ -649,6 +692,12 @@ main() {
 					exit 0
 				else
 					run_status=$?
+				fi
+				if is_nvidia_nim_candidate "$model_candidate"; then
+					nim_attempt_elapsed=$((SECONDS - nim_attempt_started))
+					nim_elapsed_seconds=$((nim_elapsed_seconds + nim_attempt_elapsed))
+					printf 'OpenCode NVIDIA NIM combined runtime used %ss/%ss after %s attempt %s/%s.\n' \
+						"$nim_elapsed_seconds" "$nim_budget_seconds" "$model_candidate" "$attempt" "$attempts"
 				fi
 				if [ "$run_status" -ne 3 ] && is_credit_exhausted_failure "$opencode_json_file" "${opencode_json_file}.stderr"; then
 					dead_candidate_reasons[$model_candidate]="provider credits exhausted (HTTP 402 / payment required)"

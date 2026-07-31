@@ -92,7 +92,14 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidates_match is not None
     conditional_public_candidate = (
         "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'opencode-free/nemotron-3-ultra-free "
+        "&& 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
+        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
+        "nvidia-nim/meta/llama-3.3-70b-instruct "
+        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
+        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
+        "opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
         "opencode-free/laguna-s-2.1-free "
@@ -103,6 +110,13 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
+        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1",
+        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia-nim/meta/llama-3.3-70b-instruct",
+        "nvidia-nim/deepseek-ai/deepseek-v4-pro",
+        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1",
         "opencode-free/nemotron-3-ultra-free",
         "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
@@ -129,7 +143,18 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
 
     assert candidate_pairs
+    assert all(
+        not candidate.startswith("nvidia-nim/")
+        for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
+    )
     assert candidate_pairs == [
+        ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
+        ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
+        ["nvidia-nim", "nvidia/nemotron-3-super-120b-a12b"],
+        ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
+        ["nvidia-nim", "meta/llama-3.3-70b-instruct"],
+        ["nvidia-nim", "deepseek-ai/deepseek-v4-pro"],
+        ["nvidia-nim", "mistralai/codestral-22b-instruct-v0.1"],
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
@@ -165,6 +190,46 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     )
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
+    nvidia_provider = generated_config["provider"]["nvidia-nim"]
+    assert nvidia_provider["options"] == {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}",
+    }
+    assert nvidia_provider["models"]["nvidia/nemotron-3-ultra-550b-a55b"][
+        "limit"
+    ] == {"context": 131072, "output": 8192}
+    scoped_provider_binding = (
+        "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
+    )
+    jobs_text = workflow[workflow.index("\njobs:\n") + len("\njobs:\n") :]
+    job_headers = list(
+        re.finditer(r"^  ([A-Za-z0-9_-]+):\n", jobs_text, re.MULTILINE)
+    )
+    job_blocks = {
+        match.group(1): jobs_text[
+            match.start() : (
+                job_headers[index + 1].start()
+                if index + 1 < len(job_headers)
+                else len(jobs_text)
+            )
+        ]
+        for index, match in enumerate(job_headers)
+    }
+    privileged_review_job = job_blocks["opencode-review-target"]
+
+    assert privileged_review_job.count(scoped_provider_binding) == 2
+    assert (
+        privileged_review_job.count(
+            "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
+        )
+        == 2
+    )
+    for job_name, job_block in job_blocks.items():
+        if job_name == "opencode-review-target":
+            continue
+        assert "secrets.NVIDIA_NIM_API_KEY" not in job_block, job_name
+        assert "secrets.NVIDIA_API_KEY" not in job_block, job_name
+    assert "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" not in workflow
     free_models = generated_config["provider"]["opencode-free"]["models"]
     paid_zen_models = generated_config["provider"]["opencode"]["models"]
     assert set(free_models) == {
@@ -1332,7 +1397,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'opencode-free/nemotron-3-ultra-free "
+        "'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
+        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
+        "nvidia-nim/meta/llama-3.3-70b-instruct "
+        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
+        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
+        "opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
         "opencode-free/laguna-s-2.1-free "
@@ -1341,6 +1413,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/mimo-v2.5-free ' || ''"
     ) in workflow
     assert (
+        "opencode/gpt-5.6-terra "
         "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
@@ -1374,6 +1447,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
+    assert 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"' in workflow
+    assert 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
@@ -1503,7 +1578,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         '["opencode-review", "coverage-evidence", "coverage-source-tree", '
-        '"required-workflow-bootstrap", "metadata-only gate evaluation"]' in workflow
+        '"required-workflow-bootstrap", "metadata-only gate evaluation", '
+        '"scan-pr-queue"]' in workflow
     )
     assert "falling back to current-head REST check-runs" in workflow
 
@@ -1575,6 +1651,49 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "prefers-reduced-motion: reduce" in prompt_template
     assert "forced smooth scrolling" in prompt_template
+
+
+def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
+    """Never diagnose the central scheduler's own queue check as a peer failure."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    unconditional_filter = 'select((.name // "") != "scan-pr-queue")'
+    cancelled_only_filter = (
+        'select(((.conclusion // "" | ascii_downcase) == "cancelled" '
+        'and (.name // "") == "scan-pr-queue") | not)'
+    )
+
+    # Both failed-check collectors and both pending-check collectors exclude the
+    # scheduler check by name, independently of its current state or conclusion.
+    assert workflow.count(unconditional_filter) >= 5
+    assert cancelled_only_filter not in workflow
+    failed_check_collector = Path(
+        "scripts/ci/collect_failed_check_evidence.sh"
+    ).read_text(encoding="utf-8")
+    assert unconditional_filter in failed_check_collector
+    assert cancelled_only_filter not in failed_check_collector
+
+    fixtures = [
+        {"name": "scan-pr-queue", "conclusion": "CANCELLED"},
+        {"name": "scan-pr-queue", "conclusion": "FAILURE"},
+        {"name": "real-peer-check", "conclusion": "FAILURE"},
+    ]
+    extracted_filter = re.search(
+        rf"^\s+\|\s+({re.escape(unconditional_filter)})$",
+        workflow,
+        re.MULTILINE,
+    )
+    assert extracted_filter is not None
+    jq_result = subprocess.run(
+        ["jq", "-c", f"[.[] | {extracted_filter.group(1)}]"],
+        input=json.dumps(fixtures),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    retained = json.loads(jq_result.stdout)
+    assert retained == [{"name": "real-peer-check", "conclusion": "FAILURE"}]
 
 
 def test_opencode_job_timeout_contains_full_sequential_review_budget():
