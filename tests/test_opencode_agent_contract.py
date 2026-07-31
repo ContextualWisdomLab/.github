@@ -577,6 +577,26 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'chmod -R u+rwX,go-rwx "$destination"' in measure_step
     assert '--cache "$writable_npm_cache_dir"' in measure_step
     assert "npm offline ci" in measure_step
+    npm_install_case = (
+        measure_step.split("install_package_dependencies() {", 1)[1]
+        .split("npm)", 1)[1]
+        .split(";;", 1)[0]
+    )
+    assert (
+        "if ! trusted_npm_lock_is_materialized || "
+        "! prepare_writable_npm_cache; then"
+    ) in npm_install_case
+    assert (
+        "the current npm lock is not hash-bounded to the validated base or HEAD, "
+        "or the trusted npm cache is unavailable"
+    ) in npm_install_case
+    assert (
+        "offline npm coverage requires a tracked package-lock.json or "
+        "npm-shrinkwrap.json at the validated base and current head"
+    ) in npm_install_case
+    assert npm_install_case.count("failures=$((failures + 1))") == 2
+    assert npm_install_case.count("return 0") == 2
+    assert "return 1" not in npm_install_case
     assert "trusted_pnpm_lock_matches_base()" in measure_step
     assert (
         'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'

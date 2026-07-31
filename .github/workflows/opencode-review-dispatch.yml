@@ -1391,8 +1391,15 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-                  trusted_npm_lock_is_materialized
-                  prepare_writable_npm_cache
+                  if ! trusted_npm_lock_is_materialized || ! prepare_writable_npm_cache; then
+                    append "### JavaScript/TypeScript dependencies (npm)"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: the current npm lock is not hash-bounded to the validated base or HEAD, or the trusted npm cache is unavailable."
+                    append ""
+                    failures=$((failures + 1))
+                    return 0
+                  fi
                   run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
                     npm ci \
                       --offline \
@@ -1401,8 +1408,13 @@ jobs:
                       --no-audit \
                       --no-fund
                 else
-                  echo "::error::Offline npm coverage requires a tracked package-lock.json or npm-shrinkwrap.json at the validated base and current head."
-                  return 1
+                  append "### JavaScript/TypeScript dependencies (npm)"
+                  append ""
+                  append "- Result: FAIL"
+                  append "- Reason: offline npm coverage requires a tracked package-lock.json or npm-shrinkwrap.json at the validated base and current head."
+                  append ""
+                  failures=$((failures + 1))
+                  return 0
                 fi
                 ;;
               pnpm)

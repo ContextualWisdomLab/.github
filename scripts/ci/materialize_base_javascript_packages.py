@@ -108,13 +108,16 @@ def base_pnpm_projects(
         if not isinstance(package_manager, str) or not PNPM_SPEC_RE.fullmatch(
             package_manager
         ):
-            if str(project_root / "package-lock.json") in regular_paths:
-                # A sibling package-lock.json means npm owns this project and
-                # the pnpm-lock.yaml is a vestigial second lockfile. Skip pnpm
-                # materialization so the downstream npm (package-lock.json)
-                # install path handles it, instead of failing the whole
-                # coverage-evidence job. A genuine pnpm-only project (no sibling
-                # package-lock.json) still must pin an exact pnpm packageManager.
+            if any(
+                str(project_root / lock_name) in regular_paths
+                for lock_name in NPM_LOCK_NAMES
+            ):
+                # A sibling npm lock means npm owns this project and the
+                # pnpm-lock.yaml is a vestigial second lockfile. Skip pnpm
+                # materialization so the downstream npm install path handles
+                # it, instead of failing the whole coverage-evidence job. A
+                # genuine pnpm-only project (no sibling npm lock) still must
+                # pin an exact pnpm packageManager.
                 continue
             raise ValueError(
                 f"trusted base package manifest {package_path} must declare an exact pnpm packageManager version"
@@ -350,28 +353,28 @@ def materialize(
 
     manifest: list[dict[str, str]] = []
     projects: list[tuple[str, str, dict[str, bytes], str, str]] = []
-    for source_path, package_manager, base_inputs in base_pnpm_projects(
-        repo_root, base_sha
-    ) + base_npm_projects(repo_root, base_sha):
+    base_npm = base_npm_projects(repo_root, base_sha)
+    base_npm_paths = {source_path for source_path, _manager, _inputs in base_npm}
+    base_npm_blobs: dict[str, str] = {}
+    for source_path, package_manager, base_inputs in (
+        base_pnpm_projects(repo_root, base_sha) + base_npm
+    ):
+        lock_blob = _lock_blob_sha(repo_root, base_sha, source_path)
         projects.append(
             (
                 source_path,
                 package_manager,
                 base_inputs,
                 base_sha.lower(),
-                _lock_blob_sha(repo_root, base_sha, source_path),
+                lock_blob,
             )
         )
+        if source_path in base_npm_paths:
+            base_npm_blobs[source_path] = lock_blob
 
     if head_sha is not None:
         if not SHA_RE.fullmatch(head_sha):
             raise ValueError("head SHA must be exactly 40 hexadecimal characters")
-        base_npm_blobs = {
-            source_path: _lock_blob_sha(repo_root, base_sha, source_path)
-            for source_path, _package_manager, _base_inputs in base_npm_projects(
-                repo_root, base_sha
-            )
-        }
         for source_path, package_manager, head_inputs in base_npm_projects(
             repo_root, head_sha
         ):

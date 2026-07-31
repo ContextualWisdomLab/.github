@@ -539,7 +539,7 @@ def test_rejects_lock_without_sibling_package_manifest(tmp_path: Path) -> None:
     git(repo, "add", ".")
     git(repo, "commit", "-m", "base")
 
-    with pytest.raises(ValueError, match="no regular sibling package.json"):
+    with pytest.raises(ValueError, match=r"no regular sibling package\.json"):
         materializer.base_pnpm_projects(repo, git(repo, "rev-parse", "HEAD"))
 
 
@@ -556,7 +556,7 @@ def test_rejects_npm_lock_without_sibling_package_manifest(tmp_path: Path) -> No
     git(repo, "add", ".")
     git(repo, "commit", "-m", "base")
 
-    with pytest.raises(ValueError, match="no regular sibling package.json"):
+    with pytest.raises(ValueError, match=r"no regular sibling package\.json"):
         materializer.base_npm_projects(repo, git(repo, "rev-parse", "HEAD"))
 
 
@@ -636,20 +636,23 @@ def test_rejects_invalid_base_package_inputs(
         materializer.base_pnpm_projects(tmp_path, "a" * 40)
 
 
+@pytest.mark.parametrize("npm_lock_name", materializer.NPM_LOCK_NAMES)
 def test_skips_npm_project_with_vestigial_pnpm_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    npm_lock_name: str,
 ) -> None:
     """An npm project's stray pnpm-lock.yaml is skipped, not fail-closed.
 
-    A base tree with a ``pnpm-lock.yaml`` plus a sibling ``package-lock.json``
-    and no exact pnpm ``packageManager`` is npm-managed, so pnpm materialization
-    is skipped (the downstream npm install path owns it) rather than failing the
-    whole coverage-evidence job.
+    A base tree with a ``pnpm-lock.yaml`` plus any sibling npm lock and no exact
+    pnpm ``packageManager`` is npm-managed, so pnpm materialization is skipped
+    (the downstream npm install path owns it) rather than failing the whole
+    coverage-evidence job.
     """
     regular_paths = {
         "frontend/package.json",
         "frontend/pnpm-lock.yaml",
-        "frontend/package-lock.json",
+        f"frontend/{npm_lock_name}",
     }
     monkeypatch.setattr(
         materializer, "_regular_base_paths", lambda *_args: regular_paths
