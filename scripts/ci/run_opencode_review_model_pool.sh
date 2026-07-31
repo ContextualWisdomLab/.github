@@ -352,6 +352,12 @@ is_nvidia_nim_candidate() {
 	esac
 }
 
+# Org secret is NVIDIA_NIM_API_KEY; opencode.jsonc expects NVIDIA_API_KEY.
+# Normalize once so skip checks and the provider env share one name.
+if [ -z "${NVIDIA_API_KEY:-}" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
+	export NVIDIA_API_KEY="$NVIDIA_NIM_API_KEY"
+fi
+
 is_low_sensitivity_candidate() {
 	case "$1" in
 	openai/*-mini | openai/*-nano | \
