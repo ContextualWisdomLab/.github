@@ -270,7 +270,15 @@ def test_materializes_strict_changed_head_npm_lock_after_base(
                 "lockfileVersion": 3,
                 "packages": {
                     "": {"name": "untrusted-head"},
+                    "packages/worker": {
+                        "name": "@fixture/worker",
+                        "version": "1.0.0",
+                    },
                     "node_modules/head": head_package,
+                    "node_modules/worker": {
+                        "resolved": "packages/worker",
+                        "link": True,
+                    },
                 },
             }
         )
@@ -300,6 +308,60 @@ def test_materializes_strict_changed_head_npm_lock_after_base(
     )
 
 
+def test_unchanged_head_npm_lock_is_not_materialized_twice(tmp_path: Path) -> None:
+    """An unchanged exact lock reuses the base cache and manifest entry."""
+    repo, base_sha = npm_fixture_repo(tmp_path)
+
+    manifest = materializer.materialize(
+        repo,
+        base_sha,
+        tmp_path / "output",
+        head_sha=base_sha,
+    )
+
+    assert len(manifest) == 1
+    assert manifest[0]["revision_sha"] == base_sha
+
+
+def test_rejects_invalid_head_sha_during_materialization(tmp_path: Path) -> None:
+    """A symbolic or abbreviated head cannot enter the networked context."""
+    repo, base_sha = npm_fixture_repo(tmp_path)
+
+    with pytest.raises(ValueError, match="head SHA must be exactly 40"):
+        materializer.materialize(
+            repo,
+            base_sha,
+            tmp_path / "output",
+            head_sha="HEAD",
+        )
+
+
+def test_rejects_invalid_lock_blob_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Manifest provenance must contain a full Git blob SHA."""
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"not-a-sha\n")
+
+    with pytest.raises(RuntimeError, match="invalid blob SHA"):
+        materializer._lock_blob_sha(tmp_path, "a" * 40, "package-lock.json")
+
+
+@pytest.mark.parametrize(
+    ("lock_content", "message"),
+    [
+        (b"not-json", "invalid JSON"),
+        (b"[]", "must be a JSON object"),
+    ],
+)
+def test_rejects_malformed_changed_head_npm_lock_bytes(
+    lock_content: bytes,
+    message: str,
+) -> None:
+    """Changed HEAD locks must decode to a JSON object."""
+    with pytest.raises(ValueError, match=message):
+        materializer.validate_head_npm_lock("package-lock.json", lock_content)
+
+
 @pytest.mark.parametrize(
     ("lock_data", "message"),
     [
@@ -310,6 +372,20 @@ def test_materializes_strict_changed_head_npm_lock_after_base(
         (
             {"lockfileVersion": 3, "packages": []},
             "object-valued packages map",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {"node_modules/pkg": []},
+            },
+            "malformed package metadata",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {"..\\escape": {}},
+            },
+            "unsafe package path",
         ),
         (
             {
@@ -347,12 +423,42 @@ def test_materializes_strict_changed_head_npm_lock_after_base(
                 "lockfileVersion": 3,
                 "packages": {
                     "node_modules/workspace": {
+                        "link": True,
+                    }
+                },
+            },
+            "unsafe workspace link",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/workspace": {
                         "resolved": "../escape",
                         "link": True,
                     }
                 },
             },
             "unsafe workspace link",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {"node_modules/pkg": {}},
+            },
+            "must pin a registry tarball and SHA-512 integrity",
+        ),
+        (
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/pkg": {
+                        "resolved": "https://registry.npmjs.org:bad/pkg/-/pkg-1.0.0.tgz",
+                        "integrity": "sha512-" + ("A" * 86) + "==",
+                    }
+                },
+            },
+            "invalid registry URL",
         ),
     ],
 )
