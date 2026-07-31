@@ -627,6 +627,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GIT_CONFIG_NOSYSTEM=1" in measure_step
     assert "GIT_CONFIG_GLOBAL=/dev/null" in measure_step
     assert "-c safe.directory=/work" in measure_step
+    assert measure_step.count("GIT_CONFIG_COUNT=1") == 3
+    assert measure_step.count("GIT_CONFIG_KEY_0=safe.directory") == 3
+    assert measure_step.count("GIT_CONFIG_VALUE_0=/work") == 3
     assert "-c core.fsmonitor=false" in measure_step
     assert "-c core.hooksPath=/dev/null" in measure_step
     assert "git -c core.quotePath=false ls-files" not in measure_step
@@ -779,6 +782,59 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "opencode-exhausted-retry:" not in workflow
     assert "RETRY_DISPATCH_TOKEN" not in workflow
     assert "contents: write" not in workflow
+
+
+def test_sandbox_git_config_env_marks_only_the_validated_worktree_safe(tmp_path):
+    """Propagated Git config admits /work without trusting unrelated repositories."""
+    worktree = tmp_path / "work"
+    unrelated = tmp_path / "unrelated"
+    for repository in (worktree, unrelated):
+        repository.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repository), "init", "-q"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+    base_env = {
+        **os.environ,
+        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+    }
+    refused = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=base_env,
+    )
+    assert refused.returncode != 0
+    assert "dubious ownership" in refused.stderr
+
+    sandbox_env = {
+        **base_env,
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": str(worktree),
+    }
+    allowed = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=sandbox_env,
+    )
+    still_refused = subprocess.run(
+        ["git", "-C", str(unrelated), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=sandbox_env,
+    )
+
+    assert allowed.returncode == 0
+    assert still_refused.returncode != 0
+    assert "dubious ownership" in still_refused.stderr
 
 
 def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
