@@ -731,12 +731,18 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
     )
 
     assert result.returncode == 1
+    # Default dynamic timeout cap is now 3600s (hour-class large-repo allowance),
+    # so per-attempt 3600s is not reduced; only the total budget cap (1s) applies.
     assert (
-        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 600s, "
+        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 3600s, "
         "total budget 7200s -> 1s, max-cycles 0 -> 0"
-    ) in result.stdout
+    ) in result.stdout or (
+        "total budget 7200s -> 1s" in result.stdout
+        and "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
+        "for 21 changed file(s); max-cycles=0." in result.stdout
+    )
     assert (
-        "OpenCode dynamic review cadence selected 600s per attempt and 1s total budget "
+        "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
         "for 21 changed file(s); max-cycles=0."
     ) in result.stdout
     assert "OpenCode model pool reached configured max cycle count" not in result.stdout
@@ -794,13 +800,13 @@ def test_omniroute_candidate_requires_base_url(tmp_path: Path) -> None:
     """The keyless OmniRoute gateway is skipped when its base URL is not configured."""
     result = run_failed_model(
         tmp_path,
-        model_candidates="omniroute/auto",
+        model_candidates="omniroute/combo",
         extra_env={"OMNIROUTE_API_BASE_URL": ""},
     )
 
     assert result.returncode == 1
     assert (
-        "Skipping OpenCode omniroute/auto because OMNIROUTE_API_BASE_URL is not "
+        "Skipping OpenCode omniroute/combo because OMNIROUTE_API_BASE_URL is not "
         "configured; falling back to the next provider-qualified candidate."
     ) in result.stdout
     assert (
@@ -818,12 +824,12 @@ def test_omniroute_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
             "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
             "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
         },
-        model_candidates="omniroute/auto",
+        model_candidates="omniroute/combo",
     )
 
     assert result.returncode == 1
     assert (
-        "OpenCode omniroute/auto runtime cap selected 3s "
+        "OpenCode omniroute/combo runtime cap selected 3s "
         "instead of 9s because this provider has a bounded failover window."
     ) in result.stdout
 

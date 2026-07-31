@@ -99,7 +99,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
         "opencode-free/mimo-v2.5-free "
-        "omniroute/auto ' || '' }}"
+        "omniroute/combo ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -111,12 +111,15 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
-        "omniroute/auto",
+        "omniroute/combo",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
     direct_openai_models = [
         model_name for provider, model_name in candidate_pairs if provider == "openai"
+    ]
+    zen_models = [
+        model_name for provider, model_name in candidate_pairs if provider == "opencode"
     ]
     openrouter_models = [
         model_name for provider, model_name in candidate_pairs if provider == "openrouter"
@@ -136,7 +139,14 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
-        ["omniroute", "auto"],
+        ["omniroute", "combo"],
+        ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
+        ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
+        ["nvidia-nim", "nvidia/nemotron-3-super-120b-a12b"],
+        ["nvidia-nim", "meta/llama-3.3-70b-instruct"],
+        ["nvidia-nim", "deepseek-ai/deepseek-v4-pro"],
+        ["nvidia-nim", "mistralai/codestral-22b-instruct-v0.1"],
+        ["opencode", "gpt-5.6-terra"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
@@ -148,6 +158,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["github-models", "deepseek/deepseek-r1-0528"],
         ["github-models", "deepseek/deepseek-r1"],
     ]
+    assert zen_models == ["gpt-5.6-terra"]
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert openrouter_models == [
         "deepseek/deepseek-v3.2",
@@ -164,6 +175,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
     free_models = generated_config["provider"]["opencode-free"]["models"]
+    paid_zen_models = generated_config["provider"]["opencode"]["models"]
     assert set(free_models) == {
         "nemotron-3-ultra-free",
         "deepseek-v4-flash-free",
@@ -173,6 +185,13 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "big-pickle",
         "mimo-v2.5-free",
     }
+    assert set(paid_zen_models) == {"gpt-5.6-terra"}
+    terra_model = paid_zen_models["gpt-5.6-terra"]
+    assert terra_model["tool_call"] is True
+    assert terra_model["reasoning"] is True
+    assert terra_model["options"]["reasoningEffort"] == "high"
+    assert terra_model["variants"]["high"]["reasoningEffort"] == "high"
+    assert terra_model["limit"] == {"context": 1000000, "output": 128000}
     nemotron_model = free_models["nemotron-3-ultra-free"]
     deepseek_model = free_models["deepseek-v4-flash-free"]
     north_model = free_models["north-mini-code-free"]
@@ -204,12 +223,18 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert omniroute_provider["options"]["baseURL"] == "{env:OMNIROUTE_API_BASE_URL}"
     assert omniroute_provider["options"]["apiKey"] == "{env:OMNIROUTE_API_KEY}"
     omniroute_models = omniroute_provider["models"]
-    assert set(omniroute_models) == {"auto"}
-    assert omniroute_models["auto"]["tool_call"] is True
-    assert omniroute_models["auto"]["limit"] == {
+    assert set(omniroute_models) == {"combo"}
+    assert omniroute_models["combo"]["tool_call"] is True
+    assert omniroute_models["combo"]["limit"] == {
         "context": 200000,
         "output": 32768,
     }
+    for model_name, model_config in free_models.items():
+        if model_config.get("reasoning") is True:
+            assert model_config["options"]["reasoningEffort"] == "high", model_name
+            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
+                model_name
+            )
     assert github_candidate_models == [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
@@ -227,6 +252,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert banned_review_candidates.isdisjoint(
         set(direct_openai_models) | set(openrouter_models) | set(github_candidate_models)
     )
+    assert '"opencode": {' in workflow
+    assert '"apiKey": "{env:OPENCODE_API_KEY}"' in workflow
+    assert "OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}" in workflow
     assert '"openai": {' in workflow
     assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
     assert '"openrouter": {' in workflow
@@ -355,6 +383,23 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert "  coverage-source-tree:\n" in workflow
     assert "  coverage-evidence:\n" in workflow
+
+    metadata_start = workflow.index("  validate-pr-metadata:\n")
+    metadata_end = workflow.index("\n  coverage-source-tree:", metadata_start)
+    metadata_job = workflow[metadata_start:metadata_end]
+    assert "id-token: write" in metadata_job
+    assert (
+        "Exchange OpenCode app token for target repository metadata reads"
+        in metadata_job
+    )
+    assert (
+        "GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+    ) in metadata_job
+    assert (
+        "github.event.client_payload.target_repository != github.repository"
+        in metadata_job
+    )
 
     source_start = workflow.index("  coverage-source-tree:\n")
     source_end = workflow.index("\n  coverage-evidence:", source_start)
@@ -1264,7 +1309,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
     )
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 300", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 325", workflow)
     assert "timeout-minutes: 12" in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
@@ -1316,7 +1361,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
         "opencode-free/mimo-v2.5-free "
-        "omniroute/auto ' || ''"
+        "omniroute/combo ' || ''"
     ) in workflow
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
@@ -1352,7 +1397,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
-    assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "600"' in workflow
+    assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
@@ -1584,11 +1629,16 @@ def test_opencode_job_timeout_contains_full_sequential_review_budget():
         r"^      - name: Publish OpenCode review outcome\n"
         r"[\s\S]{0,1200}?^        timeout-minutes: (\d+)$"
     )
+    noema_handoff_timeout = timeout_minutes(
+        r"^      - name: Dispatch Noema after current-head OpenCode approval\n"
+        r"[\s\S]{0,500}?^        timeout-minutes: (\d+)$"
+    )
     setup_and_cleanup_margin = 30
     required_timeout = (
         evidence_timeout
         + model_pool_timeout
         + max(fast_publish_timeout, normal_publish_timeout)
+        + noema_handoff_timeout
         + setup_and_cleanup_margin
     )
 
@@ -1725,7 +1775,9 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "github.event_name == 'pull_request_target'" in workflow
     status_step = workflow.split(
         "      - name: Publish repository_dispatch OpenCode status", 1
-    )[1].split("      - name: Run merge scheduler after approval", 1)[0]
+    )[1].split(
+        "      - name: Dispatch Noema after current-head OpenCode approval", 1
+    )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
