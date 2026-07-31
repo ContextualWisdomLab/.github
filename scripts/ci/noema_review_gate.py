@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import ipaddress
 import json
 import os
@@ -342,17 +343,26 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
     if not paths:
         return "Changed file context unavailable: PR reported no changed files."
     sections: list[str] = []
-    for path in paths[:MAX_CONTEXT_FILES]:
+    target_paths = paths[:MAX_CONTEXT_FILES]
+
+    def process_path(path: str) -> str:
+        """Fetch and truncate one changed file for the bounded review context."""
         try:
             content = fetch_head_file_content(repo, path, head_sha)
         except RuntimeError as exc:
             reason = scrub_sensitive_data(str(exc)) or "unknown error"
-            sections.append(f"### {path}\nUnavailable from head content API: {reason}")
-            continue
+            return f"### {path}\nUnavailable from head content API: {reason}"
         if not content:
-            sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
-            continue
-        sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
+            return f"### {path}\nNo UTF-8 text content available from head content API."
+        return f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
+
+    if len(target_paths) <= 1:
+        sections.extend(process_path(path) for path in target_paths)
+    else:
+        max_workers = min(10, len(target_paths))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            sections.extend(executor.map(process_path, target_paths))
+
     if len(paths) > MAX_CONTEXT_FILES:
         sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)

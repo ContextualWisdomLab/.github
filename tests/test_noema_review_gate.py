@@ -246,13 +246,20 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         calls.append(args)
         target = args[2]
         if target.endswith("/files"):
-            return "src/a.py\nREADME.md\nempty.txt\n"
-        if "contents/src/a.py" in target:
+            return "src/a.py\nREADME.md\nempty.txt\nspace.txt\n"
+        if "contents/src%2Fa.py" in target or "contents/src/a.py" in target:
             return encoded
         if "contents/README.md" in target:
             raise RuntimeError("Command failed: token secret")
         if "contents/empty.txt" in target:
             return ""
+        # Adding support for space content decode to trigger the empty condition correctly inside process_path
+        if "contents/space.txt" in target:
+            # We want fetch_head_file_content to return empty string
+            # fetch_head_file_content decodes base64, but first strips whitespace.
+            # To get an empty string result from fetch_head_file_content when content isn't empty,
+            # we just provide an empty JSON value conceptually, or just return empty base64 string
+            return "   "
         raise AssertionError(args)
 
     monkeypatch.setattr(noema, "run", fake_run)
@@ -307,6 +314,11 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
     context = noema.changed_file_context("owner/repo", 7, "head")
 
     assert "1 changed files omitted from context budget" in context
+
+    paths = ["src/file_only.py"]
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
+    context = noema.changed_file_context("owner/repo", 7, "head")
+    assert "src/file_only.py" in context
 
 
 class FakeResponse:
