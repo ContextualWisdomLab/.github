@@ -352,8 +352,10 @@ is_nvidia_nim_candidate() {
 	esac
 }
 
-# Org secret is NVIDIA_NIM_API_KEY; opencode.jsonc expects NVIDIA_API_KEY.
-# Normalize once so skip checks and the provider env share one name.
+# Org secret name is NVIDIA_NIM_API_KEY (GitHub Actions / org secrets UI).
+# opencode.jsonc nvidia-nim provider block resolves {env:NVIDIA_API_KEY}.
+# Workflow maps secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY → env NVIDIA_API_KEY.
+# Normalize here too so local/CLI runs with only NVIDIA_NIM_API_KEY set do not skip nim/*.
 if [ -z "${NVIDIA_API_KEY:-}" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
 	export NVIDIA_API_KEY="$NVIDIA_NIM_API_KEY"
 fi
@@ -399,7 +401,7 @@ cap_model_run_timeout() {
 
 	case "$model_candidate" in
 	opencode-free/*)
-		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 600)"
+		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600)"
 		;;
 	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
 		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
