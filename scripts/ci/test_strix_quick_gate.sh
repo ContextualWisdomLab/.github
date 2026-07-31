@@ -731,9 +731,13 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review preserves legitimate full-hour provider sessions"
 assert_file_contains "$workflow_file" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' "opencode free-tier failover timeout is hour-class (~3600s)"
+assert_file_contains "$workflow_file" 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"' "opencode NVIDIA NIM candidates have a short per-candidate failover timeout"
+assert_file_contains "$workflow_file" 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"' "opencode NVIDIA NIM candidates share a bounded combined runtime budget"
 assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_RUN_TIMEOUT_SECONDS:-3600' "opencode pool defaults primary run timeout to hour-class (~3600s) for large repos"
 assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600' "opencode pool dynamic timeout cap defaults to hour-class (~3600s)"
 assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600' "opencode free-tier failover timeout is hour-class (~3600s)"
+assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180' "opencode NVIDIA NIM candidate runtime cap defaults to three minutes"
+assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 900' "opencode NVIDIA NIM combined runtime cap defaults to fifteen minutes"
 
 	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
 	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "1"' "opencode model pool exhausts each candidate only once before bounded fallback"

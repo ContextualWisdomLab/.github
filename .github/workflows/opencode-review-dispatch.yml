@@ -4091,6 +4091,8 @@ jobs:
           OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
           OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
+          OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"
+          OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"
           OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is

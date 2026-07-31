@@ -27,6 +27,10 @@ CENTRAL_FALLBACK_ENV = {
     "OPENCODE_EVIDENCE_FILE",
     "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION",
 }
+INHERITED_PROVIDER_CREDENTIAL_ENV = {
+    "NVIDIA_API_KEY",
+    "NVIDIA_NIM_API_KEY",
+}
 
 
 def bash_command() -> str:
@@ -170,7 +174,7 @@ def run_failed_model(
     fake_opencode.chmod(0o755)
     github_output = tmp_path / "github-output.txt"
     env = os.environ.copy()
-    for name in CENTRAL_FALLBACK_ENV:
+    for name in CENTRAL_FALLBACK_ENV | INHERITED_PROVIDER_CREDENTIAL_ENV:
         env.pop(name, None)
     env.update(
         {
@@ -796,8 +800,12 @@ def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> Non
     ) in result.stdout
 
 
-def test_nvidia_nim_candidate_requires_key(tmp_path: Path) -> None:
+def test_nvidia_nim_candidate_requires_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """NVIDIA NIM is skipped cleanly when its scoped credential is unavailable."""
+    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "ambient-scoped-key")
+    monkeypatch.setenv("NVIDIA_API_KEY", "ambient-provider-key")
     result = run_failed_model(
         tmp_path,
         model_candidates="nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
@@ -814,7 +822,7 @@ def test_nvidia_nim_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
         tmp_path,
         extra_env={
             "NVIDIA_NIM_API_KEY": "fake-nvidia-key",
-            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS": "3",
             "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
         },
         model_candidates="nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
@@ -825,6 +833,38 @@ def test_nvidia_nim_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
         "OpenCode nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b runtime cap "
         "selected 3s instead of 9s because this provider has a bounded failover window."
     ) in result.stdout
+
+
+def test_nvidia_nim_combined_budget_preserves_fallback_attempt(
+    tmp_path: Path,
+) -> None:
+    """Timed-out NIM candidates cannot consume the fallback provider budget."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "2",
+            "NVIDIA_NIM_API_KEY": "fake-nvidia-key",
+            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "1",
+            "OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS": "1",
+            "OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS": "1",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "5",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "6",
+        },
+        model_candidates=(
+            "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
+            "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
+            "opencode-free/nemotron-3-ultra-free"
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "OpenCode NVIDIA NIM combined runtime used" in result.stdout
+    assert (
+        "Skipping OpenCode nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
+        "because the NVIDIA NIM combined runtime budget of 1s is exhausted"
+        in result.stdout
+    )
+    assert "OpenCode opencode-free/nemotron-3-ultra-free attempt 1/1" in result.stdout
 
 
 def test_github_models_openai_prompt_references_evidence_without_inlining(
