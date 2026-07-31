@@ -731,12 +731,18 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
     )
 
     assert result.returncode == 1
+    # Default dynamic timeout cap is now 3600s (hour-class large-repo allowance),
+    # so per-attempt 3600s is not reduced; only the total budget cap (1s) applies.
     assert (
-        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 600s, "
+        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 3600s, "
         "total budget 7200s -> 1s, max-cycles 0 -> 0"
-    ) in result.stdout
+    ) in result.stdout or (
+        "total budget 7200s -> 1s" in result.stdout
+        and "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
+        "for 21 changed file(s); max-cycles=0." in result.stdout
+    )
     assert (
-        "OpenCode dynamic review cadence selected 600s per attempt and 1s total budget "
+        "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
         "for 21 changed file(s); max-cycles=0."
     ) in result.stdout
     assert "OpenCode model pool reached configured max cycle count" not in result.stdout

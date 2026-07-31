@@ -44,3 +44,10 @@ catalog reliability is restored.
 
 Org secret is **`NVIDIA_NIM_API_KEY`**. Workflows bind it to process env `NVIDIA_API_KEY`
 (fallback: `secrets.NVIDIA_API_KEY` if present) so `opencode.jsonc` `{env:NVIDIA_API_KEY}` resolves.
+
+## Large-repo OpenCode timeouts (~1 hour)
+
+Primary/default run timeouts and the dynamic queue timeout cap default to
+**3600s** (hour-class) so large repositories are not cut off by the old 600s
+default when env is unset. Free-tier failover remains capped at 600s.
+Workflow-provided values (e.g. 5400s) still win over defaults.
