@@ -576,9 +576,9 @@ jobs:
           # pull-request-controlled tests in Docker's default private PID namespace with a
           # read-only trusted tree and no host Docker socket. The image is
           # pinned to the reviewed linux/amd64 manifest digest. JavaScript
-          # registry access is likewise restricted to exact package inputs
-          # extracted from the live-validated base commit; the PR-head sandbox
-          # consumes only the resulting offline store.
+          # registry access is likewise restricted to exact base package inputs
+          # or strictly registry/hash-bounded npm inputs from the live-validated
+          # HEAD; the PR-head sandbox consumes only the resulting offline store.
           if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" != "1" ]; then
             host_github_output="$GITHUB_OUTPUT"
             sandbox_result_dir="${RUNNER_TEMP}/opencode-coverage-sandbox-result"
@@ -600,9 +600,10 @@ jobs:
 
             # Build the coverage tool image before the pull-request tree is
             # mounted anywhere. The networked build context contains only this
-            # trusted Dockerfile, the reviewed CI requirements, and hash-pinned
-            # dependency locks read directly from the live-validated base SHA.
-            # It never contains PR-head source, manifests, credentials, or runner
+            # trusted Dockerfile, the reviewed CI requirements, exact base
+            # dependency locks, and strictly registry/hash-bounded npm locks
+            # read directly from the live-validated HEAD SHA. It never contains
+            # PR-head source, credentials, lifecycle execution, or runner
             # command files.
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
@@ -630,6 +631,7 @@ jobs:
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_javascript_packages.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
+              --head-sha "$PR_HEAD_SHA" \
               --output-dir "$coverage_build_dir/base-javascript-packages"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
@@ -679,22 +681,37 @@ jobs:
             && rm -f /tmp/pnpm.tgz
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
-              mkdir -p /opt/pnpm-store; \
+              mkdir -p /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
+              install -m 0444 /tmp/base-javascript-packages/manifest.json \
+                /opt/javascript-package-locks/manifest.json; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
                 /tmp/base-javascript-packages/manifest.json \
                 | while IFS="$(printf '\t')" read -r project_dir package_manager; do \
                     [ -n "$project_dir" ] || continue; \
-                    if [ "$package_manager" != "pnpm@11.5.3" ]; then \
-                      printf 'Unsupported trusted base package manager: %s\n' "$package_manager" >&2; \
-                      exit 1; \
-                    fi; \
                     cd "/tmp/base-javascript-packages/${project_dir}"; \
-                    pnpm fetch \
-                      --frozen-lockfile \
-                      --ignore-scripts \
-                      --store-dir /opt/pnpm-store; \
+                    case "$package_manager" in \
+                      npm) \
+                        npm ci \
+                          --ignore-scripts \
+                          --cache /opt/npm-cache \
+                          --no-audit \
+                          --no-fund; \
+                        rm -rf node_modules; \
+                        ;; \
+                      pnpm@11.5.3) \
+                        pnpm fetch \
+                          --frozen-lockfile \
+                          --ignore-scripts \
+                          --store-dir /opt/pnpm-store; \
+                        ;; \
+                      *) \
+                        printf 'Unsupported trusted base package manager: %s\n' "$package_manager" >&2; \
+                        exit 1; \
+                        ;; \
+                    esac; \
                   done; \
-              chmod -R a+rX /opt/pnpm-store; \
+              npm cache verify --cache /opt/npm-cache; \
+              chmod -R a+rX /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
           RUN python3 -m pip install \
@@ -856,6 +873,9 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0=safe.directory \
+              GIT_CONFIG_VALUE_0=/work \
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
@@ -878,10 +898,20 @@ jobs:
 
           run_r_package_testthat() {
             local package_name="$1"
-            local log_file rc classification
+            local log_file rc classification description_snapshot
             log_file="$(mktemp)"
             append "### R package testthat suite"
             append ""
+            description_snapshot="$(mktemp "$RUNNER_TEMP/r-description.XXXXXX")"
+            if [ ! -f DESCRIPTION ] || [ -L DESCRIPTION ] ||
+              ! install -m 0444 -- DESCRIPTION "$description_snapshot"; then
+              append "- Result: FAIL"
+              append "- Reason: DESCRIPTION must be a regular non-symlink file that can be snapshotted before untrusted tests run."
+              append ""
+              failures=$((failures + 1))
+              rm -f "$log_file" "$description_snapshot"
+              return
+            fi
             append '```text'
             append_command \
               Rscript -e 'lib <- Sys.getenv("R_LIBS_USER"); .libPaths(c(lib, .libPaths())); testthat::test_dir("tests/testthat")'
@@ -902,6 +932,9 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0=safe.directory \
+              GIT_CONFIG_VALUE_0=/work \
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
@@ -918,7 +951,8 @@ jobs:
               python3 -I "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \
                 classify-testthat \
                 --log "$log_file" \
-                --package "$package_name" 2>/dev/null
+                --package "$package_name" \
+                --description "$description_snapshot" 2>/dev/null
             )"; then
               append "- Result: PASS"
               append "- Reason: ${classification}; direct sandbox failures are deferred only to a successful current-head peer R CMD check."
@@ -928,7 +962,7 @@ jobs:
               failures=$((failures + 1))
             fi
             append ""
-            rm -f "$log_file"
+            rm -f "$log_file" "$description_snapshot"
           }
 
           run_and_capture_advisory() {
@@ -957,6 +991,9 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0=safe.directory \
+              GIT_CONFIG_VALUE_0=/work \
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
@@ -1195,7 +1232,95 @@ jobs:
             [ -f package.json ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null
           }
 
+          writable_npm_cache_dir=""
           writable_pnpm_store_dir=""
+          trusted_npm_lock_is_materialized() {
+            local relative_dir
+            local lock_name
+            local relative_lock
+            local head_blob
+            local worktree_blob
+            local trust_manifest
+
+            case "$PWD" in
+              "$COVERAGE_SOURCE_WORKDIR")
+                relative_dir=""
+                ;;
+              "$COVERAGE_SOURCE_WORKDIR"/*)
+                relative_dir="${PWD#"$COVERAGE_SOURCE_WORKDIR"/}"
+                ;;
+              *)
+                echo "::error::npm project directory escaped the validated coverage worktree."
+                return 1
+                ;;
+            esac
+            if [ -f npm-shrinkwrap.json ] && [ ! -L npm-shrinkwrap.json ]; then
+              lock_name="npm-shrinkwrap.json"
+            elif [ -f package-lock.json ] && [ ! -L package-lock.json ]; then
+              lock_name="package-lock.json"
+            else
+              echo "::error::Current npm lock must be a regular non-symlink package-lock.json or npm-shrinkwrap.json."
+              return 1
+            fi
+            relative_lock="${relative_dir:+${relative_dir}/}${lock_name}"
+
+            head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}" 2>/dev/null)" || {
+              echo "::error::Validated head does not contain ${relative_lock}."
+              return 1
+            }
+            worktree_blob="$(
+              trusted_git hash-object --no-filters -- \
+                "$COVERAGE_SOURCE_WORKDIR/$relative_lock"
+            )" || {
+              echo "::error::Could not hash current npm lock ${relative_lock}."
+              return 1
+            }
+            if [ "$head_blob" != "$worktree_blob" ]; then
+              echo "::error::Current npm lock ${relative_lock} does not match the live-validated HEAD blob."
+              return 1
+            fi
+
+            trust_manifest="/opt/javascript-package-locks/manifest.json"
+            if [ ! -f "$trust_manifest" ] || [ -L "$trust_manifest" ]; then
+              echo "::error::Trusted JavaScript package lock manifest must be a regular non-symlink file."
+              return 1
+            fi
+            if ! jq -e \
+              --arg source "$relative_lock" \
+              --arg package_manager "npm" \
+              --arg base_sha "${PR_BASE_SHA,,}" \
+              --arg head_sha "${PR_HEAD_SHA,,}" \
+              --arg lock_blob "${head_blob,,}" \
+              'any(.[];
+                .source == $source
+                and .package_manager == $package_manager
+                and .lock_blob == $lock_blob
+                and (.revision_sha == $base_sha or .revision_sha == $head_sha)
+              )' "$trust_manifest" >/dev/null; then
+              echo "::error::Current npm lock ${relative_lock} was not hash-bounded and materialized from the validated base or HEAD."
+              return 1
+            fi
+          }
+
+          prepare_writable_npm_cache() {
+            if [ -n "$writable_npm_cache_dir" ]; then
+              return
+            fi
+            if [ ! -d /opt/npm-cache ] || [ -L /opt/npm-cache ]; then
+              echo "::error::Trusted npm cache must be a non-symlink directory."
+              return 1
+            fi
+
+            local destination
+            destination="$(mktemp -d /tmp/opencode-npm-cache.XXXXXX)"
+            cp -R /opt/npm-cache/. "$destination/"
+            chown -R --no-dereference \
+              "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" \
+              "$destination"
+            chmod -R u+rwX,go-rwx "$destination"
+            writable_npm_cache_dir="$destination"
+          }
+
           trusted_pnpm_lock_matches_base() {
             local relative_dir
             local relative_lock
@@ -1266,9 +1391,30 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-                  run_and_capture "JavaScript/TypeScript dependencies (npm ci, lifecycle hooks disabled)" npm ci --ignore-scripts
+                  if ! trusted_npm_lock_is_materialized || ! prepare_writable_npm_cache; then
+                    append "### JavaScript/TypeScript dependencies (npm)"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: the current npm lock is not hash-bounded to the validated base or HEAD, or the trusted npm cache is unavailable."
+                    append ""
+                    failures=$((failures + 1))
+                    return 0
+                  fi
+                  run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
+                    npm ci \
+                      --offline \
+                      --ignore-scripts \
+                      --cache "$writable_npm_cache_dir" \
+                      --no-audit \
+                      --no-fund
                 else
-                  run_and_capture "JavaScript/TypeScript dependencies (npm install, lifecycle hooks disabled)" npm install --ignore-scripts
+                  append "### JavaScript/TypeScript dependencies (npm)"
+                  append ""
+                  append "- Result: FAIL"
+                  append "- Reason: offline npm coverage requires a tracked package-lock.json or npm-shrinkwrap.json at the validated base and current head."
+                  append ""
+                  failures=$((failures + 1))
+                  return 0
                 fi
                 ;;
               pnpm)
@@ -2931,6 +3077,16 @@ jobs:
               : >"$OPENCODE_CHANGED_FILES_FILE"
             fi
 
+            if ! python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_adversarial_receipts.py" \
+              --repo-root "$OPENCODE_SOURCE_WORKDIR" \
+              --base-sha "$PR_MERGE_BASE" \
+              --head-sha "$PR_HEAD_SHA" \
+              --changed-files-file "$OPENCODE_CHANGED_FILES_FILE"; then
+              printf '## Adversarial probe source-line receipts\n\n'
+              printf 'Trusted current-head receipt generation failed; approval must fail closed.\n'
+            fi
+            printf '\n\n'
+
             printf '## CodeGraph evidence\n\n'
             if [ ! -s "$CODEGRAPH_EVIDENCE_FILE" ]; then
               printf 'CodeGraph evidence is unavailable; approval must fail closed.\n\n'
@@ -3113,6 +3269,7 @@ jobs:
               append_evidence_section "Failed GitHub Check evidence" 7000
               append_evidence_section "Coverage execution evidence" 7000
               append_evidence_section "Changed files" 7000
+              append_evidence_section "Adversarial probe source-line receipts" 9000
               append_evidence_section "Focused changed hunks" 14000
               printf '\n\n[Full evidence is available in ./bounded-review-evidence.md inside the isolated review workspace.]\n'
             } >"$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
@@ -3134,7 +3291,13 @@ jobs:
           reviewed content, execute commands, reach external services, or claim that you did. Use only the
           copied source tree and trusted bounded evidence prepared outside the model process. CodeGraph,
           execution receipts, coverage, current-head checks, and security evidence are precomputed and must be
-          cited exactly as supplied. Missing or contradictory trusted evidence must fail closed as NEEDS_INFO.
+          cited exactly as supplied. Copy adversarial path, line, and source-line-sha256 values only from the
+          Adversarial probe source-line receipts section; the isolated model cannot recompute a trusted receipt.
+          Missing or contradictory trusted evidence must fail closed with a schema-valid REQUEST_CHANGES
+          result, never NEEDS_INFO or a bare status substitution. That result must include at least one
+          source-backed finding and a confirmed adversarial probe at the same path and positive line; copy
+          the path, line, and source-line-sha256 without alteration from one matching entry in the
+          Adversarial probe source-line receipts section.
           Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain
           terminology; require trusted bounded source evidence when those facts are material.
           Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it.
@@ -4685,11 +4848,12 @@ jobs:
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
           # The OpenCode app installation token is exchanged from api.opencode.ai
           # and never carries security-events read, so it cannot read the
-          # code-scanning alerts API; github.token has security-events: read from
-          # this job's permissions block, so it is the same-repository default.
-          CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          # code-scanning alerts API. Prefer a configured organization credential
+          # because repository_dispatch runs in .github while the alert target is
+          # commonly another repository; github.token remains the same-repo fallback.
+          CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
-          CODE_SCANNING_TOKEN_SOURCE: github-token
+          CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           # Exposed so the "openai" provider in opencode.jsonc resolves during the
@@ -5156,9 +5320,7 @@ jobs:
             if [ "${GITHUB_EVENT_NAME:-}" = "repository_dispatch" ] &&
               [ -n "${GH_REPOSITORY:-}" ] &&
               [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
-              printf '::notice::Cross-repository repository_dispatch review-tool failure for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
-              echo "::endgroup::"
-              exit 0
+              printf '::notice::Cross-repository repository_dispatch review-tool failure for %s#%s fails closed; the target-head status publisher and a later scheduler pass must expose and retry this review gap.\n' "$GH_REPOSITORY" "$PR_NUMBER"
             fi
             echo "::endgroup::"
             exit 1
@@ -5182,9 +5344,7 @@ jobs:
             if [ "${GITHUB_EVENT_NAME:-}" = "repository_dispatch" ] &&
               [ -n "${GH_REPOSITORY:-}" ] &&
               [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]; then
-              printf '::notice::Cross-repository repository_dispatch approval hold for %s#%s was logged without failing the central .github source-branch check; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
-              echo "::endgroup::"
-              exit 0
+              printf '::notice::Cross-repository repository_dispatch approval hold for %s#%s fails closed until the exact current-head review evidence becomes complete; a later scheduler pass must retry this target head.\n' "$GH_REPOSITORY" "$PR_NUMBER"
             fi
             echo "::endgroup::"
             exit 1
@@ -7581,14 +7741,18 @@ jobs:
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
-          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
+          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
+          OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"
         run: |
           set -euo pipefail
           if [ -z "${PR_HEAD_SHA:-}" ]; then

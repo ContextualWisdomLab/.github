@@ -545,9 +545,58 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm" in measure_step
     assert 'test "$(/usr/local/bin/pnpm --version)" = "11.5.3"' in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
+    assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
+    assert (
+        "install -m 0444 /tmp/base-javascript-packages/manifest.json"
+        in measure_step
+    )
+    assert "/opt/javascript-package-locks/manifest.json" in measure_step
+    assert "npm ci" in measure_step
+    assert "--cache /opt/npm-cache" in measure_step
+    assert "npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
+    assert "trusted_npm_lock_is_materialized()" in measure_step
+    assert (
+        'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
+        in measure_step
+    )
+    assert (
+        "was not hash-bounded and materialized from the validated base or HEAD"
+        in measure_step
+    )
+    assert ".lock_blob == $lock_blob" in measure_step
+    assert ".revision_sha == $base_sha or .revision_sha == $head_sha" in measure_step
+    assert "prepare_writable_npm_cache()" in measure_step
+    assert (
+        'destination="$(mktemp -d /tmp/opencode-npm-cache.XXXXXX)"'
+        in measure_step
+    )
+    assert 'cp -R /opt/npm-cache/. "$destination/"' in measure_step
+    assert 'chmod -R u+rwX,go-rwx "$destination"' in measure_step
+    assert '--cache "$writable_npm_cache_dir"' in measure_step
+    assert "npm offline ci" in measure_step
+    npm_install_case = (
+        measure_step.split("install_package_dependencies() {", 1)[1]
+        .split("npm)", 1)[1]
+        .split(";;", 1)[0]
+    )
+    assert (
+        "if ! trusted_npm_lock_is_materialized || "
+        "! prepare_writable_npm_cache; then"
+    ) in npm_install_case
+    assert (
+        "the current npm lock is not hash-bounded to the validated base or HEAD, "
+        "or the trusted npm cache is unavailable"
+    ) in npm_install_case
+    assert (
+        "offline npm coverage requires a tracked package-lock.json or "
+        "npm-shrinkwrap.json at the validated base and current head"
+    ) in npm_install_case
+    assert npm_install_case.count("failures=$((failures + 1))") == 2
+    assert npm_install_case.count("return 0") == 2
+    assert "return 1" not in npm_install_case
     assert "trusted_pnpm_lock_matches_base()" in measure_step
     assert (
         'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
@@ -627,6 +676,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GIT_CONFIG_NOSYSTEM=1" in measure_step
     assert "GIT_CONFIG_GLOBAL=/dev/null" in measure_step
     assert "-c safe.directory=/work" in measure_step
+    assert measure_step.count("GIT_CONFIG_COUNT=1") == 3
+    assert measure_step.count("GIT_CONFIG_KEY_0=safe.directory") == 3
+    assert measure_step.count("GIT_CONFIG_VALUE_0=/work") == 3
     assert "-c core.fsmonitor=false" in measure_step
     assert "-c core.hooksPath=/dev/null" in measure_step
     assert "git -c core.quotePath=false ls-files" not in measure_step
@@ -779,6 +831,59 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "opencode-exhausted-retry:" not in workflow
     assert "RETRY_DISPATCH_TOKEN" not in workflow
     assert "contents: write" not in workflow
+
+
+def test_sandbox_git_config_env_marks_only_the_validated_worktree_safe(tmp_path):
+    """Propagated Git config admits /work without trusting unrelated repositories."""
+    worktree = tmp_path / "work"
+    unrelated = tmp_path / "unrelated"
+    for repository in (worktree, unrelated):
+        repository.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repository), "init", "-q"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+    base_env = {
+        **os.environ,
+        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+    }
+    refused = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=base_env,
+    )
+    assert refused.returncode != 0
+    assert "dubious ownership" in refused.stderr
+
+    sandbox_env = {
+        **base_env,
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": str(worktree),
+    }
+    allowed = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=sandbox_env,
+    )
+    still_refused = subprocess.run(
+        ["git", "-C", str(unrelated), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=sandbox_env,
+    )
+
+    assert allowed.returncode == 0
+    assert still_refused.returncode != 0
+    assert "dubious ownership" in still_refused.stderr
 
 
 def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
@@ -1317,8 +1422,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
-        "CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN }}"
+        "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in workflow
     # The OpenCode app installation token never carries security-events read, so
     # preferring it for the code-scanning alert lookup 403s ("Resource not
@@ -1328,7 +1433,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     ]
     assert code_scanning_token_lines
     assert all("opencode_app_token" not in line for line in code_scanning_token_lines)
-    assert "CODE_SCANNING_TOKEN_SOURCE: github-token" in workflow
+    assert (
+        "CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && "
+        "'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && "
+        "'OPENCODE_APPROVE_TOKEN' || 'github-token' }}"
+    ) in workflow
     code_scanning_source_lines = [
         line for line in workflow.splitlines() if "CODE_SCANNING_TOKEN_SOURCE:" in line
     ]
@@ -1501,6 +1610,25 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Repeated current-head sections for models without file reads" in workflow
     assert "append_evidence_section" in workflow
     assert 'Focused changed hunks" 14000' in workflow
+    assert (
+        'append_evidence_section "Adversarial probe source-line receipts" 9000'
+        in workflow
+    )
+    assert (
+        'python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_adversarial_receipts.py"'
+        in workflow
+    )
+    assert "the isolated model cannot recompute a trusted receipt" in workflow
+    assert (
+        "Missing or contradictory trusted evidence must fail closed with a "
+        "schema-valid REQUEST_CHANGES" in workflow
+    )
+    assert "never NEEDS_INFO or a bare status substitution" in workflow
+    assert (
+        "copy\n"
+        "          the path, line, and source-line-sha256 without alteration "
+        "from one matching entry" in workflow
+    )
     assert (
         "do not request changes solely because your own tool or file read did not"
         in workflow
@@ -1875,10 +2003,15 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
+        "github.token }}"
     ) in status_step
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
-    assert "steps.opencode_app_token.outputs" not in status_step
+    assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step
+    assert "OPENCODE_CHANGED_FILES_FILE" in status_step
+    assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in status_step
+    assert "OPENCODE_SOURCE_WORKDIR" in status_step
+    assert 'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"' in status_step
     assert "continue-on-error: true" not in status_step
     assert (
         "same-repository github.token can access cross-repository target"
@@ -1932,6 +2065,16 @@ def test_opencode_adversarial_prompt_requires_independent_proof():
     assert '"properly handles all cases"' in prompt
     assert "is circular and invalid" in prompt
     assert "source-line-sha256=<64 lowercase hex>" in prompt
+    assert "copied without alteration" in prompt
+    assert "do not invent, approximate, or recompute" in prompt
+    assert (
+        "example probe's `path`, numeric positive `line`, and "
+        "`source-line-sha256` evidence value together" in prompt
+    )
+    assert "copying all three without alteration from the same entry" in prompt
+    assert "Adversarial probe source-line receipts" in prompt
+    assert "COPY_SENTINEL_HEAD_SHA" in prompt
+    assert '{"head_sha":"${HEAD_SHA}"' not in prompt
 
 
 def test_opencode_privileged_review_security_boundaries_are_fail_closed():
@@ -1980,9 +2123,13 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "materialize_base_python_requirements.py" in measure
     assert "install_base_python_locks.py" in measure
     assert "base-python-requirements" in measure
-    assert "read directly from the live-validated base SHA" in measure
+    assert "strictly registry/hash-bounded npm inputs from the live-validated" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
-    assert "npm ci --ignore-scripts" in coverage_job
+    assert "npm ci \\" in coverage_job
+    assert "--offline" in coverage_job
+    assert '--cache "$writable_npm_cache_dir"' in coverage_job
+    assert "prepare_writable_npm_cache" in coverage_job
+    assert "npm install --ignore-scripts" not in coverage_job
     assert "pnpm install \\" in coverage_job
     assert "--offline" in coverage_job
     assert "--frozen-lockfile" in coverage_job
@@ -2537,6 +2684,10 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
 
     assert "run_r_package_testthat" in workflow
     assert "r_coverage_peer_gate.py" in workflow
+    assert 'description_snapshot="$(mktemp "$RUNNER_TEMP/r-description.XXXXXX")"' in workflow
+    assert '[ -L DESCRIPTION ]' in workflow
+    assert 'install -m 0444 -- DESCRIPTION "$description_snapshot"' in workflow
+    assert '--description "$description_snapshot"' in workflow
     assert marker in workflow
     assert "require_r_cmd_check_for_deferred_coverage" in workflow
     assert workflow.count("require_r_cmd_check_for_deferred_coverage") == 3

@@ -49,6 +49,64 @@ Error: Test failures
     assert not gate.classify_testthat_failure(other_package, "aFIPC")
     assert not gate.classify_testthat_failure(mismatched, "aFIPC")
     assert not gate.classify_testthat_failure(other_package, "../aFIPC")
+    assert not gate.classify_testthat_failure(
+        other_package,
+        "aFIPC",
+        allowed_missing={"../mirt"},
+    )
+
+
+def test_allows_only_declared_suggests_package_failures() -> None:
+    """A peer-check deferral may include packageNotFound errors for declared Suggests."""
+    text = """\
+Error ('test-one.R:1:1'): first
+<packageNotFoundError/error/condition>
+Error in `loadNamespace(x)`: there is no package called 'aFIPC'
+Error ('test-two.R:2:1'): second
+<packageNotFoundError/error/condition>
+Error in `loadNamespace(x)`: there is no package called 'mockery'
+[ FAIL 2 | WARN 0 | SKIP 0 | PASS 0 ]
+Error: Test failures
+"""
+    description = """\
+Package: aFIPC
+Suggests:
+    mockery,
+    testthat (>= 3.0.0)
+"""
+    suggests = gate.declared_suggests(description)
+
+    assert suggests == {"mockery", "testthat"}
+    assert not gate.classify_testthat_failure(text, "aFIPC")
+    assert gate.classify_testthat_failure(
+        text,
+        "aFIPC",
+        allowed_missing=suggests,
+    )
+    assert not gate.classify_testthat_failure(
+        text.replace("mockery", "undeclared"),
+        "aFIPC",
+        allowed_missing=suggests,
+    )
+
+
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        ("Package: pkg\n", set()),
+        ("Package: pkg\nSuggests:\n", set()),
+        ("invalid preamble\nSuggests: helper\n", {"helper"}),
+        ("Package: pkg\nSuggests: helper (>= 1.2), other.pkg\n", {"helper", "other.pkg"}),
+        ("Package: pkg\nSuggests: helper (\n", None),
+        ("Package: pkg\nSuggests: helper\ninvalid continuation\n", None),
+        ("Package: pkg\nSuggests: helper\nSuggests: other\n", None),
+    ],
+)
+def test_parses_description_suggests_fail_closed(
+    description: str, expected: set[str] | None
+) -> None:
+    """Malformed or duplicate Suggests fields cannot broaden the deferral set."""
+    assert gate.declared_suggests(description) == expected
 
 
 def test_requires_successful_r_cmd_check_workflow() -> None:
@@ -78,7 +136,10 @@ def test_cli_classifies_log_and_check_json(tmp_path: Path, capsys) -> None:
         "Error ('x.R:1:1'): x\n"
         "<packageNotFoundError/error/condition>\n"
         "Error in `loadNamespace(x)`: there is no package called 'pkg'\n"
-        "[ FAIL 1 | WARN 0 | SKIP 0 | PASS 0 ]\n"
+        "Error ('y.R:2:1'): y\n"
+        "<packageNotFoundError/error/condition>\n"
+        "Error in `loadNamespace(x)`: there is no package called 'helper'\n"
+        "[ FAIL 2 | WARN 0 | SKIP 0 | PASS 0 ]\n"
         "Error: Test failures\n",
         encoding="utf-8",
     )
@@ -87,8 +148,24 @@ def test_cli_classifies_log_and_check_json(tmp_path: Path, capsys) -> None:
         json.dumps([{"workflow": "R CMD check", "name": "check", "state": "SUCCESS"}]),
         encoding="utf-8",
     )
+    description = tmp_path / "DESCRIPTION"
+    description.write_text("Package: pkg\nSuggests: helper\n", encoding="utf-8")
 
-    assert gate.main(["classify-testthat", "--log", str(log), "--package", "pkg"]) == 0
+    assert gate.main(["classify-testthat", "--log", str(log), "--package", "pkg"]) == 1
+    assert (
+        gate.main(
+            [
+                "classify-testthat",
+                "--log",
+                str(log),
+                "--package",
+                "pkg",
+                "--description",
+                str(description),
+            ]
+        )
+        == 0
+    )
     assert gate.main(["require-check", "--checks-json", str(checks)]) == 0
 
     checks.write_text("{", encoding="utf-8")
