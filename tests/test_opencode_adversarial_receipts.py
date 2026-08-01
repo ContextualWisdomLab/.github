@@ -15,16 +15,63 @@ from scripts.ci import opencode_adversarial_receipts as receipts
 def isolated_git_environment() -> dict[str, str]:
     """Return a Git environment isolated from host configuration and templates."""
     env = os.environ.copy()
-    env.pop("GIT_CONFIG_COUNT", None)
-    env.pop("GIT_TEMPLATE_DIR", None)
+    for name in tuple(env):
+        if name.startswith("GIT_") or name == "EMAIL":
+            env.pop(name)
     env.update(
         {
+            "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
+            "GIT_AUTHOR_EMAIL": "receipt@example.invalid",
+            "GIT_AUTHOR_NAME": "Receipt Test",
+            "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00",
+            "GIT_COMMITTER_EMAIL": "receipt@example.invalid",
+            "GIT_COMMITTER_NAME": "Receipt Test",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
         }
     )
     return env
+
+
+def test_isolated_git_environment_replaces_host_git_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Host repository, identity, config, and prompt controls never reach fixture Git."""
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_TEMPLATE_DIR",
+        "GIT_WORK_TREE",
+        "EMAIL",
+    ):
+        monkeypatch.setenv(name, "/host-controlled")
+
+    env = isolated_git_environment()
+
+    assert {name for name in env if name.startswith("GIT_")} == {
+        "GIT_AUTHOR_DATE",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_DATE",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_TERMINAL_PROMPT",
+    }
+    assert env["GIT_AUTHOR_NAME"] == env["GIT_COMMITTER_NAME"] == "Receipt Test"
+    assert env["GIT_AUTHOR_EMAIL"] == env["GIT_COMMITTER_EMAIL"]
+    assert env["GIT_AUTHOR_DATE"] == env["GIT_COMMITTER_DATE"]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "EMAIL" not in env
 
 
 def git(repo: Path, *args: str) -> str:
