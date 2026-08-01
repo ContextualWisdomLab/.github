@@ -582,7 +582,16 @@ jobs:
           if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" != "1" ]; then
             host_github_output="$GITHUB_OUTPUT"
             sandbox_result_dir="${RUNNER_TEMP}/opencode-coverage-sandbox-result"
-            measure_step_script="$(realpath "$0")"
+            # GitHub Actions invokes this generated step as `bash -e {0}`, so
+            # $0 is the runner-generated script path. Check that unresolved
+            # invocation path before realpath; checking only the resolved path
+            # cannot detect a symlink used to invoke the step.
+            measure_step_invocation="$0"
+            if [ -L "$measure_step_invocation" ]; then
+              echo "::error::Coverage sandbox launcher invocation must not be a symlink."
+              exit 1
+            fi
+            measure_step_script="$(realpath "$measure_step_invocation")"
             case "$measure_step_script" in
               "${RUNNER_TEMP}"/*) ;;
               *)
@@ -590,7 +599,7 @@ jobs:
                 exit 1
                 ;;
             esac
-            if [ ! -f "$measure_step_script" ] || [ -L "$0" ] || [ "$(stat -c '%u' "$measure_step_script")" != "$(id -u)" ]; then
+            if [ ! -f "$measure_step_script" ] || [ -L "$measure_step_script" ] || [ "$(stat -c '%u' "$measure_step_script")" != "$(id -u)" ]; then
               echo "::error::Coverage sandbox launcher failed regular-file, symlink, or ownership validation."
               exit 1
             fi

@@ -684,7 +684,14 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "--pid private" not in measure_step
     assert "--pid host" not in measure_step
     assert "Docker's default private PID namespace" in measure_step
-    assert 'measure_step_script="$(realpath "$0")"' in measure_step
+    assert 'measure_step_invocation="$0"' in measure_step
+    assert '[ -L "$measure_step_invocation" ]' in measure_step
+    assert 'measure_step_script="$(realpath "$measure_step_invocation")"' in measure_step
+    assert '[ -L "$measure_step_script" ]' in measure_step
+    assert '[ -L "$0" ]' not in measure_step
+    assert measure_step.index('[ -L "$measure_step_invocation" ]') < measure_step.index(
+        'measure_step_script="$(realpath "$measure_step_invocation")"'
+    )
     assert (
         "source=${measure_step_script},target=/trusted-measure-step.sh,readonly"
         in measure_step
