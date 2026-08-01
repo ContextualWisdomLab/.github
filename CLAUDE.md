@@ -95,13 +95,9 @@ e.g.:
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-bandit-ci.txt -o requirements-bandit-ci-hashes.txt
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-pip-audit-ci.txt -o requirements-pip-audit-ci-hashes.txt
 uv pip compile --generate-hashes --python-version 3.13 --python-platform x86_64-manylinux_2_28 --output-file requirements-strix-ci-hashes.txt requirements-strix-ci.txt
-./scripts/ci/compile_opencode_review_lock.sh
 ```
 
-Note the per-file Python versions differ (bandit/pip-audit: 3.12; strix: 3.13; OpenCode
-review: 3.14). The OpenCode review generator always passes `--upgrade` so an existing output
-file cannot preserve hashes from the previous Python target, and records itself as the lock's
-repeatable compile command.
+Note the per-file Python versions differ (bandit/pip-audit: 3.12; strix: 3.13).
 
 ## Conventions and gotchas specific to this repo
 

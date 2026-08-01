@@ -36,6 +36,14 @@ def test_sanitizes_url_credentials_without_secret_key_prefix():
     assert sanitized == "postgresql://<redacted>@db:5432/app\n"
 
 
+def test_multiline_regex_does_not_consume_newlines_causing_innocent_line_deletion():
+    source = "DATABASE_URL=\nStarting server...\n"
+    sanitized = sanitize_text(source)
+
+    assert "Starting server" in sanitized
+    assert sanitized == "DATABASE_URL=<redacted>\nStarting server...\n"
+
+
 def test_cli_writes_sanitized_summary(tmp_path, monkeypatch):
     source = tmp_path / "coverage.md"
     destination = tmp_path / "coverage-output.md"

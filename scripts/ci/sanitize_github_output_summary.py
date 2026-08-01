@@ -13,10 +13,10 @@ SECRET_KEY_RE = re.compile(
     r"DATABASE[_-]?URL|DB[_-]?URL|CONNECTION[_-]?STRING|"
     r"SECRET|TOKEN|PASSWORD|PASSWD|"
     r"API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|ENCRYPTION[_-]?KEY"
-    r")[A-Z0-9_.-]*\b)(?P<sep>\s*[:=]\s*)[^\n]*"
+    r")[A-Z0-9_.-]*\b)(?P<sep>[ \t]*[:=][ \t]*)[^\n]*"
 )
 URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@")
-AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+")
+AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization[ \t]*[:=][ \t]*)(Bearer|Basic)\s+[^\s,;]+")
 
 
 def sanitize_text(text: str) -> str:

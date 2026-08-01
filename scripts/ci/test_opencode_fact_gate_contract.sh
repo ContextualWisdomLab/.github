@@ -6,7 +6,7 @@ repo_root="$(
   cd -P -- "$(dirname -- "$0")/../.."
   pwd -P
 )"
-workflow_file="$repo_root/.github/workflows/opencode-review-dispatch.yml"
+workflow_file="$repo_root/.github/workflows/opencode-review.yml"
 
 check_contains() {
   local needle="$1"

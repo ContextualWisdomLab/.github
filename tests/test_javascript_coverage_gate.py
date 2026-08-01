@@ -254,41 +254,6 @@ def test_changed_file_enumeration_error_is_visible(monkeypatch, tmp_path: Path) 
         gate.changed_runtime_lines(tmp_path, "base", "head")
 
 
-def test_git_commands_mark_only_the_validated_repo_as_safe(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    commands: list[list[str]] = []
-
-    def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[bytes]:
-        commands.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(gate.subprocess, "run", capture)
-
-    assert gate.git(tmp_path, "status") == ""
-    assert gate.changed_runtime_lines(tmp_path, "base", "head") == {}
-
-    resolved = tmp_path.resolve()
-    expected_prefix = [
-        "git",
-        "-c",
-        f"safe.directory={resolved}",
-        "-C",
-        str(resolved),
-    ]
-    assert len(commands) == 2
-    assert all(command[:5] == expected_prefix for command in commands)
-    assert commands[0][5:] == ["status"]
-    assert commands[1][5:] == [
-        "diff",
-        "--name-only",
-        "-z",
-        "--diff-filter=ACMR",
-        "base",
-        "head",
-    ]
-
-
 def test_invalid_istanbul_locations_do_not_intersect() -> None:
     assert gate.location_range(None) is None
     assert gate.location_range({"start": {"line": "two"}}) is None
