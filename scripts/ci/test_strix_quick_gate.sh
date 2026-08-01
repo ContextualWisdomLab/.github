@@ -7246,6 +7246,7 @@ run_pull_request_target_frontend_search_context_scope_case() {
 		"frontend/package.json"
 		"frontend/src/app/api/[...path]/route.ts"
 		"frontend/src/app/auth/session/route.ts"
+		"frontend/src/app/search/page.tsx"
 		"frontend/src/components/SearchLayout.tsx"
 		"frontend/src/lib/api-client.ts"
 		"frontend/src/lib/session-cookie.ts"

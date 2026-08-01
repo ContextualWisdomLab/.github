@@ -1282,6 +1282,7 @@ backend/services/ontology_service.py
 frontend/package.json
 frontend/src/app/api/[...path]/route.ts
 frontend/src/app/auth/session/route.ts
+frontend/src/app/search/page.tsx
 frontend/src/components/SearchLayout.tsx
 frontend/src/lib/api-client.ts
 frontend/src/lib/session-cookie.ts
