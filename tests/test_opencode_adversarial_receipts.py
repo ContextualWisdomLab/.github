@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import runpy
 import subprocess
 import sys
@@ -11,15 +12,35 @@ import pytest
 from scripts.ci import opencode_adversarial_receipts as receipts
 
 
+def isolated_git_environment() -> dict[str, str]:
+    """Return a Git environment isolated from host configuration and templates."""
+    env = os.environ.copy()
+    env.pop("GIT_CONFIG_COUNT", None)
+    env.pop("GIT_TEMPLATE_DIR", None)
+    env.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+    )
+    return env
+
+
 def git(repo: Path, *args: str) -> str:
     """Run a Git command in a temporary test repository."""
-    return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+    return subprocess.check_output(
+        ["git", *args],
+        cwd=repo,
+        env=isolated_git_environment(),
+        text=True,
+    ).strip()
 
 
 def commit_all(repo: Path, message: str) -> str:
     """Commit all temporary repository changes and return the new SHA."""
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", message], cwd=repo, check=True)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", message)
     return git(repo, "rev-parse", "HEAD")
 
 
@@ -27,15 +48,11 @@ def initialized_repo(tmp_path: Path) -> Path:
     """Create a temporary repository with deterministic local identity."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "config", "user.name", "Receipt Test"], cwd=repo, check=True
-    )
-    subprocess.run(
-        ["git", "config", "user.email", "receipt@example.invalid"],
-        cwd=repo,
-        check=True,
-    )
+    git(repo, "init", "-q")
+    git(repo, "config", "--local", "user.name", "Receipt Test")
+    git(repo, "config", "--local", "user.email", "receipt@example.invalid")
+    git(repo, "config", "--local", "commit.gpgsign", "false")
+    git(repo, "config", "--local", "core.hooksPath", os.devnull)
     return repo
 
 

@@ -45,6 +45,7 @@ First line exactly:
 <!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->
 
 Then exactly one control block. The object below is a non-current schema illustration: replace every `COPY_*` identity with the exact values from the sentinel above, choose one enum value rather than copying `CHOOSE_*`, and do not quote or repeat this illustration before the sentinel.
+Replace the example probe's `path`, numeric positive `line`, and `source-line-sha256` evidence value together, copying all three without alteration from the same entry in the trusted Adversarial probe source-line receipts section.
 <!-- opencode-review-control-v1
 {"head_sha":"COPY_SENTINEL_HEAD_SHA","run_id":"COPY_SENTINEL_RUN_ID","run_attempt":"COPY_SENTINEL_RUN_ATTEMPT","result":"CHOOSE_APPROVE_OR_REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and all required labels","adversarial_validation":{"status":"CHOOSE_PASSED_OR_FAILED","probes":[{"path":"COPY_EXACT_PATH_FROM_TRUSTED_RECEIPT_SECTION","line":1,"hypothesis":"concrete failure hypothesis","attack_or_counterexample":"input, state, race, threat, or boundary used to challenge it","evidence":"trusted test/check/log/diff/source-trace outcome at matching path:line and exactly one copied source-line-sha256 receipt","outcome":"CHOOSE_FALSIFIED_OR_CONFIRMED"}],"residual_risk":"bounded residual risk after the probes"},"findings":[]}
 -->

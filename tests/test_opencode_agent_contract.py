@@ -1620,6 +1620,16 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "the isolated model cannot recompute a trusted receipt" in workflow
     assert (
+        "Missing or contradictory trusted evidence must fail closed with a "
+        "schema-valid REQUEST_CHANGES" in workflow
+    )
+    assert "never NEEDS_INFO or a bare status substitution" in workflow
+    assert (
+        "copy\n"
+        "          the path, line, and source-line-sha256 without alteration "
+        "from one matching entry" in workflow
+    )
+    assert (
         "do not request changes solely because your own tool or file read did not"
         in workflow
     )
@@ -2057,6 +2067,11 @@ def test_opencode_adversarial_prompt_requires_independent_proof():
     assert "source-line-sha256=<64 lowercase hex>" in prompt
     assert "copied without alteration" in prompt
     assert "do not invent, approximate, or recompute" in prompt
+    assert (
+        "example probe's `path`, numeric positive `line`, and "
+        "`source-line-sha256` evidence value together" in prompt
+    )
+    assert "copying all three without alteration from the same entry" in prompt
     assert "Adversarial probe source-line receipts" in prompt
     assert "COPY_SENTINEL_HEAD_SHA" in prompt
     assert '{"head_sha":"${HEAD_SHA}"' not in prompt

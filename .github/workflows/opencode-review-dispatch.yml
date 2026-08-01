@@ -3293,7 +3293,11 @@ jobs:
           execution receipts, coverage, current-head checks, and security evidence are precomputed and must be
           cited exactly as supplied. Copy adversarial path, line, and source-line-sha256 values only from the
           Adversarial probe source-line receipts section; the isolated model cannot recompute a trusted receipt.
-          Missing or contradictory trusted evidence must fail closed as NEEDS_INFO.
+          Missing or contradictory trusted evidence must fail closed with a schema-valid REQUEST_CHANGES
+          result, never NEEDS_INFO or a bare status substitution. That result must include at least one
+          source-backed finding and a confirmed adversarial probe at the same path and positive line; copy
+          the path, line, and source-line-sha256 without alteration from one matching entry in the
+          Adversarial probe source-line receipts section.
           Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain
           terminology; require trusted bounded source evidence when those facts are material.
           Do not claim repository docs, images, or reference assets are unavailable, missing, or absent unless the changed docs repository tree evidence proves it.

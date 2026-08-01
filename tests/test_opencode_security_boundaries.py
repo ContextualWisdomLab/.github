@@ -9,6 +9,7 @@ import os
 import runpy
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -276,7 +277,7 @@ DISPATCH_SOURCE_LINES = (
 def trusted_dispatch_status_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+) -> Iterator[None]:
     """Seal the source and changed-file evidence used by dispatch-status review validation."""
     runner_temp = tmp_path / "runner-temp"
     source_root = tmp_path / "source"
