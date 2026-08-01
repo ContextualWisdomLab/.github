@@ -15,6 +15,7 @@ import tempfile
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+UV_EXPORT_TIMEOUT_SECONDS = 120
 
 
 def _is_candidate_lock_name(name: str) -> bool:
@@ -79,7 +80,12 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     return completed.stdout
 
 
-def _run_uv_export(work_dir: pathlib.Path) -> subprocess.CompletedProcess[bytes]:
+def _run_uv_export(
+    work_dir: pathlib.Path,
+    uv_path: str,
+    *,
+    timeout: float = UV_EXPORT_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[bytes]:
     """Run ``uv export`` for a reconstructed base project and return the result.
 
     ``--frozen`` forbids lock mutation and ``--offline`` forbids network access,
@@ -90,7 +96,7 @@ def _run_uv_export(work_dir: pathlib.Path) -> subprocess.CompletedProcess[bytes]
     """
     return subprocess.run(
         [
-            "uv",
+            uv_path,
             "export",
             "--frozen",
             "--offline",
@@ -103,6 +109,7 @@ def _run_uv_export(work_dir: pathlib.Path) -> subprocess.CompletedProcess[bytes]
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=timeout,
     )
 
 
@@ -123,7 +130,8 @@ def _export_uv_lock(
     fails, or its output is not fully hash-pinned, so this can never break an
     otherwise-working build.
     """
-    if shutil.which("uv") is None:
+    uv_path = shutil.which("uv")
+    if uv_path is None:
         return None
     project_dir = pathlib.PurePosixPath(lock_path).parent
     pyproject_path = (
@@ -140,7 +148,10 @@ def _export_uv_lock(
         work_path = pathlib.Path(work_dir)
         (work_path / "uv.lock").write_bytes(lock_content)
         (work_path / "pyproject.toml").write_bytes(pyproject_content)
-        completed = _run_uv_export(work_path)
+        try:
+            completed = _run_uv_export(work_path, uv_path)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
     if completed.returncode != 0:
         return None
     exported = completed.stdout
