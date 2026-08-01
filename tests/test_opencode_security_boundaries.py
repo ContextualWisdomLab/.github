@@ -495,3 +495,156 @@ def test_dispatch_status_cli_and_evidence_shape_validation(
     with pytest.raises(SystemExit) as exc:
         runpy.run_path("scripts/ci/opencode_dispatch_status.py", run_name="__main__")
     assert exc.value.code == 0
+
+
+def test_dispatch_status_visibility_receipt_is_bounded_and_app_owned() -> None:
+    """Review-tool failures produce one exact-head App-comment upsert receipt."""
+    head = "a" * 40
+    decision = {
+        "state": "failure",
+        "description": "No validated approval.\nProvider detail must remain one line.",
+    }
+    comments = [
+        {
+            "id": 10,
+            "user": {"login": "pull-request-author"},
+            "body": dispatch_status.VISIBILITY_COMMENT_MARKER,
+        },
+        {
+            "id": 11,
+            "user": {"login": "opencode-agent[bot]"},
+            "body": dispatch_status.VISIBILITY_COMMENT_MARKER,
+        },
+    ]
+
+    enriched = dispatch_status.add_visibility_receipt(
+        decision,
+        comments=comments,
+        expected_head=head,
+        model_outcome="exhausted",
+        coverage_result="success",
+        run_url="https://github.com/ContextualWisdomLab/.github/actions/runs/123",
+    )
+
+    visibility = enriched["visibility"]
+    assert visibility["comment_id"] == 11
+    assert visibility["should_publish"] is True
+    assert "REVIEW_TOOL_FAILURE" in visibility["body"]
+    assert f"Head SHA: `{head}`" in visibility["body"]
+    assert "not a source finding or a clean review" in visibility["body"]
+    assert "Provider detail must remain one line." in visibility["body"]
+
+
+def test_dispatch_status_visibility_comment_lookup_ignores_untrusted_shapes() -> None:
+    """Only a positive-id App-authored marker may be updated."""
+    comments = [
+        {
+            "id": 13,
+            "user": {"login": "opencode-agent"},
+            "body": dispatch_status.VISIBILITY_COMMENT_MARKER,
+        },
+        {
+            "id": True,
+            "user": {"login": "opencode-agent[bot]"},
+            "body": dispatch_status.VISIBILITY_COMMENT_MARKER,
+        },
+        {
+            "id": 14,
+            "user": {"login": "opencode-agent[bot]"},
+            "body": "unrelated App comment",
+        },
+        {
+            "id": 15,
+            "user": {"login": "pull-request-author"},
+            "body": dispatch_status.VISIBILITY_COMMENT_MARKER,
+        },
+    ]
+
+    assert dispatch_status.existing_visibility_comment_id(comments) == 13
+
+
+def test_dispatch_status_visibility_receipt_resolves_only_an_existing_comment() -> None:
+    """Success updates a prior failure receipt without creating a new comment."""
+    head = "a" * 40
+    decision = {
+        "state": "success",
+        "description": "Validated current-head OpenCode approval and coverage passed.",
+    }
+
+    without_prior = dispatch_status.add_visibility_receipt(
+        decision,
+        comments=[],
+        expected_head=head,
+        model_outcome="success",
+        coverage_result="success",
+        run_url="https://github.com/ContextualWisdomLab/.github/actions/runs/124",
+    )
+    with_prior = dispatch_status.add_visibility_receipt(
+        decision,
+        comments=[
+            {
+                "id": 12,
+                "user": {"login": "opencode-agent"},
+                "body": dispatch_status.VISIBILITY_COMMENT_MARKER,
+            }
+        ],
+        expected_head=head,
+        model_outcome="success",
+        coverage_result="success",
+        run_url="https://github.com/ContextualWisdomLab/.github/actions/runs/124",
+    )
+
+    assert without_prior["visibility"]["should_publish"] is False
+    assert with_prior["visibility"]["should_publish"] is True
+    assert with_prior["visibility"]["comment_id"] == 12
+    assert "RESOLVED" in with_prior["visibility"]["body"]
+
+
+def test_dispatch_status_visibility_receipt_rejects_invalid_head() -> None:
+    """A malformed or stale identity cannot become a target-PR receipt."""
+    with pytest.raises(ValueError, match="40-character head SHA"):
+        dispatch_status.visibility_comment(
+            state="failure",
+            description="failure",
+            expected_head="not-a-sha",
+            model_outcome="exhausted",
+            coverage_result="success",
+            run_url="https://github.com/ContextualWisdomLab/.github/actions/runs/125",
+        )
+
+
+def test_dispatch_status_cli_emits_and_validates_visibility_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI emits a receipt and rejects a non-array comments snapshot."""
+    head = "b" * 40
+    pr_file = tmp_path / "pr.json"
+    reviews_file = tmp_path / "reviews.json"
+    comments_file = tmp_path / "comments.json"
+    pr_file.write_text(json.dumps({"head": {"sha": head}}), encoding="utf-8")
+    reviews_file.write_text("[]", encoding="utf-8")
+    comments_file.write_text("[]", encoding="utf-8")
+    args = [
+        "--model-outcome",
+        "exhausted",
+        "--coverage-result",
+        "success",
+        "--expected-head",
+        head,
+        "--pull-request-file",
+        str(pr_file),
+        "--reviews-file",
+        str(reviews_file),
+        "--comments-file",
+        str(comments_file),
+        "--run-url",
+        "https://github.com/ContextualWisdomLab/.github/actions/runs/126",
+    ]
+
+    assert dispatch_status.main(args) == 0
+    assert json.loads(capsys.readouterr().out)["visibility"]["should_publish"] is True
+
+    comments_file.write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit, match="comments evidence must be an array"):
+        dispatch_status.main(args)

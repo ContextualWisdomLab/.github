@@ -7175,6 +7175,11 @@ jobs:
               printf '::warning::Open code-scanning alert lookup skipped because no target-repository read token was configured.\n' >&2
               return 1
             fi
+            if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
+              [ "${CODE_SCANNING_TOKEN_SOURCE:-}" = "github-token" ]; then
+              printf '::warning::Open code-scanning alert lookup skipped because the central github.token cannot read cross-repository target %s. Configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN with target code-scanning read access.\n' "$GH_REPOSITORY" >&2
+              return 1
+            fi
             lookup_error_file="$(mktemp)"
             if ! pr_json="$(GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s" \
               gh pr view "$PR_NUMBER" --repo "$GH_REPOSITORY" --json headRefName 2>"$lookup_error_file")"; then
@@ -7826,14 +7831,16 @@ jobs:
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          OPENCODE_STATUS_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          OPENCODE_READ_GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          OPENCODE_COMMENT_GH_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
-          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -7844,44 +7851,112 @@ jobs:
             echo "::error::OpenCode repository_dispatch status publication failed because pr_head_sha was empty."
             exit 1
           fi
-          if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
-            [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ]; then
-            echo "::notice::OpenCode repository_dispatch status publication is unavailable because only the same-repository github.token can access cross-repository target ${GH_REPOSITORY}. The exact-head formal review remains authoritative; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish the optional commit status."
-            exit 0
-          fi
 
           state="failure"
           description="OpenCode live approval evidence validation failed."
           pull_request_file="$(mktemp)"
           reviews_file="$(mktemp)"
+          comments_file="$(mktemp)"
+          visibility_body_file="$(mktemp)"
+          visibility_payload_file="$(mktemp)"
+          status_error_file="$(mktemp)"
           cleanup_status_evidence() {
-            rm -f "$pull_request_file" "$reviews_file"
+            rm -f \
+              "$pull_request_file" \
+              "$reviews_file" \
+              "$comments_file" \
+              "$visibility_body_file" \
+              "$visibility_payload_file" \
+              "$status_error_file"
           }
           trap cleanup_status_evidence EXIT
 
-          if gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" >"$pull_request_file" &&
-            gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp \
-              | jq 'flatten' >"$reviews_file"; then
-            decision_json="$(
-              python3 scripts/ci/opencode_dispatch_status.py \
-                --model-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-missing}" \
-                --coverage-result "${COVERAGE_EVIDENCE_RESULT:-missing}" \
-                --expected-head "$PR_HEAD_SHA" \
-                --pull-request-file "$pull_request_file" \
-                --reviews-file "$reviews_file"
-            )"
-            state="$(jq -r '.state // "failure"' <<<"$decision_json")"
-            description="$(jq -r '.description // "OpenCode live approval evidence validation failed."' <<<"$decision_json")"
-          else
-            echo "::error::OpenCode repository_dispatch status could not read the live pull request and complete review history; publishing failure."
+          if [ -z "${OPENCODE_READ_GH_TOKEN:-}" ]; then
+            echo "::error::OpenCode repository_dispatch evidence validation has no target-repository read token."
+            exit 1
+          fi
+          if ! GH_TOKEN="$OPENCODE_READ_GH_TOKEN" \
+            gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" >"$pull_request_file" ||
+            ! GH_TOKEN="$OPENCODE_READ_GH_TOKEN" \
+              gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp \
+              | jq 'flatten' >"$reviews_file" ||
+            ! GH_TOKEN="$OPENCODE_READ_GH_TOKEN" \
+              gh api "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate --slurp \
+              | jq 'flatten' >"$comments_file"; then
+            echo "::error::OpenCode repository_dispatch status could not read the live pull request, complete review history, and visibility comments."
+            exit 1
           fi
 
-          printf 'Publishing OpenCode repository_dispatch status context opencode-review for %s at %s with state=%s using %s token.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state" "${OPENCODE_STATUS_TOKEN_SOURCE:-configured}"
-          gh api -X POST "repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
-            -f state="$state" \
-            -f context="opencode-review" \
-            -f target_url="$RUN_URL" \
-            -f description="$description" >/dev/null
+          decision_json="$(
+            python3 scripts/ci/opencode_dispatch_status.py \
+              --model-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-missing}" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-missing}" \
+              --expected-head "$PR_HEAD_SHA" \
+              --pull-request-file "$pull_request_file" \
+              --reviews-file "$reviews_file" \
+              --comments-file "$comments_file" \
+              --run-url "$RUN_URL"
+          )"
+          state="$(jq -r '.state // "failure"' <<<"$decision_json")"
+          description="$(jq -r '.description // "OpenCode live approval evidence validation failed."' <<<"$decision_json")"
+          visibility_comment_id="$(jq -r '.visibility.comment_id // empty' <<<"$decision_json")"
+          visibility_should_publish="$(jq -r '.visibility.should_publish // false' <<<"$decision_json")"
+          jq -r '.visibility.body // empty' <<<"$decision_json" >"$visibility_body_file"
+
+          status_capable=true
+          if [ -z "${OPENCODE_STATUS_GH_TOKEN:-}" ]; then
+            status_capable=false
+            echo "::notice::OpenCode repository_dispatch commit-status publication is unavailable because no status token is configured."
+          elif [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
+            [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ]; then
+            status_capable=false
+            echo "::notice::OpenCode repository_dispatch commit-status publication is unavailable because the central github.token cannot access cross-repository target ${GH_REPOSITORY}. Configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN for the optional commit status; the App-authored exact-head PR receipt remains authoritative for review-tool visibility."
+          fi
+
+          status_published=false
+          if [ "$status_capable" = true ]; then
+            printf 'Publishing OpenCode repository_dispatch status context opencode-review for %s at %s with state=%s using %s token.\n' "$GH_REPOSITORY" "$PR_HEAD_SHA" "$state" "${OPENCODE_STATUS_TOKEN_SOURCE:-configured}"
+            if GH_TOKEN="$OPENCODE_STATUS_GH_TOKEN" \
+              gh api -X POST "repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
+                -f state="$state" \
+                -f context="opencode-review" \
+                -f target_url="$RUN_URL" \
+                -f description="$description" >/dev/null 2>"$status_error_file"; then
+              status_published=true
+            else
+              status_error="$(head -n 1 "$status_error_file" | tr -d '\r' || true)"
+              echo "::warning::OpenCode repository_dispatch commit-status publication failed using ${OPENCODE_STATUS_TOKEN_SOURCE:-configured}; the App-authored exact-head PR receipt will expose the review-tool result. ${status_error:-GitHub returned no error detail.}"
+            fi
+          fi
+
+          if [ "$visibility_should_publish" = true ]; then
+            if [ -z "${OPENCODE_COMMENT_GH_TOKEN:-}" ]; then
+              echo "::error::OpenCode cannot publish the exact-head PR visibility receipt because the OpenCode App token is unavailable."
+              exit 1
+            fi
+            live_head="$(
+              GH_TOKEN="$OPENCODE_COMMENT_GH_TOKEN" \
+                gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty'
+            )"
+            if [ "$live_head" != "$PR_HEAD_SHA" ]; then
+              echo "::error::OpenCode refused stale PR visibility publication: expected head ${PR_HEAD_SHA}, observed ${live_head:-<missing>}."
+              exit 1
+            fi
+            jq -n --rawfile body "$visibility_body_file" '{body: $body}' >"$visibility_payload_file"
+            if [ -n "$visibility_comment_id" ]; then
+              GH_TOKEN="$OPENCODE_COMMENT_GH_TOKEN" \
+                gh api -X PATCH "repos/${GH_REPOSITORY}/issues/comments/${visibility_comment_id}" \
+                  --input "$visibility_payload_file" >/dev/null
+              echo "Updated OpenCode App exact-head PR visibility receipt comment ${visibility_comment_id} with state=${state}."
+            else
+              GH_TOKEN="$OPENCODE_COMMENT_GH_TOKEN" \
+                gh api -X POST "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                  --input "$visibility_payload_file" >/dev/null
+              echo "Published OpenCode App exact-head PR visibility receipt with state=${state}."
+            fi
+          elif [ "$status_published" != true ]; then
+            echo "::notice::OpenCode commit status was unavailable, but the exact head already has a validated formal approval and no unresolved review-tool receipt requires an update."
+          fi
 
       - name: Dispatch Noema after current-head OpenCode approval
         if: >-

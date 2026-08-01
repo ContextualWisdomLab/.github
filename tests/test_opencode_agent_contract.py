@@ -1475,6 +1475,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "Open code-scanning alert lookup skipped because no target-repository read token"
         in workflow
     )
+    assert (
+        "central github.token cannot read cross-repository target %s" in workflow
+    )
+    assert (
+        '[ "${CODE_SCANNING_TOKEN_SOURCE:-}" = "github-token" ]' in workflow
+    )
     assert "production source 또는 package manifest 변경이 없습니다" not in workflow
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
@@ -2032,31 +2038,58 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "      - name: Dispatch Noema after current-head OpenCode approval", 1
     )[0]
     assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
-        "github.token }}"
+        "OPENCODE_STATUS_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in status_step
+    status_token_line = next(
+        line for line in status_step.splitlines() if "OPENCODE_STATUS_GH_TOKEN:" in line
+    )
+    assert "opencode_app_token" not in status_token_line
+    assert (
+        "OPENCODE_COMMENT_GH_TOKEN: "
+        "${{ steps.opencode_app_token.outputs.token }}" in status_step
+    )
+    assert (
+        "OPENCODE_READ_GH_TOKEN: "
+        "${{ steps.opencode_app_token.outputs.token || "
+        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
+        "github.token }}" in status_step
+    )
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
-    assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step
+    status_source_line = next(
+        line for line in status_step.splitlines() if "OPENCODE_STATUS_TOKEN_SOURCE:" in line
+    )
+    assert "opencode-app" not in status_source_line
     assert "OPENCODE_CHANGED_FILES_FILE" in status_step
     assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in status_step
     assert "OPENCODE_SOURCE_WORKDIR" in status_step
     assert 'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"' in status_step
     assert "continue-on-error: true" not in status_step
     assert (
-        "same-repository github.token can access cross-repository target"
+        "central github.token cannot access cross-repository target"
         in status_step
     )
     assert "status publication failed because pr_head_sha was empty" in status_step
     assert "exit 1" in status_step
-    cross_repository_guard = status_step.split(
-        'if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]', 1
-    )[1].split("\n          fi", 1)[0]
-    assert "exact-head formal review remains authoritative" in cross_repository_guard
-    assert "exit 0" in cross_repository_guard
-    assert "exit 1" not in cross_repository_guard
     assert "using %s token" in status_step
     assert "scripts/ci/opencode_dispatch_status.py" in status_step
+    assert "--comments-file" in status_step
+    assert "--run-url" in status_step
+    assert "visibility.should_publish" in status_step
+    assert "OPENCODE_COMMENT_GH_TOKEN" in status_step
+    assert "issues/${PR_NUMBER}/comments" in status_step
+    assert "issues/comments/${visibility_comment_id}" in status_step
+    assert "refused stale PR visibility publication" in status_step
+    assert "App-authored exact-head PR receipt" in status_step
+    assert 'status_error="$(head -n 1 "$status_error_file"' in status_step
+    assert (
+        'if GH_TOKEN="$OPENCODE_STATUS_GH_TOKEN" \\\n'
+        '              gh api -X POST "repos/${GH_REPOSITORY}/statuses/${PR_HEAD_SHA}"'
+        in status_step
+    )
+    assert status_step.index("commit-status publication failed using") < status_step.index(
+        'if [ "$visibility_should_publish" = true ]'
+    )
     assert "COVERAGE_EVIDENCE_RESULT" in status_step
     assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}"' in status_step
     assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in status_step
