@@ -16,8 +16,8 @@ merge.  It blocks, regardless of diff size:
   merge brought in (observed in appguardrail#297, where a stale snapshot
   reverted an accessibility wrapper and deleted its regression tests in a
   push far below the bulk thresholds);
-- test regression without replacement: post-merge commits deleting or
-  shrinking test files while adding no new test file anywhere in the push;
+- test regression without replacement: post-merge commits deleting test files
+  or reducing declared test cases while adding no replacement test file;
 - the conservative bulk-regression signature: at least five tracked files and
   500 lines removed, with deletions at least four times additions.
 
@@ -28,6 +28,8 @@ paths so the failure is actionable.
 from __future__ import annotations
 
 import argparse
+import ast
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +42,21 @@ MIN_DELETED_LINES = 500
 MIN_DELETION_RATIO = 4
 MAX_LISTED_PATHS = 10
 TEST_DIR_SEGMENTS = frozenset({"tests", "test", "__tests__", "spec", "specs"})
+TEST_CASE_PATTERNS = {
+    ".bats": re.compile(r"(?m)^\s*@test\b"),
+    ".go": re.compile(
+        r"(?m)^\s*func\s+(?:Test|Benchmark|Fuzz)[A-Z0-9_][A-Za-z0-9_]*\s*\("
+    ),
+    ".js": re.compile(r"\b(?:it|test)(?:\.(?:concurrent|each|only|skip|todo))*\s*\("),
+    ".jsx": re.compile(r"\b(?:it|test)(?:\.(?:concurrent|each|only|skip|todo))*\s*\("),
+    ".r": re.compile(r"\b(?:testthat::)?test_that\s*\("),
+    ".rs": re.compile(
+        r"#\s*\[\s*(?:[A-Za-z_][A-Za-z0-9_:]*::)?test"
+        r"(?:\s*\([^]]*\))?\s*\]"
+    ),
+    ".ts": re.compile(r"\b(?:it|test)(?:\.(?:concurrent|each|only|skip|todo))*\s*\("),
+    ".tsx": re.compile(r"\b(?:it|test)(?:\.(?:concurrent|each|only|skip|todo))*\s*\("),
+}
 
 
 @dataclass(frozen=True)
@@ -74,7 +91,7 @@ class ReplayEvidence:
 
     @property
     def suspicious_test_regression(self) -> bool:
-        """Return whether tests were deleted or shrunk with no replacement test file."""
+        """Return whether test cases were lost with no replacement test file."""
         return bool(self.regressed_test_paths) and self.added_test_files == 0
 
     @property
@@ -190,8 +207,35 @@ def unmerged_base_paths(repo_root: Path, merge_anchor: str, head_sha: str) -> tu
     return tuple(sorted(since_merge - since_pre_merge))
 
 
+def test_case_count(
+    repo_root: Path,
+    revision: str,
+    path: str,
+) -> int | None:
+    """Return a supported test file's declared test-case count at one revision."""
+    try:
+        source = git_output(repo_root, ["show", f"{revision}:{path}"])
+    except RuntimeError:
+        return None
+
+    suffix = Path(path).suffix.lower()
+    if suffix == ".py":
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return None
+        return sum(
+            isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name.startswith("test")
+            for node in ast.walk(tree)
+        )
+
+    pattern = TEST_CASE_PATTERNS.get(suffix)
+    return len(pattern.findall(source)) if pattern is not None else None
+
+
 def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str, ...], int]:
-    """Return regressed (deleted or net-shrunk) test paths and the added-test count."""
+    """Return deleted or test-case-reducing paths and the added-test count."""
     regressed: set[str] = set()
     added = 0
     for line in git_output(repo_root, ["diff", "--name-status", start, end]).splitlines():
@@ -207,8 +251,13 @@ def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str,
         fields = line.split("\t", 2)
         if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
             continue
-        if is_test_path(fields[2]) and int(fields[1]) > int(fields[0]):
-            regressed.add(fields[2])
+        path = fields[2]
+        if not is_test_path(path) or int(fields[1]) <= int(fields[0]):
+            continue
+        before_count = test_case_count(repo_root, start, path)
+        after_count = test_case_count(repo_root, end, path)
+        if before_count is None or after_count is None or after_count < before_count:
+            regressed.add(path)
     return tuple(sorted(regressed)), added
 
 
@@ -287,8 +336,9 @@ def format_report(evidence: ReplayEvidence) -> str:
         )
     if evidence.suspicious_test_regression:
         reasons.append(
-            "post-merge commits deleted or shrank test files without adding any "
-            f"replacement test file: {summarize_paths(evidence.regressed_test_paths)}."
+            "post-merge commits deleted test files or reduced declared test cases "
+            "without adding any replacement test file: "
+            f"{summarize_paths(evidence.regressed_test_paths)}."
         )
     if evidence.suspicious_bulk_regression:
         reasons.append(
