@@ -450,6 +450,7 @@ def test_run_uv_export_invokes_uv_with_frozen_offline_flags(
 
     assert result.stdout == b"out"
     assert captured["argv"][:3] == ["uv", "export", "--frozen"]
+    assert "--offline" in captured["argv"]
     assert "--no-emit-project" in captured["argv"]
     assert "--no-editable" in captured["argv"]
     assert captured["cwd"] == str(tmp_path)

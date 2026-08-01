@@ -82,8 +82,8 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
 def _run_uv_export(work_dir: pathlib.Path) -> subprocess.CompletedProcess[bytes]:
     """Run ``uv export`` for a reconstructed base project and return the result.
 
-    ``--frozen`` forbids any lock mutation or network resolution, so the export
-    is a pure, offline function of the already-trusted base ``uv.lock`` and
+    ``--frozen`` forbids lock mutation and ``--offline`` forbids network access,
+    so the export is a pure function of the already-trusted base ``uv.lock`` and
     ``pyproject.toml``; ``--no-emit-project``/``--no-editable`` drop the project
     itself (installed via ``PYTHONPATH`` in the sandbox) and keep only its
     hash-pinned dependency closure.
@@ -93,6 +93,7 @@ def _run_uv_export(work_dir: pathlib.Path) -> subprocess.CompletedProcess[bytes]
             "uv",
             "export",
             "--frozen",
+            "--offline",
             "--no-emit-project",
             "--no-editable",
             "--format",
