@@ -203,9 +203,9 @@ jobs:
         with:
           scan-args: |
             --output-files=results.sarif
+            --output-files=gh-annotations:#stderr
             --old=old-results.json
             --new=new-results.json
-            --gh-annotations=true
             --fail-on-vuln=true
       - name: Mark clean OSV SARIF as comprehensive
         if: always() && hashFiles('results.sarif') != ''
@@ -231,6 +231,8 @@ jobs:
               "base/head comparison."
           )
       - name: Verify synthetic merge commit for SARIF attribution
+        id: verify_merge_commit
+        if: always() && hashFiles('results.sarif') != ''
         env:
           EXPECTED_MERGE_SHA: ${{ github.sha }}
         run: |
@@ -246,7 +248,10 @@ jobs:
           echo "Verified synthetic merge attribution commit before OSV SARIF upload."
       - name: Upload OSV SARIF to code scanning
         id: upload_osv_sarif
-        if: always() && hashFiles('results.sarif') != ''
+        if: >-
+          always() &&
+          hashFiles('results.sarif') != '' &&
+          steps.verify_merge_commit.outcome == 'success'
         # The reporter above is the vulnerability gate. Preserve an upload
         # quota failure in this step's log without reclassifying it as a CVE.
         continue-on-error: true

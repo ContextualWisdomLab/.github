@@ -929,13 +929,16 @@ def test_security_scan_avoids_warning_class_scanner_output() -> None:
     merge_verify_step = workflow_step(
         workflow, "Verify synthetic merge commit for SARIF attribution"
     )
+    upload_step = workflow_step(workflow, "Upload OSV SARIF to code scanning")
 
     assert workflow.count("--output-file=old-results.json") == 2
     assert workflow.count("--output-file=new-results.json") == 2
     assert "--output-files=results.sarif" in workflow
+    assert "--output-files=gh-annotations:#stderr" in workflow
     assert "--output=old-results.json" not in workflow
     assert "--output=new-results.json" not in workflow
     assert "--output=results.sarif" not in workflow
+    assert "--gh-annotations=true" not in workflow
 
     assert "scanners: vuln,secret,misconfig" in trivy_step
     assert "hide-progress: true" in trivy_step
@@ -948,9 +951,17 @@ def test_security_scan_avoids_warning_class_scanner_output() -> None:
     assert "ref: ${{ github.sha }}" in merge_checkout_step
     assert "fetch-depth: 1" in merge_checkout_step
     assert "persist-credentials: false" in merge_checkout_step
+    assert "id: verify_merge_commit" in merge_verify_step
+    assert "if: always() && hashFiles('results.sarif') != ''" in merge_verify_step
     assert "EXPECTED_MERGE_SHA: ${{ github.sha }}" in merge_verify_step
     assert '[[ "$EXPECTED_MERGE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' in merge_verify_step
     assert 'git cat-file -e "${EXPECTED_MERGE_SHA}^{commit}"' in merge_verify_step
+    assert "always() &&" in upload_step
+    assert "hashFiles('results.sarif') != '' &&" in upload_step
+    assert (
+        "steps.verify_merge_commit.outcome == 'success'"
+        in upload_step
+    )
     assert workflow.index(
         "Checkout synthetic merge attribution commit"
     ) < workflow.index("Checkout base")
