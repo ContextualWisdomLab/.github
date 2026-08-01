@@ -250,6 +250,23 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
+      - name: Resolve Noema target repository visibility
+        if: env.PR_NUMBER != ''
+        id: target_visibility
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"
+          case "$is_private" in
+            true | false) ;;
+            *)
+              echo "::error::Noema target repository visibility did not resolve to true or false."
+              exit 1
+              ;;
+          esac
+          echo "is_private=$is_private" >>"$GITHUB_OUTPUT"
+
       - name: Run Noema LLM review and submit verdict
         if: env.PR_NUMBER != ''
         env:
@@ -258,6 +275,8 @@ jobs:
           NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
           NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -267,6 +286,11 @@ jobs:
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
             exit 1
+          fi
+          if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ] && [ -z "${NOEMA_LLM_API_URL:-}" ] && [ -z "${NOEMA_LLM_MODEL:-}" ]; then
+            export NOEMA_LLM_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
+            export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
+            export NOEMA_LLM_API_KEY="${NVIDIA_NIM_API_KEY:-}"
           fi
           if [ -z "${NOEMA_LLM_API_URL:-}" ] || [ -z "${NOEMA_LLM_MODEL:-}" ] || [ -z "${NOEMA_LLM_API_KEY:-}" ]; then
             echo "::error::Noema LLM is unconfigured: NOEMA_LLM_API_URL, NOEMA_LLM_MODEL, and NOEMA_LLM_API_KEY (or OPENAI_API_KEY) are required."
