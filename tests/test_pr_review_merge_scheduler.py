@@ -1899,6 +1899,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     calls = []
     head_sha = "a" * 40
     base_sha = "b" * 40
+    head_ref = "🎨-palette-ux-improvement-13325911538352561627"
 
     def fake_run_with_env(args, *, stdin=None, env=None):
         calls.append((args, stdin, None if env is None else env.get("GH_TOKEN")))
@@ -1913,7 +1914,12 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
 
-    pr = make_pr(baseRefName="develop", baseRefOid=base_sha, headRefOid=head_sha)
+    pr = make_pr(
+        baseRefName="develop",
+        baseRefOid=base_sha,
+        headRefName=head_ref,
+        headRefOid=head_sha,
+    )
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
@@ -1958,7 +1964,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             "pr_number": 1,
             "pr_base_ref": "develop",
             "pr_base_sha": base_sha,
-            "pr_head_ref": "feature",
+            "pr_head_ref": head_ref,
             "pr_head_sha": head_sha,
         },
     }
