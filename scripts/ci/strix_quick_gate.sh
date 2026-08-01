@@ -1180,6 +1180,7 @@ is_scannable_changed_file() {
 pull_request_scope_context_files() {
 	local needs_backend_python=0
 	local needs_frontend_email_api_context=0
+	local needs_frontend_search_api_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
 	for changed_file in "$@"; do
@@ -1194,6 +1195,13 @@ pull_request_scope_context_files() {
 		# shape frontend email retrieval flows; include backend auth context with them.
 		frontend/src/components/EmailDetail.tsx | frontend/src/components/EmailList.tsx | frontend/src/app/page.tsx | frontend/src/lib/api-client.ts | frontend/src/lib/email-threading.ts)
 			needs_frontend_email_api_context=1
+			;;
+		# Context Search crosses the React view, the same-origin BFF, signed-session
+		# auth, owner-scoped search/ontology routes, and sender relationship storage.
+		# Supply those bounded files so Strix verifies the actual trust boundary
+		# instead of treating client-side result identifiers as authorization.
+		frontend/src/components/SearchLayout.tsx | frontend/src/app/search/page.tsx)
+			needs_frontend_search_api_context=1
 			;;
 		# Deployment and CI changes often reference build files that are not all
 		# changed in the PR. Include the trusted copies so Strix does not downgrade
@@ -1260,6 +1268,23 @@ backend/core/config.py
 backend/db/models.py
 backend/main.py
 backend/services/threading_service.py
+EOF
+	fi
+
+	if [ "$needs_frontend_search_api_context" -eq 1 ]; then
+		cat <<'EOF'
+backend/api/auth.py
+backend/api/ontology.py
+backend/api/search.py
+backend/db/models.py
+backend/main.py
+backend/services/ontology_service.py
+frontend/package.json
+frontend/src/app/api/[...path]/route.ts
+frontend/src/app/auth/session/route.ts
+frontend/src/components/SearchLayout.tsx
+frontend/src/lib/api-client.ts
+frontend/src/lib/session-cookie.ts
 EOF
 	fi
 

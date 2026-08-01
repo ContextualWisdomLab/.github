@@ -6230,6 +6230,14 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"Container build manifest changed; materialized full PR-head blob scope"
 		;;
+	pull-request-target-frontend-search-context-search-layout)
+		run_pull_request_target_frontend_search_context_scope_case \
+			"frontend/src/components/SearchLayout.tsx"
+		;;
+	pull-request-target-frontend-search-context-search-page)
+		run_pull_request_target_frontend_search_context_scope_case \
+			"frontend/src/app/search/page.tsx"
+		;;
 	repository-dispatch-pr-scope-uses-head-blob)
 		run_pull_request_target_head_scope_case \
 			"repository-dispatch-pr-scope-uses-head-blob" \
@@ -7212,6 +7220,154 @@ EOF
 
 	assert_equals "0" "$rc" "case=$case_name exit code"
 	assert_file_contains "$output_log" "scan ok with frontend email trusted backend authorization context" "case=$case_name output"
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_frontend_search_context_scope_case() {
+	local changed_file="${1:?changed file is required}"
+	local case_name="pull-request-target-frontend-search-context:$changed_file"
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	local context_files=(
+		"backend/api/auth.py"
+		"backend/api/ontology.py"
+		"backend/api/search.py"
+		"backend/db/models.py"
+		"backend/main.py"
+		"backend/services/ontology_service.py"
+		"frontend/package.json"
+		"frontend/src/app/api/[...path]/route.ts"
+		"frontend/src/app/auth/session/route.ts"
+		"frontend/src/components/SearchLayout.tsx"
+		"frontend/src/lib/api-client.ts"
+		"frontend/src/lib/session-cookie.ts"
+	)
+	local context_files_text
+	context_files_text="$(printf '%s\n' "${context_files[@]}")"
+
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+target_path=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
+		target_path="$2"
+		break
+	fi
+	shift
+done
+
+changed_file="$target_path/${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}"
+if ! grep -Fq -- 'HEAD_FRONTEND_SEARCH_FLOW_SHOULD_BE_SCANNED' "$changed_file"; then
+	echo "Error: frontend search PR-head content was not scanned" >&2
+	cat -- "$changed_file" >&2
+	exit 93
+fi
+
+while IFS= read -r context_file; do
+	[ -n "$context_file" ] || continue
+	if [ "$context_file" = "${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}" ]; then
+		continue
+	fi
+	context_path="$target_path/$context_file"
+	if [ ! -f "$context_path" ]; then
+		echo "Error: frontend search authorization context missing: $context_file" >&2
+		exit 94
+	fi
+	if ! grep -Fqx -- "BASE_SEARCH_CONTEXT:$context_file" "$context_path"; then
+		echo "Error: frontend search context did not use trusted base content: $context_file" >&2
+		cat -- "$context_path" >&2
+		exit 95
+	fi
+	if grep -Fq -- "HEAD_SEARCH_CONTEXT_SHOULD_NOT_BE_SCANNED:$context_file" "$context_path"; then
+		echo "Error: unchanged frontend search context leaked PR-head content: $context_file" >&2
+		cat -- "$context_path" >&2
+		exit 96
+	fi
+done <<<"${FAKE_STRIX_EXPECTED_CONTEXT_FILES:?}"
+
+if [ -e "$target_path/backend/api/unrelated_admin.py" ]; then
+	echo "Error: unrelated backend source leaked into bounded frontend search scope" >&2
+	exit 97
+fi
+
+echo "scan ok with frontend search trusted cross-layer authorization context"
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		local context_file
+		for context_file in "${context_files[@]}"; do
+			mkdir -p "$(dirname -- "$context_file")"
+			printf 'BASE_SEARCH_CONTEXT:%s\n' "$context_file" >"$context_file"
+		done
+		mkdir -p "$(dirname -- "$changed_file")" backend/api
+		printf '%s\n' 'BASE_FRONTEND_SEARCH_FLOW_SHOULD_NOT_BE_SCANNED' >"$changed_file"
+		printf '%s\n' 'UNRELATED_BACKEND_CONTEXT_SHOULD_NOT_BE_SCANNED' >backend/api/unrelated_admin.py
+		git add .
+		git commit -qm 'base commit'
+	)
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		local context_file
+		for context_file in "${context_files[@]}"; do
+			printf 'HEAD_SEARCH_CONTEXT_SHOULD_NOT_BE_SCANNED:%s\n' "$context_file" >"$context_file"
+		done
+		printf '%s\n' 'HEAD_FRONTEND_SEARCH_FLOW_SHOULD_BE_SCANNED' >"$changed_file"
+		git add .
+		git commit -qm 'head commit'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH \
+			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_EXPECTED_CHANGED_FILE="$changed_file" \
+			FAKE_STRIX_EXPECTED_CONTEXT_FILES="$context_files_text" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "case=$case_name exit code"
+	assert_file_contains "$output_log" "scan ok with frontend search trusted cross-layer authorization context" "case=$case_name output"
 
 	rm -rf "$tmp_dir"
 }
@@ -9031,6 +9187,12 @@ run_pull_request_target_frontend_email_context_scope_case \
 
 run_pull_request_target_frontend_email_context_scope_case \
 	"frontend/src/lib/email-threading.ts"
+
+run_pull_request_target_frontend_search_context_scope_case \
+	"frontend/src/components/SearchLayout.tsx"
+
+run_pull_request_target_frontend_search_context_scope_case \
+	"frontend/src/app/search/page.tsx"
 
 run_pull_request_target_aborts_on_pr_head_blob_failure_case \
 	"pull-request-target-added-file-pr-head-blob-read-failure" \
