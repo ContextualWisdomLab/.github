@@ -842,8 +842,8 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 
@@ -914,10 +914,49 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
         in workflow
     )
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
+
+
+def test_security_scan_avoids_warning_class_scanner_output() -> None:
+    workflow = workflow_text("security-scan.yml")
+    trivy_step = workflow_step(workflow, "Trivy filesystem scan")
+    merge_checkout_step = workflow_step(
+        workflow, "Checkout synthetic merge attribution commit"
+    )
+    merge_verify_step = workflow_step(
+        workflow, "Verify synthetic merge commit for SARIF attribution"
+    )
+
+    assert workflow.count("--output-file=old-results.json") == 2
+    assert workflow.count("--output-file=new-results.json") == 2
+    assert "--output-files=results.sarif" in workflow
+    assert "--output=old-results.json" not in workflow
+    assert "--output=new-results.json" not in workflow
+    assert "--output=results.sarif" not in workflow
+
+    assert "scanners: vuln,secret,misconfig" in trivy_step
+    assert "hide-progress: true" in trivy_step
+    assert "limit-severities-for-sarif: true" in trivy_step
+
+    assert (
+        "repository: ${{ github.event.pull_request.base.repo.full_name }}"
+        in merge_checkout_step
+    )
+    assert "ref: ${{ github.sha }}" in merge_checkout_step
+    assert "fetch-depth: 1" in merge_checkout_step
+    assert "persist-credentials: false" in merge_checkout_step
+    assert "EXPECTED_MERGE_SHA: ${{ github.sha }}" in merge_verify_step
+    assert '[[ "$EXPECTED_MERGE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' in merge_verify_step
+    assert 'git cat-file -e "${EXPECTED_MERGE_SHA}^{commit}"' in merge_verify_step
+    assert workflow.index(
+        "Checkout synthetic merge attribution commit"
+    ) < workflow.index("Checkout base")
+    assert workflow.index(
+        "Verify synthetic merge commit for SARIF attribution"
+    ) < workflow.index("Upload OSV SARIF to code scanning")
 
 
 def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(

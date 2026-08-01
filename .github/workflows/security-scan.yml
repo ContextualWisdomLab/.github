@@ -66,6 +66,17 @@ jobs:
       - name: Explain OSV scan mode and timeout budget
         run: |
           echo "::notice::OSV hard gate scans direct manifest and lockfile evidence with --no-resolve so external transitive registry resolver stalls cannot hold the required-check queue indefinitely. The job is capped at 25 minutes; if this budget is exceeded, rerun after the upstream registry/service recovers or inspect the uploaded debug artifacts."
+      - name: Checkout synthetic merge attribution commit
+        # Preserve github.sha in the local object database before the base/head
+        # comparison checks out two other revisions. upload-sarif consults this
+        # trusted merge object while calculating analysis metadata even though
+        # the final OSV upload is explicitly attributed to the PR head.
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
       - name: Checkout base
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -81,7 +92,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=old-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -99,7 +110,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=old-results.json
             --no-resolve
             --allow-no-lockfiles
             -r
@@ -120,7 +131,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -138,7 +149,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --no-resolve
             --allow-no-lockfiles
             -r
@@ -191,7 +202,7 @@ jobs:
         uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |
-            --output=results.sarif
+            --output-files=results.sarif
             --old=old-results.json
             --new=new-results.json
             --gh-annotations=true
@@ -219,6 +230,20 @@ jobs:
               "comprehensive so fixed PR-introduced alerts close after a clean "
               "base/head comparison."
           )
+      - name: Verify synthetic merge commit for SARIF attribution
+        env:
+          EXPECTED_MERGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$EXPECTED_MERGE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Synthetic merge attribution SHA is malformed."
+            exit 1
+          fi
+          if ! git cat-file -e "${EXPECTED_MERGE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Synthetic merge attribution commit is absent from the local object database."
+            exit 1
+          fi
+          echo "Verified synthetic merge attribution commit before OSV SARIF upload."
       - name: Upload OSV SARIF to code scanning
         id: upload_osv_sarif
         if: always() && hashFiles('results.sarif') != ''
@@ -321,6 +346,10 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
+          # Trivy otherwise emits a pip license-discovery warning even though
+          # license scanning is not selected. The required SARIF file and the
+          # explicit parser below retain every Medium+ finding and fail closed.
+          hide-progress: true
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
           format: sarif
