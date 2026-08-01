@@ -20,13 +20,64 @@ PACKAGE_NOT_FOUND_CONDITION_RE = re.compile(
     re.MULTILINE,
 )
 MISSING_PACKAGE_RE = re.compile(r"there is no package called ['\"]([^'\"]+)['\"]")
+DESCRIPTION_PACKAGE_SPEC_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9.]*)\s*(?:\([^()]*\))?\Z"
+)
 R_CMD_CHECK_RE = re.compile(r"\br[\s_-]*cmd[\s_-]*check\b", re.IGNORECASE)
 
 
-def classify_testthat_failure(text: str, package: str) -> bool:
-    """Return whether every testthat failure is the uninstalled package under test."""
+def declared_suggests(description: str) -> set[str] | None:
+    """Return validated package names from a DESCRIPTION ``Suggests`` field."""
+    values: list[str] = []
+    in_suggests = False
+    found_suggests = False
+    for line in description.splitlines():
+        if line.startswith((" ", "\t")):
+            if in_suggests:
+                values.append(line.strip())
+            continue
+        field, separator, value = line.partition(":")
+        if not separator:
+            if in_suggests:
+                return None
+            continue
+        in_suggests = field.casefold() == "suggests"
+        if not in_suggests:
+            continue
+        if found_suggests:
+            return None
+        found_suggests = True
+        values.append(value.strip())
+
+    if not found_suggests:
+        return set()
+    raw_value = " ".join(values).strip()
+    if not raw_value:
+        return set()
+
+    packages: set[str] = set()
+    for raw_spec in raw_value.split(","):
+        match = DESCRIPTION_PACKAGE_SPEC_RE.fullmatch(raw_spec.strip())
+        if match is None:
+            return None
+        packages.add(match.group(1))
+    return packages
+
+
+def classify_testthat_failure(
+    text: str,
+    package: str,
+    *,
+    allowed_missing: set[str] | None = None,
+) -> bool:
+    """Return whether failures only miss the package or declared test dependencies."""
     if not PACKAGE_NAME_RE.fullmatch(package):
         return False
+    allowed_packages = {package}
+    if allowed_missing is not None:
+        if any(not PACKAGE_NAME_RE.fullmatch(name) for name in allowed_missing):
+            return False
+        allowed_packages.update(allowed_missing)
     summaries = FAIL_SUMMARY_RE.findall(text)
     if not summaries or "Error: Test failures" not in text:
         return False
@@ -40,7 +91,7 @@ def classify_testthat_failure(text: str, package: str) -> bool:
         error_count == failure_count
         and condition_count == failure_count
         and len(missing_packages) == failure_count
-        and all(name == package for name in missing_packages)
+        and all(name in allowed_packages for name in missing_packages)
     )
 
 
@@ -88,6 +139,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     classify = subparsers.add_parser("classify-testthat")
     classify.add_argument("--log", type=Path, required=True)
     classify.add_argument("--package", required=True)
+    classify.add_argument("--description", type=Path)
 
     require_check = subparsers.add_parser("require-check")
     require_check.add_argument("--checks-json", type=Path, required=True)
@@ -99,10 +151,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "classify-testthat":
         text = _read_bounded_text(args.log)
-        if text is not None and classify_testthat_failure(text, args.package):
+        allowed_missing: set[str] | None = set()
+        if args.description is not None:
+            description = _read_bounded_text(args.description)
+            allowed_missing = (
+                declared_suggests(description) if description is not None else None
+            )
+        if (
+            text is not None
+            and allowed_missing is not None
+            and classify_testthat_failure(
+                text,
+                args.package,
+                allowed_missing=allowed_missing,
+            )
+        ):
             print(
-                "testthat failures were exclusively packageNotFoundError "
-                f"conditions for package {args.package}"
+                "testthat failures were exclusively packageNotFoundError conditions "
+                f"for package {args.package} or its declared Suggests dependencies"
             )
             return 0
         print("testthat failure is not safely deferrable", file=sys.stderr)

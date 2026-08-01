@@ -187,11 +187,10 @@ write_prompt() {
 		fi
 		printf 'Do not request changes solely because your tool call, MCP call, or full-file read was not executed. Treat that as a review source limitation unless current-head evidence explicitly reports a materialization failure; any such finding must be tied to that evidence, not a generic model-exhaustion message. REQUEST_CHANGES findings must cite a positive source/evidence line; never use line 0.\n'
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
-		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome and exactly one source-line-sha256=<64 lowercase hex> digest computed from the cited current-head line bytes without its line ending; generic source-inspection or coverage-verification claims are invalid.\n'
-		printf 'Required control block shape:\n'
-		printf '```json\n'
-		printf '{"head_sha":"%s","run_id":"%s","run_attempt":"%s","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and all required labels","adversarial_validation":{"status":"passed or failed","probes":[{"path":"exact/current-head/changed-file","line":1,"hypothesis":"concrete failure hypothesis","attack_or_counterexample":"input, state, race, threat, or boundary used to challenge it","evidence":"executed command or source-backed trace, observed outcome, and source-line-sha256=<exact cited line digest>","outcome":"falsified or confirmed"}],"residual_risk":"bounded residual risk after the probes"},"findings":[]}\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
-		printf '```\n'
+		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome and copy exactly one source-line-sha256=<64 lowercase hex> receipt with its matching path and line from the trusted receipt section; generic source-inspection or coverage-verification claims are invalid.\n'
+		printf 'Current-run identity values are head_sha=%s, run_id=%s, run_attempt=%s. Copy them into the one final control object required by the contract file.\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
+		printf 'Do not quote, repeat, or emit a schema example before the final sentinel. Choose exactly one result token, APPROVE or REQUEST_CHANGES; never emit the literal phrase "APPROVE or REQUEST_CHANGES".\n'
+		printf 'Before returning, verify: exactly one top-level current-run control object; non-empty reason, summary, and residual_risk; the required number of complete probes; APPROVE has status=passed, only falsified probes, and findings=[]; REQUEST_CHANGES has status=failed, a confirmed probe, and a same-location source-backed finding.\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'
 			if should_inline_prompt_evidence_excerpt "$model_candidate"; then
@@ -221,6 +220,23 @@ PY
 			printf '\n'
 		fi
 	} >"$prompt_file"
+}
+
+write_schema_repair_prompt() {
+	local model_candidate="$1"
+	local prompt_file="$2"
+
+	write_prompt "$model_candidate" "$prompt_file"
+	{
+		printf '\nA previous response from this same provider reached the trusted validator but failed the control schema. Perform the review again from the same trusted evidence and return one corrected review body only.\n'
+		printf 'This is a schema repair opportunity, not permission to weaken, omit, or fabricate evidence. Check every item before returning:\n'
+		printf -- '- Emit exactly one sentinel and exactly one current-run JSON control object; do not quote any example object or earlier response.\n'
+		printf -- '- Choose exactly APPROVE or REQUEST_CHANGES, with a non-empty reason, summary, and residual_risk.\n'
+		printf -- '- Include "adversarial_validation" as an object with at least the required probe count. Copy each path, line, and source-line-sha256 receipt exactly from trusted bounded evidence.\n'
+		printf -- '- APPROVE requires status=passed, every probe outcome=falsified, and findings=[].\n'
+		printf -- '- REQUEST_CHANGES requires status=failed, at least one outcome=confirmed, and a non-empty source-backed finding at the same path and line.\n'
+		printf 'Return only the corrected review body now.\n'
+	} >>"$prompt_file"
 }
 
 assert_reasoning_effort_for_candidate() {
@@ -348,6 +364,13 @@ is_openrouter_candidate() {
 is_nvidia_nim_candidate() {
 	case "$1" in
 	nvidia-nim/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+is_schema_repair_candidate() {
+	case "$1" in
+	nvidia-nim/* | opencode-free/*) return 0 ;;
 	*) return 1 ;;
 	esac
 }
@@ -519,7 +542,7 @@ run_one_model_attempt() {
 }
 
 main() {
-	local attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
+	local attempts schema_repair_attempts effective_attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
 	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
 	local uncapped_run_timeout
 	local changed_file_count small_file_threshold medium_file_threshold
@@ -539,6 +562,7 @@ main() {
 	total_attempts=0
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
+	schema_repair_attempts="$(env_integer_or_default OPENCODE_SCHEMA_REPAIR_ATTEMPTS 1)"
 	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
 	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
@@ -632,7 +656,16 @@ main() {
 			opencode_json_file="${candidate_output_file}.jsonl"
 			opencode_export_file="${candidate_output_file}.session.json"
 			write_prompt "$model_candidate" "$prompt_file"
-			for attempt in $(seq 1 "$attempts"); do
+			effective_attempts="$attempts"
+			if is_schema_repair_candidate "$model_candidate"; then
+				effective_attempts=$((effective_attempts + schema_repair_attempts))
+			fi
+			for attempt in $(seq 1 "$effective_attempts"); do
+				if [ "$attempt" -gt "$attempts" ]; then
+					write_schema_repair_prompt "$model_candidate" "$prompt_file"
+					printf 'OpenCode %s schema-repair attempt %s/%s will re-review from trusted evidence with a non-replayable control checklist.\n' \
+						"$model_candidate" "$attempt" "$effective_attempts"
+				fi
 				now="$SECONDS"
 				if is_nvidia_nim_candidate "$model_candidate" &&
 					[ "$nim_elapsed_seconds" -ge "$nim_budget_seconds" ]; then
@@ -641,7 +674,7 @@ main() {
 					break
 				fi
 				if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then
-					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$attempts"
+					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$effective_attempts"
 					if finish_pool_without_model; then
 						exit 0
 					fi
@@ -678,14 +711,14 @@ main() {
 						"$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$uncapped_run_timeout"
 				fi
 				export OPENCODE_RUN_TIMEOUT_SECONDS
-				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"
+				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$effective_attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"
 				agent="${OPENCODE_AGENT:-ci-review-fallback}"
 				if [ "$attempt" -eq 1 ] && [ -n "${OPENCODE_FIRST_ATTEMPT_AGENT:-}" ]; then
 					agent="$OPENCODE_FIRST_ATTEMPT_AGENT"
 				fi
 				run_status=0
 				nim_attempt_started="$SECONDS"
-				if run_one_model_attempt "$model_candidate" "$attempt" "$attempts" "$agent" "$prompt_file" "$candidate_output_file" "$opencode_json_file" "$opencode_export_file"; then
+				if run_one_model_attempt "$model_candidate" "$attempt" "$effective_attempts" "$agent" "$prompt_file" "$candidate_output_file" "$opencode_json_file" "$opencode_export_file"; then
 					cp "$candidate_output_file" "$OPENCODE_OUTPUT_FILE"
 					record_review_model "$model_candidate"
 					record_review_status "success"
@@ -697,7 +730,7 @@ main() {
 					nim_attempt_elapsed=$((SECONDS - nim_attempt_started))
 					nim_elapsed_seconds=$((nim_elapsed_seconds + nim_attempt_elapsed))
 					printf 'OpenCode NVIDIA NIM combined runtime used %ss/%ss after %s attempt %s/%s.\n' \
-						"$nim_elapsed_seconds" "$nim_budget_seconds" "$model_candidate" "$attempt" "$attempts"
+						"$nim_elapsed_seconds" "$nim_budget_seconds" "$model_candidate" "$attempt" "$effective_attempts"
 				fi
 				if [ "$run_status" -ne 3 ] && is_credit_exhausted_failure "$opencode_json_file" "${opencode_json_file}.stderr"; then
 					dead_candidate_reasons[$model_candidate]="provider credits exhausted (HTTP 402 / payment required)"
@@ -716,7 +749,10 @@ main() {
 				if [ "$run_status" -eq 2 ]; then
 					break
 				fi
-				if [ "$attempt" -lt "$attempts" ]; then
+				if [ "$run_status" -ne 3 ] && [ "$attempt" -ge "$attempts" ]; then
+					break
+				fi
+				if [ "$attempt" -lt "$effective_attempts" ] && [ "$attempt" -lt "$attempts" ]; then
 					retry_sleep="$(backoff_sleep "$attempt")"
 					if [ "$deadline" -gt 0 ] && [ $((SECONDS + retry_sleep)) -gt "$deadline" ]; then
 						retry_sleep=$((deadline - SECONDS))
