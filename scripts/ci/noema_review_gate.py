@@ -266,7 +266,11 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
-        if review_author(review) == actor or marker in str(review.get("body") or ""):
+        if (
+            actor
+            and review_author(review) == actor
+            and marker in str(review.get("body") or "")
+        ):
             return True
     return False
 
