@@ -27,6 +27,7 @@ ARTIFACT_REPORTS_DIR="$REPO_ROOT/strix_runs"
 STRIX_RUNTIME_DIR="$(mktemp -d /tmp/strix-runtime.XXXXXX)"
 STRIX_LOG="$STRIX_RUNTIME_DIR/strix.log"
 ACTIVE_REPORTS_DIR="$STRIX_RUNTIME_DIR/reports"
+ATTEMPT_LOGS_DIR="$STRIX_RUNTIME_DIR/gate-attempts"
 STRIX_REPORTS_DIR="$ACTIVE_REPORTS_DIR"
 STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-1200}"
 STRIX_TOTAL_TIMEOUT_SECONDS="${STRIX_TOTAL_TIMEOUT_SECONDS:-0}"
@@ -122,6 +123,9 @@ publish_artifact_reports() {
 	if [ -d "$ACTIVE_REPORTS_DIR" ]; then
 		cp -R -- "$ACTIVE_REPORTS_DIR"/. "$ARTIFACT_REPORTS_DIR"/
 	fi
+	if [ -d "$ATTEMPT_LOGS_DIR" ] && [ ! -L "$ATTEMPT_LOGS_DIR" ]; then
+		cp -R -- "$ATTEMPT_LOGS_DIR" "$ARTIFACT_REPORTS_DIR/gate-attempts"
+	fi
 	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
 		cp -- "$STRIX_LOG" "$ARTIFACT_REPORTS_DIR/gate-last-attempt.log"
 	fi
@@ -140,7 +144,7 @@ preserve_attempt_log() {
 	local safe_model attempt_dir attempt_log
 	ATTEMPT_LOG_SEQUENCE=$((ATTEMPT_LOG_SEQUENCE + 1))
 	safe_model="$(printf '%s' "$model" | tr -c 'A-Za-z0-9._-' '_')"
-	attempt_dir="$ACTIVE_REPORTS_DIR/gate-attempts"
+	attempt_dir="$ATTEMPT_LOGS_DIR"
 	mkdir -p -- "$attempt_dir"
 	attempt_log="$(printf '%s/%03d-%s-rc%s.log' "$attempt_dir" "$ATTEMPT_LOG_SEQUENCE" "$safe_model" "$rc")"
 	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
@@ -1493,6 +1497,15 @@ build_pull_request_head_tree_scope_dir() {
 		[ -n "$metadata" ] || continue
 		# shellcheck disable=SC2086 # metadata is exactly git ls-tree's mode/type/object tuple.
 		read -r mode object_type object_hash <<<"$metadata"
+		# Git submodule pointers (gitlinks) list as mode 160000 / type commit in
+		# the recursive tree. They carry no scannable blob content in this
+		# repository (the submodule's files live in a separate repository), so
+		# skip them here exactly as the changed-file scope path does, instead of
+		# failing closed on a legitimately non-blob tree entry.
+		if [ "$mode" = "160000" ] || [ "$object_type" = "commit" ]; then
+			echo "INFO: pull request head tree entry is a git submodule pointer; excluding content from PR-scoped Strix input: $relative_path" >&2
+			continue
+		fi
 		if [ "$object_type" != "blob" ]; then
 			echo "ERROR: pull request head tree entry is not a blob; failing closed: $relative_path" >&2
 			return 2
@@ -2146,6 +2159,7 @@ fail_unmapped_threshold_report() {
 	fi
 	PR_FINDINGS_DECISION="block_unmapped"
 	echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+	echo "Strix quick scan failed with a non-recoverable error." >&2
 	return 0
 }
 
@@ -2581,8 +2595,10 @@ PY
 
 	if [ "$rc" -eq 0 ]; then
 		if has_blocking_vulnerability_reports; then
-			echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
-			return 1
+			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
+				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
+				return 1
+			fi
 		fi
 		printf "Strix run succeeded for model '%s' in %ds.\n" "$model" "$elapsed" >&2
 		return 0
@@ -3583,12 +3599,14 @@ opencode_config_source_candidates() {
 	resolved_scan_target="$(resolve_current_target_path "$TARGET_PATH" 2>/dev/null || true)"
 
 	if [ -n "$resolved_scan_target" ]; then
+		printf '%s\n' "$resolved_scan_target/.github/workflows/opencode-review-dispatch.yml"
 		printf '%s\n' "$resolved_scan_target/.github/workflows/opencode-review.yml"
 		printf '%s\n' "$resolved_scan_target/opencode.jsonc"
 	fi
 	if pull_request_head_blob_required || [ "$TARGET_PATH_IS_INTERNAL_PR_SCOPE" -eq 1 ]; then
 		return 0
 	fi
+	printf '%s\n' "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml"
 	printf '%s\n' "$REPO_ROOT/.github/workflows/opencode-review.yml"
 	printf '%s\n' "$REPO_ROOT/opencode.jsonc"
 }
@@ -3869,9 +3887,10 @@ run_current_target_scan() {
 
 	case "$PR_FINDINGS_DECISION" in
 	block_changed | block_unmapped | block_manifest_unverified)
-		if [ "$strict_primary_provider_fallback" -eq 1 ]; then
-			fail_reported_vulnerabilities_before_fallback_success || true
+		if [ "$strict_primary_provider_fallback" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
+			return 1
 		fi
+		echo "Strix quick scan failed with a non-recoverable error." >&2
 		return 1
 		;;
 	esac
@@ -3945,9 +3964,10 @@ run_current_target_scan() {
 
 		case "$PR_FINDINGS_DECISION" in
 		block_changed | block_unmapped | block_manifest_unverified)
-			if [ "$strict_fallback_provider_signal" -eq 1 ]; then
-				fail_reported_vulnerabilities_before_fallback_success || true
+			if [ "$strict_fallback_provider_signal" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
+				return 1
 			fi
+			echo "Strix quick scan failed with a non-recoverable error." >&2
 			return 1
 			;;
 		esac

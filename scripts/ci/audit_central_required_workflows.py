@@ -16,9 +16,14 @@ SOURCE_REPOSITORY_ID = 1274066402
 SOURCE_REF = "refs/heads/main"
 SOURCE_ORGANIZATION = "ContextualWisdomLab"
 INHERITED_SCOPE_FIELD = "_audit_repository_scope"
-EXPECTED_EXCLUSIONS = {".github", "argos", "noema"}
+EXPECTED_EXCLUSIONS = {".github", "IRT-bibliography-set", "noema"}
+# The workflow token can always enumerate these public repositories. Private
+# exclusions may be intentionally outside that token's repository visibility,
+# while still being validated from an organization-admin ruleset payload.
+REQUIRED_EXCLUSION_PROBES = {".github", "noema"}
 REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/close-empty-pr.yml",
+    ".github/workflows/noema-review.yml",
     ".github/workflows/opencode-review.yml",
     ".github/workflows/pr-review-merge-scheduler.yml",
     ".github/workflows/security-scan.yml",
@@ -72,7 +77,9 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
                 "inherited repository scope probes are not boolean for: "
                 f"{malformed_scope}"
             )
-        missing_exclusion_probes = sorted(EXPECTED_EXCLUSIONS - set(inherited_scope))
+        missing_exclusion_probes = sorted(
+            REQUIRED_EXCLUSION_PROBES - set(inherited_scope)
+        )
         if missing_exclusion_probes:
             errors.append(
                 "inherited repository scope probes omit expected exclusions: "
@@ -90,7 +97,7 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         )
         if missing_inheritance:
             errors.append(
-                "central ruleset is not inherited by public repository probes: "
+                "central ruleset is not inherited by organization repository probes: "
                 f"{missing_inheritance}"
             )
     else:
@@ -148,8 +155,8 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         parameters = review_rules[0].get("parameters")
         parameters = parameters if isinstance(parameters, dict) else {}
         approving_reviews = parameters.get("required_approving_review_count")
-        if not isinstance(approving_reviews, int) or approving_reviews < 1:
-            errors.append("at least one approving review is not required")
+        if approving_reviews != 2:
+            errors.append("exactly two approving reviews are not required")
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("stale-review dismissal on push is disabled")
         if parameters.get("require_last_push_approval") is not True:

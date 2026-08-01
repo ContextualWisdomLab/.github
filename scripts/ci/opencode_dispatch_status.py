@@ -5,26 +5,37 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import Any, Sequence
 
-APPROVAL_AUTHORS = frozenset({"opencode-agent", "opencode-agent[bot]"})
-HEAD_SHA_RE = re.compile(r"Head SHA:\s*`?([0-9a-fA-F]{40})`?", re.IGNORECASE)
+try:
+    from opencode_existing_approval_gate import (
+        OPENCODE_APP_APPROVAL_AUTHORS,
+        review_rejection_reason,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from scripts.ci.opencode_existing_approval_gate import (
+        OPENCODE_APP_APPROVAL_AUTHORS,
+        review_rejection_reason,
+    )
 
 
 def _has_current_approval(reviews: Sequence[dict[str, Any]], head_sha: str) -> bool:
-    """Return whether the latest OpenCode decision explicitly approves the exact head."""
+    """Return whether the latest OpenCode decision is a verified approval."""
     for review in reversed(reviews):
         author = str((review.get("user") or {}).get("login") or "").casefold()
-        if author not in APPROVAL_AUTHORS:
+        if author not in OPENCODE_APP_APPROVAL_AUTHORS:
             continue
         if str(review.get("commit_id") or "").lower() != head_sha.lower():
             continue
-        body_heads = HEAD_SHA_RE.findall(str(review.get("body") or ""))
-        if not body_heads or body_heads[-1].lower() != head_sha.lower():
-            continue
-        return str(review.get("state") or "").upper() == "APPROVED"
+        return (
+            review_rejection_reason(
+                review,
+                head_sha,
+                approval_authors=OPENCODE_APP_APPROVAL_AUTHORS,
+            )
+            is None
+        )
     return False
 
 
@@ -38,14 +49,15 @@ def decide_status(
 ) -> dict[str, str]:
     """Return a fail-closed GitHub commit-status decision."""
     live_head = str((pull_request.get("head") or {}).get("sha") or "")
-    if model_outcome != "success":
-        reason = "OpenCode model review did not produce approval evidence."
-    elif coverage_result != "success":
+    if coverage_result != "success":
         reason = "OpenCode coverage evidence did not pass for the current head."
     elif not expected_head or live_head.lower() != expected_head.lower():
         reason = "OpenCode status target is stale or the live PR head is unavailable."
     elif not _has_current_approval(reviews, expected_head):
-        reason = "No validated exact-current-head OpenCode approval was published."
+        reason = (
+            "No validated exact-current-head OpenCode approval was published"
+            f" (model outcome: {model_outcome or 'missing'})."
+        )
     else:
         return {
             "state": "success",
