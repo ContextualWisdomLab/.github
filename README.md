@@ -33,10 +33,10 @@ code-scanning permissions. Cross-repository `opencode-review` commit statuses
 and model-unavailable code-scanning lookups therefore require
 `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN` with access to the target
 repository (commit statuses write and code-scanning alerts read,
-respectively). When that optional status capability is unavailable, the central
-workflow upserts an App-authored, exact-head PR receipt for failed review-tool
-outcomes; the receipt never grants approval and is resolved only after a
-validated exact-head OpenCode approval exists.
+respectively). For every failed review-tool outcome, the central workflow
+upserts an App-authored, exact-head PR receipt whether or not the optional
+commit status was published; the receipt never grants approval and is resolved
+only after a validated exact-head OpenCode approval exists.
 Post-approval reuse and follow-up accept only an exact-head review authored by
 the OpenCode GitHub App; a GitHub Actions-authored review is not OpenCode
 approval evidence. The separate scheduler also listens for that App review,
