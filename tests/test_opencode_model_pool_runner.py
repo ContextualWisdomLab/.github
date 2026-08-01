@@ -424,6 +424,24 @@ def test_backoff_environment_rejects_recursive_arithmetic_injection(
     assert not marker.exists()
 
 
+def test_configured_provider_retry_uses_bounded_backoff(tmp_path: Path) -> None:
+    """A normal provider failure reaches the second configured attempt after backoff."""
+    result = run_failed_model(
+        tmp_path,
+        stderr_line="provider unavailable",
+        extra_env={
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "1",
+            "OPENCODE_BACKOFF_MAX_SECONDS": "1",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "Retrying OpenCode after exponential backoff of 1s." in result.stdout
+    assert "attempt 2/2" in result.stdout
+    assert "syntax error" not in result.stderr.casefold()
+
+
 def secret_payload() -> tuple[str, tuple[str, ...]]:
     """Return a fake credential plus fragments used to detect partial disclosure."""
     parts = ("github", "_pat_", "THISMUSTNEVERLEAK123456789")
@@ -868,7 +886,8 @@ def test_nvidia_nim_combined_budget_preserves_fallback_attempt(
         "because the NVIDIA NIM combined runtime budget of 1s is exhausted"
         in result.stdout
     )
-    assert "OpenCode opencode-free/nemotron-3-ultra-free attempt 1/1" in result.stdout
+    assert "OpenCode opencode-free/nemotron-3-ultra-free attempt 1/2" in result.stdout
+    assert "schema-repair attempt 2/2" not in result.stdout
 
 
 def test_github_models_openai_prompt_references_evidence_without_inlining(
@@ -908,3 +927,75 @@ def test_deepseek_prompt_still_inlines_bounded_evidence_excerpt(tmp_path: Path) 
     prompt = prompt_capture.read_text(encoding="utf-8")
     assert evidence_excerpt in prompt
     assert "Evidence excerpt omitted" not in prompt
+    assert f'{{"head_sha":"{"1" * 40}"' not in prompt
+    assert "Do not quote, repeat, or emit a schema example" in prompt
+
+
+def test_free_provider_gets_one_bounded_schema_repair_attempt(
+    tmp_path: Path,
+) -> None:
+    """A responsive free model can correct schema once without increasing paid retries."""
+    prompt_capture = tmp_path / "captured-repair-prompt.md"
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        prompt_capture=prompt_capture,
+        model_candidates="opencode-free/nemotron-3-ultra-free",
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {"type": "text", "text": "not a control conclusion"}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "9",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "attempt 1/2" in result.stdout
+    assert "schema-repair attempt 2/2" in result.stdout
+    assert "attempt 2/2" in result.stdout
+    assert "exponential backoff" not in result.stdout
+    repair_prompt = prompt_capture.read_text(encoding="utf-8")
+    assert "failed the control schema" in repair_prompt
+    assert "exactly one sentinel and exactly one current-run JSON control object" in repair_prompt
+
+
+def test_paid_provider_does_not_gain_an_implicit_schema_repair_attempt(
+    tmp_path: Path,
+) -> None:
+    """The free-model correction path cannot double paid-provider requests."""
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        model_candidates="openrouter/deepseek/deepseek-v3.2",
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {"type": "text", "text": "not a control conclusion"}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "OPENROUTER_API_KEY": "fake-openrouter-key",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "attempt 1/1" in result.stdout
+    assert "schema-repair attempt" not in result.stdout
+    assert "attempt 2/" not in result.stdout

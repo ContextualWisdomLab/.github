@@ -1422,8 +1422,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
-        "CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN }}"
+        "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in workflow
     # The OpenCode app installation token never carries security-events read, so
     # preferring it for the code-scanning alert lookup 403s ("Resource not
@@ -1433,7 +1433,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     ]
     assert code_scanning_token_lines
     assert all("opencode_app_token" not in line for line in code_scanning_token_lines)
-    assert "CODE_SCANNING_TOKEN_SOURCE: github-token" in workflow
+    assert (
+        "CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && "
+        "'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && "
+        "'OPENCODE_APPROVE_TOKEN' || 'github-token' }}"
+    ) in workflow
     code_scanning_source_lines = [
         line for line in workflow.splitlines() if "CODE_SCANNING_TOKEN_SOURCE:" in line
     ]
@@ -1606,6 +1610,15 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Repeated current-head sections for models without file reads" in workflow
     assert "append_evidence_section" in workflow
     assert 'Focused changed hunks" 14000' in workflow
+    assert (
+        'append_evidence_section "Adversarial probe source-line receipts" 9000'
+        in workflow
+    )
+    assert (
+        'python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_adversarial_receipts.py"'
+        in workflow
+    )
+    assert "the isolated model cannot recompute a trusted receipt" in workflow
     assert (
         "do not request changes solely because your own tool or file read did not"
         in workflow
@@ -1980,10 +1993,15 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
+        "github.token }}"
     ) in status_step
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
-    assert "steps.opencode_app_token.outputs" not in status_step
+    assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step
+    assert "OPENCODE_CHANGED_FILES_FILE" in status_step
+    assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in status_step
+    assert "OPENCODE_SOURCE_WORKDIR" in status_step
+    assert 'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"' in status_step
     assert "continue-on-error: true" not in status_step
     assert (
         "same-repository github.token can access cross-repository target"
@@ -2037,6 +2055,11 @@ def test_opencode_adversarial_prompt_requires_independent_proof():
     assert '"properly handles all cases"' in prompt
     assert "is circular and invalid" in prompt
     assert "source-line-sha256=<64 lowercase hex>" in prompt
+    assert "copied without alteration" in prompt
+    assert "do not invent, approximate, or recompute" in prompt
+    assert "Adversarial probe source-line receipts" in prompt
+    assert "COPY_SENTINEL_HEAD_SHA" in prompt
+    assert '{"head_sha":"${HEAD_SHA}"' not in prompt
 
 
 def test_opencode_privileged_review_security_boundaries_are_fail_closed():

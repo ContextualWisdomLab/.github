@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -13,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from scripts.ci import opencode_dispatch_status as dispatch_status
+from scripts.ci import opencode_existing_approval_gate as approval_gate
+from scripts.ci import opencode_review_normalize_output as normalizer
 from scripts.ci import redact_sensitive_log as redactor
 from scripts.ci import safe_pytest_command as safe_pytest
 
@@ -263,34 +266,128 @@ def test_safe_pytest_cli_paths_and_invalid_execution(
     assert exc.value.code == 0
 
 
+DISPATCH_SOURCE_LINES = (
+    b"name: Required OpenCode Review",
+    b"on:",
+)
+
+
+@pytest.fixture
+def trusted_dispatch_status_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seal the source and changed-file evidence used by dispatch-status review validation."""
+    runner_temp = tmp_path / "runner-temp"
+    source_root = tmp_path / "source"
+    source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
+    runner_temp.mkdir()
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"\n".join(DISPATCH_SOURCE_LINES) + b"\n")
+
+    changed_files = runner_temp / "opencode-changed-files.txt"
+    changed_files.write_text(".github/workflows/opencode-review.yml\n", encoding="utf-8")
+    manifest = runner_temp / "opencode-artifact-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "artifacts": {
+                    changed_files.name: hashlib.sha256(changed_files.read_bytes()).hexdigest()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
+    monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    monkeypatch.setenv(
+        "OPENCODE_ARTIFACT_MANIFEST_SHA256",
+        hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    )
+    normalizer.current_changed_files.cache_clear()
+    yield
+    normalizer.current_changed_files.cache_clear()
+
+
 def approval_review(head_sha: str, **overrides: object) -> dict[str, object]:
     """Build one exact-current-head OpenCode approval review."""
+    adversarial_validation = {
+        "status": "passed",
+        "probes": [
+            {
+                "path": ".github/workflows/opencode-review.yml",
+                "line": line,
+                "hypothesis": f"Approval bypass hypothesis {line}.",
+                "attack_or_counterexample": f"Supply forged evidence variant {line}.",
+                "evidence": (
+                    f"Source trace at .github/workflows/opencode-review.yml:{line} "
+                    "confirmed the gate rejected the forged evidence. "
+                    f"source-line-sha256={hashlib.sha256(source_line).hexdigest()}"
+                ),
+                "outcome": "falsified",
+            }
+            for line, source_line in enumerate(DISPATCH_SOURCE_LINES, start=1)
+        ],
+        "residual_risk": "Hosted token permissions remain externally enforced.",
+    }
     review: dict[str, object] = {
         "state": "APPROVED",
         "commit_id": head_sha,
         "user": {"login": "opencode-agent[bot]"},
-        "body": f"- Result: APPROVE\n- Head SHA: `{head_sha}`",
+        "body": "\n".join(
+            (
+                "## Pull request overview",
+                "",
+                "OpenCode reviewed the current-head bounded evidence and found no blocking issues.",
+                "",
+                "## Adversarial validation",
+                "",
+                "```json",
+                json.dumps(adversarial_validation),
+                "```",
+                "",
+                "- Result: APPROVE",
+                f"- Head SHA: `{head_sha}`",
+                "- Workflow run: 123",
+                "- Workflow attempt: 2",
+            )
+        ),
     }
     review.update(overrides)
     return review
 
 
-def test_dispatch_status_requires_live_current_head_approval_and_coverage() -> None:
+def test_dispatch_status_requires_live_current_head_approval_and_coverage(
+    trusted_dispatch_status_artifacts: None,
+) -> None:
     """A repository-dispatch status succeeds only for the validated approval boundary."""
     head = "a" * 40
+    review = approval_review(head)
+    assert (
+        approval_gate.review_rejection_reason(
+            review,
+            head,
+            approval_authors=approval_gate.OPENCODE_APP_APPROVAL_AUTHORS,
+        )
+        is None
+    )
     decision = dispatch_status.decide_status(
         model_outcome="success",
         coverage_result="success",
         expected_head=head,
         pull_request={"head": {"sha": head}},
-        reviews=[approval_review(head)],
+        reviews=[review],
     )
 
     assert decision["state"] == "success"
     assert "validated" in decision["description"].lower()
 
 
-def test_dispatch_status_latest_current_head_decision_is_authoritative() -> None:
+def test_dispatch_status_latest_current_head_decision_is_authoritative(
+    trusted_dispatch_status_artifacts: None,
+) -> None:
     """A later current-head change request supersedes an earlier approval."""
     head = "a" * 40
     reviews = [
@@ -309,10 +406,27 @@ def test_dispatch_status_latest_current_head_decision_is_authoritative() -> None
     assert decision["state"] == "failure"
 
 
+def test_dispatch_status_reuses_verified_approval_after_current_pool_exhaustion(
+    trusted_dispatch_status_artifacts: None,
+) -> None:
+    """A prior exact-head real-model approval remains authoritative across a retry outage."""
+    head = "a" * 40
+
+    decision = dispatch_status.decide_status(
+        model_outcome="exhausted",
+        coverage_result="success",
+        expected_head=head,
+        pull_request={"head": {"sha": head}},
+        reviews=[approval_review(head)],
+    )
+
+    assert decision["state"] == "success"
+
+
 @pytest.mark.parametrize(
     ("model_outcome", "coverage_result", "live_head", "review_overrides"),
     [
-        ("exhausted", "success", "current", {}),
+        ("exhausted", "success", "current", {"body": "Looks good"}),
         ("success", "failure", "current", {}),
         ("success", "success", "stale", {}),
         ("success", "success", "current", {"state": "CHANGES_REQUESTED"}),
@@ -326,6 +440,7 @@ def test_dispatch_status_fails_closed_without_validated_approval(
     coverage_result: str,
     live_head: str,
     review_overrides: dict[str, object],
+    trusted_dispatch_status_artifacts: None,
 ) -> None:
     """Negative, exhausted, stale, untrusted, and incomplete evidence cannot publish success."""
     head = "a" * 40
@@ -346,6 +461,7 @@ def test_dispatch_status_cli_and_evidence_shape_validation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    trusted_dispatch_status_artifacts: None,
 ) -> None:
     """The workflow-facing CLI emits JSON and rejects malformed evidence shapes."""
     head = "a" * 40
