@@ -44,8 +44,8 @@ def _redact_json(value: Any) -> Any:
     return value
 
 
-def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | None:
-    """Return a redacted key/value assignment parsed in linear time."""
+def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, int]:
+    """Return a redacted key/value assignment parsed in linear time, or the skip index."""
     cursor = start
     key_quote = ""
     if cursor < len(text) and text[cursor] in "\"'":
@@ -53,25 +53,28 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
         cursor += 1
     key_start = cursor
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
-        return None
+        return None, start + 1
     while cursor < len(text) and text[cursor] in KEY_CHARS:
         cursor += 1
     key = text[key_start:cursor]
     if key_quote:
         if cursor >= len(text) or text[cursor] != key_quote:
-            return None
+            return None, start + 1
         cursor += 1
+
+    parsed_key_end = cursor
+
     if not SENSITIVE_KEY_RE.search(key):
-        return None
+        return None, parsed_key_end
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text) or text[cursor] not in ":=":
-        return None
+        return None, parsed_key_end
     cursor += 1
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text):
-        return None
+        return None, parsed_key_end
 
     value_start = cursor
     if text[cursor] in "\"'":
@@ -91,7 +94,7 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
         while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
             cursor += 1
     if cursor == value_start:
-        return None
+        return None, parsed_key_end
     return text[start:value_start] + REDACTED, cursor
 
 
@@ -100,13 +103,12 @@ def _redact_assignments(text: str) -> str:
     output: list[str] = []
     cursor = 0
     while cursor < len(text):
-        match = _consume_sensitive_assignment(text, cursor)
-        if match is None:
-            output.append(text[cursor])
-            cursor += 1
-            continue
-        replacement, cursor = match
-        output.append(replacement)
+        replacement, next_cursor = _consume_sensitive_assignment(text, cursor)
+        if replacement is None:
+            output.append(text[cursor:next_cursor])
+        else:
+            output.append(replacement)
+        cursor = next_cursor
     return "".join(output)
 
 
