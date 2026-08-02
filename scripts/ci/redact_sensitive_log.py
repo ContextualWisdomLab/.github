@@ -24,11 +24,11 @@ BEARER_RE = re.compile(
     r"[^\s\"'\\]+",
     re.IGNORECASE,
 )
-PROVIDER_TOKEN_RES = (
-    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
-    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+PROVIDER_TOKEN_RE = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b|"
+    r"\bsk-[A-Za-z0-9_-]{20,}\b|"
+    r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b|"
+    r"\bAKIA[0-9A-Z]{16}\b"
 )
 
 
@@ -99,14 +99,19 @@ def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
     output: list[str] = []
     cursor = 0
+    start = 0
     while cursor < len(text):
         match = _consume_sensitive_assignment(text, cursor)
         if match is None:
-            output.append(text[cursor])
             cursor += 1
             continue
+        if cursor > start:
+            output.append(text[start:cursor])
         replacement, cursor = match
         output.append(replacement)
+        start = cursor
+    if cursor > start:
+        output.append(text[start:cursor])
     return "".join(output)
 
 
@@ -115,8 +120,7 @@ def _redact_unstructured(text: str) -> str:
     cleaned = _redact_assignments(text)
     cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
     cleaned = JWT_RE.sub(REDACTED, cleaned)
-    for pattern in PROVIDER_TOKEN_RES:
-        cleaned = pattern.sub(REDACTED, cleaned)
+    cleaned = PROVIDER_TOKEN_RE.sub(REDACTED, cleaned)
     return cleaned
 
 
