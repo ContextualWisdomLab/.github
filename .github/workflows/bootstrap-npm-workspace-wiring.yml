@@ -1,7 +1,7 @@
 name: Bootstrap npm workspace coverage wiring
 
-# One-shot branch bootstrap. The successful run deletes this workflow and its
-# patch script after wiring the active central coverage workflow and contracts.
+# One-shot branch bootstrap. A verified run deletes this workflow, its patch
+# script, and the branch-only focused workflow from the final merge diff.
 on:
   push:
     branches:
@@ -38,7 +38,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
@@ -52,6 +52,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Install hash-pinned review test tools
+        run: >-
+          python3 -m pip install
+          --disable-pip-version-check
+          --require-hashes
+          --only-binary=:all:
+          -r requirements-opencode-review-ci-hashes.txt
+
       - name: Apply focused workspace-root patch
         id: patch
         shell: bash
@@ -62,14 +70,11 @@ jobs:
           set -e
           echo "patch_rc=$patch_rc" >>"$GITHUB_OUTPUT"
           if [ "$patch_rc" -ne 0 ]; then
-            {
-              echo "bootstrap_patch_workflow.py failed with exit code $patch_rc"
-              echo
-              sed -n '1,200p' "$RUNNER_TEMP/bootstrap-patch.log"
-            } > .github/bootstrap-npm-workspace-failure.log
+            sed -n '1,200p' "$RUNNER_TEMP/bootstrap-patch.log"
           fi
 
-      - name: Verify focused result
+      - name: Verify complete focused result
+        id: verify
         if: steps.patch.outputs.patch_rc == '0'
         shell: bash
         run: |
@@ -77,7 +82,22 @@ jobs:
           python3 -m py_compile \
             scripts/ci/npm_workspace_install_root.py \
             tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py \
             tests/test_opencode_agent_contract.py
+
+          python3 -m pytest -q \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py \
+            tests/test_opencode_agent_contract.py
+
+          python3 -m coverage erase
+          python3 -m coverage run \
+            --source=scripts.ci.npm_workspace_install_root \
+            -m pytest -q \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py
+          python3 -m coverage report --show-missing --fail-under=100
+          python3 -m interrogate --fail-under=100 scripts/ci/npm_workspace_install_root.py
 
           fixture="$(mktemp -d)"
           trap 'rm -rf "$fixture"' EXIT
@@ -86,7 +106,7 @@ jobs:
           git -C "$fixture" config user.name 'Coverage Tests'
           mkdir -p "$fixture/apps/desktop"
           cat >"$fixture/package.json" <<'JSON'
-          {"name":"root","private":true,"workspaces":["apps/*"]}
+          {"name":"root","private":true,"workspaces":["apps/*","packages/*"]}
           JSON
           cat >"$fixture/apps/desktop/package.json" <<'JSON'
           {"name":"desktop"}
@@ -105,29 +125,34 @@ jobs:
               --head-sha "$revision"
           )"
           test "$resolved" = "."
+
+          grep -F 'npm_workspace_args=(--workspace "$npm_workspace_selector")' \
+            .github/workflows/opencode-review-dispatch.yml >/dev/null
+          grep -F 'npm ci --offline --ignore-scripts' \
+            .github/workflows/opencode-review-dispatch.yml >/dev/null
           git diff --check
           test ! -e .github/workflows/bootstrap-npm-workspace-wiring.yml
+          test ! -e .github/workflows/pr703-focused-tests.yml
           test ! -e scripts/ci/bootstrap_patch_workflow.py
 
-      - name: Commit result or bounded diagnostic
-        if: always()
+      - name: Commit verified final diff
+        if: >-
+          steps.patch.outputs.patch_rc == '0'
+          && steps.verify.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
+          git diff --cached --check
           if git diff --cached --quiet; then
-            echo "No bootstrap changes to commit."
+            echo "No verified bootstrap changes to commit."
             exit 0
           fi
-          if [ "${{ steps.patch.outputs.patch_rc }}" = "0" ]; then
-            git commit -m 'fix(coverage): wire validated npm workspace lock owner'
-          else
-            git commit -m 'chore(coverage): record workspace wiring bootstrap failure'
-          fi
+          git commit -m 'fix(coverage): wire validated npm workspace lock owner'
           git push origin HEAD:fix/npm-workspace-coverage-root
 
-      - name: Fail after diagnostic publication
+      - name: Fail closed after patch failure
         if: steps.patch.outputs.patch_rc != '0'
         run: exit 1
