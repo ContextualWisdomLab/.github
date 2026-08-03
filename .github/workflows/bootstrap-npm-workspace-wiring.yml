@@ -1,5 +1,6 @@
 name: Bootstrap npm workspace coverage wiring
 
+# The branch-local bootstrap is retriggered after GitHub registers this workflow.
 on:
   push:
     branches:
