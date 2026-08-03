@@ -105,7 +105,12 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || '' }}"
+        "opencode-free/mimo-v2.5-free "
+        "opencode-free/hy3-free "
+        "opencode-free/minimax-m3-free "
+        "opencode-free/glm-5-free "
+        "opencode-free/kimi-k2.5-free "
+        "opencode-free/qwen3.6-plus-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
@@ -124,6 +129,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/ling-3.0-flash-free",
         "opencode-free/big-pickle",
         "opencode-free/mimo-v2.5-free",
+        "opencode-free/hy3-free",
+        "opencode-free/minimax-m3-free",
+        "opencode-free/glm-5-free",
+        "opencode-free/kimi-k2.5-free",
+        "opencode-free/qwen3.6-plus-free",
         *candidates_text.removeprefix(conditional_public_candidate).split(),
     ]
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
@@ -162,6 +172,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "ling-3.0-flash-free"],
         ["opencode-free", "big-pickle"],
         ["opencode-free", "mimo-v2.5-free"],
+        ["opencode-free", "hy3-free"],
+        ["opencode-free", "minimax-m3-free"],
+        ["opencode-free", "glm-5-free"],
+        ["opencode-free", "kimi-k2.5-free"],
+        ["opencode-free", "qwen3.6-plus-free"],
         ["opencode", "gpt-5.6-terra"],
         ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
@@ -240,6 +255,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "ling-3.0-flash-free",
         "big-pickle",
         "mimo-v2.5-free",
+        "hy3-free",
+        "minimax-m3-free",
+        "glm-5-free",
+        "kimi-k2.5-free",
+        "qwen3.6-plus-free",
     }
     assert set(paid_zen_models) == {"gpt-5.6-terra"}
     terra_model = paid_zen_models["gpt-5.6-terra"]
@@ -469,7 +489,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "id-token: write" not in coverage_job
     assert "Report coverage source materialization failure" in coverage_job
     assert (
-        "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131"
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
         in coverage_job
     )
 
@@ -1519,7 +1539,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/laguna-s-2.1-free "
         "opencode-free/ling-3.0-flash-free "
         "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free ' || ''"
+        "opencode-free/mimo-v2.5-free "
+        "opencode-free/hy3-free "
+        "opencode-free/minimax-m3-free "
+        "opencode-free/glm-5-free "
+        "opencode-free/kimi-k2.5-free "
+        "opencode-free/qwen3.6-plus-free ' || ''"
     ) in workflow
     assert (
         "opencode/gpt-5.6-terra "
