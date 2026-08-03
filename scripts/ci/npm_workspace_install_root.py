@@ -3,15 +3,19 @@
 
 Coverage may select a nested npm workspace package while the only dependency
 lock lives at an ancestor workspace root. This resolver establishes ownership
-from regular Git blobs at validated base and head revisions, verifies the live
-worktree still matches the validated head, and returns the nearest ancestor
-whose workspace declaration and lockfile both cover the selected package.
+from regular Git blobs at the live-validated head revision, verifies the live
+worktree still matches that head, and returns the nearest ancestor whose npm
+workspace declaration and authoritative lockfile both cover the package.
+The central workflow separately authenticates the returned lock against its
+base-or-head materialization receipt before running offline dependency install.
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
+import os
 import re
 import subprocess
 from functools import lru_cache
@@ -21,6 +25,7 @@ from typing import Any
 NPM_LOCK_NAMES = ("npm-shrinkwrap.json", "package-lock.json")
 SUPPORTED_LOCKFILE_VERSIONS = frozenset({2, 3})
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_BRACKET_CLASS_RE = re.compile(r"\[(?:!|\^)?[^\[\]/]+\]")
 
 
 class ResolutionError(ValueError):
@@ -49,18 +54,22 @@ def _validate_revision(repo_root: Path, revision: str, description: str) -> None
 
 
 def _relative_path(root: Path, path: Path, description: str) -> PurePosixPath:
-    """Return a safe repository-relative POSIX path without symlink traversal."""
-    absolute = path.absolute()
+    """Return a safe repository-relative path with no symlinked component."""
+    absolute = Path(os.path.abspath(path))
     try:
-        resolved = path.resolve(strict=True)
-    except OSError as exc:
-        raise ResolutionError(f"{description} does not exist: {path}") from exc
-    if absolute != resolved:
-        raise ResolutionError(f"{description} must not traverse a symlink: {path}")
-    try:
-        relative = resolved.relative_to(root)
+        relative = absolute.relative_to(root)
     except ValueError as exc:
         raise ResolutionError(f"{description} escaped the validated repository") from exc
+
+    current = root
+    for component in relative.parts:
+        current /= component
+        if current.is_symlink():
+            raise ResolutionError(f"{description} must not traverse a symlink: {current}")
+    try:
+        absolute.resolve(strict=True)
+    except OSError as exc:
+        raise ResolutionError(f"{description} does not exist: {path}") from exc
     return PurePosixPath(relative.as_posix())
 
 
@@ -107,7 +116,7 @@ def _worktree_blob(
     expected_blob: str,
     description: str,
 ) -> None:
-    """Require the worktree file to be regular and identical to the head blob."""
+    """Require a worktree file to be regular and identical to the head blob."""
     path = repo_root.joinpath(*relative_path.parts)
     if not path.is_file() or path.is_symlink():
         raise ResolutionError(f"{description} must be a regular non-symlink file: {path}")
@@ -131,6 +140,17 @@ def _blob_object(
     if not isinstance(payload, dict):
         raise ResolutionError(f"{description} must be a JSON object")
     return payload
+
+
+def _validate_segment_pattern(segment: str, raw_pattern: str) -> None:
+    """Validate one slash-free minimatch subset segment fail-closed."""
+    if segment == "**":
+        return
+    if "**" in segment or any(character in segment for character in "{}()|"):
+        raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
+    without_classes = _BRACKET_CLASS_RE.sub("", segment)
+    if "[" in without_classes or "]" in without_classes:
+        raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
 
 
 def _workspace_patterns(package_data: dict[str, Any]) -> list[str]:
@@ -163,16 +183,13 @@ def _workspace_patterns(package_data: dict[str, Any]) -> list[str]:
         ):
             raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
         for segment in segments:
-            if segment in {"*", "**"}:
-                continue
-            if any(character in segment for character in "*?[]{}"):
-                raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
+            _validate_segment_pattern(segment, raw_pattern)
         patterns.append("/".join(segments))
     return patterns
 
 
 def _is_declared_workspace(relative_package: PurePosixPath, patterns: list[str]) -> bool:
-    """Return whether a package path matches a constrained workspace pattern."""
+    """Return whether a path fully matches one anchored workspace pattern."""
     path_parts = relative_package.parts
 
     for pattern in patterns:
@@ -180,18 +197,18 @@ def _is_declared_workspace(relative_package: PurePosixPath, patterns: list[str])
 
         @lru_cache(maxsize=None)
         def matches(path_index: int, pattern_index: int) -> bool:
-            """Match literal, single-segment, and recursive-segment tokens."""
+            """Match anchored single-segment globs and recursive ``**`` tokens."""
             if pattern_index == len(pattern_parts):
                 return path_index == len(path_parts)
             token = pattern_parts[pattern_index]
             if token == "**":
-                return any(
-                    matches(next_index, pattern_index + 1)
-                    for next_index in range(path_index + 1, len(path_parts) + 1)
+                return matches(path_index, pattern_index + 1) or (
+                    path_index < len(path_parts)
+                    and matches(path_index + 1, pattern_index)
                 )
             if path_index >= len(path_parts):
                 return False
-            return (token == "*" or token == path_parts[path_index]) and matches(
+            return fnmatch.fnmatchcase(path_parts[path_index], token) and matches(
                 path_index + 1,
                 pattern_index + 1,
             )
@@ -202,7 +219,7 @@ def _is_declared_workspace(relative_package: PurePosixPath, patterns: list[str])
 
 
 def _lock_covers(lock_data: dict[str, Any], relative_package: str) -> bool:
-    """Return whether an npm v2/v3 lock has an exact package-map entry."""
+    """Return whether an npm v2/v3 lock has an exact object package entry."""
     lockfile_version = lock_data.get("lockfileVersion")
     if (
         not isinstance(lockfile_version, int)
@@ -219,45 +236,33 @@ def _lock_covers(lock_data: dict[str, Any], relative_package: str) -> bool:
 def _validated_lock(
     repo_root: Path,
     candidate: PurePosixPath,
-    base_sha: str,
     head_sha: str,
 ) -> tuple[PurePosixPath, str] | None:
-    """Return the candidate's immutable base/head npm lock path and blob SHA."""
+    """Return the authoritative live-head npm lock path and blob SHA."""
     for lock_name in NPM_LOCK_NAMES:
         lock_path = candidate / lock_name
-        base_blob = _tree_blob(repo_root, base_sha, lock_path, "base npm lock")
         head_blob = _tree_blob(repo_root, head_sha, lock_path, "head npm lock")
-        if base_blob is None and head_blob is None:
+        if head_blob is None:
             continue
-        if base_blob is None or head_blob is None:
-            raise ResolutionError(
-                f"npm lock {lock_path.as_posix()!r} must exist at validated base and head"
-            )
-        if base_blob != head_blob:
-            raise ResolutionError(
-                f"npm lock {lock_path.as_posix()!r} differs between validated base and head"
-            )
         _worktree_blob(repo_root, lock_path, head_blob, "npm lockfile")
-        return lock_path, base_blob
+        return lock_path, head_blob
     return None
 
 
 def _validated_manifest(
     repo_root: Path,
     candidate: PurePosixPath,
-    base_sha: str,
     head_sha: str,
-) -> tuple[PurePosixPath, str, str]:
-    """Return regular base/head manifest metadata for one candidate owner."""
+) -> tuple[PurePosixPath, str]:
+    """Return regular live-head manifest metadata for one candidate owner."""
     manifest_path = candidate / "package.json"
-    base_blob = _tree_blob(repo_root, base_sha, manifest_path, "base package manifest")
     head_blob = _tree_blob(repo_root, head_sha, manifest_path, "head package manifest")
-    if base_blob is None or head_blob is None:
+    if head_blob is None:
         raise ResolutionError(
-            f"npm lock owner manifest {manifest_path.as_posix()!r} must exist at validated base and head"
+            f"npm lock owner manifest {manifest_path.as_posix()!r} is absent from validated head"
         )
     _worktree_blob(repo_root, manifest_path, head_blob, "npm lock-owner manifest")
-    return manifest_path, base_blob, head_blob
+    return manifest_path, head_blob
 
 
 def resolve_install_root(
@@ -268,11 +273,10 @@ def resolve_install_root(
 ) -> str:
     """Return the nearest validated npm lock owner for ``package_dir``.
 
-    ``.`` denotes the repository root. A package-local lock owns the selected
-    package directly. An ancestor lock owns it only when the immutable base/head
-    workspace declaration and the immutable lock package map both cover the
-    exact relative package path. Non-owning intermediate npm projects are
-    skipped so the complete ancestor chain is considered.
+    ``.`` denotes the repository root. Ownership is established from the exact
+    live-validated head tree and matching worktree. The caller still validates
+    ``base_sha`` because the central lock receipt may authenticate either base
+    or head, but dependency/workspace updates in the current head are allowed.
     """
     if repo_root.is_symlink():
         raise ResolutionError("repository root must be a real non-symlink directory")
@@ -280,7 +284,7 @@ def resolve_install_root(
         root = repo_root.resolve(strict=True)
     except OSError as exc:
         raise ResolutionError("repository root must be a real non-symlink directory") from exc
-    if not root.is_dir() or root != repo_root.absolute():
+    if not root.is_dir() or root != Path(os.path.abspath(repo_root)):
         raise ResolutionError("repository root must be a real non-symlink directory")
     package_relative = _relative_path(root, package_dir, "npm package directory")
     package = root.joinpath(*package_relative.parts)
@@ -305,27 +309,21 @@ def resolve_install_root(
 
     candidate = package_relative
     while True:
-        validated_lock = _validated_lock(root, candidate, base_sha, head_sha)
+        validated_lock = _validated_lock(root, candidate, head_sha)
         if validated_lock is not None:
             lock_path, _lock_blob = validated_lock
-            manifest_path, base_manifest_blob, head_manifest_blob = _validated_manifest(
-                root, candidate, base_sha, head_sha
-            )
-            lock_data = _blob_object(root, base_sha, lock_path, "base npm lockfile")
+            manifest_path, _manifest_blob = _validated_manifest(root, candidate, head_sha)
+            lock_data = _blob_object(root, head_sha, lock_path, "head npm lockfile")
             if candidate == package_relative:
                 if _lock_covers(lock_data, ""):
                     return candidate.as_posix() or "."
             else:
-                if base_manifest_blob != head_manifest_blob:
-                    raise ResolutionError(
-                        f"npm workspace manifest {manifest_path.as_posix()!r} differs between validated base and head"
-                    )
                 relative_package = package_relative.relative_to(candidate)
                 package_data = _blob_object(
                     root,
-                    base_sha,
+                    head_sha,
                     manifest_path,
-                    "base npm workspace manifest",
+                    "head npm workspace manifest",
                 )
                 patterns = _workspace_patterns(package_data)
                 if _is_declared_workspace(relative_package, patterns) and _lock_covers(
