@@ -1,0 +1,66 @@
+name: Bootstrap Strix review fixes
+
+# One-shot exact-branch repair. The patch deletes this workflow and its script
+# before committing the final reviewable branch state.
+on:
+  push:
+    branches:
+      - fix/strix-sql-migration-context
+    paths:
+      - .github/workflows/bootstrap-strix-review-fixes.yml
+      - scripts/ci/bootstrap_strix_review_fixes.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-strix-review-fixes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.ref_name == 'fix/strix-sql-migration-context'
+      && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/strix-sql-migration-context
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply bounded reviewed replacements
+        run: python3 scripts/ci/bootstrap_strix_review_fixes.py
+
+      - name: Validate final branch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/ci/strix_quick_gate.sh scripts/ci/test_strix_quick_gate.sh
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -x -S warning scripts/ci/strix_quick_gate.sh scripts/ci/test_strix_quick_gate.sh
+          fi
+          bash scripts/ci/test_strix_quick_gate.sh
+          git diff --check
+          test ! -e .github/workflows/bootstrap-strix-review-fixes.yml
+          test ! -e scripts/ci/bootstrap_strix_review_fixes.py
+
+      - name: Commit final review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix(strix): validate migration context and fallback endpoint paths'
+          git push origin HEAD:fix/strix-sql-migration-context
