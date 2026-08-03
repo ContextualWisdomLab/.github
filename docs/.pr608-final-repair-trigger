@@ -1,1 +1,2 @@
 trigger final reviewed repair
+retrigger after unresolved review and scorecard findings
