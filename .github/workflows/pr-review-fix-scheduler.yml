@@ -43,11 +43,6 @@ on:
         required: false
         default: ""
         type: string
-      canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for scheduler code
-        required: false
-        default: "main"
-        type: string
   repository_dispatch:
     types: [pr-review-fix-scheduler]
   schedule:
@@ -83,13 +78,16 @@ jobs:
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
-      CANONICAL_REF: main
     steps:
       - name: Checkout canonical scheduler
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ env.CANONICAL_REF }}
+          # In a reusable workflow, the ordinary github context belongs to the
+          # caller. The job workflow context identifies the called workflow's
+          # repository and immutable resolved SHA, so no caller input or branch
+          # can select the privileged scheduler implementation.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
 
