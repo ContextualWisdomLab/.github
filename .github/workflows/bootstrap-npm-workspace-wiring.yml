@@ -140,8 +140,14 @@ jobs:
           steps.patch.outputs.patch_rc == '0'
           && steps.verify.outcome == 'success'
         shell: bash
+        env:
+          PATCH_RC: ${{ steps.patch.outputs.patch_rc }}
         run: |
           set -euo pipefail
+          if [ "$PATCH_RC" != "0" ]; then
+            echo "::error::Refusing to commit an unsuccessful bootstrap patch."
+            exit 1
+          fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
@@ -155,4 +161,10 @@ jobs:
 
       - name: Fail closed after patch failure
         if: steps.patch.outputs.patch_rc != '0'
-        run: exit 1
+        shell: bash
+        env:
+          PATCH_RC: ${{ steps.patch.outputs.patch_rc }}
+        run: |
+          set -euo pipefail
+          echo "::error::Bootstrap patch failed with exit code ${PATCH_RC:-unknown}."
+          exit 1
