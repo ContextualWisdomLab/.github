@@ -2224,10 +2224,10 @@ resolved_llm_api_base_for_model() {
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
-		# Cross-provider fallback: when the active primary provider uses a
-		# different API base (for example OpenRouter), github_models/* fallback
-		# attempts must still route through the GitHub Models inference endpoint.
+	if [ -z "$api_base_file" ] && is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+		# Cross-provider fallback: a direct-OpenAI primary run keeps its own
+		# key and no API base, while github_models/* fallback models route
+		# through the GitHub Models inference endpoint supplied here.
 		api_base_file="$STRIX_GITHUB_MODELS_API_BASE_FILE"
 		api_base_file_name="STRIX_GITHUB_MODELS_API_BASE_FILE"
 	fi

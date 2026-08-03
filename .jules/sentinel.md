@@ -35,7 +35,3 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
-## 2026-07-20 - Prevent Information Disclosure via TimeoutExpired Output
-**Vulnerability:** Information Disclosure / Secret Leakage
-**Learning:** The `subprocess.TimeoutExpired` exception object contains unmasked `stdout` and `stderr` attributes. If a subprocess throws this exception during a timeout and the output text is decoded and logged directly (e.g., in CI wrappers like `sandboxed_verify.py`), it can leak sensitive tokens, credentials, or API keys captured in those streams.
-**Prevention:** Always sanitize or mask the `.stdout` and `.stderr` properties of a `subprocess.TimeoutExpired` exception using a standard set of regex-based redaction patterns (e.g., `scrub_sensitive_data`) before printing or logging them to prevent secrets exposure.
