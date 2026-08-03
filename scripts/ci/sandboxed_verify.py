@@ -13,12 +13,12 @@ import tempfile
 import time
 from collections.abc import Sequence
 
-try:
-    from scripts.ci.redact_sensitive_log import redact_text
-except ImportError:  # pragma: no cover
-    def redact_text(text: str) -> str:
-        return text
 from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci.redact_sensitive_log import redact_text
 
 
 DEFAULT_IGNORE = (
@@ -194,13 +194,13 @@ def emit_result(
     """Print a machine-readable execution evidence summary."""
     payload = {
         "allowed_env": sorted(set(allowed_env)),
-        "command": list(command),
-        "cwd": str(copied_repo),
+        "command": [redact_text(c) for c in command],
+        "cwd": redact_text(str(copied_repo)),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": evidence_note,
+        "evidence_note": redact_text(evidence_note),
         "exit_code": exit_code,
         "network": network,
-        "sandbox": str(sandbox_root) if kept else "(removed)",
+        "sandbox": redact_text(str(sandbox_root)) if kept else "(removed)",
         "sandboxed": True,
     }
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")

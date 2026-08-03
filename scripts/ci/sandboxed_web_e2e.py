@@ -22,12 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
-
-try:
-    from scripts.ci.redact_sensitive_log import redact_text
-except ImportError:  # pragma: no cover
-    def redact_text(text: str) -> str:
-        return text
+from scripts.ci.redact_sensitive_log import redact_text
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 
@@ -189,18 +184,18 @@ def emit_result(
 ) -> None:
     """Print a machine-readable web E2E execution evidence summary."""
     payload = {
-        "backend_cmd": args.backend_cmd,
+        "backend_cmd": redact_text(args.backend_cmd),
         "backend_ready": backend_ready,
         "allowed_env": sorted(set(args.allow_env)),
-        "cwd": str(copied_repo),
-        "e2e_cmd": args.e2e_cmd,
+        "cwd": redact_text(str(copied_repo)),
+        "e2e_cmd": redact_text(args.e2e_cmd),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": args.evidence_note,
+        "evidence_note": redact_text(args.evidence_note),
         "exit_code": exit_code,
-        "frontend_cmd": args.frontend_cmd,
+        "frontend_cmd": redact_text(args.frontend_cmd),
         "frontend_ready": frontend_ready,
         "network": args.network,
-        "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
+        "sandbox": redact_text(str(sandbox_root)) if args.keep_sandbox else "(removed)",
         "sandboxed": True,
     }
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")

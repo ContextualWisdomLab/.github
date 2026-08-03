@@ -39,3 +39,7 @@
 **Vulnerability:** Information Disclosure / Secret Leakage
 **Learning:** Untrusted subprocess output and logs in `sandboxed_verify.py` and `sandboxed_web_e2e.py` can expose sensitive credentials in standard output and error tracebacks.
 **Prevention:** Always wrap arbitrary subprocess stdout/stderr and tracebacks with `scripts.ci.redact_sensitive_log.redact_text` (with an `ImportError` fallback) before printing or logging them in the CI environment.
+## 2026-07-27 - Fail Closed for CI Log Redaction
+**Vulnerability:** Information Disclosure / Secret Leakage
+**Learning:** Returning unredacted text when the `scripts.ci.redact_sensitive_log` module is unavailable behaves as a fail-open security bypass, violating the fail-secure principle. If the redactor fails to load, the CI environment risks leaking untrusted standard output, timeouts, tracebacks, and machine-readable payload fields (e.g., `command`, `cwd`, `evidence_note`).
+**Prevention:** Remove `ImportError` fallbacks that silently pass through raw text. Ensure the repository root is established on `sys.path` and import `redact_text` unconditionally so the system fails closed rather than leaking secrets. Furthermore, sanitize scalar string fields containing commands and arguments before JSON serialization in result payloads.
