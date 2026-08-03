@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -73,6 +73,17 @@ def test_resolves_bandscope_apps_desktop_layout(tmp_path: Path) -> None:
     assert resolve_install_root(tmp_path, package, revision, revision) == "."
 
 
+def test_single_star_is_repository_root_anchored(tmp_path: Path) -> None:
+    """`apps/*` never suffix-matches a deeper `foo/apps/desktop` package."""
+    package, revision = _workspace_repo(
+        tmp_path,
+        package_path="foo/apps/desktop",
+        patterns=["apps/*"],
+    )
+    with pytest.raises(ResolutionError, match="no validated package-lock"):
+        resolve_install_root(tmp_path, package, revision, revision)
+
+
 def test_single_star_never_authorizes_multiple_path_segments(tmp_path: Path) -> None:
     """A single-star workspace segment cannot consume a deeper package path."""
     package, revision = _workspace_repo(
@@ -84,25 +95,28 @@ def test_single_star_never_authorizes_multiple_path_segments(tmp_path: Path) -> 
         resolve_install_root(tmp_path, package, revision, revision)
 
 
-def test_double_star_authorizes_multiple_repository_path_segments(tmp_path: Path) -> None:
-    """A whole-segment double star may match one or more nested path segments."""
+@pytest.mark.parametrize("package_path", ["apps/desktop", "apps/deep/desktop"])
+def test_double_star_matches_zero_or_more_complete_segments(
+    tmp_path: Path,
+    package_path: str,
+) -> None:
+    """`apps/**/desktop` matches only anchored complete path segments."""
     package, revision = _workspace_repo(
         tmp_path,
-        package_path="apps/deep/desktop",
-        patterns=["apps/**"],
+        package_path=package_path,
+        patterns=["apps/**/desktop"],
     )
     assert resolve_install_root(tmp_path, package, revision, revision) == "."
 
 
-@pytest.mark.parametrize("pattern", ["apps/**desktop", "apps/***", "apps/{desktop,web}"])
-def test_rejects_ambiguous_workspace_glob_syntax(
-    tmp_path: Path,
-    pattern: str,
-) -> None:
-    """Unsupported glob constructs fail closed instead of broadening ownership."""
-    package, revision = _workspace_repo(tmp_path, patterns=[pattern])
-    with pytest.raises(ResolutionError, match="workspace pattern"):
-        resolve_install_root(tmp_path, package, revision, revision)
+def test_segment_globs_support_question_and_character_classes(tmp_path: Path) -> None:
+    """Safe single-segment minimatch forms remain compatible with npm workspaces."""
+    package, revision = _workspace_repo(
+        tmp_path,
+        package_path="apps/desktop",
+        patterns=["apps/d?skto[!x]"],
+    )
+    assert resolve_install_root(tmp_path, package, revision, revision) == "."
 
 
 @pytest.mark.parametrize("workspaces", [[], {"packages": []}])
@@ -227,3 +241,8 @@ def test_cli_rejects_non_normalized_or_escaping_resolver_output(
     """CLI output must remain normalized, relative, and repository-contained."""
     with pytest.raises(ResolutionError, match="safe normalized relative path"):
         module._validated_cli_output(unsafe_output)
+
+
+def test_matcher_rejects_empty_path_for_non_recursive_pattern() -> None:
+    """A non-recursive workspace pattern cannot own the repository root."""
+    assert not module._is_declared_workspace(PurePosixPath("."), ["apps/*"])
