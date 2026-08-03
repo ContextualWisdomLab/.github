@@ -1,182 +1,78 @@
+# Central SBOM generation for every ContextualWisdomLab repo.
+#
+# This is a REQUIRED-style org workflow (mirrors security-scan.yml): same
+# pull_request trigger conventions, least-privilege permissions, SHA-pinned
+# actions. It complements the Security Scan by producing a Software Bill of
+# Materials for every repo's dependencies on each PR and release.
+#
+# What it does per repo:
+#   - Generates BOTH a CycloneDX and an SPDX SBOM with anchore/syft (via the
+#     anchore/sbom-action wrapper; Apache-2.0, permissive tooling only), scanning
+#     the whole filesystem so every present ecosystem is covered
+#     (npm / pyproject / uv / cargo / go / maven).
+#   - Uploads each SBOM as a build artifact.
+#   - Attaches both SBOMs to GitHub releases (on release: published).
+#   - Submits the SPDX snapshot to the GitHub dependency submission API so the
+#     components show up in the repo's dependency graph. That graph is the source
+#     the central SBOM inventory aggregator reads back out org-wide.
+#
+# NOTE: contents: write is required for release-asset upload and for the
+# dependency submission API. Fork PR heads run without write and simply skip
+# those side effects; the artifact is still produced.
 name: SBOM Generation
 
 on:
   pull_request:
-    types: [synchronize]
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+    branches: [main, master, develop]
+  release:
+    types: [published]
 
 concurrency:
-  group: pr650-review-repair-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-  cancel-in-progress: false
+  group: sbom-generation-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.event.release.tag_name || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  repair-pr650-review-feedback:
-    if: >-
-      github.event.pull_request.number == 650
-      && github.event.pull_request.head.repo.full_name == github.repository
-      && github.event.pull_request.head.ref == 'claude/fast-mlsirm-pr-review-mt2e1z'
+  cancel-closed-pr-runs:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
+  generate-sbom:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
     permissions:
+      # write is needed for release-asset upload and dependency submission.
       contents: write
     steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
-
-      - name: Checkout exact pull request branch
+      - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: claude/fast-mlsirm-pr-review-mt2e1z
-          fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
-      - name: Apply bounded review repairs
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
+      - name: Generate SPDX SBOM and submit dependency snapshot
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          artifact-name: sbom-spdx-json
+          upload-artifact: true
+          upload-release-assets: true
+          # Feeds the repo dependency graph -> read back by the org aggregator.
+          dependency-snapshot: true
 
-          workflow_path = Path(".github/workflows/opencode-review-dispatch.yml")
-          lines = workflow_path.read_text(encoding="utf-8").splitlines()
-
-          step_marker = "      - name: Exchange OpenCode app token for target repository metadata reads"
-          step_start = lines.index(step_marker)
-          step_end = len(lines)
-          for index in range(step_start + 1, len(lines)):
-              if lines[index].startswith("      - name: "):
-                  step_end = index
-                  break
-
-          curl_indexes = [
-              index
-              for index in range(step_start, step_end)
-              if lines[index].strip().startswith("curl -fsS")
-          ]
-          if len(curl_indexes) != 2:
-              raise SystemExit(
-                  f"expected exactly two metadata token-exchange curl calls, found {len(curl_indexes)}"
-              )
-          for index in reversed(curl_indexes):
-              nearby = "\n".join(lines[index + 1:index + 4])
-              if "--connect-timeout 5" in nearby and "--max-time 20" in nearby:
-                  continue
-              indentation = lines[index][:len(lines[index]) - len(lines[index].lstrip())]
-              lines[index + 1:index + 1] = [
-                  f"{indentation}  --connect-timeout 5 \\",
-                  f"{indentation}  --max-time 20 \\",
-              ]
-
-          function_marker = "          collect_successful_r_cmd_check_evidence() {"
-          function_start = lines.index(function_marker)
-          function_end = None
-          for index in range(function_start + 1, len(lines)):
-              if lines[index] == "          }":
-                  function_end = index
-                  break
-          if function_end is None:
-              raise SystemExit("R CMD peer-check collector closing brace was not found")
-          replacement = [
-              "          collect_successful_r_cmd_check_evidence() {",
-              "            local output_file=\"$1\"",
-              "            local checks_status",
-              "            if gh pr checks \"$PR_NUMBER\" \\",
-              "              --repo \"$GH_REPOSITORY\" \\",
-              "              --json name,state,workflow >\"$output_file\"; then",
-              "              checks_status=0",
-              "            else",
-              "              checks_status=$?",
-              "            fi",
-              "            case \"$checks_status\" in",
-              "              0 | 1 | 8) ;;",
-              "              *) return 1 ;;",
-              "            esac",
-              "            if ! jq -e 'type == \"array\"' \"$output_file\" >/dev/null; then",
-              "              return 1",
-              "            fi",
-              "            python3 \"$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py\" \\",
-              "              require-check \\",
-              "              --checks-json \"$output_file\" >/dev/null",
-              "          }",
-          ]
-          lines[function_start:function_end + 1] = replacement
-          workflow_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-          tests_path = Path("tests/test_required_workflow_queue_contract.py")
-          tests = tests_path.read_text(encoding="utf-8")
-          marker = "def test_opencode_review_token_exchange_and_r_peer_gate_are_bounded()"
-          if marker not in tests:
-              test_lines = [
-                  "",
-                  "",
-                  "def test_opencode_review_token_exchange_and_r_peer_gate_are_bounded() -> None:",
-                  "    \"\"\"Token exchange and R peer-check collection have deterministic bounds.\"\"\"",
-                  "    workflow = workflow_text(\"opencode-review-dispatch.yml\")",
-                  "    initial_exchange = workflow_step(",
-                  "        workflow,",
-                  "        \"Exchange OpenCode app token for target repository metadata reads\",",
-                  "    )",
-                  "",
-                  "    assert initial_exchange.count(\"--connect-timeout 5\") == 2",
-                  "    assert initial_exchange.count(\"--max-time 20\") == 2",
-                  "",
-                  "    collector = workflow.split(",
-                  "        \"collect_successful_r_cmd_check_evidence() {\", 1",
-                  "    )[1].split(\"\\n          }\", 1)[0]",
-                  "    assert 'case \"$checks_status\" in' in collector",
-                  "    assert \"0 | 1 | 8)\" in collector",
-                  "    assert \"checks_status=$?\" in collector",
-                  "    assert \"jq -e 'type == \\\"array\\\"'\" in collector",
-                  "    assert collector.index(\"jq -e\") < collector.index(\"r_coverage_peer_gate.py\")",
-              ]
-              tests_path.write_text(
-                  tests.rstrip() + "\n" + "\n".join(test_lines) + "\n",
-                  encoding="utf-8",
-              )
-          PY
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-          metadata = workflow.split(
-              "      - name: Exchange OpenCode app token for target repository metadata reads\n", 1
-          )[1].split("\n      - name:", 1)[0]
-          assert metadata.count("--connect-timeout 5") == 2
-          assert metadata.count("--max-time 20") == 2
-          collector = workflow.split(
-              "collect_successful_r_cmd_check_evidence() {", 1
-          )[1].split("\n          }", 1)[0]
-          assert "0 | 1 | 8)" in collector
-          assert "checks_status=$?" in collector
-          assert "jq -e 'type == \"array\"'" in collector
-          compile(
-              Path("tests/test_required_workflow_queue_contract.py").read_text(encoding="utf-8"),
-              "tests/test_required_workflow_queue_contract.py",
-              "exec",
-          )
-          PY
-
-          git fetch --no-tags origin main
-          git show origin/main:.github/workflows/sbom-generation.yml > .github/workflows/sbom-generation.yml
-          git diff --check
-
-      - name: Commit verified repair and remove scaffold
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/workflows/opencode-review-dispatch.yml \
-            tests/test_required_workflow_queue_contract.py \
-            .github/workflows/sbom-generation.yml
-          git diff --cached --check
-          if git diff --cached --quiet; then
-            echo "No repair remained to commit."
-            exit 0
-          fi
-          git commit -m "fix(review): bound token exchange and preserve check JSON"
-          git push origin HEAD:claude/fast-mlsirm-pr-review-mt2e1z
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+          artifact-name: sbom-cyclonedx-json
+          upload-artifact: true
+          upload-release-assets: true
+          dependency-snapshot: false
