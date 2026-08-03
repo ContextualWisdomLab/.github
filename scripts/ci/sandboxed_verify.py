@@ -14,6 +14,10 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci.redact_sensitive_log import redact_text
 
 DEFAULT_IGNORE = (
     ".git",
@@ -149,7 +153,9 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     return destination
 
 
-def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+def run_command(
+    command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int
+) -> subprocess.CompletedProcess[str]:
     """Run the verification command and capture output for review evidence."""
     return subprocess.run(
         list(command),
@@ -188,13 +194,13 @@ def emit_result(
     """Print a machine-readable execution evidence summary."""
     payload = {
         "allowed_env": sorted(set(allowed_env)),
-        "command": list(command),
-        "cwd": str(copied_repo),
+        "command": [redact_text(item) for item in command],
+        "cwd": redact_text(str(copied_repo)),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": evidence_note,
+        "evidence_note": redact_text(evidence_note),
         "exit_code": exit_code,
         "network": network,
-        "sandbox": str(sandbox_root) if kept else "(removed)",
+        "sandbox": redact_text(str(sandbox_root)) if kept else "(removed)",
         "sandboxed": True,
     }
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
@@ -210,27 +216,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = scrubbed_env(sandbox, args.allow_env)
-        print(f"sandboxed-verify: cwd={copied_repo}")
-        print(f"sandboxed-verify: command={' '.join(args.command)}")
+        print(redact_text(f"sandboxed-verify: cwd={copied_repo}"))
+        print(redact_text(f"sandboxed-verify: command={' '.join(args.command)}"))
         if args.allow_env:
-            print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
+            print(
+                redact_text(
+                    "sandboxed-verify: allowed env names="
+                    + ",".join(sorted(set(args.allow_env)))
+                )
+            )
         if args.network != "default":
             print(f"sandboxed-verify: network={args.network}")
         try:
             completed = run_command(args.command, copied_repo, env, args.timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
             stdout = timeout_output_text(exc.stdout)
             stderr = timeout_output_text(exc.stderr)
             if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
+                print(redact_text(stdout), end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-            print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
+                print(
+                    redact_text(stderr),
+                    end="" if stderr.endswith("\n") else "\n",
+                    file=sys.stderr,
+                )
+            print(
+                f"sandboxed-verify: command timed out after {args.timeout}s",
+                file=sys.stderr,
+            )
             exit_code = 124
         return exit_code
     finally:
