@@ -2033,11 +2033,16 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "      - name: Dispatch Noema after current-head OpenCode approval", 1
     )[0]
     assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == "
+        "github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
         "github.token }}"
     ) in status_step
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
+    assert (
+        "needs.validate-pr-metadata.outputs.target_repository == github.repository && "
+        "'github-token'"
+    ) in status_step
     assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step
     assert "OPENCODE_CHANGED_FILES_FILE" in status_step
     assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in status_step
