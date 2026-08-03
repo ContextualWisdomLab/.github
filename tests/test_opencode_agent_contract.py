@@ -1589,6 +1589,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
+    assert 'OPENCODE_FREE_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow

@@ -4342,6 +4342,10 @@ jobs:
           OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"
           OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"
+          # Anonymous free candidates share fifteen minutes total. A quota-starved
+          # catalog therefore cannot consume the entire 195-minute retry budget
+          # before keyed Terra/OpenAI/OpenRouter/GitHub Models fallbacks run.
+          OPENCODE_FREE_TOTAL_BUDGET_SECONDS: "900"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a

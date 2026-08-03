@@ -818,6 +818,36 @@ def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> Non
     ) in result.stdout
 
 
+def test_free_provider_combined_budget_preserves_keyed_fallback_attempt(
+    tmp_path: Path,
+) -> None:
+    """Timed-out anonymous providers cannot consume the keyed fallback budget."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "2",
+            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_FREE_TOTAL_BUDGET_SECONDS": "1",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "5",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "15",
+        },
+        model_candidates=(
+            "opencode-free/nemotron-3-ultra-free "
+            "opencode-free/deepseek-v4-flash-free "
+            "github-models/openai/gpt-5"
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "OpenCode anonymous-free combined runtime used" in result.stdout
+    assert (
+        "Skipping OpenCode opencode-free/deepseek-v4-flash-free because the "
+        "anonymous-free combined runtime budget of 1s is exhausted"
+        in result.stdout
+    )
+    assert "OpenCode github-models/openai/gpt-5 attempt 1/1" in result.stdout
+
+
 def test_nvidia_nim_candidate_requires_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
