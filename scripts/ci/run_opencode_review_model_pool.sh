@@ -3,6 +3,34 @@ set -euo pipefail
 
 : "${GITHUB_OUTPUT:=/dev/null}"
 
+# Only canonical, repository-owned validator categories may be replayed into a
+# repair prompt. Provider output is untrusted and must never be reflected back
+# verbatim as instructions.
+LAST_CONTROL_REJECTION_KIND=""
+
+classify_control_rejection() {
+	local diagnostics_file="$1"
+
+	LAST_CONTROL_REJECTION_KIND="unknown-control-contract"
+	if grep -Fq "no top-level current-run control JSON object was found" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="missing-current-run-control-envelope"
+	elif grep -Fq "expected exactly one top-level current-run control JSON object" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="multiple-current-run-control-objects"
+	elif grep -Fq "must cite the exact probe path and positive line" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="probe-path-line-mismatch"
+	elif grep -Fq "must state the observed proof result" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="probe-observed-result-missing"
+	elif grep -Fq "must cite an executed command, test/assertion, log/check/SARIF receipt, source trace, diff, or CodeGraph path" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="probe-proof-anchor-missing"
+	elif grep -Fq "source-line-sha256 receipt" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="probe-source-line-receipt-invalid"
+	elif grep -Fq "approval does not prove 100% coverage or an explicit no-source exception" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="approval-coverage-proof-missing"
+	elif grep -Fq "adversarial_validation" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="adversarial-validation-contract"
+	fi
+}
+
 record_review_status() {
 	printf 'review_status=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
@@ -35,19 +63,28 @@ normalize_opencode_output() {
 	# copy, then normalize — so the pool only records success for output the
 	# publish step will accept, and leave output_file pristine for the publish
 	# step to normalize itself.
-	local probe rc
+	local probe rc diagnostics_file
 	probe="$(mktemp)"
+	diagnostics_file="$(mktemp)"
 	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$output_file" >"$probe" 2>/dev/null || cp "$output_file" "$probe"
 
 	if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_normalize_output.py" \
-		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe"; then
+		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe" 2>"$diagnostics_file"; then
 		bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" \
-			"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe" >/dev/null
+			"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe" >/dev/null 2>>"$diagnostics_file"
 		rc=$?
 	else
 		rc=1
 	fi
-	rm -f "$probe"
+	if [ -s "$diagnostics_file" ]; then
+		cat "$diagnostics_file" >&2
+	fi
+	if [ "$rc" -ne 0 ]; then
+		classify_control_rejection "$diagnostics_file"
+	else
+		LAST_CONTROL_REJECTION_KIND=""
+	fi
+	rm -f "$probe" "$diagnostics_file"
 	return "$rc"
 }
 
@@ -225,14 +262,20 @@ PY
 write_schema_repair_prompt() {
 	local model_candidate="$1"
 	local prompt_file="$2"
+	local rejection_kind="${LAST_CONTROL_REJECTION_KIND:-unknown-control-contract}"
 
 	write_prompt "$model_candidate" "$prompt_file"
 	{
 		printf '\nA previous response from this same provider reached the trusted validator but failed the control schema. Perform the review again from the same trusted evidence and return one corrected review body only.\n'
+		printf 'The trusted validator classified the previous rejection as `%s`. This fixed category contains no provider-controlled text.\n' "$rejection_kind"
 		printf 'This is a schema repair opportunity, not permission to weaken, omit, or fabricate evidence. Check every item before returning:\n'
-		printf -- '- Emit exactly one sentinel and exactly one current-run JSON control object; do not quote any example object or earlier response.\n'
+		printf -- '- The first output line must be exactly `<!-- opencode-review-gate head_sha=%s run_id=%s run_attempt=%s -->`; emit no prose or Markdown before it.\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
+		printf -- '- After that sentinel, emit exactly one `<!-- opencode-review-control-v1` block containing exactly one JSON object and close it with `-->`; do not quote any example object or earlier response.\n'
+		printf -- '- The JSON identity values must be head_sha=%s, run_id=%s, and run_attempt=%s.\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
 		printf -- '- Choose exactly APPROVE or REQUEST_CHANGES, with a non-empty reason, summary, and residual_risk.\n'
 		printf -- '- Include "adversarial_validation" as an object with at least the required probe count. Copy each path, line, and source-line-sha256 receipt exactly from trusted bounded evidence.\n'
+		printf -- '- For every probe, repeat its exact `path:line` inside evidence; name a concrete test, assertion, check, log, source trace, diff, or CodeGraph path; state the observed passed, failed, rejected, returned, showed, or exit-code result; include exactly one matching source-line-sha256 receipt.\n'
+		printf -- '- In an APPROVE summary, include both `Coverage:` and `Docstring coverage:` and cite the exact trusted Coverage execution evidence that supported repository test suites passed and configured docstring gates passed or were advisory, or the exact explicit no-source exception.\n'
 		printf -- '- APPROVE requires status=passed, every probe outcome=falsified, and findings=[].\n'
 		printf -- '- REQUEST_CHANGES requires status=failed, at least one outcome=confirmed, and a non-empty source-backed finding at the same path and line.\n'
 		printf 'Return only the corrected review body now.\n'
@@ -852,4 +895,6 @@ main() {
 	done
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

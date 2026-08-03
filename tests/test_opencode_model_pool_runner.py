@@ -645,7 +645,9 @@ def test_credit_exhausted_402_ends_pool_without_further_spend(tmp_path: Path) ->
     assert result.returncode == 1
     assert "provider credits are exhausted" in result.stdout
     assert "marking this candidate failed for the rest of the run" in result.stdout
-    assert "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    assert (
+        "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    )
     assert "class=credit-exhausted" in result.stdout
     assert "Restarting OpenCode model pool" not in result.stdout
     assert elapsed < 20
@@ -680,7 +682,9 @@ def test_invalid_control_output_cap_marks_candidate_failed(tmp_path: Path) -> No
     assert result.returncode == 1
     assert "produced 2 control-rejected outputs" in result.stdout
     assert "marking this candidate failed for the rest of the run" in result.stdout
-    assert "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    assert (
+        "Every OpenCode model candidate is marked failed for this run" in result.stdout
+    )
     assert "attempt 3/3" not in result.stdout
 
 
@@ -697,9 +701,7 @@ def test_attempt_ceiling_bounds_provider_spend(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 1
-    assert (
-        "reached the per-run provider attempt ceiling of 2 attempts" in result.stdout
-    )
+    assert "reached the per-run provider attempt ceiling of 2 attempts" in result.stdout
     assert "attempt 3/3" not in result.stdout
 
 
@@ -761,7 +763,8 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
     ) in result.stdout or (
         "total budget 7200s -> 1s" in result.stdout
         and "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
-        "for 21 changed file(s); max-cycles=0." in result.stdout
+        "for 21 changed file(s); max-cycles=0."
+        in result.stdout
     )
     assert (
         "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
@@ -842,8 +845,7 @@ def test_free_provider_combined_budget_preserves_keyed_fallback_attempt(
     assert "OpenCode anonymous-free combined runtime used" in result.stdout
     assert (
         "Skipping OpenCode opencode-free/deepseek-v4-flash-free because the "
-        "anonymous-free combined runtime budget of 1s is exhausted"
-        in result.stdout
+        "anonymous-free combined runtime budget of 1s is exhausted" in result.stdout
     )
     assert "OpenCode github-models/openai/gpt-5 attempt 1/1" in result.stdout
 
@@ -996,7 +998,72 @@ def test_free_provider_gets_one_bounded_schema_repair_attempt(
     assert "exponential backoff" not in result.stdout
     repair_prompt = prompt_capture.read_text(encoding="utf-8")
     assert "failed the control schema" in repair_prompt
-    assert "exactly one sentinel and exactly one current-run JSON control object" in repair_prompt
+    assert "missing-current-run-control-envelope" in repair_prompt
+    assert (
+        "<!-- opencode-review-gate "
+        f"head_sha={'1' * 40} run_id=29189945378 run_attempt=1 -->" in repair_prompt
+    )
+    assert "exactly one `<!-- opencode-review-control-v1` block" in repair_prompt
+    assert "repeat its exact `path:line` inside evidence" in repair_prompt
+    assert "state the observed passed, failed, rejected" in repair_prompt
+    assert "include both `Coverage:` and `Docstring coverage:`" in repair_prompt
+
+
+@pytest.mark.parametrize(
+    ("validator_reason", "expected_category"),
+    [
+        (
+            "adversarial probe 2 evidence must cite the exact probe path and "
+            "positive line",
+            "probe-path-line-mismatch",
+        ),
+        (
+            "adversarial probe 2 evidence must state the observed proof result, "
+            "such as an exit code",
+            "probe-observed-result-missing",
+        ),
+        (
+            "adversarial probe 1 evidence must cite an executed command, "
+            "test/assertion, log/check/SARIF receipt, source trace, diff, or "
+            "CodeGraph path",
+            "probe-proof-anchor-missing",
+        ),
+        (
+            "approval does not prove 100% coverage or an explicit no-source exception",
+            "approval-coverage-proof-missing",
+        ),
+    ],
+)
+def test_control_rejection_is_reduced_to_canonical_validator_category(
+    tmp_path: Path,
+    validator_reason: str,
+    expected_category: str,
+) -> None:
+    """Diagnostics become actionable categories without replaying provider prose."""
+    diagnostics_file = tmp_path / "validator-diagnostics.txt"
+    diagnostics_file.write_text(
+        f"CONTROL_REJECTED candidate=1: {validator_reason}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            bash_command(),
+            "-c",
+            'source "$1"; classify_control_rejection "$2"; '
+            'printf "%s" "$LAST_CONTROL_REJECTION_KIND"',
+            "schema-repair-classifier",
+            bash_path(RUNNER),
+            bash_path(diagnostics_file),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected_category
 
 
 def test_paid_provider_does_not_gain_an_implicit_schema_repair_attempt(
