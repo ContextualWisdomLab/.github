@@ -43,6 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
-## 2024-05-19 - Pre-compile Regex Patterns in Loop-called Functions
-**Learning:** Found a codebase-specific anti-pattern in `scripts/ci/noema_review_gate.py` where deep text inspection using repetitive substring or pattern matching across a known set of keys or labels was sequentially fetching file contents via GitHub API causing N+1 bottleneck.
-**Action:** Use `concurrent.futures.ThreadPoolExecutor` for independent network calls in a loop when there are multiple items, keep empty and single-item inputs on the cheaper serial path, and bound `max_workers` to avoid API rate limits.
+## 2026-07-25 - Avoid N+1 API blocking in Noema review context fetching
+**Learning:** In `scripts/ci/noema_review_gate.py`, the `changed_file_context` function was fetching file contents from the GitHub API sequentially, causing an N+1 API bottleneck.
+**Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch bounded file contents concurrently, bounded by an explicit conservative `max_workers` limit (no more than 6), while preserving the fast serial path for single-item inputs and ensuring deterministic output order.

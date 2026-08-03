@@ -42,6 +42,7 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_CONTEXT_WORKERS = 6
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -359,7 +360,7 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
     if len(target_paths) <= 1:
         sections.extend(process_path(path) for path in target_paths)
     else:
-        max_workers = min(10, len(target_paths))
+        max_workers = min(MAX_CONTEXT_WORKERS, len(target_paths))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             sections.extend(executor.map(process_path, target_paths))
 

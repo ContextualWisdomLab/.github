@@ -92,7 +92,14 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidates_match is not None
     conditional_public_candidate = (
         "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'opencode-free/nemotron-3-ultra-free "
+        "&& 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
+        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
+        "nvidia-nim/meta/llama-3.3-70b-instruct "
+        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
+        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
+        "opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
         "opencode-free/laguna-s-2.1-free "
@@ -103,6 +110,13 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
+        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1",
+        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia-nim/meta/llama-3.3-70b-instruct",
+        "nvidia-nim/deepseek-ai/deepseek-v4-pro",
+        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1",
         "opencode-free/nemotron-3-ultra-free",
         "opencode-free/deepseek-v4-flash-free",
         "opencode-free/north-mini-code-free",
@@ -129,7 +143,18 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
 
     assert candidate_pairs
+    assert all(
+        not candidate.startswith("nvidia-nim/")
+        for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
+    )
     assert candidate_pairs == [
+        ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
+        ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
+        ["nvidia-nim", "nvidia/nemotron-3-super-120b-a12b"],
+        ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
+        ["nvidia-nim", "meta/llama-3.3-70b-instruct"],
+        ["nvidia-nim", "deepseek-ai/deepseek-v4-pro"],
+        ["nvidia-nim", "mistralai/codestral-22b-instruct-v0.1"],
         ["opencode-free", "nemotron-3-ultra-free"],
         ["opencode-free", "deepseek-v4-flash-free"],
         ["opencode-free", "north-mini-code-free"],
@@ -165,6 +190,46 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     )
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
+    nvidia_provider = generated_config["provider"]["nvidia-nim"]
+    assert nvidia_provider["options"] == {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}",
+    }
+    assert nvidia_provider["models"]["nvidia/nemotron-3-ultra-550b-a55b"][
+        "limit"
+    ] == {"context": 131072, "output": 8192}
+    scoped_provider_binding = (
+        "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
+    )
+    jobs_text = workflow[workflow.index("\njobs:\n") + len("\njobs:\n") :]
+    job_headers = list(
+        re.finditer(r"^  ([A-Za-z0-9_-]+):\n", jobs_text, re.MULTILINE)
+    )
+    job_blocks = {
+        match.group(1): jobs_text[
+            match.start() : (
+                job_headers[index + 1].start()
+                if index + 1 < len(job_headers)
+                else len(jobs_text)
+            )
+        ]
+        for index, match in enumerate(job_headers)
+    }
+    privileged_review_job = job_blocks["opencode-review-target"]
+
+    assert privileged_review_job.count(scoped_provider_binding) == 2
+    assert (
+        privileged_review_job.count(
+            "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
+        )
+        == 2
+    )
+    for job_name, job_block in job_blocks.items():
+        if job_name == "opencode-review-target":
+            continue
+        assert "secrets.NVIDIA_NIM_API_KEY" not in job_block, job_name
+        assert "secrets.NVIDIA_API_KEY" not in job_block, job_name
+    assert "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" not in workflow
     free_models = generated_config["provider"]["opencode-free"]["models"]
     paid_zen_models = generated_config["provider"]["opencode"]["models"]
     assert set(free_models) == {
@@ -480,9 +545,58 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm" in measure_step
     assert 'test "$(/usr/local/bin/pnpm --version)" = "11.5.3"' in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
+    assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
+    assert (
+        "install -m 0444 /tmp/base-javascript-packages/manifest.json"
+        in measure_step
+    )
+    assert "/opt/javascript-package-locks/manifest.json" in measure_step
+    assert "npm ci" in measure_step
+    assert "--cache /opt/npm-cache" in measure_step
+    assert "npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
+    assert "trusted_npm_lock_is_materialized()" in measure_step
+    assert (
+        'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
+        in measure_step
+    )
+    assert (
+        "was not hash-bounded and materialized from the validated base or HEAD"
+        in measure_step
+    )
+    assert ".lock_blob == $lock_blob" in measure_step
+    assert ".revision_sha == $base_sha or .revision_sha == $head_sha" in measure_step
+    assert "prepare_writable_npm_cache()" in measure_step
+    assert (
+        'destination="$(mktemp -d /tmp/opencode-npm-cache.XXXXXX)"'
+        in measure_step
+    )
+    assert 'cp -R /opt/npm-cache/. "$destination/"' in measure_step
+    assert 'chmod -R u+rwX,go-rwx "$destination"' in measure_step
+    assert '--cache "$writable_npm_cache_dir"' in measure_step
+    assert "npm offline ci" in measure_step
+    npm_install_case = (
+        measure_step.split("install_package_dependencies() {", 1)[1]
+        .split("npm)", 1)[1]
+        .split(";;", 1)[0]
+    )
+    assert (
+        "if ! trusted_npm_lock_is_materialized || "
+        "! prepare_writable_npm_cache; then"
+    ) in npm_install_case
+    assert (
+        "the current npm lock is not hash-bounded to the validated base or HEAD, "
+        "or the trusted npm cache is unavailable"
+    ) in npm_install_case
+    assert (
+        "offline npm coverage requires a tracked package-lock.json or "
+        "npm-shrinkwrap.json at the validated base and current head"
+    ) in npm_install_case
+    assert npm_install_case.count("failures=$((failures + 1))") == 2
+    assert npm_install_case.count("return 0") == 2
+    assert "return 1" not in npm_install_case
     assert "trusted_pnpm_lock_matches_base()" in measure_step
     assert (
         'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
@@ -562,6 +676,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GIT_CONFIG_NOSYSTEM=1" in measure_step
     assert "GIT_CONFIG_GLOBAL=/dev/null" in measure_step
     assert "-c safe.directory=/work" in measure_step
+    assert measure_step.count("GIT_CONFIG_COUNT=1") == 3
+    assert measure_step.count("GIT_CONFIG_KEY_0=safe.directory") == 3
+    assert measure_step.count("GIT_CONFIG_VALUE_0=/work") == 3
     assert "-c core.fsmonitor=false" in measure_step
     assert "-c core.hooksPath=/dev/null" in measure_step
     assert "git -c core.quotePath=false ls-files" not in measure_step
@@ -714,6 +831,59 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "opencode-exhausted-retry:" not in workflow
     assert "RETRY_DISPATCH_TOKEN" not in workflow
     assert "contents: write" not in workflow
+
+
+def test_sandbox_git_config_env_marks_only_the_validated_worktree_safe(tmp_path):
+    """Propagated Git config admits /work without trusting unrelated repositories."""
+    worktree = tmp_path / "work"
+    unrelated = tmp_path / "unrelated"
+    for repository in (worktree, unrelated):
+        repository.mkdir()
+        subprocess.run(
+            ["git", "-C", str(repository), "init", "-q"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+    base_env = {
+        **os.environ,
+        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+    }
+    refused = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=base_env,
+    )
+    assert refused.returncode != 0
+    assert "dubious ownership" in refused.stderr
+
+    sandbox_env = {
+        **base_env,
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": str(worktree),
+    }
+    allowed = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=sandbox_env,
+    )
+    still_refused = subprocess.run(
+        ["git", "-C", str(unrelated), "status", "--short"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=sandbox_env,
+    )
+
+    assert allowed.returncode == 0
+    assert still_refused.returncode != 0
+    assert "dubious ownership" in still_refused.stderr
 
 
 def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
@@ -1252,8 +1422,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "collect_open_code_scanning_alerts" in workflow
     assert (
-        "CODE_SCANNING_GH_TOKEN: ${{ github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN }}"
+        "CODE_SCANNING_GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
     ) in workflow
     # The OpenCode app installation token never carries security-events read, so
     # preferring it for the code-scanning alert lookup 403s ("Resource not
@@ -1263,7 +1433,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     ]
     assert code_scanning_token_lines
     assert all("opencode_app_token" not in line for line in code_scanning_token_lines)
-    assert "CODE_SCANNING_TOKEN_SOURCE: github-token" in workflow
+    assert (
+        "CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && "
+        "'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && "
+        "'OPENCODE_APPROVE_TOKEN' || 'github-token' }}"
+    ) in workflow
     code_scanning_source_lines = [
         line for line in workflow.splitlines() if "CODE_SCANNING_TOKEN_SOURCE:" in line
     ]
@@ -1332,7 +1506,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'opencode-free/nemotron-3-ultra-free "
+        "'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
+        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
+        "nvidia-nim/meta/llama-3.3-70b-instruct "
+        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
+        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
+        "opencode-free/nemotron-3-ultra-free "
         "opencode-free/deepseek-v4-flash-free "
         "opencode-free/north-mini-code-free "
         "opencode-free/laguna-s-2.1-free "
@@ -1341,6 +1522,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/mimo-v2.5-free ' || ''"
     ) in workflow
     assert (
+        "opencode/gpt-5.6-terra "
         "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
@@ -1374,6 +1556,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
+    assert 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"' in workflow
+    assert 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
@@ -1426,6 +1610,25 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Repeated current-head sections for models without file reads" in workflow
     assert "append_evidence_section" in workflow
     assert 'Focused changed hunks" 14000' in workflow
+    assert (
+        'append_evidence_section "Adversarial probe source-line receipts" 9000'
+        in workflow
+    )
+    assert (
+        'python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_adversarial_receipts.py"'
+        in workflow
+    )
+    assert "the isolated model cannot recompute a trusted receipt" in workflow
+    assert (
+        "Missing or contradictory trusted evidence must fail closed with a "
+        "schema-valid REQUEST_CHANGES" in workflow
+    )
+    assert "never NEEDS_INFO or a bare status substitution" in workflow
+    assert (
+        "copy\n"
+        "          the path, line, and source-line-sha256 without alteration "
+        "from one matching entry" in workflow
+    )
     assert (
         "do not request changes solely because your own tool or file read did not"
         in workflow
@@ -1503,7 +1706,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         '["opencode-review", "coverage-evidence", "coverage-source-tree", '
-        '"required-workflow-bootstrap", "metadata-only gate evaluation"]' in workflow
+        '"required-workflow-bootstrap", "metadata-only gate evaluation", '
+        '"scan-pr-queue"]' in workflow
     )
     assert "falling back to current-head REST check-runs" in workflow
 
@@ -1575,6 +1779,49 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "prefers-reduced-motion: reduce" in prompt_template
     assert "forced smooth scrolling" in prompt_template
+
+
+def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
+    """Never diagnose the central scheduler's own queue check as a peer failure."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    unconditional_filter = 'select((.name // "") != "scan-pr-queue")'
+    cancelled_only_filter = (
+        'select(((.conclusion // "" | ascii_downcase) == "cancelled" '
+        'and (.name // "") == "scan-pr-queue") | not)'
+    )
+
+    # Both failed-check collectors and both pending-check collectors exclude the
+    # scheduler check by name, independently of its current state or conclusion.
+    assert workflow.count(unconditional_filter) >= 5
+    assert cancelled_only_filter not in workflow
+    failed_check_collector = Path(
+        "scripts/ci/collect_failed_check_evidence.sh"
+    ).read_text(encoding="utf-8")
+    assert unconditional_filter in failed_check_collector
+    assert cancelled_only_filter not in failed_check_collector
+
+    fixtures = [
+        {"name": "scan-pr-queue", "conclusion": "CANCELLED"},
+        {"name": "scan-pr-queue", "conclusion": "FAILURE"},
+        {"name": "real-peer-check", "conclusion": "FAILURE"},
+    ]
+    extracted_filter = re.search(
+        rf"^\s+\|\s+({re.escape(unconditional_filter)})$",
+        workflow,
+        re.MULTILINE,
+    )
+    assert extracted_filter is not None
+    jq_result = subprocess.run(
+        ["jq", "-c", f"[.[] | {extracted_filter.group(1)}]"],
+        input=json.dumps(fixtures),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    retained = json.loads(jq_result.stdout)
+    assert retained == [{"name": "real-peer-check", "conclusion": "FAILURE"}]
 
 
 def test_opencode_job_timeout_contains_full_sequential_review_budget():
@@ -1756,10 +2003,15 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     )[0]
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
+        "github.token }}"
     ) in status_step
     assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
-    assert "steps.opencode_app_token.outputs" not in status_step
+    assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step
+    assert "OPENCODE_CHANGED_FILES_FILE" in status_step
+    assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in status_step
+    assert "OPENCODE_SOURCE_WORKDIR" in status_step
+    assert 'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"' in status_step
     assert "continue-on-error: true" not in status_step
     assert (
         "same-repository github.token can access cross-repository target"
@@ -1813,6 +2065,16 @@ def test_opencode_adversarial_prompt_requires_independent_proof():
     assert '"properly handles all cases"' in prompt
     assert "is circular and invalid" in prompt
     assert "source-line-sha256=<64 lowercase hex>" in prompt
+    assert "copied without alteration" in prompt
+    assert "do not invent, approximate, or recompute" in prompt
+    assert (
+        "example probe's `path`, numeric positive `line`, and "
+        "`source-line-sha256` evidence value together" in prompt
+    )
+    assert "copying all three without alteration from the same entry" in prompt
+    assert "Adversarial probe source-line receipts" in prompt
+    assert "COPY_SENTINEL_HEAD_SHA" in prompt
+    assert '{"head_sha":"${HEAD_SHA}"' not in prompt
 
 
 def test_opencode_privileged_review_security_boundaries_are_fail_closed():
@@ -1861,9 +2123,13 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "materialize_base_python_requirements.py" in measure
     assert "install_base_python_locks.py" in measure
     assert "base-python-requirements" in measure
-    assert "read directly from the live-validated base SHA" in measure
+    assert "strictly registry/hash-bounded npm inputs from the live-validated" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
-    assert "npm ci --ignore-scripts" in coverage_job
+    assert "npm ci \\" in coverage_job
+    assert "--offline" in coverage_job
+    assert '--cache "$writable_npm_cache_dir"' in coverage_job
+    assert "prepare_writable_npm_cache" in coverage_job
+    assert "npm install --ignore-scripts" not in coverage_job
     assert "pnpm install \\" in coverage_job
     assert "--offline" in coverage_job
     assert "--frozen-lockfile" in coverage_job
@@ -2418,6 +2684,10 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
 
     assert "run_r_package_testthat" in workflow
     assert "r_coverage_peer_gate.py" in workflow
+    assert 'description_snapshot="$(mktemp "$RUNNER_TEMP/r-description.XXXXXX")"' in workflow
+    assert '[ -L DESCRIPTION ]' in workflow
+    assert 'install -m 0444 -- DESCRIPTION "$description_snapshot"' in workflow
+    assert '--description "$description_snapshot"' in workflow
     assert marker in workflow
     assert "require_r_cmd_check_for_deferred_coverage" in workflow
     assert workflow.count("require_r_cmd_check_for_deferred_coverage") == 3
