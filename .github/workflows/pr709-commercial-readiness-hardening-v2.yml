@@ -1,8 +1,7 @@
 name: PR 709 Commercial Readiness Hardening v2
 
-# One-shot repair. It shares the original repair's concurrency group so an
-# in-flight narrow repair completes before this idempotent superset runs.
-# Retriggered after current security review findings.
+# One-shot repair for the PR branch. The bootstrap deletes this workflow after
+# the requested least-privilege changes and contract tests pass.
 on:
   push:
     branches:
@@ -53,6 +52,59 @@ jobs:
           --only-binary=:all:
           -r requirements-opencode-review-ci-hashes.txt
 
+      - name: Normalize squash-safe autonomous branch guard
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/naruon-commercial-readiness-development.yml')
+          text = path.read_text(encoding='utf-8')
+          marker = 'Ignoring completed autonomous branch:'
+          if marker not in text:
+              start = text.index('          autonomous_branch_count=0\n')
+              end = text.index(
+                  '          if [ "$autonomous_branch_count" -ne 0 ]; then\n',
+                  start,
+              )
+              replacement = '''          autonomous_branch_count=0
+          while IFS= read -r autonomous_ref; do
+            [ -n "$autonomous_ref" ] || continue
+            autonomous_sha="$(git -C "$target_workspace" rev-parse "$autonomous_ref")"
+            if git -C "$target_workspace" merge-base --is-ancestor \\
+              "$autonomous_sha" "$BASE_SHA"; then
+              continue
+            fi
+
+            autonomous_branch="${autonomous_ref#refs/remotes/origin/}"
+            branch_pr_state="$(
+              gh pr list \\
+                --repo "$TARGET_REPOSITORY" \\
+                --state all \\
+                --base "$TARGET_BASE_BRANCH" \\
+                --head "$autonomous_branch" \\
+                --limit 20 \\
+                --json state,mergedAt \\
+                --jq 'if length == 0 then "missing" elif any(.[]; .state == "OPEN") then "open" elif any(.[]; .mergedAt != null) then "merged" else "closed" end'
+            )"
+            case "$branch_pr_state" in
+              merged | closed)
+                echo "Ignoring completed autonomous branch: ${autonomous_branch} (${branch_pr_state})."
+                ;;
+              *)
+                autonomous_branch_count=$((autonomous_branch_count + 1))
+                echo "Unfinished autonomous branch: ${autonomous_branch} (${branch_pr_state})."
+                ;;
+            esac
+          done < <(
+            git -C "$target_workspace" for-each-ref \\
+              --format='%(refname)' \\
+              'refs/remotes/origin/autonomous/commercial-readiness-*'
+          )
+'''
+              path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+          PY
+
       - name: Apply idempotent comprehensive hardening
         run: |
           set -euo pipefail
@@ -72,37 +124,37 @@ jobs:
           import yaml
 
           for name in (
-              "naruon-commercial-readiness-development.yml",
-              "naruon-commercial-readiness-hourly.yml",
+              'naruon-commercial-readiness-development.yml',
+              'naruon-commercial-readiness-hourly.yml',
           ):
               document = yaml.safe_load(
-                  Path(".github/workflows", name).read_text(encoding="utf-8")
+                  Path('.github/workflows', name).read_text(encoding='utf-8')
               )
               if not isinstance(document, dict):
-                  raise SystemExit(f"workflow did not parse as a mapping: {name}")
+                  raise SystemExit(f'workflow did not parse as a mapping: {name}')
           PY
           python3 - <<'PY'
           from pathlib import Path
 
           development = Path(
-              ".github/workflows/naruon-commercial-readiness-development.yml"
-          ).read_text(encoding="utf-8")
+              '.github/workflows/naruon-commercial-readiness-development.yml'
+          ).read_text(encoding='utf-8')
           hourly = Path(
-              ".github/workflows/naruon-commercial-readiness-hourly.yml"
-          ).read_text(encoding="utf-8")
+              '.github/workflows/naruon-commercial-readiness-hourly.yml'
+          ).read_text(encoding='utf-8')
           agent = development.split(
-              "- name: Run one commercial-readiness implementation slice", 1
-          )[1].split("- name: Validate bounded changed-file", 1)[0]
-          if "GITHUB_TOKEN:" in agent or "USE_GITHUB_TOKEN:" in agent:
-              raise SystemExit("agent step still receives a repository token")
-          if "contents: write" in development.split("steps:", 1)[0]:
-              raise SystemExit("development job still has contents:write")
-          if "contents: write" in hourly:
-              raise SystemExit("hourly orchestrator still has contents:write")
-          if "Binary changes are outside" not in development:
-              raise SystemExit("binary change guard is absent")
-          if "Ignoring completed autonomous branch:" not in development:
-              raise SystemExit("squash-safe completed-branch guard is absent")
+              '- name: Run one commercial-readiness implementation slice', 1
+          )[1].split('- name: Validate bounded changed-file', 1)[0]
+          if 'GITHUB_TOKEN:' in agent or 'USE_GITHUB_TOKEN:' in agent:
+              raise SystemExit('agent step still receives a repository token')
+          if 'contents: write' in development.split('steps:', 1)[0]:
+              raise SystemExit('development job still has contents:write')
+          if 'contents: write' in hourly:
+              raise SystemExit('hourly orchestrator still has contents:write')
+          if 'Binary changes are outside' not in development:
+              raise SystemExit('binary change guard is absent')
+          if 'Ignoring completed autonomous branch:' not in development:
+              raise SystemExit('squash-safe completed-branch guard is absent')
           PY
           git diff --check
           test ! -e .github/workflows/pr709-least-privilege-repair.yml
@@ -118,8 +170,8 @@ jobs:
           git add -A
           git diff --cached --check
           if git diff --cached --quiet; then
-            echo "No hardening changes remain to commit."
+            echo 'No hardening changes remain to commit.'
             exit 0
           fi
-          git commit -m "fix(automation): harden autonomous Naruon development boundary"
+          git commit -m 'fix(automation): harden autonomous Naruon development boundary'
           git push origin HEAD:ops/naruon-hourly-commercial-readiness-20260803
