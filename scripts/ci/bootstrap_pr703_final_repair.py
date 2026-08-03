@@ -76,7 +76,7 @@ def patch_generated_contract(text: str) -> str:
         """    npm_install_case = (
         measure_step.split("install_package_dependencies() {", 1)[1]
         .split("npm)", 1)[1]
-        .split("\n              pnpm)", 1)[0]
+        .split(chr(10) + "              pnpm)", 1)[0]
     )
 """,
         "complete nested npm case extraction",
