@@ -1,0 +1,89 @@
+name: Bootstrap npm workspace coverage wiring
+
+on:
+  push:
+    branches:
+      - fix/npm-workspace-coverage-root
+    paths:
+      - .github/workflows/bootstrap-npm-workspace-wiring.yml
+      - scripts/ci/bootstrap_patch_workflow.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-npm-workspace-wiring-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.ref_name == 'fix/npm-workspace-coverage-root'
+      && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/npm-workspace-coverage-root
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply focused workspace-root patch
+        run: python3 scripts/ci/bootstrap_patch_workflow.py
+
+      - name: Verify resolver smoke path and patch hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/ci/npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_opencode_agent_contract.py
+
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+          git -C "$fixture" init -q
+          git -C "$fixture" config user.email tests@example.invalid
+          git -C "$fixture" config user.name 'Coverage Tests'
+          mkdir -p "$fixture/apps/desktop"
+          cat >"$fixture/package.json" <<'JSON'
+          {"name":"root","private":true,"workspaces":["apps/*"]}
+          JSON
+          cat >"$fixture/apps/desktop/package.json" <<'JSON'
+          {"name":"desktop"}
+          JSON
+          cat >"$fixture/package-lock.json" <<'JSON'
+          {"name":"root","lockfileVersion":3,"packages":{"":{},"apps/desktop":{}}}
+          JSON
+          git -C "$fixture" add -A
+          git -C "$fixture" commit -q -m fixture
+          revision="$(git -C "$fixture" rev-parse HEAD)"
+          resolved="$(
+            python3 scripts/ci/npm_workspace_install_root.py \
+              --repo-root "$fixture" \
+              --package-dir "$fixture/apps/desktop" \
+              --base-sha "$revision" \
+              --head-sha "$revision"
+          )"
+          test "$resolved" = "."
+          git diff --check
+          test ! -e .github/workflows/bootstrap-npm-workspace-wiring.yml
+          test ! -e scripts/ci/bootstrap_patch_workflow.py
+
+      - name: Commit focused result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'fix(coverage): wire validated npm workspace lock owner'
+          git push origin HEAD:fix/npm-workspace-coverage-root
