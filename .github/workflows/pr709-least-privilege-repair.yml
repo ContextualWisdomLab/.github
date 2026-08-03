@@ -1,0 +1,101 @@
+name: PR 709 Least Privilege Repair
+
+# One-shot repair for the current least-privilege review findings. This workflow
+# removes itself after focused validation succeeds.
+on:
+  push:
+    branches:
+      - ops/naruon-hourly-commercial-readiness-20260803
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr709-least-privilege-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ops/naruon-hourly-commercial-readiness-20260803
+          fetch-depth: 0
+
+      - name: Apply bounded least-privilege repairs
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(
+              ".github/workflows/naruon-commercial-readiness-development.yml"
+          )
+          source = workflow.read_text(encoding="utf-8")
+
+          old_credential = '''          target_token="$PAT_TOKEN"
+          if [ -z "$target_token" ]; then
+            target_token="$APP_TOKEN"
+          fi'''
+          new_credential = '''          # Prefer the short-lived repository-scoped App credential. Broad PATs
+          # are an explicit fallback only when the App exchange is unavailable.
+          target_token="$APP_TOKEN"
+          if [ -z "$target_token" ]; then
+            target_token="$PAT_TOKEN"
+          fi'''
+          if old_credential not in source:
+              raise SystemExit("expected PAT-first credential resolution was not found")
+          source = source.replace(old_credential, new_credential, 1)
+
+          old_agent_env = '''          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ steps.target_credential.outputs.token }}
+          MODEL: github-models/openai/gpt-5'''
+          new_agent_env = '''          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          MODEL: github-models/openai/gpt-5'''
+          if old_agent_env not in source:
+              raise SystemExit("expected target write token in agent environment was not found")
+          workflow.write_text(source.replace(old_agent_env, new_agent_env, 1), encoding="utf-8")
+
+          tests = Path("tests/test_naruon_commercial_readiness_hourly_contract.py")
+          test_source = tests.read_text(encoding="utf-8")
+          marker = "def test_development_worker_keeps_write_tokens_out_of_agent_context()"
+          if marker not in test_source:
+              test_source += '''\n\ndef test_development_worker_keeps_write_tokens_out_of_agent_context() -> None:\n    \"\"\"The untrusted-context agent must never receive a target write token.\"\"\"\n    workflow = workflow_text(\"naruon-commercial-readiness-development.yml\")\n    agent_step = workflow.split(\n        \"- name: Run one commercial-readiness implementation slice\", 1\n    )[1].split(\"- name:\", 1)[0]\n\n    assert \"GITHUB_TOKEN:\" not in agent_step\n    assert \"steps.target_credential.outputs.token\" not in agent_step\n    assert \"STRIX_GITHUB_MODELS_TOKEN:\" in agent_step\n\n\ndef test_development_worker_prefers_scoped_app_token_over_pat() -> None:\n    \"\"\"Credential resolution must use a broad PAT only as a fallback.\"\"\"\n    workflow = workflow_text(\"naruon-commercial-readiness-development.yml\")\n    credential_step = workflow.split(\"- name: Resolve target credential\", 1)[1].split(\n        \"- name:\", 1\n    )[0]\n\n    app_assignment = 'target_token=\"$APP_TOKEN\"'\n    pat_fallback = 'target_token=\"$PAT_TOKEN\"'\n    assert credential_step.index(app_assignment) < credential_step.index(pat_fallback)\n    assert 'if [ -z \"$target_token\" ]; then' in credential_step\n'''
+              tests.write_text(test_source, encoding="utf-8")
+          PY
+          rm -f .github/workflows/pr709-least-privilege-repair.yml
+
+      - name: Validate focused contracts
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q \
+            tests/test_naruon_commercial_readiness_hourly_contract.py \
+            tests/test_required_workflow_queue_contract.py
+          python3 - <<'PY'
+          import pathlib
+          import yaml
+          for name in (
+              'naruon-commercial-readiness-development.yml',
+              'naruon-commercial-readiness-hourly.yml',
+          ):
+              yaml.safe_load(
+                  pathlib.Path('.github/workflows', name).read_text(encoding='utf-8')
+              )
+          PY
+          git diff --check
+
+      - name: Commit repaired head
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/naruon-commercial-readiness-development.yml \
+            tests/test_naruon_commercial_readiness_hourly_contract.py \
+            .github/workflows/pr709-least-privilege-repair.yml
+          git commit -m "fix(automation): isolate agent from target write credentials"
+          git push origin HEAD:ops/naruon-hourly-commercial-readiness-20260803
