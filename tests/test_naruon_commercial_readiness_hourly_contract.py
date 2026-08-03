@@ -40,7 +40,8 @@ def test_hourly_loop_dispatches_fix_merge_and_zero_queue_development() -> None:
     assert 'if [ "$OPEN_PR_COUNT" -ne 0 ]; then' in workflow
     assert 'review_dispatch_limit: "-1"' in workflow
     assert 'stale_opencode_minutes: "60"' in workflow
-    assert 'startsWith("autonomous/commercial-readiness-")' in workflow
+    assert "actions/workflows/naruon-commercial-readiness-development.yml/runs" in workflow
+    assert '.status == "queued" or .status == "in_progress"' in workflow
 
 
 def test_development_worker_uses_a_fixed_trusted_dispatch() -> None:
@@ -55,8 +56,9 @@ def test_development_worker_uses_a_fixed_trusted_dispatch() -> None:
     assert 'TARGET_BASE_BRANCH: "develop"' in workflow
     assert 'EXPECTED_TARGET_REPOSITORY: "ContextualWisdomLab/naruon"' in workflow
     assert 'EXPECTED_TARGET_BASE_BRANCH: "develop"' in workflow
-    assert 'github.event.client_payload.target_repository != env.EXPECTED_TARGET_REPOSITORY' in workflow
-    assert 'github.event.client_payload.base_branch != env.EXPECTED_TARGET_BASE_BRANCH' in workflow
+    assert 'if [ "$REQUESTED_TARGET_REPOSITORY" != "$EXPECTED_TARGET_REPOSITORY" ]; then' in workflow
+    assert 'if [ "$REQUESTED_TARGET_BASE_BRANCH" != "$EXPECTED_TARGET_BASE_BRANCH" ]; then' in workflow
+    assert "ref: ${{ github.workflow_sha }}" in workflow
 
 
 def test_development_worker_revalidates_zero_prs_and_single_agent_work() -> None:
@@ -75,8 +77,8 @@ def test_development_worker_blocks_sensitive_and_unreviewable_changes() -> None:
     """Autonomous edits remain small, test-backed, and outside control-plane files."""
     workflow = workflow_text("naruon-commercial-readiness-development.yml")
 
-    assert "MAX_CHANGED_FILES=12" in workflow
-    assert "MAX_CHANGED_LINES=1200" in workflow
+    assert "MAX_CHANGED_FILES: 12" in workflow
+    assert "MAX_CHANGED_LINES: 1200" in workflow
     assert "^\\.github/workflows/" in workflow
     assert "^\\.env" in workflow
     assert "BEGIN.*PRIVATE KEY" in workflow
@@ -92,6 +94,7 @@ def test_development_worker_runs_repository_validation() -> None:
 
     assert "python -m ruff check ." in workflow
     assert "python -m pytest -q" in workflow
+    assert "backend/requirements-agent.txt" in workflow
     assert "pnpm install --frozen-lockfile" in workflow
     assert "pnpm run lint" in workflow
     assert "pnpm run typecheck" in workflow
@@ -104,10 +107,11 @@ def test_development_worker_opens_one_pr_and_dispatches_review() -> None:
     """Successful development is published only through a normal reviewed PR."""
     workflow = workflow_text("naruon-commercial-readiness-development.yml")
 
-    assert 'DEVELOPMENT_BRANCH="autonomous/commercial-readiness-${GITHUB_RUN_ID}"' in workflow
+    assert 'development_branch="autonomous/commercial-readiness-${GITHUB_RUN_ID}"' in workflow
     assert 'git push origin "HEAD:${DEVELOPMENT_BRANCH}"' in workflow
     assert "gh pr create" in workflow
     assert '"event_type": "merge-scheduler"' in workflow
     assert 'review_dispatch_limit: "-1"' in workflow
     assert 'merge_mode: "direct_or_auto"' in workflow
     assert "--draft" not in workflow
+    assert "git push origin HEAD:develop" not in workflow
