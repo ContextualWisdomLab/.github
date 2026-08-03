@@ -1,0 +1,179 @@
+name: Naruon Commercial Readiness Hourly Loop
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  repository_dispatch:
+    types: [naruon-commercial-readiness-hourly]
+
+concurrency:
+  group: naruon-commercial-readiness-hourly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+      TARGET_REPOSITORY: ContextualWisdomLab/naruon
+      TARGET_BASE_BRANCH: develop
+      DISPATCH_REPOSITORY: ContextualWisdomLab/.github
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Validate fixed target
+        env:
+          REQUESTED_TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
+          REQUESTED_BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED_TARGET_REPOSITORY" ] \
+            && [ "$REQUESTED_TARGET_REPOSITORY" != "$TARGET_REPOSITORY" ]; then
+            echo "::error::Hourly dispatch cannot target ${REQUESTED_TARGET_REPOSITORY}."
+            exit 1
+          fi
+          if [ -n "$REQUESTED_BASE_BRANCH" ] \
+            && [ "$REQUESTED_BASE_BRANCH" != "$TARGET_BASE_BRANCH" ]; then
+            echo "::error::Hourly dispatch cannot target base ${REQUESTED_BASE_BRANCH}."
+            exit 1
+          fi
+          if [ "$GITHUB_REPOSITORY" != "$DISPATCH_REPOSITORY" ]; then
+            echo "::error::Hourly loop must execute from ${DISPATCH_REPOSITORY}."
+            exit 1
+          fi
+
+      - name: Read live pull request queue
+        id: queue
+        run: |
+          set -euo pipefail
+          open_pr_json="$(
+            gh api --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${TARGET_REPOSITORY}/pulls?state=open&base=${TARGET_BASE_BRANCH}&per_page=100" \
+            | jq -s 'add // []'
+          )"
+          open_pr_count="$(jq 'length' <<<"$open_pr_json")"
+          open_pr_numbers="$(
+            jq -r 'map(.number | tostring) | join(",")' <<<"$open_pr_json"
+          )"
+          {
+            printf 'count=%s\n' "$open_pr_count"
+            printf 'numbers=%s\n' "$open_pr_numbers"
+          } >>"$GITHUB_OUTPUT"
+          printf 'Open PR queue: count=%s numbers=%s\n' \
+            "$open_pr_count" "${open_pr_numbers:-none}"
+
+      - name: Dispatch review feedback fixes
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/fix-payload.json" <<'JSON'
+          {
+            "event_type": "pr-review-fix-scheduler",
+            "client_payload": {
+              "target_repository": "ContextualWisdomLab/naruon",
+              "base_branch": "develop",
+              "max_prs": "100",
+              "max_dispatches": "10",
+              "retry_hours": "1",
+              "dry_run": false
+            }
+          }
+          JSON
+          gh api -X POST \
+            "repos/${DISPATCH_REPOSITORY}/dispatches" \
+            --input "$RUNNER_TEMP/fix-payload.json"
+
+      - name: Dispatch current-head review and merge processing
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/merge-payload.json" <<'JSON'
+          {
+            "event_type": "merge-scheduler",
+            "client_payload": {
+              "target_repository": "ContextualWisdomLab/naruon",
+              "base_branch": "develop",
+              "max_prs": "100",
+              "trigger_reviews": true,
+              "review_dispatch_limit": "-1",
+              "branch_update_limit": "10",
+              "enable_auto_merge": true,
+              "merge_mode": "direct_or_auto",
+              "update_branches": true,
+              "stale_opencode_minutes": "60"
+            }
+          }
+          JSON
+          gh api -X POST \
+            "repos/${DISPATCH_REPOSITORY}/dispatches" \
+            --input "$RUNNER_TEMP/merge-payload.json"
+
+      - name: Decide whether product development may run
+        id: development
+        env:
+          OPEN_PR_COUNT: ${{ steps.queue.outputs.count }}
+        run: |
+          set -euo pipefail
+          if [ "$OPEN_PR_COUNT" -ne 0 ]; then
+            echo "decision=skipped-open-prs" >>"$GITHUB_OUTPUT"
+            echo "Development suppressed because ${OPEN_PR_COUNT} PR(s) remain open."
+            exit 0
+          fi
+
+          active_run_count="$(
+            gh api \
+              "repos/${DISPATCH_REPOSITORY}/actions/workflows/naruon-commercial-readiness-development.yml/runs?per_page=30" \
+            | jq '[.workflow_runs[] | select(.status == "queued" or .status == "in_progress")] | length'
+          )"
+          if [ "$active_run_count" -ne 0 ]; then
+            echo "decision=skipped-active-development" >>"$GITHUB_OUTPUT"
+            echo "Development suppressed because a worker is already queued or running."
+            exit 0
+          fi
+
+          echo "decision=dispatch" >>"$GITHUB_OUTPUT"
+
+      - name: Dispatch one buyer-visible product gap
+        if: steps.development.outputs.decision == 'dispatch'
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/development-payload.json" <<'JSON'
+          {
+            "event_type": "naruon-commercial-readiness-development",
+            "client_payload": {
+              "target_repository": "ContextualWisdomLab/naruon",
+              "base_branch": "develop"
+            }
+          }
+          JSON
+          gh api -X POST \
+            "repos/${DISPATCH_REPOSITORY}/dispatches" \
+            --input "$RUNNER_TEMP/development-payload.json"
+
+      - name: Summarize loop
+        if: always()
+        env:
+          OPEN_PR_COUNT: ${{ steps.queue.outputs.count || 'unknown' }}
+          OPEN_PR_NUMBERS: ${{ steps.queue.outputs.numbers || '' }}
+          DEVELOPMENT_DECISION: ${{ steps.development.outputs.decision || 'not-evaluated' }}
+        run: |
+          {
+            echo "## Naruon commercial readiness loop"
+            echo "- Repository: ${TARGET_REPOSITORY}"
+            echo "- Base branch: ${TARGET_BASE_BRANCH}"
+            echo "- Open PR count: ${OPEN_PR_COUNT}"
+            echo "- Open PR numbers: ${OPEN_PR_NUMBERS:-none}"
+            echo "- Review-feedback fix dispatch: submitted"
+            echo "- Current-head review/merge dispatch: submitted"
+            echo "- Product-development decision: ${DEVELOPMENT_DECISION}"
+          } >>"$GITHUB_STEP_SUMMARY"
