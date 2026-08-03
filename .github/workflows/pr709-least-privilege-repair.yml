@@ -51,14 +51,15 @@ jobs:
               raise SystemExit("expected PAT-first credential resolution was not found")
           source = source.replace(old_credential, new_credential, 1)
 
-          old_agent_env = '''          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          GITHUB_TOKEN: ${{ steps.target_credential.outputs.token }}
-          MODEL: github-models/openai/gpt-5'''
-          new_agent_env = '''          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          MODEL: github-models/openai/gpt-5'''
-          if old_agent_env not in source:
+          expression_open = "$" + "{{"
+          target_write_line = (
+              "          GITHUB_TOKEN: "
+              + expression_open
+              + " steps.target_credential.outputs.token }}\n"
+          )
+          if target_write_line not in source:
               raise SystemExit("expected target write token in agent environment was not found")
-          workflow.write_text(source.replace(old_agent_env, new_agent_env, 1), encoding="utf-8")
+          workflow.write_text(source.replace(target_write_line, "", 1), encoding="utf-8")
 
           tests = Path("tests/test_naruon_commercial_readiness_hourly_contract.py")
           test_source = tests.read_text(encoding="utf-8")
