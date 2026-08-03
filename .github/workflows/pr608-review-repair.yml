@@ -1,0 +1,164 @@
+name: PR 608 Review Repair
+
+on:
+  push:
+    branches:
+      - fix/strix-sql-migration-context
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr608-review-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: fix/strix-sql-migration-context
+          fetch-depth: 0
+
+      - name: Apply bounded review repairs
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gate = Path("scripts/ci/strix_quick_gate.sh")
+          source = gate.read_text(encoding="utf-8")
+
+          old_migration = '''\tif [ "${#sql_migration_dirs[@]}" -gt 0 ]; then
+          \tlocal head_sha_for_migration_context migration_context_dir
+          \thead_sha_for_migration_context="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+          \tif [ -n "$head_sha_for_migration_context" ] &&
+          \t\tis_valid_git_commit_sha "$head_sha_for_migration_context" &&
+          \t\tgit rev-parse --verify --quiet "$head_sha_for_migration_context^{commit}" >/dev/null; then
+          \t\tfor migration_context_dir in "${sql_migration_dirs[@]}"; do
+          \t\t\tgit -c core.quotepath=false ls-tree -r --name-only "$head_sha_for_migration_context" -- "$migration_context_dir/" 2>/dev/null |
+          \t\t\t\tgrep -E '\\.sql$' || true
+          \t\tdone
+          \tfi
+          \tfi'''
+          new_migration = '''\tif [ "${#sql_migration_dirs[@]}" -gt 0 ]; then
+          \tlocal head_sha_for_migration_context migration_context_dir
+          \tlocal migration_context_file normalized_migration_context_file
+          \thead_sha_for_migration_context="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+          \tif [ -n "$head_sha_for_migration_context" ] &&
+          \t\tis_valid_git_commit_sha "$head_sha_for_migration_context" &&
+          \t\tgit rev-parse --verify --quiet "$head_sha_for_migration_context^{commit}" >/dev/null; then
+          \t\tfor migration_context_dir in "${sql_migration_dirs[@]}"; do
+          \t\t\twhile IFS= read -r migration_context_file; do
+          \t\t\t\tnormalized_migration_context_file="$(normalize_changed_file_path "$migration_context_file")" || continue
+          \t\t\t\tcase "$normalized_migration_context_file" in
+          \t\t\t\t\t"$migration_context_dir"/*.sql)
+          \t\t\t\t\t\tprintf '%s\\n' "$normalized_migration_context_file"
+          \t\t\t\t\t\t;;
+          \t\t\t\tesac
+          \t\t\tdone < <(
+          \t\t\t\tgit -c core.quotepath=false ls-tree -r --name-only "$head_sha_for_migration_context" -- "$migration_context_dir/" 2>/dev/null
+          \t\t\t)
+          \t\tdone
+          \tfi
+          \tfi'''
+          if old_migration not in source:
+              raise SystemExit("expected SQL migration enumeration block was not found")
+          source = source.replace(old_migration, new_migration, 1)
+
+          old_api_base = '''github_models_api_base_is_active() {
+          \tlocal api_base_file="${LLM_API_BASE_FILE:-}"
+          \tlocal api_base_file_label="LLM_API_BASE_FILE"
+          \t# Cross-provider fallback: when the primary scan uses direct-OpenAI,
+          \t# LLM_API_BASE_FILE is not set, but github_models/* fallback models
+          \t# route through the GitHub Models endpoint supplied by
+          \t# STRIX_GITHUB_MODELS_API_BASE_FILE.  Recognise either source so that
+          \t# github_models_rate_limit_should_skip_same_model_retry correctly skips
+          \t# same-model retries for rate-limited cross-provider fallback models.
+          \tif [ -z "$api_base_file" ] && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+          \t\tapi_base_file="$STRIX_GITHUB_MODELS_API_BASE_FILE"
+          \t\tapi_base_file_label="STRIX_GITHUB_MODELS_API_BASE_FILE"
+          \tfi
+
+          \tif [ -z "$api_base_file" ]; then
+          \t\treturn 1
+          \tfi
+
+          \tlocal resolved_llm_api_base_file
+          \tif ! resolved_llm_api_base_file="$(resolve_trusted_input_file "$api_base_file_label" "$api_base_file" 2>/dev/null)"; then
+          \t\treturn 1
+          \tfi
+
+          \tlocal llm_api_base_value
+          \tllm_api_base_value="$(cat -- "$resolved_llm_api_base_file" 2>/dev/null)" || return 1
+          \tllm_api_base_value="${llm_api_base_value%%/generateContent*}"
+          \tllm_api_base_value="${llm_api_base_value%%:generateContent*}"
+          \tllm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
+          \tis_github_models_api_base "$llm_api_base_value"
+          }'''
+          new_api_base = '''github_models_api_base_is_active() {
+          \tlocal api_base_file api_base_file_label
+          \tlocal resolved_llm_api_base_file llm_api_base_value
+          \t# A direct provider and a GitHub Models fallback can both be configured.
+          \t# Inspect both trusted endpoint files independently so a non-GitHub
+          \t# primary endpoint cannot mask the active GitHub Models fallback.
+          \tfor api_base_file_label in LLM_API_BASE_FILE STRIX_GITHUB_MODELS_API_BASE_FILE; do
+          \t\tcase "$api_base_file_label" in
+          \t\t\tLLM_API_BASE_FILE) api_base_file="${LLM_API_BASE_FILE:-}" ;;
+          \t\t\tSTRIX_GITHUB_MODELS_API_BASE_FILE) api_base_file="${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ;;
+          \t\tesac
+          \t\t[ -n "$api_base_file" ] || continue
+          \t\tif ! resolved_llm_api_base_file="$(resolve_trusted_input_file "$api_base_file_label" "$api_base_file" 2>/dev/null)"; then
+          \t\t\tcontinue
+          \t\tfi
+          \t\tllm_api_base_value="$(cat -- "$resolved_llm_api_base_file" 2>/dev/null)" || continue
+          \t\tllm_api_base_value="${llm_api_base_value%%/generateContent*}"
+          \t\tllm_api_base_value="${llm_api_base_value%%:generateContent*}"
+          \t\tllm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
+          \t\tif is_github_models_api_base "$llm_api_base_value"; then
+          \t\t\treturn 0
+          \t\tfi
+          \tdone
+          \treturn 1
+          }'''
+          if old_api_base not in source:
+              raise SystemExit("expected GitHub Models endpoint detector was not found")
+          gate.write_text(source.replace(old_api_base, new_api_base, 1), encoding="utf-8")
+
+          tests = Path("scripts/ci/test_strix_quick_gate.sh")
+          test_source = tests.read_text(encoding="utf-8")
+          old_head = '\t\thead_sha="$(git rev-parse HEAD)"'
+          new_head = '\t\tlocal head_sha\n\t\thead_sha="$(git rev-parse HEAD)"'
+          if old_head not in test_source:
+              raise SystemExit("expected leaked head_sha assignment was not found")
+          test_source = test_source.replace(old_head, new_head, 1)
+          assertion_anchor = '\tassert_file_contains "$GATE_SCRIPT" "fails open" "strix gate migration context enumeration is documented as fail-open"'
+          normalization_assertion = '\tassert_file_contains "$GATE_SCRIPT" "normalize_changed_file_path \\"\\$migration_context_file\\"" "strix gate normalizes and skips unsafe sibling migration paths"'
+          if normalization_assertion not in test_source:
+              if assertion_anchor not in test_source:
+                  raise SystemExit("migration context assertion anchor was not found")
+              test_source = test_source.replace(assertion_anchor, assertion_anchor + "\n" + normalization_assertion, 1)
+          tests.write_text(test_source, encoding="utf-8")
+          PY
+          rm -f .github/workflows/pr608-review-repair.yml
+
+      - name: Validate focused contracts
+        run: |
+          set -euo pipefail
+          bash -n scripts/ci/strix_quick_gate.sh scripts/ci/test_strix_quick_gate.sh
+          bash scripts/ci/test_strix_quick_gate.sh
+          python3 -m pytest -q tests/test_required_workflow_queue_contract.py
+          git diff --check
+
+      - name: Commit repaired head
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/ci/strix_quick_gate.sh scripts/ci/test_strix_quick_gate.sh .github/workflows/pr608-review-repair.yml
+          git commit -m "fix(strix): address migration and fallback review findings"
+          git push origin HEAD:fix/strix-sql-migration-context
