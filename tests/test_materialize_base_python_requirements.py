@@ -187,7 +187,7 @@ def test_materializes_hash_pinned_locks_inside_a_requirements_directory(
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")
-    assert materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert not materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
     assert materializer._is_hash_pinned(b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")
     assert materializer._is_hash_pinned(b"-r other-hashes.txt\n")
     assert not materializer._is_hash_pinned(b"untrusted==1\n")
