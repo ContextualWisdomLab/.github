@@ -6,6 +6,13 @@ on:
   push:
     branches:
       - ops/naruon-hourly-commercial-readiness-20260803
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/pr709-commercial-readiness-hardening-v2.yml
+      - scripts/ci/bootstrap_naruon_commercial_readiness_hardening_v2.py
 
 permissions:
   contents: write
@@ -16,7 +23,12 @@ concurrency:
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]'
+      && (
+        github.event_name == 'push'
+        || github.event.pull_request.head.ref == 'ops/naruon-hourly-commercial-readiness-20260803'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
