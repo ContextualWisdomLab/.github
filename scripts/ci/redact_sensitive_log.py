@@ -25,12 +25,10 @@ BEARER_RE = re.compile(
     re.IGNORECASE,
 )
 PROVIDER_TOKEN_RES = (
-    re.compile(
-        r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b|"
-        r"\bsk-[A-Za-z0-9_-]{20,}\b|"
-        r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b|"
-        r"\bAKIA[0-9A-Z]{16}\b"
-    ),
+    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
 
 
@@ -67,9 +65,6 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, in
     parsed_key_end = cursor
 
     if not SENSITIVE_KEY_RE.search(key):
-        # The pattern is intentionally an unanchored substring search. If the
-        # full key does not match, no suffix can newly match, so skipping the
-        # parsed run preserves the base parser's redaction semantics.
         return None, parsed_key_end
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
@@ -107,19 +102,13 @@ def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
     output: list[str] = []
     cursor = 0
-    last_append = 0
     while cursor < len(text):
         replacement, next_cursor = _consume_sensitive_assignment(text, cursor)
         if replacement is None:
-            cursor = next_cursor
-            continue
-        if cursor > last_append:
-            output.append(text[last_append:cursor])
-        output.append(replacement)
+            output.append(text[cursor:next_cursor])
+        else:
+            output.append(replacement)
         cursor = next_cursor
-        last_append = cursor
-    if last_append < len(text):
-        output.append(text[last_append:])
     return "".join(output)
 
 
