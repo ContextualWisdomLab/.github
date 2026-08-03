@@ -296,6 +296,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "output": 32000,
     }
     for model_name, model_config in free_models.items():
+        # Every free-pool candidate must declare tool_call support: the reviewer
+        # drives CodeGraph/web-search tooling, so a non-tool_call model in the
+        # pool cannot produce a structured review and would burn its failover
+        # slot before yielding. Guard the whole pool, not just a hand-picked few.
+        assert model_config["tool_call"] is True, model_name
         if model_config.get("reasoning") is True:
             assert model_config["options"]["reasoningEffort"] == "high", model_name
             assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
