@@ -30,10 +30,20 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          expression_open = "$" + "{{"
+          old = (
+              "STRIX_SCAN_SCOPE: "
+              + expression_open
+              + " (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'pr' || 'full' }}"
+          )
+          new = (
+              "STRIX_SCAN_SCOPE: "
+              + expression_open
+              + " (github.event_name == 'pull_request_target' || (github.event.client_payload.pr_number || '') != '') && 'pr' || 'full' }}"
+          )
+
           workflow = Path(".github/workflows/strix.yml")
           source = workflow.read_text(encoding="utf-8")
-          old = "STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'pr' || 'full' }}"
-          new = "STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || (github.event.client_payload.pr_number || '') != '') && 'pr' || 'full' }}"
           if old not in source:
               raise SystemExit("expected unsafe Strix scan-scope expression was not found")
           workflow.write_text(source.replace(old, new, 1), encoding="utf-8")
@@ -42,7 +52,7 @@ jobs:
           test_source = tests.read_text(encoding="utf-8")
           marker = "def test_strix_scan_scope_requires_a_nonempty_pr_number()"
           if marker not in test_source:
-              test_source += '''\n\ndef test_strix_scan_scope_requires_a_nonempty_pr_number():\n    from pathlib import Path\n\n    workflow_text = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")\n    expected = (\n        "STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || "\n        "(github.event.client_payload.pr_number || '') != '') && 'pr' || 'full' }}"\n    )\n    assert expected in workflow_text\n    assert \"github.event.client_payload.pr_number != ''\" not in workflow_text\n'''
+              test_source += '''\n\ndef test_strix_scan_scope_requires_a_nonempty_pr_number():\n    from pathlib import Path\n\n    expression_open = "$" + "{{"\n    workflow_text = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")\n    expected = (\n        "STRIX_SCAN_SCOPE: "\n        + expression_open\n        + " (github.event_name == 'pull_request_target' || "\n        "(github.event.client_payload.pr_number || '') != '') && 'pr' || 'full' }}"\n    )\n    assert expected in workflow_text\n    assert \"github.event.client_payload.pr_number != ''\" not in workflow_text\n'''
               tests.write_text(test_source, encoding="utf-8")
           PY
           rm -f .github/workflows/pr560-strix-scope-repair.yml
