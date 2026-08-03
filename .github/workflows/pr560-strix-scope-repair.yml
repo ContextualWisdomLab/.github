@@ -1,5 +1,7 @@
 name: PR 560 Strix Scope Repair
 
+# One-shot repair: apply the reviewed null-safe scope expression, validate the
+# focused contracts, and delete this bootstrap before the branch can merge.
 on:
   push:
     branches:
@@ -19,7 +21,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout exact branch head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: agent/appguardrail-security-aggregation
           fetch-depth: 0
