@@ -13,6 +13,19 @@ import sys
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+RESOLVER_ONLY_EXACT_OPTIONS = frozenset(
+    {"--require-hashes", "--no-index", "--prefer-binary", "--pre"}
+)
+RESOLVER_ONLY_OPTION_PREFIXES = (
+    "--index-url ",
+    "--extra-index-url ",
+    "--find-links ",
+    "--trusted-host ",
+    "--only-binary ",
+    "--only-binary=",
+    "--no-binary ",
+    "--no-binary=",
+)
 
 
 def _is_candidate_lock_name(name: str) -> bool:
@@ -61,24 +74,36 @@ def _requirement_lines(content: bytes) -> list[str]:
 
 
 def _is_hash_pinned(content: bytes) -> bool:
-    """Return whether content carries hash pins and is safe to preflight.
+    """Return whether every installable requirement is hash-pinned.
 
     Discovery is content-based rather than name-based so hash-pinned locks in any
-    location (a service subdirectory, ``requirements-dev.txt``,
-    ``requirements-test.txt``) can be considered for offline coverage, while an
-    unpinned or PR-mutable requirements file is still excluded from the networked
-    build context. Hash syntax cannot prove that a file includes every transitive
-    dependency, so the trusted image installer separately preflights every
-    candidate as an independent ``--require-hashes`` closure. An empty file
-    carries no installable dependency and is not materialized.
+    location can be considered for offline coverage. Resolver-only pip options do
+    not count as dependency evidence, and ``--require-hashes`` is only a policy
+    directive: it cannot replace an actual ``--hash=`` on each package line.
+    Requirement-file includes remain eligible because the trusted installer
+    independently executes every candidate with pip's fail-closed
+    ``--require-hashes`` enforcement. Empty, option-only, editable, unknown-option,
+    and unpinned files are excluded from the networked build context.
     """
     lines = _requirement_lines(content)
     if not lines:
         return False
-    return any(line == "--require-hashes" for line in lines) or all(
-        "--hash=" in line or line.startswith(("-r ", "--requirement "))
-        for line in lines
-    )
+
+    has_install_target = False
+    for line in lines:
+        if line in RESOLVER_ONLY_EXACT_OPTIONS or line.startswith(
+            RESOLVER_ONLY_OPTION_PREFIXES
+        ):
+            continue
+        if line.startswith(("-r ", "--requirement ")):
+            has_install_target = True
+            continue
+        if line.startswith("-"):
+            return False
+        has_install_target = True
+        if "--hash=" not in line:
+            return False
+    return has_install_target
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
