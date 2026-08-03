@@ -120,7 +120,13 @@ def _worktree_blob(
     path = repo_root.joinpath(*relative_path.parts)
     if not path.is_file() or path.is_symlink():
         raise ResolutionError(f"{description} must be a regular non-symlink file: {path}")
-    current_blob = _git(repo_root, "hash-object", "--no-filters", "--", str(path))
+    current_blob = _git(
+        repo_root,
+        "hash-object",
+        f"--path={relative_path.as_posix()}",
+        "--",
+        str(path),
+    )
     if current_blob.decode("ascii", errors="strict").strip() != expected_blob:
         raise ResolutionError(f"{description} does not match the validated head blob")
 
