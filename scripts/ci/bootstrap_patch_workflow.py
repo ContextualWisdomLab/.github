@@ -11,6 +11,7 @@ WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 CONTRACT = ROOT / "tests/test_opencode_agent_contract.py"
 SELF = ROOT / "scripts/ci/bootstrap_patch_workflow.py"
 SELF_WORKFLOW = ROOT / ".github/workflows/bootstrap-npm-workspace-wiring.yml"
+FOCUSED_WORKFLOW = ROOT / ".github/workflows/pr703-focused-tests.yml"
 
 
 def replace_once(text: str, old: str, new: str, name: str) -> str:
@@ -37,7 +38,44 @@ def regex_once(text: str, pattern: str, replacement: str, name: str) -> str:
 
 def patch_workflow(text: str) -> str:
     """Patch the central coverage workflow with fail-closed root resolution."""
-    resolver_and_trust = r'''          resolve_npm_install_root() {
+    resolver_and_trust = r'''          resolve_npm_package_root() {
+            local selected_package_dir="$1"
+            local candidate_root
+
+            case "$selected_package_dir" in
+              "$COVERAGE_SOURCE_WORKDIR" | "$COVERAGE_SOURCE_WORKDIR"/*)
+                candidate_root="$selected_package_dir"
+                ;;
+              .)
+                candidate_root="$PWD"
+                ;;
+              "" | /* | ../* | */../* | */.. | *\\* | *$'\n'* | *$'\r'*)
+                echo "::error::Selected npm package directory is not a safe repository-relative path."
+                return 1
+                ;;
+              *)
+                candidate_root="$COVERAGE_SOURCE_WORKDIR/$selected_package_dir"
+                ;;
+            esac
+            if [ ! -d "$candidate_root" ] || [ -L "$candidate_root" ]; then
+              echo "::error::Selected npm package directory must be a real non-symlink directory."
+              return 1
+            fi
+            candidate_root="$(realpath -e -- "$candidate_root")" || {
+              echo "::error::Could not canonicalize the selected npm package directory."
+              return 1
+            }
+            case "$candidate_root" in
+              "$COVERAGE_SOURCE_WORKDIR" | "$COVERAGE_SOURCE_WORKDIR"/*) ;;
+              *)
+                echo "::error::Selected npm package directory escaped the validated coverage worktree."
+                return 1
+                ;;
+            esac
+            printf '%s\n' "$candidate_root"
+          }
+
+          resolve_npm_install_root() {
             local selected_package_dir="$1"
             local relative_root
             local candidate_root
@@ -149,7 +187,7 @@ def patch_workflow(text: str) -> str:
                 and .lock_blob == $lock_blob
                 and (.revision_sha == $base_sha or .revision_sha == $head_sha)
               )' "$trust_manifest" >/dev/null; then
-              echo "::error::Current npm lock ${relative_lock} was not hash-bounded and materialized from the validated base or HEAD."
+              echo "::error::Current npm lock ${relative_lock} lacks an exact validated base-or-HEAD materialization receipt."
               return 1
             fi
           }'''
@@ -165,8 +203,13 @@ def patch_workflow(text: str) -> str:
             local selected_package_dir="${2:-$PWD}"
             case "$package_runner" in
               npm)
+                local selected_package_root
                 local npm_install_root
-                if ! npm_install_root="$(resolve_npm_install_root "$selected_package_dir")"; then
+                local npm_workspace_selector=""
+                local npm_workspace_args=()
+
+                if ! selected_package_root="$(resolve_npm_package_root "$selected_package_dir")" ||
+                  ! npm_install_root="$(resolve_npm_install_root "$selected_package_root")"; then
                   append "### JavaScript/TypeScript dependencies (npm)"
                   append ""
                   append "- Result: FAIL"
@@ -179,14 +222,44 @@ def patch_workflow(text: str) -> str:
                   append "### JavaScript/TypeScript dependencies (npm)"
                   append ""
                   append "- Result: FAIL"
-                  append "- Reason: the resolved npm lock is not hash-bounded to the validated base or HEAD, or the trusted npm cache is unavailable."
+                  append "- Reason: the resolved npm lock lacks an exact validated base-or-HEAD receipt, or the trusted npm cache is unavailable."
                   append ""
                   failures=$((failures + 1))
                   return 0
                 fi
+
+                case "$selected_package_root" in
+                  "$npm_install_root")
+                    ;;
+                  "$npm_install_root"/*)
+                    npm_workspace_selector="${selected_package_root#"$npm_install_root"/}"
+                    case "$npm_workspace_selector" in
+                      "" | /* | ../* | */../* | */.. | *\\* | *$'\n'* | *$'\r'*)
+                        append "### JavaScript/TypeScript dependencies (npm)"
+                        append ""
+                        append "- Result: FAIL"
+                        append "- Reason: the selected npm workspace path is not a safe lock-root-relative selector."
+                        append ""
+                        failures=$((failures + 1))
+                        return 0
+                        ;;
+                    esac
+                    npm_workspace_args=(--workspace "$npm_workspace_selector")
+                    ;;
+                  *)
+                    append "### JavaScript/TypeScript dependencies (npm)"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: the selected npm package is outside its validated lock owner."
+                    append ""
+                    failures=$((failures + 1))
+                    return 0
+                    ;;
+                esac
+
                 run_and_capture "JavaScript/TypeScript dependencies (npm workspace-root offline ci, lifecycle hooks disabled)" \
-                  bash -c 'cd "$1" && npm ci --offline --ignore-scripts --cache "$2" --no-audit --no-fund' \
-                  bash "$npm_install_root" "$writable_npm_cache_dir"
+                  bash -c 'cd "$1" && cache="$2" && shift 2 && npm ci --offline --ignore-scripts --cache "$cache" --no-audit --no-fund "$@"' \
+                  bash "$npm_install_root" "$writable_npm_cache_dir" "${npm_workspace_args[@]}"
                 ;;
               pnpm)'''
     text = regex_once(
@@ -214,7 +287,8 @@ def patch_workflow(text: str) -> str:
         text,
         "              ContextualWisdomLab/.github:tests/test_materialize_base_javascript_packages.py | \\\n",
         "              ContextualWisdomLab/.github:tests/test_materialize_base_javascript_packages.py | \\\n"
-        "              ContextualWisdomLab/.github:tests/test_npm_workspace_install_root.py | \\\n",
+        "              ContextualWisdomLab/.github:tests/test_npm_workspace_install_root.py | \\\n"
+        "              ContextualWisdomLab/.github:tests/test_npm_workspace_install_root_hardening.py | \\\n",
         "resolver test fallback allowlist",
     )
     return text
@@ -226,6 +300,7 @@ def patch_contract(text: str) -> str:
         text,
         '    assert "trusted_npm_lock_is_materialized()" in measure_step\n',
         '    assert "trusted_npm_lock_is_materialized()" in measure_step\n'
+        '    assert "resolve_npm_package_root()" in measure_step\n'
         '    assert "resolve_npm_install_root()" in measure_step\n'
         '    assert \'python3 -I "$GITHUB_WORKSPACE/scripts/ci/npm_workspace_install_root.py"\' in measure_step\n'
         '    assert \'--base-sha "$PR_BASE_SHA"\' in measure_step\n'
@@ -249,7 +324,7 @@ def patch_contract(text: str) -> str:
     text = replace_once(
         text,
         '        "the current npm lock is not hash-bounded to the validated base or HEAD, "\n',
-        '        "the resolved npm lock is not hash-bounded to the validated base or HEAD, "\n',
+        '        "the resolved npm lock lacks an exact validated base-or-HEAD receipt, "\n',
         "npm trust diagnostic",
     )
     text = replace_once(
@@ -261,10 +336,12 @@ def patch_contract(text: str) -> str:
         "resolver failure diagnostic",
     )
     anchor = '    assert "return 1" not in npm_install_case\n'
-    addition = anchor + """    assert "bash -c 'cd \"$1\" && npm ci --offline --ignore-scripts" in npm_install_case
-    assert 'bash "$npm_install_root" "$writable_npm_cache_dir"' in npm_install_case
+    addition = anchor + """    assert 'npm_workspace_args=(--workspace "$npm_workspace_selector")' in npm_install_case
+    assert 'npm ci --offline --ignore-scripts' in npm_install_case
+    assert 'bash "$npm_install_root" "$writable_npm_cache_dir" "${npm_workspace_args[@]}"' in npm_install_case
     assert 'ContextualWisdomLab/.github:scripts/ci/npm_workspace_install_root.py' in workflow
     assert 'ContextualWisdomLab/.github:tests/test_npm_workspace_install_root.py' in workflow
+    assert 'ContextualWisdomLab/.github:tests/test_npm_workspace_install_root_hardening.py' in workflow
 """
     text = replace_once(
         text,
@@ -283,6 +360,7 @@ def main() -> None:
     CONTRACT.write_text(contract, encoding="utf-8")
     SELF.unlink()
     SELF_WORKFLOW.unlink()
+    FOCUSED_WORKFLOW.unlink()
 
 
 if __name__ == "__main__":
