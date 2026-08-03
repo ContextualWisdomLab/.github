@@ -26,6 +26,10 @@ classify_control_rejection() {
 		LAST_CONTROL_REJECTION_KIND="probe-source-line-receipt-invalid"
 	elif grep -Fq "approval does not prove 100% coverage or an explicit no-source exception" "$diagnostics_file"; then
 		LAST_CONTROL_REJECTION_KIND="approval-coverage-proof-missing"
+	elif grep -Fq "approval does not cite changed-file evidence" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="approval-changed-file-evidence-missing"
+	elif grep -Fq "approval does not include the required verification posture" "$diagnostics_file"; then
+		LAST_CONTROL_REJECTION_KIND="approval-verification-posture-missing"
 	elif grep -Fq "adversarial_validation" "$diagnostics_file"; then
 		LAST_CONTROL_REJECTION_KIND="adversarial-validation-contract"
 	fi
@@ -275,6 +279,8 @@ write_schema_repair_prompt() {
 		printf -- '- Choose exactly APPROVE or REQUEST_CHANGES, with a non-empty reason, summary, and residual_risk.\n'
 		printf -- '- Include "adversarial_validation" as an object with at least the required probe count. Copy each path, line, and source-line-sha256 receipt exactly from trusted bounded evidence.\n'
 		printf -- '- For every probe, repeat its exact `path:line` inside evidence; name a concrete test, assertion, check, log, source trace, diff, or CodeGraph path; state the observed passed, failed, rejected, returned, showed, or exit-code result; include exactly one matching source-line-sha256 receipt.\n'
+		printf -- '- In an APPROVE reason or summary, name at least one exact current-head changed-file path copied from trusted bounded evidence.\n'
+		printf -- '- In an APPROVE reason or summary, include `CodeGraph` and every required verification-posture label exactly: `Approval sufficiency:`, `Verification posture:`, `Linter/static:`, `TDD/regression:`, `Coverage:`, `Docstring coverage:`, `DAG:`, `PoC/execution:`, `DDD/domain:`, `CDD/context:`, `Similar issues:`, `Claim/concept check:`, `Standards search:`, `Compatibility/convention:`, `Breaking-change/backcompat:`, `Performance:`, `Developer experience:`, `User experience:`, `Visual/DOM:`, `Accessibility/i18n:`, `Supply-chain/license:`, `Packaging:`, and `Security/privacy:`. State the evidence-backed outcome for each; do not fabricate unavailable evidence.\n'
 		printf -- '- In an APPROVE summary, include both `Coverage:` and `Docstring coverage:` and cite the exact trusted Coverage execution evidence that supported repository test suites passed and configured docstring gates passed or were advisory, or the exact explicit no-source exception.\n'
 		printf -- '- APPROVE requires status=passed, every probe outcome=falsified, and findings=[].\n'
 		printf -- '- REQUEST_CHANGES requires status=failed, at least one outcome=confirmed, and a non-empty source-backed finding at the same path and line.\n'

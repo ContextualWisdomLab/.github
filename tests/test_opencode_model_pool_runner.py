@@ -1006,6 +1006,9 @@ def test_free_provider_gets_one_bounded_schema_repair_attempt(
     assert "exactly one `<!-- opencode-review-control-v1` block" in repair_prompt
     assert "repeat its exact `path:line` inside evidence" in repair_prompt
     assert "state the observed passed, failed, rejected" in repair_prompt
+    assert "name at least one exact current-head changed-file path" in repair_prompt
+    assert "every required verification-posture label exactly" in repair_prompt
+    assert "`Security/privacy:`" in repair_prompt
     assert "include both `Coverage:` and `Docstring coverage:`" in repair_prompt
 
 
@@ -1031,6 +1034,14 @@ def test_free_provider_gets_one_bounded_schema_repair_attempt(
         (
             "approval does not prove 100% coverage or an explicit no-source exception",
             "approval-coverage-proof-missing",
+        ),
+        (
+            "approval does not cite changed-file evidence",
+            "approval-changed-file-evidence-missing",
+        ),
+        (
+            "approval does not include the required verification posture",
+            "approval-verification-posture-missing",
         ),
     ],
 )
