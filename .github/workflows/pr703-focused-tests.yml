@@ -8,13 +8,20 @@ on:
       - tests/test_npm_workspace_install_root.py
       - tests/test_npm_workspace_install_root_hardening.py
       - .github/workflows/pr703-focused-tests.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/ci/npm_workspace_install_root.py
+      - tests/test_npm_workspace_install_root.py
+      - tests/test_npm_workspace_install_root_hardening.py
+      - .github/workflows/pr703-focused-tests.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr703-focused-resolver-${{ github.ref }}
+  group: pr703-focused-resolver-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
