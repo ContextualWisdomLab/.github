@@ -431,6 +431,7 @@ def test_reachable_index_missing_pinned_version_is_visible_and_nonfatal(
 
     assert result == 0
     assert "candidates=1 installed=0 skipped=1" in stdout.getvalue()
+    assert "Could not find a version that satisfies the requirement" in stderr.getvalue()
 
 
 def test_unreachable_index_from_versions_none_stays_fatal(tmp_path) -> None:
