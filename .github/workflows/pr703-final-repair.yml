@@ -9,7 +9,7 @@ on:
       - scripts/ci/bootstrap_pr703_final_repair.py
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: pr703-final-repair
@@ -19,7 +19,6 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
-      && github.actor != 'github-actions[bot]'
       && github.ref_name == 'fix/npm-workspace-coverage-root'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -29,12 +28,12 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout exact triggering commit
+      - name: Checkout exact triggering commit without credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Install hash-pinned contract tools
         run: >-
@@ -44,7 +43,7 @@ jobs:
           --only-binary=:all:
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Apply reviewed final repair
+      - name: Apply reviewed final repair in the ephemeral worktree
         shell: bash
         run: |
           set -euo pipefail
@@ -113,17 +112,21 @@ jobs:
           test ! -e scripts/ci/bootstrap_patch_workflow.py
           test ! -e scripts/ci/bootstrap_pr703_final_repair.py
 
-      - name: Commit verified final diff
+      - name: Package verified canonical files
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          if git diff --cached --quiet; then
-            echo "No verified repair changes to commit."
-            exit 0
-          fi
-          git commit -m 'fix(coverage): wire validated npm workspace lock owner'
-          git push origin HEAD:fix/npm-workspace-coverage-root
+          tar -czf "$RUNNER_TEMP/pr703-final-state.tar.gz" \
+            .github/workflows/opencode-review-dispatch.yml \
+            scripts/ci/npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py \
+            tests/test_opencode_agent_contract.py
+
+      - name: Upload verified final state
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr703-final-state-${{ github.sha }}
+          path: ${{ runner.temp }}/pr703-final-state.tar.gz
+          if-no-files-found: error
+          retention-days: 1
