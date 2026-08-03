@@ -48,15 +48,17 @@ Naruon is the product experiment that starts in email. An inbox is not just a me
 
 ## Public Projects
 
-These repositories are public product and tool repositories that are not forks.
+These repositories are public product and tool repositories that are not forks. Each project is intended to remain useful on its own, while reusable engines keep stable module boundaries for integration into larger Contextual Wisdom Lab systems.
 
 - **[naruon](https://github.com/ContextualWisdomLab/naruon)**: 메일, 첨부, 일정, 작업을 맥락으로 묶어 판단과 실행으로 연결하는 AI 이메일 워크스페이스입니다.
+- **[appguardrail](https://github.com/ContextualWisdomLab/appguardrail)**: AI로 개발되는 애플리케이션의 취약점 탐지, 증거 보존, 수정 검증을 연결하는 보안 가드레일입니다.
+- **[RankWeave](https://github.com/ContextualWisdomLab/RankWeave)**: lexical, dense, learned-sparse 등 여러 검색 채널의 점수와 순위를 저장소 독립적으로 결합하는 하이브리드 검색 융합 엔진입니다.
+- **[fast-mlsirm](https://github.com/ContextualWisdomLab/fast-mlsirm)**: 다차원 잠재공간 문항반응모형의 시뮬레이션, 추정, 모형 진단과 평가를 위한 고성능 도구 모음입니다.
 - **[pg-erd-cloud](https://github.com/ContextualWisdomLab/pg-erd-cloud)**: PostgreSQL 스키마를 리버스 엔지니어링하고 ERD와 DDL 공유 흐름으로 관리하는 클라우드 MVP입니다.
 - **[bandscope](https://github.com/ContextualWisdomLab/bandscope)**: 곡을 섹션, 역할, 템포, 연습 우선순위로 분석하는 로컬 우선 리허설 앱입니다.
 - **[codec-carver](https://github.com/ContextualWisdomLab/codec-carver)**: 긴 녹음을 메타데이터를 보존한 FLAC/Opus 조각으로 변환하는 Python CLI입니다.
 - **[newsdom-api](https://github.com/ContextualWisdomLab/newsdom-api)**: 스캔된 일본어 신문 PDF를 기사, 제목, 본문, 이미지 구조의 DOM형 JSON으로 파싱하는 API입니다.
 - **[scopeweave](https://github.com/ContextualWisdomLab/scopeweave)**: 트리 편집, 진행률 계산, CSV/JSON, 주간 Gantt를 지원하는 정적 HTML/CSS/JS WBS 플래너입니다.
-- **[VibeSec](https://github.com/ContextualWisdomLab/VibeSec)**: 바이브코딩 앱을 위한 보안 가드레일입니다. AI 개발 도구 규칙, 정적 점검, 리뷰와 수정 프롬프트를 다룹니다.
 
 ## Forked Projects
 
