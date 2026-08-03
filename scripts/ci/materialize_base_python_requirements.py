@@ -8,8 +8,10 @@ import fnmatch
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -26,6 +28,8 @@ RESOLVER_ONLY_OPTION_PREFIXES = (
     "--no-binary ",
     "--no-binary=",
 )
+
+UV_EXPORT_TIMEOUT_SECONDS = 120
 
 
 def _is_candidate_lock_name(name: str) -> bool:
@@ -120,6 +124,84 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     return completed.stdout
 
 
+def _run_uv_export(
+    work_dir: pathlib.Path,
+    uv_path: str,
+    *,
+    timeout: float = UV_EXPORT_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run ``uv export`` for a reconstructed base project and return the result.
+
+    ``--frozen`` forbids lock mutation and ``--offline`` forbids network access,
+    so the export is a pure function of the already-trusted base ``uv.lock`` and
+    ``pyproject.toml``; ``--no-emit-project``/``--no-editable`` drop the project
+    itself (installed via ``PYTHONPATH`` in the sandbox) and keep only its
+    hash-pinned dependency closure.
+    """
+    return subprocess.run(
+        [
+            uv_path,
+            "export",
+            "--frozen",
+            "--offline",
+            "--no-emit-project",
+            "--no-editable",
+            "--format",
+            "requirements-txt",
+        ],
+        cwd=str(work_dir),
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+
+
+def _export_uv_lock(
+    repo_root: pathlib.Path, base_sha: str, lock_path: str
+) -> bytes | None:
+    """Export a base ``uv.lock`` to a hash-pinned requirements closure, or ``None``.
+
+    ``uv.lock`` is not a pip-installable format, so a uv-managed repository
+    materializes no dependencies and its offline coverage run fails at import.
+    When ``uv`` is available, reconstruct the exact base ``uv.lock`` and its
+    sibling ``pyproject.toml`` in an isolated temporary directory and run
+    ``uv export --frozen`` to produce a fully hash-pinned closure the trusted
+    installer can consume like any other lock. Both inputs are read only from
+    the validated base commit, so no PR-mutable content reaches ``uv``. Return
+    ``None`` — degrading to the prior no-uv behavior — when ``uv`` is absent,
+    the sibling ``pyproject.toml`` is missing at the base commit, the export
+    fails, or its output is not fully hash-pinned, so this can never break an
+    otherwise-working build.
+    """
+    uv_path = shutil.which("uv")
+    if uv_path is None:
+        return None
+    project_dir = pathlib.PurePosixPath(lock_path).parent
+    pyproject_path = (
+        "pyproject.toml"
+        if str(project_dir) == "."
+        else f"{project_dir}/pyproject.toml"
+    )
+    try:
+        lock_content = _git(repo_root, "show", f"{base_sha}:{lock_path}")
+        pyproject_content = _git(repo_root, "show", f"{base_sha}:{pyproject_path}")
+    except RuntimeError:
+        return None
+    with tempfile.TemporaryDirectory() as work_dir:
+        work_path = pathlib.Path(work_dir)
+        (work_path / "uv.lock").write_bytes(lock_content)
+        (work_path / "pyproject.toml").write_bytes(pyproject_content)
+        try:
+            completed = _run_uv_export(work_path, uv_path)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    if completed.returncode != 0:
+        return None
+    exported = completed.stdout
+    return exported if _is_hash_pinned(exported) else None
+
+
 def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
     """Return regular hash-lock blobs from the exact validated base commit."""
     if not SHA_RE.fullmatch(base_sha):
@@ -146,13 +228,17 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
             or not mode.startswith("100")
             or candidate.is_absolute()
             or ".." in candidate.parts
-            or not _is_candidate_lock_path(candidate)
+            or not (_is_candidate_lock_path(candidate) or candidate.name == "uv.lock")
         ):
             continue
-        content = _git(repo_root, "show", f"{base_sha}:{path}")
-        if not _is_hash_pinned(content):
-            continue
-        locks.append((path, content))
+        if _is_candidate_lock_path(candidate):
+            content = _git(repo_root, "show", f"{base_sha}:{path}")
+            if _is_hash_pinned(content):
+                locks.append((path, content))
+        elif candidate.name == "uv.lock":
+            exported = _export_uv_lock(repo_root, base_sha, path)
+            if exported is not None:
+                locks.append((path, exported))
     return sorted(locks, key=lambda item: item[0])
 
 

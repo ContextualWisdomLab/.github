@@ -370,3 +370,170 @@ def test_script_entrypoint_exits_through_main(
         runpy.run_path(str(module_path), run_name="__main__")
 
     assert raised.value.code == 1
+
+
+def test_skips_non_blob_tree_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Submodule/gitlink (non-blob) tree entries are skipped, never materialized."""
+    blob = b"pinned==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    tree = (
+        b"160000 commit " + b"0" * 40 + b"\tvendored-submodule\0"
+        b"100644 blob " + b"1" * 40 + b"\trequirements.txt\0"
+    )
+
+    def fake_git(_repo_root: Path, *args: str) -> bytes:
+        if args[0] == "ls-tree":
+            return tree
+        if args[0] == "show":
+            return blob
+        raise AssertionError(args)
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+
+    assert materializer.base_hash_locks(tmp_path, "a" * 40) == [
+        ("requirements.txt", blob)
+    ]
+
+
+def _uv_repo(tmp_path: Path, *, with_pyproject: bool, lock_dir: str = "") -> tuple[Path, str]:
+    """Init a fixture repo with a uv.lock (and optional pyproject.toml) at lock_dir."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    base = repo / lock_dir if lock_dir else repo
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    if with_pyproject:
+        (base / "pyproject.toml").write_text(
+            "[project]\nname = 'demo'\nversion = '0'\n", encoding="utf-8"
+        )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    return repo, git(repo, "rev-parse", "HEAD")
+
+
+def _export(returncode: int, stdout: bytes) -> subprocess.CompletedProcess[bytes]:
+    """Build a fake ``uv export`` completed-process result."""
+    return subprocess.CompletedProcess(["uv", "export"], returncode, stdout, b"")
+
+
+def test_uv_lock_is_exported_to_a_hash_pinned_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A base uv.lock is exported via uv into a materialized hash-pinned closure."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    monkeypatch.setattr(materializer.shutil, "which", lambda _name: "/usr/bin/uv")
+    hashed = b"demo-dep==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    monkeypatch.setattr(
+        materializer,
+        "_run_uv_export",
+        lambda _work, _uv_path: _export(0, hashed),
+    )
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert manifest == [{"file": "requirements-000.txt", "source": "uv.lock"}]
+    assert (output / "requirements-000.txt").read_bytes() == hashed
+
+
+def test_uv_lock_skipped_when_uv_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the uv exporter, a uv.lock-only repo materializes nothing (no regression)."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    monkeypatch.setattr(materializer.shutil, "which", lambda _name: None)
+
+    assert materializer.materialize(repo, base_sha, tmp_path / "output") == []
+
+
+def test_uv_lock_skipped_when_pyproject_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A uv.lock without a sibling pyproject.toml at base (in a subdir) cannot be exported."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=False, lock_dir="service")
+    monkeypatch.setattr(materializer.shutil, "which", lambda _name: "/usr/bin/uv")
+
+    assert materializer.materialize(repo, base_sha, tmp_path / "output") == []
+
+
+def test_uv_lock_skipped_when_export_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-zero uv export (e.g. a stale lock) is skipped, never materialized."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    monkeypatch.setattr(materializer.shutil, "which", lambda _name: "/usr/bin/uv")
+    monkeypatch.setattr(
+        materializer,
+        "_run_uv_export",
+        lambda _work, _uv_path: _export(1, b""),
+    )
+
+    assert materializer.materialize(repo, base_sha, tmp_path / "output") == []
+
+
+def test_uv_lock_skipped_when_export_is_not_hash_pinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A uv export that somehow lacks hashes is rejected by the hash-pin guard."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    monkeypatch.setattr(materializer.shutil, "which", lambda _name: "/usr/bin/uv")
+    monkeypatch.setattr(
+        materializer,
+        "_run_uv_export",
+        lambda _work, _uv_path: _export(0, b"unpinned==1\n"),
+    )
+
+    assert materializer.materialize(repo, base_sha, tmp_path / "output") == []
+
+
+def test_run_uv_export_invokes_uv_with_frozen_offline_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The uv export helper runs uv with frozen, project-excluding, offline flags."""
+    captured: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        captured["argv"] = argv
+        captured["cwd"] = kwargs.get("cwd")
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(argv, 0, b"out", b"")
+
+    monkeypatch.setattr(materializer.subprocess, "run", fake_run)
+
+    result = materializer._run_uv_export(tmp_path, "/usr/bin/uv")
+
+    assert result.stdout == b"out"
+    assert captured["argv"][:3] == ["/usr/bin/uv", "export", "--frozen"]
+    assert "--offline" in captured["argv"]
+    assert "--no-emit-project" in captured["argv"]
+    assert "--no-editable" in captured["argv"]
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["timeout"] == materializer.UV_EXPORT_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    "export_error",
+    [
+        FileNotFoundError("uv disappeared"),
+        subprocess.TimeoutExpired(["/usr/bin/uv", "export"], timeout=120),
+    ],
+)
+def test_uv_export_process_failures_fall_back_to_no_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    export_error: OSError | subprocess.TimeoutExpired,
+) -> None:
+    """A missing or hung uv process preserves the documented best-effort fallback."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    monkeypatch.setattr(materializer.shutil, "which", lambda _name: "/usr/bin/uv")
+
+    def fail_export(_work: Path, _uv_path: str) -> None:
+        raise export_error
+
+    monkeypatch.setattr(materializer, "_run_uv_export", fail_export)
+
+    assert materializer.materialize(repo, base_sha, tmp_path / "output") == []
