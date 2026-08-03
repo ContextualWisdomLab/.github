@@ -247,7 +247,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         target = args[2]
         if target.endswith("/files"):
             return "src/a.py\nREADME.md\nempty.txt\n"
-        if "contents/src%2Fa.py" in target or "contents/src/a.py" in target:
+        if "contents/src/a.py" in target:
             return encoded
         if "contents/README.md" in target:
             raise RuntimeError("Command failed: token secret")
@@ -308,10 +308,51 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
 
     assert "1 changed files omitted from context budget" in context
 
+
     paths = ["src/file_only.py"]
     monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
     context = noema.changed_file_context("owner/repo", 7, "head")
     assert "src/file_only.py" in context
+
+
+def test_changed_file_context_concurrency_and_ordering(monkeypatch):
+    import time
+
+    paths = ["src/a.py", "src/b.py", "src/c.py", "src/empty.txt"]
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
+
+    completion_order = []
+
+    def fake_fetch_head_file_content(repo, path, head_sha):
+        if path == "src/a.py":
+            completion_order.append(path)
+            raise RuntimeError("API error")
+        elif path == "src/b.py":
+            time.sleep(0.1)
+            completion_order.append(path)
+            return "b content"
+        elif path == "src/c.py":
+            completion_order.append(path)
+            return "c content"
+        elif path == "src/empty.txt":
+            completion_order.append(path)
+            return ""
+        return "content"
+
+    monkeypatch.setattr(noema, "fetch_head_file_content", fake_fetch_head_file_content)
+
+    context = noema.changed_file_context("owner/repo", 7, "head")
+
+    assert "### src/a.py\nUnavailable from head content API: API error" in context
+    assert "### src/b.py\nb content" in context
+    assert "### src/c.py\nc content" in context
+    assert "### src/empty.txt\nNo UTF-8 text content available" in context
+
+    pos_a = context.find("### src/a.py")
+    pos_b = context.find("### src/b.py")
+    pos_c = context.find("### src/c.py")
+
+    assert pos_a < pos_b < pos_c, "Output order does not match input order"
 
 
 class FakeResponse:
@@ -560,51 +601,3 @@ def test_parse_args_and_main(monkeypatch):
 
     with pytest.raises(SystemExit, match="--pr-number must be positive"):
         noema.main(["--repo", "owner/repo", "--pr-number", "0"])
-
-def test_changed_file_context_concurrency_and_ordering(monkeypatch):
-    import time
-
-    # We want to test that fetch_head_file_content is called concurrently
-    # and that the output order matches the input order, even if completion order differs.
-
-    paths = ["src/a.py", "src/b.py", "src/c.py"]
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
-
-    # Track completion order
-    completion_order = []
-
-    def fake_fetch_head_file_content(repo, path, head_sha):
-        # b.py is slow, c.py is fast, a.py is an error, empty.txt is empty
-        if path == "src/a.py":
-            completion_order.append(path)
-            raise RuntimeError("API error")
-        elif path == "src/b.py":
-            time.sleep(0.1)
-            completion_order.append(path)
-            return "b content"
-        elif path == "src/c.py":
-            completion_order.append(path)
-            return "c content"
-        elif path == "src/empty.txt":
-            completion_order.append(path)
-            return ""
-        return "content"
-
-    monkeypatch.setattr(noema, "fetch_head_file_content", fake_fetch_head_file_content)
-
-    context = noema.changed_file_context("owner/repo", 7, "head")
-
-    # Order should be a, b, c in the text
-    assert "### src/a.py\nUnavailable from head content API: API error" in context
-    assert "### src/b.py\nb content" in context
-    assert "### src/c.py\nc content" in context
-
-    # Ensure they are in the correct order in the final output string
-    pos_a = context.find("### src/a.py")
-    pos_b = context.find("### src/b.py")
-    pos_c = context.find("### src/c.py")
-
-    assert pos_a < pos_b < pos_c, "Output order does not match input order"
-
-    # Completion order might not be strictly deterministic without larger sleeps,
-    # but concurrent execution ensures it doesn't block entirely sequentially.
