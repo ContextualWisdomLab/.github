@@ -67,6 +67,22 @@ def patch_generated_contract(text: str) -> str:
     )
     text = replace_once(
         text,
+        """    npm_install_case = (
+        measure_step.split("install_package_dependencies() {", 1)[1]
+        .split("npm)", 1)[1]
+        .split(";;", 1)[0]
+    )
+""",
+        """    npm_install_case = (
+        measure_step.split("install_package_dependencies() {", 1)[1]
+        .split("npm)", 1)[1]
+        .split("\n              pnpm)", 1)[0]
+    )
+""",
+        "complete nested npm case extraction",
+    )
+    text = replace_once(
+        text,
         """    assert 'bash "$npm_install_root" "$writable_npm_cache_dir" "${npm_workspace_args[@]}"' in npm_install_case
 """,
         """    assert 'bash "$npm_install_root"' in npm_install_case
