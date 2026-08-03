@@ -1,0 +1,93 @@
+name: PR 558 Active Status Repair v2
+
+on:
+  push:
+    branches:
+      - fix/opencode-merge-method-concurrency-20260714
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr558-active-status-repair-v2
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: >-
+      github.actor != 'github-actions[bot]'
+      && (
+        github.event_name == 'push'
+        || github.event.pull_request.head.ref == 'fix/opencode-merge-method-concurrency-20260714'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/opencode-merge-method-concurrency-20260714
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply bounded REST status repair
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          scheduler = Path("scripts/ci/pr_review_merge_scheduler.py")
+          source = scheduler.read_text(encoding="utf-8")
+          old = '''ACTIVE_WORKFLOW_RUN_STATUSES = (
+              "queued",
+              "in_progress",
+              "pending",
+              "waiting",
+              "requested",
+          )'''
+          new = '''ACTIVE_WORKFLOW_RUN_STATUSES = (
+              "queued",
+              "in_progress",
+              "waiting",
+          )'''
+          if new not in source:
+              if source.count(old) != 1:
+                  raise SystemExit("expected active-workflow status tuple was not found")
+              source = source.replace(old, new, 1)
+              scheduler.write_text(source, encoding="utf-8")
+
+          tests = Path("tests/test_pr_review_merge_scheduler.py")
+          test_source = tests.read_text(encoding="utf-8")
+          marker = "def test_active_workflow_run_statuses_are_api_valid()"
+          if marker not in test_source:
+              test_source += '''\n\ndef test_active_workflow_run_statuses_are_api_valid():\n    assert sched.ACTIVE_WORKFLOW_RUN_STATUSES == (\n        "queued",\n        "in_progress",\n        "waiting",\n    )\n    assert not ({"pending", "requested"} & set(sched.ACTIVE_WORKFLOW_RUN_STATUSES))\n'''
+              tests.write_text(test_source, encoding="utf-8")
+          PY
+          rm -f .github/workflows/pr558-active-status-repair-v2.yml
+
+      - name: Validate focused scheduler contracts
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q tests/test_pr_review_merge_scheduler.py
+          python3 scripts/ci/pr_review_merge_scheduler.py --self-test
+          git diff --check
+          test ! -e .github/workflows/pr558-active-status-repair-v2.yml
+
+      - name: Commit verified repair
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(scheduler): restrict active workflow status filters"
+          git push origin HEAD:fix/opencode-merge-method-concurrency-20260714
