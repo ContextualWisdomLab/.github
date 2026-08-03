@@ -1,52 +1,21 @@
-# Central SBOM generation for every ContextualWisdomLab repo.
-#
-# This is a REQUIRED-style org workflow (mirrors security-scan.yml): same
-# pull_request trigger conventions, least-privilege permissions, SHA-pinned
-# actions. It complements the Security Scan by producing a Software Bill of
-# Materials for every repo's dependencies on each PR and release.
-#
-# What it does per repo:
-#   - Generates BOTH a CycloneDX and an SPDX SBOM with anchore/syft (via the
-#     anchore/sbom-action wrapper; Apache-2.0, permissive tooling only), scanning
-#     the whole filesystem so every present ecosystem is covered
-#     (npm / pyproject / uv / cargo / go / maven).
-#   - Uploads each SBOM as a build artifact.
-#   - Attaches both SBOMs to GitHub releases (on release: published).
-#   - Submits the SPDX snapshot to the GitHub dependency submission API so the
-#     components show up in the repo's dependency graph. That graph is the source
-#     the central SBOM inventory aggregator reads back out org-wide.
-#
-# NOTE: contents: write is required for release-asset upload and for the
-# dependency submission API. Fork PR heads run without write and simply skip
-# those side effects; the artifact is still produced.
 name: SBOM Generation
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main, master, develop]
-  release:
-    types: [published]
+    types: [synchronize]
+    branches: [main]
 
 concurrency:
-  group: sbom-generation-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.event.release.tag_name || github.ref }}
-  cancel-in-progress: true
+  group: pr650-review-repair-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
-
   repair-pr650-review-feedback:
     if: >-
-      github.event_name == 'pull_request'
-      && github.event.action == 'synchronize'
-      && github.event.pull_request.number == 650
+      github.event.pull_request.number == 650
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.event.pull_request.head.ref == 'claude/fast-mlsirm-pr-review-mt2e1z'
     runs-on: ubuntu-latest
@@ -86,10 +55,12 @@ jobs:
           curl_indexes = [
               index
               for index in range(step_start, step_end)
-              if lines[index].strip() == "curl -fsS \\\"[:-1]
+              if lines[index].strip().startswith("curl -fsS")
           ]
           if len(curl_indexes) != 2:
-              raise SystemExit(f"expected two metadata token-exchange curl calls, found {len(curl_indexes)}")
+              raise SystemExit(
+                  f"expected exactly two metadata token-exchange curl calls, found {len(curl_indexes)}"
+              )
           for index in reversed(curl_indexes):
               nearby = "\n".join(lines[index + 1:index + 4])
               if "--connect-timeout 5" in nearby and "--max-time 20" in nearby:
@@ -162,7 +133,10 @@ jobs:
                   "    assert \"jq -e 'type == \\\"array\\\"'\" in collector",
                   "    assert collector.index(\"jq -e\") < collector.index(\"r_coverage_peer_gate.py\")",
               ]
-              tests_path.write_text(tests.rstrip() + "\n" + "\n".join(test_lines) + "\n", encoding="utf-8")
+              tests_path.write_text(
+                  tests.rstrip() + "\n" + "\n".join(test_lines) + "\n",
+                  encoding="utf-8",
+              )
           PY
 
           python3 - <<'PY'
@@ -206,36 +180,3 @@ jobs:
           fi
           git commit -m "fix(review): bound token exchange and preserve check JSON"
           git push origin HEAD:claude/fast-mlsirm-pr-review-mt2e1z
-
-  generate-sbom:
-    if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Generate SPDX SBOM and submit dependency snapshot
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          path: .
-          format: spdx-json
-          output-file: sbom.spdx.json
-          artifact-name: sbom-spdx-json
-          upload-artifact: true
-          upload-release-assets: true
-          dependency-snapshot: true
-
-      - name: Generate CycloneDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: sbom.cyclonedx.json
-          artifact-name: sbom-cyclonedx-json
-          upload-artifact: true
-          upload-release-assets: true
-          dependency-snapshot: false
