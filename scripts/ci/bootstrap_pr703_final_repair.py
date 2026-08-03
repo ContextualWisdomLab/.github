@@ -69,7 +69,7 @@ def patch_generated_contract(text: str) -> str:
         text,
         """    assert 'bash "$npm_install_root" "$writable_npm_cache_dir" "${npm_workspace_args[@]}"' in npm_install_case
 """,
-        """    assert 'bash "$npm_install_root" \\' in npm_install_case
+        """    assert 'bash "$npm_install_root"' in npm_install_case
     assert '--cache "$writable_npm_cache_dir"' in npm_install_case
     assert '"${npm_workspace_args[@]}"' in npm_install_case
 """,
