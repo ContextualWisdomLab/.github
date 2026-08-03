@@ -2,6 +2,7 @@ name: PR 709 Commercial Readiness Hardening v2
 
 # One-shot repair. It shares the original repair's concurrency group so an
 # in-flight narrow repair completes before this idempotent superset runs.
+# Retriggered after current security review findings.
 on:
   push:
     branches:
