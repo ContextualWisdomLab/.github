@@ -91,3 +91,5 @@ jobs:
           git diff --cached --check
           git commit -m "fix(scheduler): restrict active workflow status filters"
           git push origin HEAD:fix/opencode-merge-method-concurrency-20260714
+
+# Trigger the bounded self-removing repair on the exact branch head.
