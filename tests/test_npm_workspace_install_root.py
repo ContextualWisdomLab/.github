@@ -94,13 +94,13 @@ def test_supports_object_valued_workspace_packages(tmp_path: Path) -> None:
 
 def test_prefers_the_nearest_package_local_lock(tmp_path: Path) -> None:
     """A package-local lock takes precedence over an ancestor workspace lock."""
-    desktop, _base = _workspace(tmp_path)
+    desktop, base = _workspace(tmp_path)
     _write_json(
         desktop / "package-lock.json",
         {"name": "desktop", "lockfileVersion": 3, "packages": {"": {}}},
     )
     head = _commit(tmp_path, "local lock")
-    assert _resolve(tmp_path, desktop, head) == "apps/desktop"
+    assert _resolve(tmp_path, desktop, base, head) == "apps/desktop"
 
 
 def test_skips_non_owner_intermediate_lock_and_checks_full_ancestry(
@@ -131,7 +131,22 @@ def test_rejects_package_missing_from_lock_map(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "pattern",
-    ["", 42, "!apps/*", "apps\\*", "/apps/*", "../apps/*", "node_modules/*", "apps/\x00*"],
+    [
+        "",
+        42,
+        "!apps/*",
+        "apps\\*",
+        "/apps/*",
+        "../apps/*",
+        "node_modules/*",
+        "apps/\x00*",
+        "apps/**desktop",
+        "apps/***",
+        "apps/{desktop,web}",
+        "apps/(desktop|web)",
+        "apps/[desktop",
+        "apps/desktop]",
+    ],
 )
 def test_rejects_unsafe_workspace_patterns(tmp_path: Path, pattern: object) -> None:
     """Workspace patterns are constrained to safe relative path globs."""
@@ -147,12 +162,12 @@ def test_rejects_unsafe_workspace_patterns(tmp_path: Path, pattern: object) -> N
 def test_rejects_invalid_workspace_manifest(
     tmp_path: Path, content: str, match: str
 ) -> None:
-    """Workspace ownership cannot be derived from malformed base JSON."""
-    desktop, _base = _workspace(tmp_path)
+    """Workspace ownership cannot be derived from malformed head JSON."""
+    desktop, base = _workspace(tmp_path)
     (tmp_path / "package.json").write_text(content, encoding="utf-8")
-    revision = _commit(tmp_path, "bad manifest")
+    head = _commit(tmp_path, "bad manifest")
     with pytest.raises(ResolutionError, match=match):
-        _resolve(tmp_path, desktop, revision)
+        _resolve(tmp_path, desktop, base, head)
 
 
 @pytest.mark.parametrize(
@@ -169,11 +184,11 @@ def test_rejects_invalid_lock_metadata(
     tmp_path: Path, payload: str, match: str
 ) -> None:
     """Malformed lock metadata cannot establish npm ownership."""
-    desktop, _base = _workspace(tmp_path)
+    desktop, base = _workspace(tmp_path)
     (tmp_path / "package-lock.json").write_text(payload, encoding="utf-8")
-    revision = _commit(tmp_path, "bad lock")
+    head = _commit(tmp_path, "bad lock")
     with pytest.raises(ResolutionError, match=match):
-        _resolve(tmp_path, desktop, revision)
+        _resolve(tmp_path, desktop, base, head)
 
 
 def test_rejects_package_directory_escape(tmp_path: Path) -> None:
@@ -258,44 +273,67 @@ def test_rejects_tree_without_any_npm_lock(tmp_path: Path) -> None:
         _resolve(repo, package, revision)
 
 
-def test_rejects_lock_added_only_at_head(tmp_path: Path) -> None:
-    """A PR-added lock cannot become an authenticated workspace owner."""
-    desktop, base = _workspace(tmp_path)
+def test_accepts_lock_added_only_at_head_for_receipt_validation(tmp_path: Path) -> None:
+    """A head-added lock may own the package when the workflow authenticates it."""
+    desktop, _initial = _workspace(tmp_path)
     (tmp_path / "package-lock.json").unlink()
-    base_without_lock = _commit(tmp_path, "remove lock")
+    base = _commit(tmp_path, "remove lock")
     _write_json(
         tmp_path / "package-lock.json",
-        {"lockfileVersion": 3, "packages": {"apps/desktop": {}}},
+        {
+            "lockfileVersion": 3,
+            "packages": {"": {}, "apps/desktop": {}},
+        },
     )
-    head = _commit(tmp_path, "add lock")
-    with pytest.raises(ResolutionError, match="must exist at validated base and head"):
-        _resolve(tmp_path, desktop, base_without_lock, head)
-    assert base != base_without_lock
+    head = _commit(tmp_path, "add bounded head lock")
+    assert _resolve(tmp_path, desktop, base, head) == "."
 
 
-def test_rejects_lock_changed_between_base_and_head(tmp_path: Path) -> None:
-    """Ancestor dependency ownership must be immutable across the PR."""
+def test_accepts_bounded_lock_change_between_base_and_head(tmp_path: Path) -> None:
+    """A changed head lock remains eligible for exact manifest-receipt checks."""
     desktop, base = _workspace(tmp_path)
     lock = json.loads((tmp_path / "package-lock.json").read_text(encoding="utf-8"))
     lock["packages"]["apps/desktop"]["version"] = "1.0.0"
     _write_json(tmp_path / "package-lock.json", lock)
     head = _commit(tmp_path, "change lock")
-    with pytest.raises(ResolutionError, match="differs between validated base and head"):
-        _resolve(tmp_path, desktop, base, head)
+    assert _resolve(tmp_path, desktop, base, head) == "."
 
 
-def test_rejects_workspace_manifest_changed_between_base_and_head(
-    tmp_path: Path,
-) -> None:
-    """A PR cannot rewrite the ancestor workspace ownership declaration."""
-    desktop, base = _workspace(tmp_path)
+def test_accepts_workspace_manifest_change_at_validated_head(tmp_path: Path) -> None:
+    """Ownership follows the live head declaration rather than stale base JSON."""
+    desktop, base = _workspace(tmp_path, ["packages/*"])
     _write_json(
         tmp_path / "package.json",
         {"name": "root", "private": True, "workspaces": ["apps/*", "packages/*"]},
     )
     head = _commit(tmp_path, "change workspaces")
-    with pytest.raises(ResolutionError, match="workspace manifest.*differs"):
-        _resolve(tmp_path, desktop, base, head)
+    assert _resolve(tmp_path, desktop, base, head) == "."
+
+
+def test_accepts_pr_added_workspace_package_in_head_lock_map(tmp_path: Path) -> None:
+    """A new workspace package is valid when head manifest and lock agree."""
+    _init_repo(tmp_path)
+    _write_json(
+        tmp_path / "package.json",
+        {"name": "root", "private": True, "workspaces": ["packages/*"]},
+    )
+    _write_json(
+        tmp_path / "package-lock.json",
+        {"lockfileVersion": 3, "packages": {"": {}}},
+    )
+    base = _commit(tmp_path, "base")
+    desktop = tmp_path / "apps" / "desktop"
+    _write_json(desktop / "package.json", {"name": "desktop"})
+    _write_json(
+        tmp_path / "package.json",
+        {"name": "root", "private": True, "workspaces": ["apps/*", "packages/*"]},
+    )
+    _write_json(
+        tmp_path / "package-lock.json",
+        {"lockfileVersion": 3, "packages": {"": {}, "apps/desktop": {}}},
+    )
+    head = _commit(tmp_path, "add workspace")
+    assert _resolve(tmp_path, desktop, base, head) == "."
 
 
 def test_rejects_worktree_lock_that_differs_from_validated_head(tmp_path: Path) -> None:
@@ -325,7 +363,7 @@ def test_rejects_invalid_or_missing_revision(tmp_path: Path) -> None:
         _resolve(tmp_path, desktop, "f" * 40, revision)
 
 
-def test_main_prints_resolved_root(tmp_path: Path, capsys) -> None:
+def test_main_prints_resolved_root(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The command-line entry point prints the validated install root."""
     desktop, revision = _workspace(tmp_path)
     assert (
@@ -346,7 +384,9 @@ def test_main_prints_resolved_root(tmp_path: Path, capsys) -> None:
     assert capsys.readouterr().out == ".\n"
 
 
-def test_main_reports_resolution_error(tmp_path: Path, capsys) -> None:
+def test_main_reports_resolution_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The CLI turns fail-closed resolver errors into parser errors."""
     desktop, revision = _workspace(tmp_path)
     (tmp_path / "package-lock.json").unlink()
