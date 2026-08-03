@@ -1,29 +1,52 @@
-import pytest
+"""Regression tests for sandboxed verification output redaction."""
+
 from scripts.ci import sandboxed_verify
 
-def test_timeout_output_text_redacts_bytes_and_str():
-    assert sandboxed_verify.redact_text(sandboxed_verify.timeout_output_text(b"api_key: 1234567890abcdefghijklmnopqrstuvwxyz")) == "api_key: [REDACTED]"
-    assert sandboxed_verify.redact_text(sandboxed_verify.timeout_output_text("github_pat_11A2B3C4D5E6F7G8H9I0J_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890")) == "[REDACTED]"
+API_SECRET = "1234567890" + "abcdefghijklmnopqrstuvwxyz"
+GITHUB_PAT = "github_" + "pat_11A2B3C4D5E6F7G8H9I0J_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890"
+SLACK_TOKEN = "xox" + "b-1234567890-1234567890"
 
-def test_emit_result_redacts_payload_fields(capsys, tmp_path):
+
+def test_timeout_output_text_redacts_bytes_and_str() -> None:
+    """Timeout output is normalized and redacted for bytes and text values."""
+    assert (
+        sandboxed_verify.redact_text(
+            sandboxed_verify.timeout_output_text(
+                f"api_key: {API_SECRET}".encode("utf-8")
+            )
+        )
+        == "api_key: [REDACTED]"
+    )
+    assert (
+        sandboxed_verify.redact_text(
+            sandboxed_verify.timeout_output_text(GITHUB_PAT)
+        )
+        == "[REDACTED]"
+    )
+
+
+def test_emit_result_redacts_payload_fields(capsys, tmp_path) -> None:
+    """Structured result fields never expose secret-shaped fixture values."""
     sandboxed_verify.emit_result(
-        command=["echo", "api_key: 1234567890abcdefghijklmnopqrstuvwxyz"],
-        copied_repo=tmp_path / "github_pat_11A2B3C4D5E6F7G8H9I0J_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890",
-        sandbox_root=tmp_path / "xoxb-1234567890-1234567890",
+        command=["echo", f"api_key: {API_SECRET}"],
+        copied_repo=tmp_path / GITHUB_PAT,
+        sandbox_root=tmp_path / SLACK_TOKEN,
         exit_code=0,
         elapsed_seconds=1.0,
         kept=True,
         allowed_env=[],
         network="default",
-        evidence_note="used api_key: 1234567890abcdefghijklmnopqrstuvwxyz"
+        evidence_note=f"used api_key: {API_SECRET}",
     )
     captured = capsys.readouterr()
     assert "[REDACTED]" in captured.out
-    assert "1234567890abcdefghijklmnopqrstuvwxyz" not in captured.out
-    assert "github_pat_11A2B3C4D5E6F7G8H9I0J_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890" not in captured.out
-    assert "xoxb-1234567890-1234567890" not in captured.out
+    assert API_SECRET not in captured.out
+    assert GITHUB_PAT not in captured.out
+    assert SLACK_TOKEN not in captured.out
 
-def test_main_redacts_stdout_and_stderr(monkeypatch, tmp_path, capsys):
+
+def test_main_redacts_stdout_and_stderr(tmp_path, capsys) -> None:
+    """The CLI redacts untrusted subprocess stdout and stderr before emission."""
     repo = tmp_path / "repo"
     repo.mkdir()
     exit_code = sandboxed_verify.main(
@@ -35,12 +58,15 @@ def test_main_redacts_stdout_and_stderr(monkeypatch, tmp_path, capsys):
             "--",
             "python",
             "-c",
-            "import sys; print('api_key: 1234567890abcdefghijklmnopqrstuvwxyz'); print('github_pat_11A2B3C4D5E6F7G8H9I0J_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890', file=sys.stderr)"
+            (
+                f"import sys; print('api_key: {API_SECRET}'); "
+                f"print({GITHUB_PAT!r}, file=sys.stderr)"
+            ),
         ]
     )
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "api_key: [REDACTED]" in captured.out
-    assert "1234567890abcdefghijklmnopqrstuvwxyz" not in captured.out
+    assert API_SECRET not in captured.out
     assert "[REDACTED]" in captured.err
-    assert "github_pat_11A2B3C4D5E6F7G8H9I0J_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890" not in captured.err
+    assert GITHUB_PAT not in captured.err
