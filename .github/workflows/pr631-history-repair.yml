@@ -1,0 +1,55 @@
+name: PR 631 Clean History Repair
+
+on:
+  push:
+    branches:
+      - sentinel/fix-ci-subprocess-log-leak-16137767205653188116
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr631-clean-history-repair
+  cancel-in-progress: false
+
+jobs:
+  squash:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: sentinel/fix-ci-subprocess-log-leak-16137767205653188116
+          fetch-depth: 0
+
+      - name: Validate repaired tree and rewrite PR history
+        env:
+          EXPECTED_REMOTE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          rm -f .github/workflows/pr631-history-repair.yml
+
+          if git grep -nE 'github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}' -- \
+            tests/test_sandboxed_verify_redaction.py \
+            tests/test_sandboxed_web_e2e_redaction.py; then
+            echo '::error::credential-shaped fixture remains literal in the repaired source tree.'
+            exit 1
+          fi
+
+          python3 -m compileall -q \
+            scripts/ci/sandboxed_verify.py \
+            scripts/ci/sandboxed_web_e2e.py \
+            tests/test_sandboxed_verify_redaction.py \
+            tests/test_sandboxed_web_e2e_redaction.py
+
+          git reset --soft origin/main
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(security): redact sandboxed subprocess evidence'
+          git push \
+            --force-with-lease=refs/heads/sentinel/fix-ci-subprocess-log-leak-16137767205653188116:${EXPECTED_REMOTE_SHA} \
+            origin HEAD:refs/heads/sentinel/fix-ci-subprocess-log-leak-16137767205653188116
