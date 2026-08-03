@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - agent/appguardrail-security-aggregation
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/pr560-scan-scope-repair.yml
+      - .github/workflows/strix.yml
+      - tests/test_required_workflow_queue_contract.py
 
 permissions:
   contents: write
@@ -14,6 +22,9 @@ concurrency:
 
 jobs:
   repair:
+    if: >-
+      github.event_name == 'push'
+      || github.event.pull_request.head.ref == 'agent/appguardrail-security-aggregation'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,10 +46,24 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          expression_prefix = "$" + "{{ "
+          expression_suffix = " }}"
+          old = (
+              "STRIX_SCAN_SCOPE: "
+              + expression_prefix
+              + "(github.event_name == 'pull_request_target' || "
+              + "github.event.client_payload.pr_number != '') && 'pr' || 'full'"
+              + expression_suffix
+          )
+          new = (
+              "STRIX_SCAN_SCOPE: "
+              + expression_prefix
+              + "(github.event_name == 'pull_request_target' || "
+              + "(github.event.client_payload.pr_number || '') != '') && 'pr' || 'full'"
+              + expression_suffix
+          )
           workflow = Path('.github/workflows/strix.yml')
           source = workflow.read_text(encoding='utf-8')
-          old = "STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'pr' || 'full' }}"
-          new = "STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || (github.event.client_payload.pr_number || '') != '') && 'pr' || 'full' }}"
           if new not in source:
               if source.count(old) != 1:
                   raise SystemExit('expected STRIX_SCAN_SCOPE expression was not found exactly once')
@@ -57,14 +82,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pytest -q tests/test_required_workflow_queue_contract.py
-          python3 - <<'PY'
-          from pathlib import Path
-          import yaml
-
-          document = yaml.safe_load(Path('.github/workflows/strix.yml').read_text(encoding='utf-8'))
-          if not isinstance(document, dict):
-              raise SystemExit('workflow did not parse as a mapping')
-          PY
           git diff --check
           test ! -e .github/workflows/pr560-scan-scope-repair.yml
 
