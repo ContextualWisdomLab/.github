@@ -9,7 +9,9 @@ import sys
 from typing import Any
 
 REDACTED = "[REDACTED]"
-KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+KEY_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
+)
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
@@ -20,17 +22,14 @@ JWT_RE = re.compile(
     r"[A-Za-z0-9_-]{3,}(?![A-Za-z0-9_-])"
 )
 BEARER_RE = re.compile(
-    r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)"
-    r"[^\s\"'\\]+",
+    r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)" r"[^\s\"'\\]+",
     re.IGNORECASE,
 )
 PROVIDER_TOKEN_RES = (
-    re.compile(
-        r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b|"
-        r"\bsk-[A-Za-z0-9_-]{20,}\b|"
-        r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b|"
-        r"\bAKIA[0-9A-Z]{16}\b"
-    ),
+    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
 
 
@@ -64,22 +63,19 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, in
             return None, start + 1
         cursor += 1
 
-    parsed_key_end = cursor
-
     if not SENSITIVE_KEY_RE.search(key):
-        # The pattern is intentionally an unanchored substring search. If the
-        # full key does not match, no suffix can newly match, so skipping the
-        # parsed run preserves the base parser's redaction semantics.
-        return None, parsed_key_end
+        if not key_quote:
+            return None, key_start + len(key)
+        return None, start + 1
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text) or text[cursor] not in ":=":
-        return None, parsed_key_end
+        return None, start + 1
     cursor += 1
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text):
-        return None, parsed_key_end
+        return None, start + 1
 
     value_start = cursor
     if text[cursor] in "\"'":
@@ -96,10 +92,14 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, in
             elif char == value_quote:
                 break
     else:
-        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
+        while (
+            cursor < len(text)
+            and not text[cursor].isspace()
+            and text[cursor] not in ",}"
+        ):
             cursor += 1
     if cursor == value_start:
-        return None, parsed_key_end
+        return None, start + 1
     return text[start:value_start] + REDACTED, cursor
 
 
@@ -107,19 +107,13 @@ def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
     output: list[str] = []
     cursor = 0
-    last_append = 0
     while cursor < len(text):
         replacement, next_cursor = _consume_sensitive_assignment(text, cursor)
         if replacement is None:
-            cursor = next_cursor
-            continue
-        if cursor > last_append:
-            output.append(text[last_append:cursor])
-        output.append(replacement)
+            output.append(text[cursor:next_cursor])
+        else:
+            output.append(replacement)
         cursor = next_cursor
-        last_append = cursor
-    if last_append < len(text):
-        output.append(text[last_append:])
     return "".join(output)
 
 

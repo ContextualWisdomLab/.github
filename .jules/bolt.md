@@ -46,4 +46,4 @@
 
 ## 2024-08-02 - O(N²) Character-by-Character Parsing Overhead
 **Learning:** Character-by-character parsing with `cursor += 1` on failures in Python string processing leads to massive overhead and O(N²) behavior on long continuous strings.
-**Action:** Always return the furthest parsed index (`next_cursor`) from parsing functions on failure so the outer loop can skip rejected blocks of text and process them with fast string slicing instead of appending character by character.
+**Action:** When parsing fails on an unquoted token that does not match an unanchored sensitive-key regex, skip the entire token since a mathematically guaranteed non-match ensures no suffix can match either. For quoted keys or partially matched keys, conservatively return `start + 1` to preserve suffix-reinspection correctness for shifted keys.
