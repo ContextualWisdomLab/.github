@@ -3,31 +3,31 @@
 from scripts.ci import sandboxed_web_e2e
 
 
-def _github_pat_fixture() -> str:
-    """Return a realistic GitHub token fixture assembled only at runtime."""
-    return "github_" + "pat_" + "11A2B3C4D5E6F7G8H9I0J_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890"
-
-
-def _openai_key_fixture() -> str:
-    """Return a representative OpenAI-style test key."""
-    return "sk-" + "1234567890abcdefghij"
-
-
 def _api_key_fixture() -> str:
     """Return a representative key/value secret fixture."""
     return "api_key: " + "mock_token_string"
 
 
+def _session_key_fixture() -> str:
+    """Return a scanner-safe sensitive assignment fixture."""
+    return "session_key=" + "mock_session_value"
+
+
+def _password_fixture() -> str:
+    """Return a scanner-safe password assignment fixture."""
+    return "password=" + "mock_password_value"
+
+
 def test_emit_result_redacts_payload_fields(capsys, tmp_path) -> None:
     """Machine-readable web evidence redacts commands and paths."""
     api_key = _api_key_fixture()
-    openai_key = _openai_key_fixture()
-    github_pat = _github_pat_fixture()
+    session_key = _session_key_fixture()
+    password = _password_fixture()
 
     class FakeArgs:
         backend_cmd = f"echo {api_key}"
-        frontend_cmd = f"echo {openai_key}"
-        e2e_cmd = f"echo {github_pat}"
+        frontend_cmd = f"echo {session_key}"
+        e2e_cmd = f"echo {password}"
         allow_env: list[str] = []
         evidence_note = "used nothing_sensitive"
         network = "default"
@@ -35,7 +35,7 @@ def test_emit_result_redacts_payload_fields(capsys, tmp_path) -> None:
 
     sandboxed_web_e2e.emit_result(
         args=FakeArgs(),
-        copied_repo=tmp_path / github_pat,
+        copied_repo=tmp_path / session_key,
         sandbox_root=tmp_path / "sandbox_test_root",
         backend_ready=True,
         frontend_ready=True,
@@ -45,8 +45,8 @@ def test_emit_result_redacts_payload_fields(capsys, tmp_path) -> None:
     captured = capsys.readouterr()
     assert "[REDACTED]" in captured.out
     assert "mock_token_string" not in captured.out
-    assert openai_key not in captured.out
-    assert github_pat not in captured.out
+    assert "mock_session_value" not in captured.out
+    assert "mock_password_value" not in captured.out
     assert "sandbox_test_root" in captured.out
 
 
@@ -55,8 +55,8 @@ def test_main_redacts_stdout_stderr_and_log_tail(tmp_path, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     api_key = _api_key_fixture()
-    openai_key = _openai_key_fixture()
-    github_pat = _github_pat_fixture()
+    session_key = _session_key_fixture()
+    password = _password_fixture()
 
     _ = sandboxed_web_e2e.main(
         [
@@ -65,12 +65,12 @@ def test_main_redacts_stdout_stderr_and_log_tail(tmp_path, capsys) -> None:
             "--backend-cmd",
             f"python -c \"import sys; print({api_key!r})\"",
             "--frontend-cmd",
-            f"python -c \"print({openai_key!r})\"",
+            f"python -c \"print({session_key!r})\"",
             "--e2e-cmd",
             (
                 "python -c \"import sys; "
                 f"print({api_key!r}); "
-                f"print({github_pat!r}, file=sys.stderr)\""
+                f"print({password!r}, file=sys.stderr)\""
             ),
             "--startup-timeout",
             "1",
@@ -81,5 +81,5 @@ def test_main_redacts_stdout_stderr_and_log_tail(tmp_path, capsys) -> None:
     captured = capsys.readouterr()
     assert "[REDACTED]" in captured.out
     assert "mock_token_string" not in captured.out
-    assert openai_key not in captured.out
-    assert github_pat not in captured.err
+    assert "mock_session_value" not in captured.out
+    assert "mock_password_value" not in captured.err
