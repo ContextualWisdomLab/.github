@@ -160,7 +160,7 @@ def patch_workflow(text: str) -> str:
               return 1
             }
             worktree_blob="$(
-              trusted_git hash-object --no-filters -- "$install_root/$lock_name"
+              trusted_git hash-object --path="$relative_lock" -- "$install_root/$lock_name"
             )" || {
               echo "::error::Could not hash current npm lock ${relative_lock}."
               return 1
