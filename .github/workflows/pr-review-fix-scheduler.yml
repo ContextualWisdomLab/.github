@@ -44,9 +44,9 @@ on:
         default: ""
         type: string
       canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for scheduler code
+        description: Optional expected immutable SHA for the called scheduler workflow
         required: false
-        default: "main"
+        default: ""
         type: string
   repository_dispatch:
     types: [pr-review-fix-scheduler]
@@ -83,13 +83,75 @@ jobs:
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
-      CANONICAL_REF: main
+      CANONICAL_REF_INPUT: ${{ github.event.client_payload.canonical_ref || inputs.canonical_ref || '' }}
     steps:
+      - name: Resolve trusted scheduler source ref
+        id: trusted_source
+        env:
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
+          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
+
+          try:
+              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
+              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+
+          expected_repository = "ContextualWisdomLab/.github"
+          workflow_repository = str(job_context.get("workflow_repository") or "").strip()
+          if workflow_repository and workflow_repository != expected_repository:
+              print(
+                  "::error::Review-fix scheduler resolved an unexpected workflow repository: "
+                  f"{workflow_repository}",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          trusted_ref = str(
+              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
+          ).strip()
+          workflow_ref = str(
+              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
+          ).strip()
+          if not trusted_ref:
+              prefix = (
+                  "ContextualWisdomLab/.github/.github/workflows/"
+                  "pr-review-fix-scheduler.yml@"
+              )
+              if workflow_ref.startswith(prefix):
+                  trusted_ref = workflow_ref.split("@", 1)[1]
+
+          if not re.fullmatch(r"[0-9a-fA-F]{40}", trusted_ref):
+              print(
+                  "::error::Trusted review-fix scheduler source did not resolve to a full commit SHA.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          expected_ref = os.environ.get("CANONICAL_REF_INPUT", "").strip()
+          if expected_ref and expected_ref.lower() != trusted_ref.lower():
+              print(
+                  "::error::Caller canonical_ref does not match the immutable called workflow SHA.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          print(f"ref={trusted_ref.lower()}")
+          PY
+
       - name: Checkout canonical scheduler
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: ${{ env.CANONICAL_REF }}
+          ref: ${{ steps.trusted_source.outputs.ref }}
           fetch-depth: 1
           persist-credentials: false
 
