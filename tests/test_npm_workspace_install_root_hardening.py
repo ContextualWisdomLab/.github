@@ -246,3 +246,37 @@ def test_cli_rejects_non_normalized_or_escaping_resolver_output(
 def test_matcher_rejects_empty_path_for_non_recursive_pattern() -> None:
     """A non-recursive workspace pattern cannot own the repository root."""
     assert not module._is_declared_workspace(PurePosixPath("."), ["apps/*"])
+
+
+def test_worktree_blob_uses_path_aware_git_normalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worktree comparison applies the path's clean and end-of-line filters."""
+    relative_path = PurePosixPath("apps/desktop/package.json")
+    worktree_path = tmp_path.joinpath(*relative_path.parts)
+    worktree_path.parent.mkdir(parents=True)
+    worktree_path.write_text('{"name":"desktop"}\r\n', encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_git(repo_root: Path, *args: str) -> bytes:
+        assert repo_root == tmp_path
+        calls.append(args)
+        return b"expected-blob\n"
+
+    monkeypatch.setattr(module, "_git", fake_git)
+    module._worktree_blob(
+        tmp_path,
+        relative_path,
+        "expected-blob",
+        "selected npm package manifest",
+    )
+
+    assert calls == [
+        (
+            "hash-object",
+            "--path=apps/desktop/package.json",
+            "--",
+            str(worktree_path),
+        )
+    ]
