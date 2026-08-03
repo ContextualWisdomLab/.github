@@ -7,20 +7,34 @@ on:
     paths:
       - .github/workflows/bootstrap-npm-workspace-wiring.yml
       - scripts/ci/bootstrap_patch_workflow.py
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/bootstrap-npm-workspace-wiring.yml
+      - scripts/ci/bootstrap_patch_workflow.py
 
 permissions:
   contents: write
 
 concurrency:
-  group: bootstrap-npm-workspace-wiring-${{ github.ref }}
+  group: bootstrap-npm-workspace-wiring-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   apply:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
-      && github.ref_name == 'fix/npm-workspace-coverage-root'
       && github.actor != 'github-actions[bot]'
+      && (
+        (github.event_name == 'push' && github.ref_name == 'fix/npm-workspace-coverage-root')
+        || (
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.head.ref == 'fix/npm-workspace-coverage-root'
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
