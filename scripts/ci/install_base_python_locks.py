@@ -168,7 +168,9 @@ def _is_deferable_preflight_failure(output: str) -> bool:
     group or defer to the later networkless coverage run. Hash mismatches,
     resolver crashes, empty diagnostics, and registry/network failures — including
     the "(from versions: none)" empty/unreachable-index shape — remain fatal so a
-    broken trusted build cannot be mistaken for an optional lock.
+    broken trusted build cannot be mistaken for an optional lock. Deferred paths
+    retain a warning and bounded pip diagnostics so the incompatibility stays
+    visible without blocking unrelated coverage evidence.
     """
     return bool(output.strip()) and any(
         pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
@@ -294,9 +296,8 @@ def install_materialized_locks(
         skipped += 1
         print(
             "::warning::Skipping trusted base Python requirement candidate "
-            f"{entry.source}: hash-bearing content is not an independently "
-            "installable dependency closure and no same-directory lock group "
-            "completed it.",
+            f"{entry.source}: it could not be installed independently for the "
+            "coverage interpreter and no same-directory lock group completed it.",
             file=stderr,
         )
         failure_output = _bounded_failure_output(
