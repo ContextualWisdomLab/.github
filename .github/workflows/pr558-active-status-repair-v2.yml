@@ -19,11 +19,8 @@ concurrency:
 jobs:
   repair:
     if: >-
-      github.actor != 'github-actions[bot]'
-      && (
-        github.event_name == 'push'
-        || github.event.pull_request.head.ref == 'fix/opencode-merge-method-concurrency-20260714'
-      )
+      github.event_name == 'push'
+      || github.event.pull_request.head.ref == 'fix/opencode-merge-method-concurrency-20260714'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -91,5 +88,3 @@ jobs:
           git diff --cached --check
           git commit -m "fix(scheduler): restrict active workflow status filters"
           git push origin HEAD:fix/opencode-merge-method-concurrency-20260714
-
-# Trigger the bounded self-removing repair on the exact branch head.
