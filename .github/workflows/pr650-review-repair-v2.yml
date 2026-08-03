@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - claude/fast-mlsirm-pr-review-mt2e1z
+  pull_request:
+    branches:
+      - main
+    types: [synchronize]
 
 permissions:
   contents: read
@@ -14,6 +18,7 @@ concurrency:
 
 jobs:
   repair:
+    if: github.event.pull_request.head.ref == 'claude/fast-mlsirm-pr-review-mt2e1z'
     permissions:
       contents: write
     runs-on: ubuntu-latest
