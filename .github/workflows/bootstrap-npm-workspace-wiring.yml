@@ -1,6 +1,5 @@
 name: Bootstrap npm workspace coverage wiring
 
-# The branch-local bootstrap is retriggered after GitHub registers this workflow.
 on:
   push:
     branches:
@@ -38,9 +37,24 @@ jobs:
           persist-credentials: true
 
       - name: Apply focused workspace-root patch
-        run: python3 scripts/ci/bootstrap_patch_workflow.py
+        id: patch
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/ci/bootstrap_patch_workflow.py >"$RUNNER_TEMP/bootstrap-patch.log" 2>&1
+          patch_rc=$?
+          set -e
+          echo "patch_rc=$patch_rc" >>"$GITHUB_OUTPUT"
+          if [ "$patch_rc" -ne 0 ]; then
+            {
+              echo "bootstrap_patch_workflow.py failed with exit code $patch_rc"
+              echo
+              sed -n '1,200p' "$RUNNER_TEMP/bootstrap-patch.log"
+            } > .github/bootstrap-npm-workspace-failure.log
+          fi
 
-      - name: Verify resolver smoke path and patch hygiene
+      - name: Verify focused result
+        if: steps.patch.outputs.patch_rc == '0'
         shell: bash
         run: |
           set -euo pipefail
@@ -79,12 +93,25 @@ jobs:
           test ! -e .github/workflows/bootstrap-npm-workspace-wiring.yml
           test ! -e scripts/ci/bootstrap_patch_workflow.py
 
-      - name: Commit focused result
+      - name: Commit result or bounded diagnostic
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m 'fix(coverage): wire validated npm workspace lock owner'
+          if git diff --cached --quiet; then
+            echo "No bootstrap changes to commit."
+            exit 0
+          fi
+          if [ "${{ steps.patch.outputs.patch_rc }}" = "0" ]; then
+            git commit -m 'fix(coverage): wire validated npm workspace lock owner'
+          else
+            git commit -m 'chore(coverage): record workspace wiring bootstrap failure'
+          fi
           git push origin HEAD:fix/npm-workspace-coverage-root
+
+      - name: Fail after diagnostic publication
+        if: steps.patch.outputs.patch_rc != '0'
+        run: exit 1
