@@ -1,29 +1,21 @@
-name: PR 650 Review Repair v2
+name: PR 650 Review Repair v3
 
 on:
   push:
     branches:
       - claude/fast-mlsirm-pr-review-mt2e1z
-  pull_request:
-    branches:
-      - main
-    types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: pr650-review-repair-v2
+  group: pr650-review-repair-v3
   cancel-in-progress: true
 
 jobs:
   repair:
-    if: >-
-      github.actor != 'github-actions[bot]'
-      && (
-        github.event_name == 'push'
-        || github.event.pull_request.head.ref == 'claude/fast-mlsirm-pr-review-mt2e1z'
-      )
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -45,96 +37,115 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          workflow = Path(".github/workflows/opencode-review-dispatch.yml")
-          source = workflow.read_text(encoding="utf-8")
+          workflow_path = Path(".github/workflows/opencode-review-dispatch.yml")
+          lines = workflow_path.read_text(encoding="utf-8").splitlines()
 
-          replacements = (
-              (
-                  '''          if ! oidc_response="$(
-                    curl -fsS \\
-                      -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \\
-                      "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-                  )"; then'''.replace("                  ", ""),
-                  '''          if ! oidc_response="$(
-                    curl -fsS \\
-                      --connect-timeout 5 \\
-                      --max-time 20 \\
-                      -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \\
-                      "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-                  )"; then'''.replace("                  ", ""),
-                  "OIDC request block",
-              ),
-              (
-                  '''          if ! token_response="$(
-                    curl -fsS \\
-                      -X POST \\
-                      -H "Authorization: Bearer ${oidc_token}" \\
-                      "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-                  )"; then'''.replace("                  ", ""),
-                  '''          if ! token_response="$(
-                    curl -fsS \\
-                      --connect-timeout 5 \\
-                      --max-time 20 \\
-                      -X POST \\
-                      -H "Authorization: Bearer ${oidc_token}" \\
-                      "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-                  )"; then'''.replace("                  ", ""),
-                  "App-token exchange block",
-              ),
-              (
-                  '''          collect_successful_r_cmd_check_evidence() {
-                    local output_file="$1"
-                    if ! gh pr checks "$PR_NUMBER" \\
-                      --repo "$GH_REPOSITORY" \\
-                      --json name,state,workflow >"$output_file"; then
-                      return 1
-                    fi
-                    python3 "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \\
-                      require-check \\
-                      --checks-json "$output_file" >/dev/null
-                  }'''.replace("                  ", ""),
-                  '''          collect_successful_r_cmd_check_evidence() {
-                    local output_file="$1"
-                    local checks_status
-                    if gh pr checks "$PR_NUMBER" \\
-                      --repo "$GH_REPOSITORY" \\
-                      --json name,state,workflow >"$output_file"; then
-                      checks_status=0
-                    else
-                      checks_status=$?
-                    fi
-                    case "$checks_status" in
-                      0 | 1 | 8) ;;
-                      *) return 1 ;;
-                    esac
-                    if ! jq -e 'type == "array"' "$output_file" >/dev/null; then
-                      return 1
-                    fi
-                    python3 "$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py" \\
-                      require-check \\
-                      --checks-json "$output_file" >/dev/null
-                  }'''.replace("                  ", ""),
-                  "R CMD peer-check collector",
-              ),
+          step_marker = (
+              "      - name: Exchange OpenCode app token for target repository metadata reads"
           )
-          for old, new, label in replacements:
-              if new in source:
-                  continue
-              if source.count(old) != 1:
-                  raise SystemExit(f"expected {label} was not found")
-              source = source.replace(old, new, 1)
-          workflow.write_text(source, encoding="utf-8")
+          try:
+              step_start = lines.index(step_marker)
+          except ValueError as exc:
+              raise SystemExit("token-exchange step marker was not found") from exc
 
-          tests = Path("tests/test_required_workflow_queue_contract.py")
-          test_source = tests.read_text(encoding="utf-8")
+          step_end = len(lines)
+          for index in range(step_start + 1, len(lines)):
+              if lines[index].startswith("      - name: "):
+                  step_end = index
+                  break
+
+          curl_indexes = [
+              index
+              for index in range(step_start, step_end)
+              if lines[index].strip() == "curl -fsS \\"
+          ]
+          if len(curl_indexes) != 2:
+              raise SystemExit(
+                  f"expected exactly two token-exchange curl calls, found {len(curl_indexes)}"
+              )
+
+          for index in reversed(curl_indexes):
+              nearby = "\n".join(lines[index + 1 : index + 4])
+              if "--connect-timeout 5" in nearby and "--max-time 20" in nearby:
+                  continue
+              indentation = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+              lines[index + 1 : index + 1] = [
+                  f"{indentation}  --connect-timeout 5 \\",
+                  f"{indentation}  --max-time 20 \\",
+              ]
+
+          function_marker = "          collect_successful_r_cmd_check_evidence() {"
+          try:
+              function_start = lines.index(function_marker)
+          except ValueError as exc:
+              raise SystemExit("R CMD peer-check collector was not found") from exc
+
+          function_end = None
+          for index in range(function_start + 1, len(lines)):
+              if lines[index] == "          }":
+                  function_end = index
+                  break
+          if function_end is None:
+              raise SystemExit("R CMD peer-check collector closing brace was not found")
+
+          replacement = [
+              "          collect_successful_r_cmd_check_evidence() {",
+              "            local output_file=\"$1\"",
+              "            local checks_status",
+              "            if gh pr checks \"$PR_NUMBER\" \\",
+              "              --repo \"$GH_REPOSITORY\" \\",
+              "              --json name,state,workflow >\"$output_file\"; then",
+              "              checks_status=0",
+              "            else",
+              "              checks_status=$?",
+              "            fi",
+              "            case \"$checks_status\" in",
+              "              0 | 1 | 8) ;;",
+              "              *) return 1 ;;",
+              "            esac",
+              "            if ! jq -e 'type == \"array\"' \"$output_file\" >/dev/null; then",
+              "              return 1",
+              "            fi",
+              "            python3 \"$GITHUB_WORKSPACE/scripts/ci/r_coverage_peer_gate.py\" \\",
+              "              require-check \\",
+              "              --checks-json \"$output_file\" >/dev/null",
+              "          }",
+          ]
+          lines[function_start : function_end + 1] = replacement
+          workflow_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          tests_path = Path("tests/test_required_workflow_queue_contract.py")
+          test_source = tests_path.read_text(encoding="utf-8")
           marker = "def test_opencode_review_token_exchange_and_r_peer_gate_are_bounded()"
           if marker not in test_source:
-              test_source += '''\n\ndef test_opencode_review_token_exchange_and_r_peer_gate_are_bounded():\n    from pathlib import Path\n\n    workflow_text = Path(\n        ".github/workflows/opencode-review-dispatch.yml"\n    ).read_text(encoding="utf-8")\n    initial_exchange = workflow_text.split(\n        "- name: Exchange OpenCode app token for target repository metadata reads", 1\n    )[1].split("- name:", 1)[0]\n    assert initial_exchange.count("--connect-timeout 5") == 2\n    assert initial_exchange.count("--max-time 20") == 2\n    collector = workflow_text.split(\n        "collect_successful_r_cmd_check_evidence() {", 1\n    )[1].split("\\n          }", 1)[0]\n    assert '0 | 1 | 8)' in collector\n    assert \"jq -e 'type == \\\"array\\\"'\" in collector\n    assert 'checks_status=$?' in collector\n'''
-              tests.write_text(test_source, encoding="utf-8")
+              test_source += '''
+
+
+def test_opencode_review_token_exchange_and_r_peer_gate_are_bounded():
+    """Token exchange and R peer-check collection have deterministic bounds."""
+    from pathlib import Path
+
+    workflow_text = Path(
+        ".github/workflows/opencode-review-dispatch.yml"
+    ).read_text(encoding="utf-8")
+    initial_exchange = workflow_text.split(
+        "- name: Exchange OpenCode app token for target repository metadata reads", 1
+    )[1].split("- name:", 1)[0]
+    assert initial_exchange.count("--connect-timeout 5") == 2
+    assert initial_exchange.count("--max-time 20") == 2
+    collector = workflow_text.split(
+        "collect_successful_r_cmd_check_evidence() {", 1
+    )[1].split("\n          }", 1)[0]
+    assert "0 | 1 | 8)" in collector
+    assert "jq -e 'type == \\\"array\\\"'" in collector
+    assert "checks_status=$?" in collector
+'''
+              tests_path.write_text(test_source, encoding="utf-8")
           PY
           rm -f \
             .github/workflows/pr650-review-repair.yml \
-            .github/workflows/pr650-review-repair-v2.yml
+            .github/workflows/pr650-review-repair-v2.yml \
+            docs/.pr650-review-repair-trigger
 
       - name: Validate focused contracts
         run: |
@@ -158,6 +169,7 @@ jobs:
           git diff --check
           test ! -e .github/workflows/pr650-review-repair.yml
           test ! -e .github/workflows/pr650-review-repair-v2.yml
+          test ! -e docs/.pr650-review-repair-trigger
 
       - name: Commit verified repair
         run: |
