@@ -9,20 +9,34 @@ on:
     paths:
       - .github/workflows/bootstrap-strix-review-fixes.yml
       - scripts/ci/bootstrap_strix_review_fixes.py
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/bootstrap-strix-review-fixes.yml
+      - scripts/ci/bootstrap_strix_review_fixes.py
 
 permissions:
   contents: write
 
 concurrency:
-  group: bootstrap-strix-review-fixes-${{ github.ref }}
+  group: bootstrap-strix-review-fixes-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   apply:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
-      && github.ref_name == 'fix/strix-sql-migration-context'
       && github.actor != 'github-actions[bot]'
+      && (
+        (github.event_name == 'push' && github.ref_name == 'fix/strix-sql-migration-context')
+        || (
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.head.ref == 'fix/strix-sql-migration-context'
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
