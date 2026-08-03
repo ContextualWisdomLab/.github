@@ -18,8 +18,10 @@ permissions:
 jobs:
   develop-one-gap:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     permissions:
-      contents: read
+      actions: write
+      contents: write
       id-token: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -568,7 +570,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check --require-hashes \
-            -r "$TARGET_WORKSPACE/backend/requirements-hashes.txt"
+            -r "$TARGET_WORKSPACE/backend/requirements-hashes.txt" \
+            -r "$TARGET_WORKSPACE/backend/requirements-agent.txt"
           cd "$TARGET_WORKSPACE/backend"
           python -m ruff check .
           PYTHONWARNINGS=error DISABLE_BACKGROUND_WORKERS=1 \
@@ -642,8 +645,8 @@ jobs:
           {
             echo "## Commercial-readiness slice"
             echo
-            echo "This PR was created only after the live \\`develop\` PR queue reached zero."
-            echo "It implements one bounded, buyer-visible gap and does not write directly to \\`develop\`."
+            echo "This PR was created only after the live \\`develop\\` PR queue reached zero."
+            echo "It implements one bounded, buyer-visible gap and does not write directly to \\`develop\\`."
             echo
             echo "## Agent summary"
             echo
