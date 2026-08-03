@@ -206,3 +206,24 @@ def test_cli_rejects_control_characters_in_resolver_output(
                 "0" * 40,
             ]
         )
+
+
+def test_literal_workspace_pattern_longer_than_package_path_is_not_owner(
+    tmp_path: Path,
+) -> None:
+    """A literal pattern with unmatched trailing segments cannot own a package."""
+    package, revision = _workspace_repo(
+        tmp_path,
+        patterns=["apps/desktop/extra"],
+    )
+    with pytest.raises(ResolutionError, match="no validated package-lock"):
+        resolve_install_root(tmp_path, package, revision, revision)
+
+
+@pytest.mark.parametrize("unsafe_output", ["/absolute", "../escape", "apps//desktop"])
+def test_cli_rejects_non_normalized_or_escaping_resolver_output(
+    unsafe_output: str,
+) -> None:
+    """CLI output must remain normalized, relative, and repository-contained."""
+    with pytest.raises(ResolutionError, match="safe normalized relative path"):
+        module._validated_cli_output(unsafe_output)
