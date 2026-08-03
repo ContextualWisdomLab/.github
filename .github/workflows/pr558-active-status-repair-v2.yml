@@ -23,11 +23,8 @@ concurrency:
 jobs:
   repair:
     if: >-
-      github.actor != 'github-actions[bot]'
-      && (
-        github.event_name == 'push'
-        || github.event.pull_request.head.ref == 'fix/opencode-merge-method-concurrency-20260714'
-      )
+      github.event_name == 'push'
+      || github.event.pull_request.head.ref == 'fix/opencode-merge-method-concurrency-20260714'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
