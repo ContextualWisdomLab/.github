@@ -20,9 +20,13 @@ UV_EXPORT_TIMEOUT_SECONDS = 120
 
 def _is_candidate_lock_name(name: str) -> bool:
     """Return whether a file name is a possible pip requirements lock."""
-    return name == "requirements.lock" or (
-        fnmatch.fnmatch(name, "requirements*.txt")
-        and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+    return (
+        name == "requirements.lock"
+        or fnmatch.fnmatch(name, "requirements-*.lock")
+        or (
+            fnmatch.fnmatch(name, "requirements*.txt")
+            and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+        )
     )
 
 
@@ -49,7 +53,7 @@ def _is_hash_pinned(content: bytes) -> bool:
     """Return whether content carries hash pins and is safe to preflight.
 
     Discovery is content-based rather than name-based so hash-pinned locks in any
-    location (a service subdirectory, ``requirements-dev.txt``,
+    location (a service subdirectory, ``requirements-dev.lock``,
     ``requirements-test.txt``) can be considered for offline coverage, while an
     unpinned or PR-mutable requirements file is still excluded from the networked
     build context. Hash syntax cannot prove that a file includes every transitive

@@ -87,7 +87,7 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
 ) -> None:
     """Hash-pinned locks in service subdirs and dev/test files are materialized.
 
-    Discovery is content-based: a hash-pinned ``requirements-dev.txt`` under a
+    Discovery is content-based: a hash-pinned ``requirements-dev.lock`` under a
     service directory and a hash-pinned ``requirements-test.txt`` are installed
     for offline coverage, while a non-requirements ``uv.lock`` (excluded by name)
     and an unpinned ``requirements-extra.txt`` (excluded by content) are not.
@@ -100,7 +100,7 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
 
     service = repo / "services" / "account_unification"
     service.mkdir(parents=True)
-    (service / "requirements-dev.txt").write_text(
+    (service / "requirements-dev.lock").write_text(
         "fastapi==1 --hash=sha256:" + ("a" * 64) + "\n",
         encoding="utf-8",
     )
@@ -121,13 +121,15 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
 
     assert [entry["source"] for entry in manifest] == [
         "requirements-test.txt",
-        "services/account_unification/requirements-dev.txt",
+        "services/account_unification/requirements-dev.lock",
     ]
 
 
 def test_lock_name_candidates_are_pip_requirements_files() -> None:
-    """Requirements files and requirements.lock are candidates; other names are not."""
+    """Requirements text and lock files are candidates; unrelated names are not."""
     assert materializer._is_candidate_lock_name("requirements.lock")
+    assert materializer._is_candidate_lock_name("requirements-dev.lock")
+    assert materializer._is_candidate_lock_name("requirements-test.lock")
     assert materializer._is_candidate_lock_name("requirements-dev.txt")
     assert materializer._is_candidate_lock_name("requirements.txt")
     assert not materializer._is_candidate_lock_name(
