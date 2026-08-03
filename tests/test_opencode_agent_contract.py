@@ -762,7 +762,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "pytest-cov==7.1.0" in trusted_requirements
     assert '"--dry-run"' in base_python_installer
     assert '"--ignore-installed"' in base_python_installer
-    assert "not an independently" in base_python_installer
+    assert "could not be installed independently" in base_python_installer
+    assert "no same-directory lock group completed it" in base_python_installer
     assert (
         "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678"
         in trusted_requirements
