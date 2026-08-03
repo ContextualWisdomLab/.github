@@ -1,0 +1,79 @@
+name: PR 560 Scan Scope Repair
+
+on:
+  push:
+    branches:
+      - agent/appguardrail-security-aggregation
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr560-scan-scope-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/appguardrail-security-aggregation
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply bounded scan-scope repair
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/strix.yml')
+          source = workflow.read_text(encoding='utf-8')
+          old = "STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'pr' || 'full' }}"
+          new = "STRIX_SCAN_SCOPE: ${{ (github.event_name == 'pull_request_target' || (github.event.client_payload.pr_number || '') != '') && 'pr' || 'full' }}"
+          if new not in source:
+              if source.count(old) != 1:
+                  raise SystemExit('expected STRIX_SCAN_SCOPE expression was not found exactly once')
+              workflow.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          tests = Path('tests/test_required_workflow_queue_contract.py')
+          test_source = tests.read_text(encoding='utf-8')
+          marker = 'def test_strix_scan_scope_null_coalesces_repository_dispatch_pr_number()'
+          if marker not in test_source:
+              test_source += '''\n\ndef test_strix_scan_scope_null_coalesces_repository_dispatch_pr_number() -> None:\n    from pathlib import Path\n\n    workflow_text = Path('.github/workflows/strix.yml').read_text(encoding='utf-8')\n    expected = \"(github.event.client_payload.pr_number || '') != ''\"\n    assert expected in workflow_text\n    assert \"github.event.client_payload.pr_number != ''\" not in workflow_text\n'''
+              tests.write_text(test_source, encoding='utf-8')
+          PY
+          rm -f .github/workflows/pr560-scan-scope-repair.yml
+
+      - name: Validate focused contracts
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q tests/test_required_workflow_queue_contract.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          document = yaml.safe_load(Path('.github/workflows/strix.yml').read_text(encoding='utf-8'))
+          if not isinstance(document, dict):
+              raise SystemExit('workflow did not parse as a mapping')
+          PY
+          git diff --check
+          test ! -e .github/workflows/pr560-scan-scope-repair.yml
+
+      - name: Commit verified repair
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(security): classify absent Strix PR payload as full scan"
+          git push origin HEAD:agent/appguardrail-security-aggregation
