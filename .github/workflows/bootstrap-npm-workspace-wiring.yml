@@ -1,5 +1,7 @@
 name: Bootstrap npm workspace coverage wiring
 
+# One-shot branch bootstrap. The successful run deletes this workflow and its
+# patch script after wiring the active central coverage workflow and contracts.
 on:
   push:
     branches:
