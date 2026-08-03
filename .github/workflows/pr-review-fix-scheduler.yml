@@ -44,7 +44,7 @@ on:
         default: ""
         type: string
       canonical_ref:
-        description: Immutable commit SHA of ContextualWisdomLab/.github to use for scheduler code on reusable calls
+        description: Deprecated compatibility input; the called workflow's immutable SHA is always used
         required: false
         default: ""
         type: string
@@ -83,21 +83,25 @@ jobs:
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
       AUTOFIX_WORKFLOW: ${{ github.event.client_payload.autofix_workflow || inputs.autofix_workflow || 'pr-review-autofix.yml' }}
       AUTOFIX_REPOSITORY: ${{ github.event.client_payload.autofix_repository || inputs.autofix_repository || 'ContextualWisdomLab/.github' }}
-      CANONICAL_REF: ${{ github.event_name == 'workflow_call' && inputs.canonical_ref || 'main' }}
+      CANONICAL_REPOSITORY: ${{ job.workflow_repository }}
+      CANONICAL_REF: ${{ job.workflow_sha }}
     steps:
-      - name: Require immutable canonical source for reusable calls
-        if: github.event_name == 'workflow_call'
+      - name: Require immutable canonical source
         run: |
           set -euo pipefail
+          if [ "$CANONICAL_REPOSITORY" != "ContextualWisdomLab/.github" ]; then
+            echo "::error::Canonical scheduler source resolved outside ContextualWisdomLab/.github."
+            exit 1
+          fi
           if [[ ! "$CANONICAL_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Reusable scheduler calls must provide canonical_ref as an immutable 40-character commit SHA."
+            echo "::error::Canonical scheduler source must resolve to the immutable called-workflow commit SHA."
             exit 1
           fi
 
       - name: Checkout canonical scheduler
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ContextualWisdomLab/.github
+          repository: ${{ env.CANONICAL_REPOSITORY }}
           ref: ${{ env.CANONICAL_REF }}
           fetch-depth: 1
           persist-credentials: false
