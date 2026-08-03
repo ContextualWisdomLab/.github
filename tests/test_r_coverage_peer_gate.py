@@ -74,7 +74,7 @@ Suggests:
     mockery,
     testthat (>= 3.0.0)
 """
-    suggests = gate.declared_suggests(description)
+    suggests = gate.declared_dependencies(description)
 
     assert suggests == {"mockery", "testthat"}
     assert not gate.classify_testthat_failure(text, "aFIPC")
@@ -88,6 +88,48 @@ Suggests:
         "aFIPC",
         allowed_missing=suggests,
     )
+
+
+def test_allows_imports_depends_linkingto_dependency_failures() -> None:
+    """A deferral may name a missing Imports/Depends/LinkingTo dependency, not only Suggests."""
+    # Mirrors the real aFIPC contract: mirt is an Imports package, so a
+    # transient sandbox failure to install it must remain safely deferrable.
+    text = """\
+Error ('test-linking.R:1:1'): fixed-anchor invariant
+<packageNotFoundError/error/condition>
+Error in `loadNamespace(x)`: there is no package called 'mirt'
+[ FAIL 1 | WARN 0 | SKIP 0 | PASS 0 ]
+Error: Test failures
+"""
+    description = """\
+Package: aFIPC
+Imports: mirt, methods
+Suggests: testthat (>= 3.0.0)
+"""
+    dependencies = gate.declared_dependencies(description)
+
+    assert dependencies == {"mirt", "methods", "testthat"}
+    assert gate.classify_testthat_failure(text, "aFIPC", allowed_missing=dependencies)
+
+    depends_link = """\
+Package: pkg
+Depends: R (>= 4.1), lattice
+LinkingTo: Rcpp
+Imports: methods
+"""
+    assert gate.declared_dependencies(depends_link) == {
+        "R",
+        "lattice",
+        "Rcpp",
+        "methods",
+    }
+
+
+def test_declared_dependencies_fail_closed_on_any_field() -> None:
+    """A malformed non-Suggests dependency field fails the whole deferral closed."""
+    assert gate.declared_dependencies("Package: pkg\nImports: mirt (\n") is None
+    assert gate.declared_dependencies("Package: pkg\nDepends: a\nDepends: b\n") is None
+    assert gate.declared_dependencies("Package: pkg\n") == set()
 
 
 @pytest.mark.parametrize(
@@ -106,7 +148,7 @@ def test_parses_description_suggests_fail_closed(
     description: str, expected: set[str] | None
 ) -> None:
     """Malformed or duplicate Suggests fields cannot broaden the deferral set."""
-    assert gate.declared_suggests(description) == expected
+    assert gate.declared_dependencies(description) == expected
 
 
 def test_requires_successful_r_cmd_check_workflow() -> None:

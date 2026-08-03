@@ -24,32 +24,44 @@ DESCRIPTION_PACKAGE_SPEC_RE = re.compile(
     r"([A-Za-z][A-Za-z0-9.]*)\s*(?:\([^()]*\))?\Z"
 )
 R_CMD_CHECK_RE = re.compile(r"\br[\s_-]*cmd[\s_-]*check\b", re.IGNORECASE)
+# A package's testthat suite loads the package under test, so a bounded
+# ``packageNotFoundError`` deferral may name any of its *declared* runtime or
+# test dependencies -- not only ``Suggests``. ``Enhances`` is excluded on
+# purpose: those packages are not loaded when the package under test loads.
+DEPENDENCY_FIELDS = ("depends", "imports", "linkingto", "suggests")
 
 
-def declared_suggests(description: str) -> set[str] | None:
-    """Return validated package names from a DESCRIPTION ``Suggests`` field."""
+def declared_field_packages(description: str, field_name: str) -> set[str] | None:
+    """Return validated package names from one DESCRIPTION dependency field.
+
+    ``field_name`` is matched case-insensitively. Continuation lines (leading
+    whitespace) extend the field value. A duplicate field declaration, a
+    malformed package spec, or a non-indented line without a colon inside the
+    open field body fails closed with ``None``. An absent field yields an empty
+    set.
+    """
     values: list[str] = []
-    in_suggests = False
-    found_suggests = False
+    in_field = False
+    found_field = False
     for line in description.splitlines():
         if line.startswith((" ", "\t")):
-            if in_suggests:
+            if in_field:
                 values.append(line.strip())
             continue
         field, separator, value = line.partition(":")
         if not separator:
-            if in_suggests:
+            if in_field:
                 return None
             continue
-        in_suggests = field.casefold() == "suggests"
-        if not in_suggests:
+        in_field = field.strip().casefold() == field_name
+        if not in_field:
             continue
-        if found_suggests:
+        if found_field:
             return None
-        found_suggests = True
+        found_field = True
         values.append(value.strip())
 
-    if not found_suggests:
+    if not found_field:
         return set()
     raw_value = " ".join(values).strip()
     if not raw_value:
@@ -61,6 +73,25 @@ def declared_suggests(description: str) -> set[str] | None:
         if match is None:
             return None
         packages.add(match.group(1))
+    return packages
+
+
+def declared_dependencies(description: str) -> set[str] | None:
+    """Return validated package names across DESCRIPTION dependency fields.
+
+    Unions the ``Depends``, ``Imports``, ``LinkingTo``, and ``Suggests``
+    fields so that a bounded ``packageNotFoundError`` deferral may name any
+    declared dependency the test suite loads through the package under test
+    (for example an ``Imports`` package such as ``mirt``), not only a
+    ``Suggests`` package. Any malformed dependency field fails closed with
+    ``None``.
+    """
+    packages: set[str] = set()
+    for field_name in DEPENDENCY_FIELDS:
+        field_packages = declared_field_packages(description, field_name)
+        if field_packages is None:
+            return None
+        packages |= field_packages
     return packages
 
 
@@ -155,7 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.description is not None:
             description = _read_bounded_text(args.description)
             allowed_missing = (
-                declared_suggests(description) if description is not None else None
+                declared_dependencies(description) if description is not None else None
             )
         if (
             text is not None
@@ -168,7 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             print(
                 "testthat failures were exclusively packageNotFoundError conditions "
-                f"for package {args.package} or its declared Suggests dependencies"
+                f"for package {args.package} or its declared dependencies"
             )
             return 0
         print("testthat failure is not safely deferrable", file=sys.stderr)
