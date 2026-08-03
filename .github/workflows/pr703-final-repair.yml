@@ -1,0 +1,129 @@
+name: PR 703 Final Repair
+
+on:
+  push:
+    branches:
+      - fix/npm-workspace-coverage-root
+    paths:
+      - .github/workflows/pr703-final-repair.yml
+      - scripts/ci/bootstrap_pr703_final_repair.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr703-final-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.actor != 'github-actions[bot]'
+      && github.ref_name == 'fix/npm-workspace-coverage-root'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact triggering commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install hash-pinned contract tools
+        run: >-
+          python3 -m pip install
+          --disable-pip-version-check
+          --require-hashes
+          --only-binary=:all:
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply reviewed final repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/ci/bootstrap_pr703_final_repair.py
+          python3 scripts/ci/bootstrap_pr703_final_repair.py
+
+      - name: Verify complete final state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/ci/npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py \
+            tests/test_opencode_agent_contract.py
+
+          python3 -m pytest -q \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py \
+            tests/test_opencode_agent_contract.py
+
+          python3 -m coverage erase
+          python3 -m coverage run \
+            --source=scripts.ci.npm_workspace_install_root \
+            -m pytest -q \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py
+          python3 -m coverage report --show-missing --fail-under=100
+          python3 -m interrogate --fail-under=100 scripts/ci/npm_workspace_install_root.py
+
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+          git -C "$fixture" init -q
+          git -C "$fixture" config user.email tests@example.invalid
+          git -C "$fixture" config user.name 'Coverage Tests'
+          mkdir -p "$fixture/apps/desktop"
+          cat >"$fixture/package.json" <<'JSON'
+          {"name":"root","private":true,"workspaces":["apps/*","packages/*"]}
+          JSON
+          cat >"$fixture/apps/desktop/package.json" <<'JSON'
+          {"name":"desktop"}
+          JSON
+          cat >"$fixture/package-lock.json" <<'JSON'
+          {"name":"root","lockfileVersion":3,"packages":{"":{},"apps/desktop":{}}}
+          JSON
+          git -C "$fixture" add -A
+          git -C "$fixture" commit -q -m fixture
+          revision="$(git -C "$fixture" rev-parse HEAD)"
+          resolved="$(
+            python3 scripts/ci/npm_workspace_install_root.py \
+              --repo-root "$fixture" \
+              --package-dir "$fixture/apps/desktop" \
+              --base-sha "$revision" \
+              --head-sha "$revision"
+          )"
+          test "$resolved" = "."
+
+          grep -F 'npm_workspace_args=(--workspace "$npm_workspace_selector")' \
+            .github/workflows/opencode-review-dispatch.yml >/dev/null
+          grep -F 'npm ci --offline --ignore-scripts --cache "$writable_npm_cache_dir"' \
+            .github/workflows/opencode-review-dispatch.yml >/dev/null
+          git diff --check
+          test ! -e .github/workflows/bootstrap-npm-workspace-wiring.yml
+          test ! -e .github/workflows/pr703-focused-tests.yml
+          test ! -e .github/workflows/pr703-final-repair.yml
+          test ! -e scripts/ci/bootstrap_patch_workflow.py
+          test ! -e scripts/ci/bootstrap_pr703_final_repair.py
+
+      - name: Commit verified final diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No verified repair changes to commit."
+            exit 0
+          fi
+          git commit -m 'fix(coverage): wire validated npm workspace lock owner'
+          git push origin HEAD:fix/npm-workspace-coverage-root
