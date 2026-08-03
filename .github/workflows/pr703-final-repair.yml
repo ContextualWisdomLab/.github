@@ -7,31 +7,46 @@ on:
     paths:
       - .github/workflows/pr703-final-repair.yml
       - scripts/ci/bootstrap_pr703_final_repair.py
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/pr703-final-repair.yml
+      - scripts/ci/bootstrap_pr703_final_repair.py
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr703-final-repair
+  group: pr703-final-repair-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
-      && github.ref_name == 'fix/npm-workspace-coverage-root'
+      && (
+        (github.event_name == 'push' && github.ref_name == 'fix/npm-workspace-coverage-root')
+        || (
+          github.event_name == 'pull_request'
+          && github.event.pull_request.number == 703
+          && github.event.pull_request.head.repo.full_name == github.repository
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      REPAIR_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
         with:
           egress-policy: audit
 
-      - name: Checkout exact triggering commit without credentials
+      - name: Checkout exact pull request head without credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.REPAIR_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -126,7 +141,7 @@ jobs:
       - name: Upload verified final state
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pr703-final-state-${{ github.sha }}
+          name: pr703-final-state-${{ env.REPAIR_SHA }}
           path: ${{ runner.temp }}/pr703-final-state.tar.gz
           if-no-files-found: error
           retention-days: 1
