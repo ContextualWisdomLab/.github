@@ -22,7 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
-
+from scripts.ci.redact_sensitive_log import redact_text
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 
@@ -184,18 +184,18 @@ def emit_result(
 ) -> None:
     """Print a machine-readable web E2E execution evidence summary."""
     payload = {
-        "backend_cmd": args.backend_cmd,
+        "backend_cmd": redact_text(args.backend_cmd),
         "backend_ready": backend_ready,
         "allowed_env": sorted(set(args.allow_env)),
-        "cwd": str(copied_repo),
-        "e2e_cmd": args.e2e_cmd,
+        "cwd": redact_text(str(copied_repo)),
+        "e2e_cmd": redact_text(args.e2e_cmd),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": args.evidence_note,
+        "evidence_note": redact_text(args.evidence_note),
         "exit_code": exit_code,
-        "frontend_cmd": args.frontend_cmd,
+        "frontend_cmd": redact_text(args.frontend_cmd),
         "frontend_ready": frontend_ready,
         "network": args.network,
-        "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
+        "sandbox": redact_text(str(sandbox_root)) if args.keep_sandbox else "(removed)",
         "sandboxed": True,
     }
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
@@ -216,9 +216,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         copied_repo = sandboxed_verify.copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = sandboxed_verify.scrubbed_env(sandbox, args.allow_env)
-        print(f"sandboxed-web-e2e: cwd={copied_repo}")
+        print(redact_text(f"sandboxed-web-e2e: cwd={copied_repo}"))
         if args.allow_env:
-            print(f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}")
+            print(redact_text(f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}"))
         if args.network != "default":
             print(f"sandboxed-web-e2e: network={args.network}")
         services.append(start_service("backend", args.backend_cmd, copied_repo, env, logs_dir))
@@ -232,18 +232,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
             return exit_code
         except subprocess.TimeoutExpired as exc:
             stdout = sandboxed_verify.timeout_output_text(exc.stdout)
             stderr = sandboxed_verify.timeout_output_text(exc.stderr)
             if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
+                print(redact_text(stdout), end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+                print(redact_text(stderr), end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
             print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
             exit_code = 124
             return exit_code
@@ -253,7 +253,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_tail = tail_text(service.log_path)
             if log_tail:
                 print(f"--- {service.label} log tail ---")
-                print(log_tail)
+                print(redact_text(log_tail))
         emit_result(
             args=args,
             copied_repo=copied_repo,
