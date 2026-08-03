@@ -2,6 +2,7 @@ name: Bootstrap npm workspace coverage wiring
 
 # One-shot branch bootstrap; a verified run removes this workflow, its patch
 # script, and the branch-only focused workflow from the final merge diff.
+# Retriggered to materialize the reviewed final state and self-remove.
 on:
   push:
     branches:
