@@ -1,0 +1,112 @@
+name: PR 709 Commercial Readiness Hardening v2
+
+# One-shot repair. It shares the original repair's concurrency group so an
+# in-flight narrow repair completes before this idempotent superset runs.
+on:
+  push:
+    branches:
+      - ops/naruon-hourly-commercial-readiness-20260803
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr709-least-privilege-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ops/naruon-hourly-commercial-readiness-20260803
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install hash-pinned contract tools
+        run: >-
+          python3 -m pip install
+          --disable-pip-version-check
+          --require-hashes
+          --only-binary=:all:
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply idempotent comprehensive hardening
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/ci/bootstrap_naruon_commercial_readiness_hardening_v2.py
+          python3 scripts/ci/bootstrap_naruon_commercial_readiness_hardening_v2.py
+
+      - name: Validate final branch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q \
+            tests/test_naruon_commercial_readiness_hourly_contract.py \
+            tests/test_required_workflow_queue_contract.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          for name in (
+              "naruon-commercial-readiness-development.yml",
+              "naruon-commercial-readiness-hourly.yml",
+          ):
+              document = yaml.safe_load(
+                  Path(".github/workflows", name).read_text(encoding="utf-8")
+              )
+              if not isinstance(document, dict):
+                  raise SystemExit(f"workflow did not parse as a mapping: {name}")
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+
+          development = Path(
+              ".github/workflows/naruon-commercial-readiness-development.yml"
+          ).read_text(encoding="utf-8")
+          hourly = Path(
+              ".github/workflows/naruon-commercial-readiness-hourly.yml"
+          ).read_text(encoding="utf-8")
+          agent = development.split(
+              "- name: Run one commercial-readiness implementation slice", 1
+          )[1].split("- name: Validate bounded changed-file", 1)[0]
+          if "GITHUB_TOKEN:" in agent or "USE_GITHUB_TOKEN:" in agent:
+              raise SystemExit("agent step still receives a repository token")
+          if "contents: write" in development.split("steps:", 1)[0]:
+              raise SystemExit("development job still has contents:write")
+          if "contents: write" in hourly:
+              raise SystemExit("hourly orchestrator still has contents:write")
+          if "Binary changes are outside" not in development:
+              raise SystemExit("binary change guard is absent")
+          if "Ignoring completed autonomous branch:" not in development:
+              raise SystemExit("squash-safe completed-branch guard is absent")
+          PY
+          git diff --check
+          test ! -e .github/workflows/pr709-least-privilege-repair.yml
+          test ! -e .github/workflows/pr709-commercial-readiness-hardening-v2.yml
+          test ! -e scripts/ci/bootstrap_naruon_commercial_readiness_hardening_v2.py
+
+      - name: Commit verified hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No hardening changes remain to commit."
+            exit 0
+          fi
+          git commit -m "fix(automation): harden autonomous Naruon development boundary"
+          git push origin HEAD:ops/naruon-hourly-commercial-readiness-20260803
