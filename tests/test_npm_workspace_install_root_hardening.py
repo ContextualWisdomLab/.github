@@ -45,7 +45,7 @@ def _workspace_repo(
     lockfile_version: object = 3,
 ) -> tuple[Path, str]:
     """Create a committed npm workspace fixture with one selected package."""
-    repo.mkdir(parents=True)
+    repo.mkdir(parents=True, exist_ok=True)
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "tests@example.invalid")
     _git(repo, "config", "user.name", "Coverage Tests")
