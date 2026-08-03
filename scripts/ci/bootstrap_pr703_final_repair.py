@@ -83,6 +83,14 @@ def patch_generated_contract(text: str) -> str:
     )
     text = replace_once(
         text,
+        """    assert npm_install_case.count("failures=$((failures + 1))") == 2
+""",
+        """    assert npm_install_case.count("failures=$((failures + 1))") == 4
+""",
+        "complete npm failure-path assertions",
+    )
+    text = replace_once(
+        text,
         """    assert 'bash "$npm_install_root" "$writable_npm_cache_dir" "${npm_workspace_args[@]}"' in npm_install_case
 """,
         """    assert 'bash "$npm_install_root"' in npm_install_case
