@@ -14,10 +14,12 @@ import argparse
 import json
 import re
 import subprocess
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 NPM_LOCK_NAMES = ("npm-shrinkwrap.json", "package-lock.json")
+SUPPORTED_LOCKFILE_VERSIONS = frozenset({2, 3})
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
@@ -151,28 +153,63 @@ def _workspace_patterns(package_data: dict[str, Any]) -> list[str]:
             raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
         if any(ord(character) < 32 or ord(character) == 127 for character in raw_pattern):
             raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
-        candidate = PurePosixPath(raw_pattern.rstrip("/"))
+
+        normalized = raw_pattern.rstrip("/")
+        segments = normalized.split("/")
         if (
-            candidate.is_absolute()
-            or ".." in candidate.parts
-            or "node_modules" in candidate.parts
-            or not candidate.parts
+            raw_pattern.startswith("/")
+            or not normalized
+            or any(segment in {"", ".", "..", "node_modules"} for segment in segments)
         ):
             raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
-        patterns.append(candidate.as_posix())
+        for segment in segments:
+            if segment in {"*", "**"}:
+                continue
+            if any(character in segment for character in "*?[]{}"):
+                raise ResolutionError(f"unsafe npm workspace pattern: {raw_pattern!r}")
+        patterns.append("/".join(segments))
     return patterns
 
 
 def _is_declared_workspace(relative_package: PurePosixPath, patterns: list[str]) -> bool:
-    """Return whether a package path matches at least one workspace pattern."""
-    return any(relative_package.match(pattern) for pattern in patterns)
+    """Return whether a package path matches a constrained workspace pattern."""
+    path_parts = relative_package.parts
+
+    for pattern in patterns:
+        pattern_parts = tuple(pattern.split("/"))
+
+        @lru_cache(maxsize=None)
+        def matches(path_index: int, pattern_index: int) -> bool:
+            """Match literal, single-segment, and recursive-segment tokens."""
+            if pattern_index == len(pattern_parts):
+                return path_index == len(path_parts)
+            token = pattern_parts[pattern_index]
+            if token == "**":
+                return any(
+                    matches(next_index, pattern_index + 1)
+                    for next_index in range(path_index + 1, len(path_parts) + 1)
+                )
+            if path_index >= len(path_parts):
+                return False
+            return (token == "*" or token == path_parts[path_index]) and matches(
+                path_index + 1,
+                pattern_index + 1,
+            )
+
+        if matches(0, 0):
+            return True
+    return False
 
 
 def _lock_covers(lock_data: dict[str, Any], relative_package: str) -> bool:
-    """Return whether an npm lock has an exact package-map entry for a package."""
+    """Return whether an npm v2/v3 lock has an exact package-map entry."""
     lockfile_version = lock_data.get("lockfileVersion")
-    if not isinstance(lockfile_version, int) or isinstance(lockfile_version, bool):
-        raise ResolutionError("npm lockfile must declare an integer lockfileVersion")
+    if (
+        not isinstance(lockfile_version, int)
+        or isinstance(lockfile_version, bool)
+        or lockfile_version not in SUPPORTED_LOCKFILE_VERSIONS
+    ):
+        raise ResolutionError("npm lockfileVersion must be the supported integer 2 or 3")
     packages = lock_data.get("packages")
     if not isinstance(packages, dict):
         raise ResolutionError("npm lockfile must contain a packages object")
@@ -306,6 +343,19 @@ def resolve_install_root(
     )
 
 
+def _validated_cli_output(value: str) -> str:
+    """Return one safe single-line repository-relative resolver result."""
+    if not value or "\\" in value or any(
+        ord(character) < 32 or ord(character) == 127 for character in value
+    ):
+        raise ResolutionError("resolved npm install root contains unsafe characters")
+    candidate = PurePosixPath(value)
+    normalized = candidate.as_posix()
+    if candidate.is_absolute() or ".." in candidate.parts or normalized != value:
+        raise ResolutionError("resolved npm install root is not a safe normalized relative path")
+    return normalized
+
+
 def main(argv: list[str] | None = None) -> int:
     """Resolve and print one validated repository-relative npm install root."""
     parser = argparse.ArgumentParser()
@@ -315,14 +365,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head-sha", required=True)
     args = parser.parse_args(argv)
     try:
-        print(
-            resolve_install_root(
-                args.repo_root,
-                args.package_dir,
-                args.base_sha,
-                args.head_sha,
-            )
+        resolved_root = resolve_install_root(
+            args.repo_root,
+            args.package_dir,
+            args.base_sha,
+            args.head_sha,
         )
+        print(_validated_cli_output(resolved_root))
     except (OSError, ResolutionError) as exc:
         parser.error(str(exc))
     return 0
