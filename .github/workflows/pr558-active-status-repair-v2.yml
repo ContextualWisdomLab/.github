@@ -8,6 +8,10 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/pr558-active-status-repair-v2.yml
+      - scripts/ci/pr_review_merge_scheduler.py
+      - tests/test_pr_review_merge_scheduler.py
 
 permissions:
   contents: write
@@ -19,8 +23,11 @@ concurrency:
 jobs:
   repair:
     if: >-
-      github.event_name == 'push'
-      || github.event.pull_request.head.ref == 'fix/opencode-merge-method-concurrency-20260714'
+      github.actor != 'github-actions[bot]'
+      && (
+        github.event_name == 'push'
+        || github.event.pull_request.head.ref == 'fix/opencode-merge-method-concurrency-20260714'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
