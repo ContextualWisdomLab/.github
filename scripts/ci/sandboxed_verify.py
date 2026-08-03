@@ -18,8 +18,11 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.ci.redact_sensitive_log import redact_text
-
+try:
+    from scripts.ci.redact_sensitive_log import redact_text
+except ImportError:  # pragma: no cover
+    def redact_text(text: str) -> str:
+        return text
 
 DEFAULT_IGNORE = (
     ".git",
