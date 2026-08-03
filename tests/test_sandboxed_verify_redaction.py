@@ -1,5 +1,7 @@
 """Regression tests for sandboxed verification log redaction."""
 
+import subprocess
+
 from scripts.ci import sandboxed_verify
 
 
@@ -24,6 +26,44 @@ def test_timeout_output_text_redacts_bytes_and_str() -> None:
     assert sandboxed_verify.redact_text(
         sandboxed_verify.timeout_output_text(session_key)
     ) == "session_key=[REDACTED]"
+
+
+def test_main_redacts_timeout_stdout_and_stderr(monkeypatch, tmp_path, capsys) -> None:
+    """The actual timeout handler redacts captured subprocess streams."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    api_key = _api_key_fixture()
+    session_key = _session_key_fixture()
+
+    def raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=["python", "-c", "pass"],
+            timeout=5,
+            output=api_key,
+            stderr=session_key,
+        )
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", raise_timeout)
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--timeout",
+            "5",
+            "--",
+            "python",
+            "-c",
+            "pass",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 124
+    assert "api_key: [REDACTED]" in captured.out
+    assert "mock_token_string" not in captured.out
+    assert "session_key=[REDACTED]" in captured.err
+    assert "mock_session_value" not in captured.err
 
 
 def test_emit_result_redacts_payload_fields(capsys, tmp_path) -> None:
