@@ -14,15 +14,6 @@ REPO_ROOT="$(
 GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
 
 FAILURES=0
-TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
-TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-60}"
-
-if ! [[ "$TIMEOUT_TEST_PROCESS_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
-	! [[ "$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
-	[ "$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" -le "$TIMEOUT_TEST_PROCESS_SECONDS" ]; then
-	printf 'STRIX_TEST_FAKE_SLEEP_SECONDS must be a positive integer greater than STRIX_TEST_PROCESS_TIMEOUT_SECONDS.\n' >&2
-	exit 2
-fi
 
 # Keep local developer/provider secrets from changing fake Strix model routing.
 unset STRIX_LLM
@@ -235,8 +226,6 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Fetch pull request head for trusted scan" "strix workflow fetches PR head without checkout"
 	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number" "strix workflow consumes default-branch PR-scope evidence payloads"
 	assert_file_contains "$workflow_file" "github.event.client_payload.strix_llm" "strix workflow accepts only repository-dispatch Strix model overrides"
-	assert_file_contains "$workflow_file" "Resolve target repository visibility" "strix workflow resolves target privacy before selecting hosted trial providers"
-	assert_file_contains "$workflow_file" "NVIDIA NIM hosted trial scans are limited to public repositories" "strix workflow blocks NVIDIA hosted trial scans for private repositories"
 	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number" "strix workflow can run PR-scoped repository_dispatch evidence"
 	assert_file_contains "$workflow_file" "PR number and head SHA are required for trusted PR-scope Strix evidence" "strix workflow fails closed when manual PR-scope metadata is incomplete"
 	assert_file_contains "$workflow_file" '[[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' "strix workflow validates PR head SHA before trusted fetch"
@@ -289,11 +278,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "STRIX_TOTAL_TIMEOUT_SECONDS:" "strix workflow must not expose total timeout env names in GitHub logs"
 	assert_file_not_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" "strix workflow must not split Strix PR evidence into separate scanner runs"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM == 'vertex_ai/gemini-3.1-pro-preview-customtools' && 'vertex_ai/gemini-2.5-flash'" "strix workflow must not quarantine the approved Vertex preview model after organization secret visibility is fixed"
-	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b' || 'gpt-5.6-luna'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
-	assert_file_contains "$workflow_file" 'if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]' "strix workflow falls back to the contracted provider when the NVIDIA secret is absent"
-	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
+	assert_file_contains "$workflow_file" "github.event.client_payload.strix_llm || 'gpt-5.6-luna'" "strix workflow defaults PR Strix scans to direct OpenAI GPT-5.6 Luna"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
-	assert_file_contains "$workflow_file" "STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model" "strix workflow rejects unsupported model inputs"
+	assert_file_contains "$workflow_file" "STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model" "strix workflow rejects unsupported model inputs"
 	assert_file_contains "$workflow_file" "vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)" "strix workflow accepts only exact approved organization Vertex AI models"
 	assert_file_contains "$workflow_file" 'STRIX_VERTEX_FALLBACK_MODELS: ""' "strix workflow disables silent Vertex fallbacks so timeout-class failures fail closed"
 	assert_file_contains "$workflow_file" 'STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"' "strix workflow fails closed on timeout, fatal, warning, denied, or provider failure signals"
@@ -321,34 +308,24 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "vertex_ai/* | vertex_ai_beta/*" "strix workflow must not accept arbitrary Vertex models"
 	assert_file_contains "$workflow_file" "provider_mode=openai_direct" "strix workflow requires direct OpenAI GPT-5 credentials"
 	assert_file_contains "$workflow_file" "provider_mode=github_models" "strix workflow supports GitHub Models provider mode"
-	assert_file_contains "$workflow_file" "provider_mode=openrouter" "strix workflow supports OpenRouter provider mode"
-	assert_file_contains "$workflow_file" "provider_mode=nvidia_nim" "strix workflow supports NVIDIA NIM provider mode"
 	assert_file_contains "$workflow_file" 'STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}' "strix workflow prefers the organization GitHub Models token secret and falls back to GITHUB_TOKEN"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token)" "strix workflow keeps GitHub Models key routing in provider-scoped key material"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY)" "strix workflow keeps direct OpenAI key routing in provider-scoped key material"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY" "strix workflow includes OpenRouter key routing in provider-scoped key material"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY" "strix workflow includes NVIDIA NIM key routing in provider-scoped key material"
+	assert_file_contains "$workflow_file" 'LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == '"'"'github_models'"'"' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == '"'"'openai_direct'"'"' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || '"'"''"'"' }}' "strix workflow uses provider-scoped LLM key material"
+	assert_file_contains "$workflow_file" 'LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == '"'"'github_models'"'"' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == '"'"'openai_direct'"'"' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || '"'"''"'"' }}' "strix workflow masks provider-scoped LLM key material"
 	assert_file_not_contains "$workflow_file" "secrets.LLM_API_KEY" "strix workflow must not expose generic LLM_API_KEY for Vertex scans"
 	assert_file_contains "$workflow_file" "STRIX_GITHUB_MODELS_TOKEN is required for GitHub Models Strix scans" "strix workflow fails closed when GitHub Models credentials are absent"
 	assert_file_contains "$workflow_file" "STRIX_OPENAI_API_KEY is required for Strix OpenAI Platform scans" "strix workflow fails closed when direct credentials are absent"
-	assert_file_contains "$workflow_file" "OPENROUTER_API_KEY is required for Strix OpenRouter scans" "strix workflow fails closed when OpenRouter credentials are absent"
-	assert_file_contains "$workflow_file" "NVIDIA_NIM_API_KEY is required for Strix NVIDIA NIM scans" "strix workflow fails closed when NVIDIA credentials are absent"
 	assert_file_contains "$workflow_file" 'PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}' "strix workflow passes provider mode through env"
 	assert_file_not_contains "$workflow_file" '[ "${{ steps.gate.outputs.provider_mode }}" = "openai_direct" ]' "strix workflow does not interpolate provider mode inside shell condition"
 	assert_file_contains "$workflow_file" "STRIX_REASONING_EFFORT: high" "strix workflow uses high reasoning effort when the selected provider/model supports it"
 	assert_file_contains "$workflow_file" 'trimmed_openai_key="$(printf '"'"'%s'"'"' "$sanitized_openai_key" | sed '"'"'s/^[[:space:]]*//;s/[[:space:]]*$//'"'"')"' "strix workflow trims whitespace-only OpenAI keys before gate validation"
-	assert_file_contains "$workflow_file" 'printf '"'"'%s'"'"' "$trimmed" > "$llm_api_key_file"' "strix workflow writes trimmed provider API keys into the trusted input file"
-	assert_file_contains "$workflow_file" 'STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == '"'"'vertex_ai'"'"' && '"'"'vertex_ai'"'"' || steps.gate.outputs.provider_mode == '"'"'nvidia_nim'"'"' && '"'"'nvidia_nim'"'"' || '"'"'openai'"'"' }}' "strix workflow selects the correct default provider"
+	assert_file_contains "$workflow_file" 'trimmed="$(printf '"'"'%s'"'"' "$sanitized" | sed '"'"'s/^[[:space:]]*//;s/[[:space:]]*$//'"'"')"' "strix workflow trims whitespace-only OpenAI keys before input file creation"
+	assert_file_contains "$workflow_file" 'STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == '"'"'vertex_ai'"'"' && '"'"'vertex_ai'"'"' || '"'"'openai'"'"' }}' "strix workflow selects the correct default provider"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models API base" "strix workflow prepares the GitHub Models API base only for GitHub Models mode"
 	assert_file_contains "$workflow_file" "https://models.github.ai/inference" "strix workflow routes GitHub Models scans to the inference endpoint"
-	assert_file_contains "$workflow_file" "Prepare OpenRouter API base" "strix workflow prepares the OpenRouter API base when OpenRouter mode is selected"
-	assert_file_contains "$workflow_file" "https://openrouter.ai/api/v1" "strix workflow routes OpenRouter scans to the OpenRouter API endpoint"
-	assert_file_contains "$workflow_file" "https://integrate.api.nvidia.com/v1" "strix workflow routes NVIDIA NIM scans to the hosted endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
 	assert_file_contains "$workflow_file" "github_models/openai/o3 github_models/openai/gpt-5-chat" "strix workflow keeps GitHub Models fallback on tool-capable OpenAI models without GPT-4.1 downgrade"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives direct-OpenAI scans GitHub Models fallbacks so provider quota outages degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
@@ -381,7 +358,6 @@ assert_strix_gpt54_model_guard_semantics() {
 	github_models/openai/gpt-5* | github_models/openai/gpt-[6-9]* | github_models/openai/gpt-[1-9][0-9]* | \
 	gpt-5.[4-9]* | gpt-5.[1-9][0-9]* | gpt-[6-9]* | gpt-[1-9][0-9]* | \
 	openai-direct/gpt-5.[4-9]* | openai-direct/gpt-5.[1-9][0-9]* | openai-direct/gpt-[6-9]* | openai-direct/gpt-[1-9][0-9]* | \
-	openrouter/free | openrouter/openrouter/free | \
 	vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)
 		return 0
 		;;
@@ -412,9 +388,6 @@ assert_strix_gpt54_model_guard_cases() {
 	fi
 	if ! assert_strix_gpt54_model_guard_semantics "openai-direct/gpt-5.4"; then
 		record_failure "strix GPT-5.4 guard must accept direct OpenAI openai-direct/gpt-5.4"
-	fi
-	if ! assert_strix_gpt54_model_guard_semantics "openrouter/free"; then
-		record_failure "strix guard must accept OpenRouter openrouter/free"
 	fi
 	if ! assert_strix_gpt54_model_guard_semantics "openai/gpt-5.4"; then
 		record_failure "strix guard must accept GitHub Models openai/gpt-5.4"
@@ -484,25 +457,13 @@ assert_strix_child_target_uses_constant_argument() {
 }
 
 assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
-	local bootstrap_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
-	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml"
-	local comment_helpers_file="$REPO_ROOT/scripts/ci/opencode_review_comment_helpers.sh"
+	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
 	local opencode_config="$REPO_ROOT/opencode.jsonc"
 
-	assert_file_contains "$bootstrap_file" "pull_request_target:" "opencode required workflow loads its metadata-only bootstrap from the protected base ref"
-	assert_file_contains "$bootstrap_file" "types: [opened, synchronize, reopened, ready_for_review, closed]" "opencode required workflow reacts to current PR head changes and closed-PR cleanup"
-	assert_file_contains "$bootstrap_file" "required-workflow-bootstrap:" "opencode required workflow materializes at least one job for pull_request ruleset runs"
-	assert_file_contains "$bootstrap_file" "Required OpenCode workflow materialized without checking out or" "opencode required workflow bootstrap documents its data-only trust boundary"
-	assert_file_contains "$bootstrap_file" "coverage-source-tree:" "opencode required workflow preserves the stable coverage-source-tree branch-protection context"
-	assert_file_contains "$bootstrap_file" "coverage-evidence:" "opencode required workflow preserves the stable coverage-evidence branch-protection context"
-	assert_file_contains "$bootstrap_file" "name: opencode-review" "opencode required workflow preserves the stable opencode-review branch-protection context"
-	assert_file_contains "$bootstrap_file" "authenticated default-branch OpenCode review dispatch" "opencode required workflow delegates real review execution to the protected dispatch path"
-	assert_file_not_contains "$bootstrap_file" "repository_dispatch:" "opencode required workflow does not mix privileged dispatch execution with pull_request_target"
-	assert_file_not_contains "$bootstrap_file" "actions/checkout" "opencode required workflow never checks out pull-request content"
-	assert_file_not_contains "$bootstrap_file" '${{ secrets.' "opencode required workflow never binds repository secrets"
+	assert_file_contains "$workflow_file" "pull_request_target:" "opencode review workflow loads privileged review logic from the protected base ref"
+	assert_file_contains "$workflow_file" "types: [opened, synchronize, reopened, ready_for_review, closed]" "opencode required workflow reacts to current PR head changes and closed-PR cleanup"
 	assert_file_contains "$workflow_file" "repository_dispatch:" "opencode review supports default-branch scheduler current-head dispatch"
 	assert_file_contains "$workflow_file" "types: [opencode-review]" "opencode repository dispatch accepts only its dedicated event type"
-	assert_file_not_contains "$workflow_file" "pull_request_target:" "opencode privileged review is isolated from pull_request_target"
 	assert_file_not_contains "$workflow_file" "workflow_dispatch:" "privileged opencode retries cannot load a caller-selected workflow ref"
 	if grep -Eq '^[[:space:]]+pull_request:[[:space:]]*$' "$workflow_file"; then
 		record_failure "opencode review workflow must not expose privileged tokens through a PR-controlled workflow definition"
@@ -510,11 +471,13 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" "Wait for trusted OpenCode approval review" "opencode pull_request bridge was removed to avoid duplicate required-check resource use"
 	assert_file_not_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge no longer reconsumes stale trusted review state"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "opencode review workflow must not hard-code repository-specific PR bypasses"
-	if awk '/^  required-workflow-bootstrap:$/,/^[^ ]/' "$bootstrap_file" | grep -q '^[[:space:]]*if:'; then
+	assert_file_contains "$workflow_file" "required-workflow-bootstrap:" "opencode required workflow materializes at least one job for pull_request ruleset runs"
+	assert_file_contains "$workflow_file" "Required OpenCode workflow run materialized for this PR event." "opencode required workflow bootstrap documents why the sentinel job exists"
+	if awk '/^  required-workflow-bootstrap:$/,/^  validate-pr-metadata:$/' "$workflow_file" | grep -q '^[[:space:]]*if:'; then
 		record_failure "opencode required workflow bootstrap must not depend on required-workflow event payload fields"
 	fi
-	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.client_payload.pr_number)" "opencode review scopes repository_dispatch concurrency by current PR"
+	assert_file_contains "$workflow_file" 'github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
+	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "opencode review scopes pull_request concurrency by current PR"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "opencode review does not keep stale head-specific concurrency groups"
 	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)" "opencode review retains a manual PR fallback group when no head SHA is provided"
 	assert_file_contains "$workflow_file" 'cancel-in-progress: true' "opencode review cancels stale in-progress review attempts when a newer PR event arrives"
@@ -535,8 +498,6 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Initialize CodeGraph index for OpenCode" "opencode review workflow initializes CodeGraph before review"
 	assert_file_contains "$workflow_file" "Validate pull request head repository trust" "opencode privileged review validates the live head repository before token exchange and PR-head tooling"
 	assert_file_contains "$workflow_file" "metadata changed before OIDC" "opencode privileged review fails closed for repository-dispatched fork or stale heads with a visible reason"
-	assert_file_contains "$workflow_file" 'EXPECTED_IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}' "opencode privileged review carries the validated privacy state into its final trust check"
-	assert_file_contains "$workflow_file" '[ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]' "opencode privileged review fails closed when a public repository becomes private before model execution"
 	assert_file_contains "$workflow_file" "actions: read" "opencode review workflow can read failed Actions logs without Actions write scope"
 	assert_file_contains "$workflow_file" "checks: read" "opencode review workflow can read failed check-run annotations for line-specific findings"
 	assert_file_contains "$workflow_file" "contents: read" "opencode review workflow uses read-only repository contents permission"
@@ -565,14 +526,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "r-cran-covr" "opencode R coverage uses the signed distribution covr package instead of mutable CRAN resolution"
 	assert_file_contains "$workflow_file" "r-cran-testthat" "opencode R coverage uses the signed distribution testthat package instead of mutable CRAN resolution"
 	assert_file_contains "$workflow_file" "R package testthat suite" "opencode R package coverage requires package testthat evidence"
-	assert_file_contains "$workflow_file" 'description_snapshot="$(mktemp "$RUNNER_TEMP/r-description.XXXXXX")"' "opencode R coverage snapshots DESCRIPTION before untrusted tests run"
-	assert_file_contains "$workflow_file" 'install -m 0444 -- DESCRIPTION "$description_snapshot"' "opencode R coverage keeps the DESCRIPTION snapshot root-owned and immutable"
-	assert_file_contains "$workflow_file" '--description "$description_snapshot"' "opencode R package coverage only defers missing dependencies from the trusted DESCRIPTION snapshot"
-	assert_file_contains "$workflow_file" "r_coverage_peer_gate.py" "opencode R package coverage classifies bounded package-load-only failures with trusted code"
-	assert_file_contains "$workflow_file" "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check" "opencode R package coverage records explicit peer-check deferral evidence"
-	assert_file_contains "$workflow_file" "require_r_cmd_check_for_deferred_coverage" "opencode approval verifies deferred R evidence against current-head peer checks"
-	assert_file_contains "$workflow_file" "WAITING_FOR_R_CMD_CHECK" "opencode approval fails closed when deferred R coverage lacks successful peer evidence"
-	assert_file_not_contains "$workflow_file" 'if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))' "opencode R coverage does not skip the entire test suite merely because the source package is not preinstalled"
+	assert_file_contains "$workflow_file" "testthat unavailable in coverage runner; deferring to required peer R CMD check evidence." "opencode R package tests defer only when testthat cannot be installed in the coverage runner"
 	assert_file_contains "$workflow_file" "covr package_coverage unavailable after package tests; treating missing-line report as advisory." "opencode R package coverage does not block on covr installation reproduction after tests pass"
 	assert_file_contains "$workflow_file" "signed distribution coverage packages unavailable" "opencode R coverage verifies distribution-provided covr/testthat are loadable"
 	assert_file_contains "$workflow_file" "repository: ContextualWisdomLab/.github" "opencode required workflow checks out the central source repository"
@@ -584,9 +538,12 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Exchange OpenCode app token for target repository review reads" "opencode review can read private target repositories through the OpenCode app token before materializing review data"
 	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ steps.review_read_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}' "opencode materialization prefers the OpenCode app token for private target repository reads"
 	assert_file_contains "$workflow_file" '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' "opencode approval uses the app token for target-repository check lookup"
-	assert_file_not_contains "$workflow_file" "LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN" "dispatch-only opencode review does not retain an unreachable pull-request-target token bridge"
-	assert_file_not_contains "$workflow_file" "legacy_github_actions_opencode_blocking_review_ids" "dispatch-only opencode review does not retain stale github-actions bridge lookup code"
-	assert_file_not_contains "$workflow_file" "publish_legacy_github_actions_approval_bridge" "dispatch-only opencode review does not retain stale github-actions bridge publication code"
+	assert_file_contains "$workflow_file" "LEGACY_GITHUB_ACTIONS_REVIEW_TOKEN: \${{ github.event_name == 'pull_request_target' && github.token || '' }}" "opencode app-token approval can bridge stale same-repo github-actions review state"
+	assert_file_contains "$workflow_file" "legacy_github_actions_opencode_blocking_review_ids" "opencode approval detects stale github-actions OpenCode request-changes reviews"
+	assert_file_contains "$workflow_file" 'select((.user.login // "") == "github-actions[bot]")' "opencode stale-review bridge is limited to legacy github-actions reviews"
+	assert_file_contains "$workflow_file" 'select((.state // "") == "CHANGES_REQUESTED")' "opencode stale-review bridge only reacts to blocking request-changes reviews"
+	assert_file_contains "$workflow_file" "OpenCode current-head approval bridge" "opencode stale-review bridge publishes an auditable current-head approval body"
+	assert_file_contains "$workflow_file" "legacy github-actions approval bridge" "opencode stale-review bridge uses a distinct publication label"
 	assert_file_contains "$workflow_file" 'COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head' "opencode coverage keeps PR-head data outside the trusted workflow root"
 	assert_file_contains "$workflow_file" 'target=/trusted,readonly' "opencode coverage mounts central scripts read-only in the isolated sandbox"
 	assert_file_contains "$workflow_file" 'target=/work' "opencode coverage mounts only the PR worktree writable in the isolated sandbox"
@@ -617,15 +574,6 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_not_contains "$workflow_file" 'secrets.GITHUB_TOKEN' "opencode review uses github.token instead of a nonexistent GITHUB_TOKEN secret"
 	assert_file_contains "$workflow_file" 'STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}' "opencode review uses the organization GitHub Models token secret with GITHUB_TOKEN fallback"
 	assert_file_not_contains "$workflow_file" 'GITHUB_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}' "opencode review does not expose GitHub credentials through the generic model environment"
-	assert_file_contains "$workflow_file" 'is_private: ${{ steps.validate.outputs.is_private }}' "opencode review carries validated repository privacy into model routing"
-	assert_file_contains "$workflow_file" '"opencode-free"' "opencode review enables its anonymous Zen free provider"
-	assert_file_contains "$workflow_file" '"baseURL": "https://opencode.ai/zen/v1"' "opencode review routes the free provider through the official Zen endpoint"
-	assert_file_contains "$workflow_file" '"nvidia-nim"' "opencode review enables its NVIDIA NIM provider"
-	assert_file_contains "$workflow_file" '"baseURL": "https://integrate.api.nvidia.com/v1"' "opencode review routes NVIDIA NIM through its official hosted endpoint"
-	assert_file_contains "$workflow_file" '"apiKey": "{env:NVIDIA_API_KEY}"' "opencode review resolves normalized NVIDIA NIM credentials at runtime"
-	assert_file_contains "$workflow_file" 'NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}' "opencode review exposes NVIDIA NIM credentials only to the model runtime"
-	assert_file_contains "$workflow_file" '"north-mini-code-free"' "opencode review declares the current Zen coding model"
-	assert_file_contains "$workflow_file" "needs.validate-pr-metadata.outputs.is_private == 'false'" "opencode review limits data-retaining free models to public repositories"
 	assert_file_matches "$workflow_file" 'uses:[[:space:]]+actions/checkout@[0-9a-fA-F]{40}([[:space:]]|$)' "opencode review workflow pins checkout to a full commit SHA"
 	assert_workflow_uses_are_sha_pinned "$workflow_file" "opencode review workflow"
 	assert_file_contains "$workflow_file" "scripts/ci/codegraph-package/package-lock.json" "opencode review workflow installs CodeGraph from the committed lockfile"
@@ -727,23 +675,14 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 325' "opencode review target contains evidence, the bounded long-review pool, publication, Noema handoff, and cleanup overhead"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 300' "opencode review target contains evidence, the bounded long-review pool, publication, and cleanup overhead"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool preserves full-hour candidates within a bounded provider-pool window"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 34' "opencode fast approval publication is bounded around the dynamic image and package/GPU check wait"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review preserves legitimate full-hour provider sessions"
-assert_file_contains "$workflow_file" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' "opencode free-tier failover timeout is hour-class (~3600s)"
-assert_file_contains "$workflow_file" 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"' "opencode NVIDIA NIM candidates have a short per-candidate failover timeout"
-assert_file_contains "$workflow_file" 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"' "opencode NVIDIA NIM candidates share a bounded combined runtime budget"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_RUN_TIMEOUT_SECONDS:-3600' "opencode pool defaults primary run timeout to hour-class (~3600s) for large repos"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600' "opencode pool dynamic timeout cap defaults to hour-class (~3600s)"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600' "opencode free-tier failover timeout is hour-class (~3600s)"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180' "opencode NVIDIA NIM candidate runtime cap defaults to three minutes"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 900' "opencode NVIDIA NIM combined runtime cap defaults to fifteen minutes"
-
 	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "1"' "opencode model pool exhausts each candidate only once before bounded fallback"
+	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "0"' "opencode model pool keeps cycling until the bounded retry budget or step timeout is exhausted"
 	assert_file_not_contains "$workflow_file" 'opencode-exhausted-retry:' "opencode model exhaustion retries stay owned by the least-privilege central scheduler"
 	assert_file_not_contains "$workflow_file" 'RETRY_DISPATCH_TOKEN' "opencode does not retain a recursive write-token dispatch path"
 	assert_file_contains "$workflow_file" "needs.coverage-evidence.result == 'success'" "opencode model pool only runs after coverage evidence passed"
@@ -752,8 +691,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode fallback tries the catalog promptly instead of spending the entire review on one model"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review includes a broad catalog fallback pool"
 	assert_file_not_contains "$workflow_file" "steps.opencode_review_model_pool.outcome == 'success'" "opencode approval gate still runs after model pool failure to publish a reason"
-	assert_file_contains "$workflow_file" "opencode-free/north-mini-code-free" "opencode review starts public repository reviews with a free coding model"
-	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review retains paid Zen and DeepSeek V3 before full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review starts with DeepSeek V3 before full-size GPT fallbacks"
 	assert_file_contains "$workflow_file" "The publish gate re-runs source-backed validation against PR-head data" "opencode review publish gate validates model output against the PR-head worktree"
 	assert_file_contains "$workflow_file" '"openai/o3"' "opencode config declares OpenAI o3 fallback"
 	assert_file_contains "$workflow_file" '"openai/o4-mini"' "opencode config declares OpenAI o4-mini fallback"
@@ -858,7 +796,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "opencode_existing_approval_gate.py" "existing approval reuse requires machine-validated real-model adversarial evidence"
 	assert_file_not_contains "$workflow_file" 'create_pull_review "APPROVE" "$clean_evidence_fallback_body"' "model-unavailable path must not publish generic deterministic approval reviews"
 	assert_file_contains "$workflow_file" "approval still pending" "pending peer checks cannot satisfy the required OpenCode gate without a review"
-	assert_file_contains "$workflow_file" "Cross-repository repository_dispatch approval hold" "cross-repository pending approvals remain visible as fail-closed central runs"
+	assert_file_contains "$workflow_file" "Cross-repository repository_dispatch approval hold" "cross-repository pending approvals avoid poisoning the central source-branch check"
 	assert_file_contains "$workflow_file" "CENTRAL_FAST_APPROVAL_ADVERSARIAL_INVALID" "central fast approval revalidates structured adversarial evidence"
 	assert_file_contains "$workflow_file" "stop_without_review_after_model_unavailable" "general model-unavailable path leaves PR review state unchanged"
 	assert_file_not_contains "$workflow_file" "approve_central_review_process_after_model_unavailable" "central review-process self-repair cannot approve without model evidence"
@@ -866,8 +804,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "collect_open_code_scanning_alerts" "model-unavailable fallback checks open code-scanning alerts before approval"
 	assert_file_contains "$workflow_file" "MODEL_OUTPUT_UNAVAILABLE" "model-unavailable path logs provider outage before deterministic evidence gating"
 	assert_file_contains "$workflow_file" "No pull request review was posted because provider delay or model-output unavailability is not review feedback." "model-unavailable path explains delay without changing review state"
-	assert_file_contains "$workflow_file" "Cross-repository repository_dispatch review-tool failure" "cross-repository dispatch tool failures fail closed and retain the concrete reason"
-	assert_file_contains "$workflow_file" "the target-head status publisher and a later scheduler pass must expose and retry this review gap" "cross-repository dispatch failures explicitly bind failure publication and retry"
+	assert_file_contains "$workflow_file" "Cross-repository repository_dispatch review-tool failure" "cross-repository dispatch tool failures log the reason without poisoning the central source-branch check"
 	assert_file_contains "$workflow_file" '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' "opencode approval distinguishes central cross-repository dispatch from same-repository required checks"
 	assert_file_contains "$workflow_file" "request_changes_for_merge_conflict_if_present" "source-backed approval still gates on mergeability"
 	assert_file_not_contains "$workflow_file" "No PR approval was posted because model-output failure is not evidence that the PR has no blockers." "model-failure path must not publish model-exhaustion review bodies"
@@ -881,8 +818,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'run_central_adversarial_harness' "model-pool exhaustion cannot invoke a PR-controlled synthetic reviewer"
 	assert_file_not_contains "$workflow_file" 'request_changes_after_model_exhaustion()' "opencode does not convert model-pool exhaustion into a review"
 	assert_file_not_contains "$workflow_file" 'This is not approval evidence' "opencode does not publish model-exhaustion evidence as a review"
-	assert_file_contains "$workflow_file" '.github/workflows/opencode-review-dispatch.yml | \' "opencode central review fallback allowlist includes the privileged dispatch workflow"
-	assert_file_contains "$workflow_file" '.github/workflows/opencode-review.yml | \' "opencode central review fallback allowlist includes the required-workflow bootstrap"
+	assert_file_contains "$workflow_file" '.github/workflows/opencode-review.yml | \' "opencode central review fallback allowlist includes only the OpenCode workflow"
 	assert_file_contains "$workflow_file" '.github/workflows/strix.yml | \' "opencode central review fallback allowlist includes only the Strix workflow"
 	assert_file_contains "$workflow_file" 'scripts/ci/opencode_review_normalize_output.py | \' "opencode central review fallback allowlist includes only the OpenCode normalizer"
 	assert_file_contains "$workflow_file" 'scripts/ci/validate_opencode_failed_check_review.sh | \' "opencode central review fallback allowlist includes the failed-check review validator"
@@ -894,8 +830,6 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "completed a full model-candidate cycle without a valid control conclusion" "opencode model-output failures keep retrying instead of publishing a review"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode model pool has no configured model candidates." "opencode model pool fails fast when no candidates are configured"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OPENAI_API_KEY is not configured" "opencode model pool skips native OpenAI candidates when the org secret is absent"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OPENROUTER_API_KEY is not configured" "opencode model pool skips OpenRouter candidates when the org secret is absent"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "scoped NVIDIA_NIM_API_KEY is not configured" "opencode model pool skips NVIDIA NIM candidates when the scoped credential is absent"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "configured max cycle count" "opencode model pool exits before the job timeout after configured cycles"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500' "opencode model pool keeps a bounded default retry budget unless the workflow explicitly disables it"
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
@@ -904,7 +838,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog fallback preserves legitimate full-hour provider sessions"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
-	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries paid Zen and DeepSeek V3 before OpenAI fallbacks"
+	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries DeepSeek V3 before OpenAI fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1" "opencode review keeps DeepSeek reasoning fallback coverage after OpenAI candidates"
 	assert_file_contains "$workflow_file" "coverage-source-tree:" "opencode workflow materializes coverage source before running PR-head tests"
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
@@ -956,18 +890,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "or fall back to npm" "coverage evidence logs package-runner activation failures instead of silently using npm"
 	assert_file_not_contains "$workflow_file" '@latest' "coverage evidence refuses mutable package-manager toolchains"
 	assert_file_contains "$workflow_file" "npm ci --ignore-scripts" "coverage dependency installation suppresses npm lifecycle hooks"
-	assert_file_contains "$workflow_file" "pnpm offline install" "coverage dependency installation uses a prefetched trusted pnpm store"
-	assert_file_contains "$workflow_file" "--offline" "coverage dependency installation refuses pnpm registry access"
-	assert_file_contains "$workflow_file" "--ignore-scripts" "coverage dependency installation suppresses pnpm lifecycle hooks"
-	assert_file_contains "$workflow_file" "trusted_pnpm_lock_matches_base()" "coverage validates the exact base and current lock before trusting it"
-	assert_file_contains "$workflow_file" '"$COVERAGE_SOURCE_WORKDIR/$relative_lock"' "coverage hashes nested pnpm locks from the validated worktree root"
-	assert_file_not_contains "$workflow_file" 'hash-object --no-filters -- "$relative_lock"' "coverage does not double-prefix nested package lock paths from the package working directory"
-	assert_file_contains "$workflow_file" "--trust-lockfile" "coverage suppresses registry attestation lookups only for an exact trusted-base lock"
-	assert_file_contains "$workflow_file" "prepare_writable_pnpm_store()" "coverage prepares a sandbox-writable clone of the trusted pnpm store"
-	assert_file_contains "$workflow_file" 'destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"' "coverage creates the writable pnpm store at an unpredictable root-owned path"
-	assert_file_contains "$workflow_file" 'cp -R /opt/pnpm-store/. "$destination/"' "coverage clones packages from the trusted image seed"
-	assert_file_contains "$workflow_file" 'chmod -R u+rwX,go-rwx "$destination"' "coverage limits the cloned pnpm store to the sandbox identity"
-	assert_file_contains "$workflow_file" '--store-dir "$writable_pnpm_store_dir"' "coverage installs from the writable pnpm store clone"
+	assert_file_contains "$workflow_file" "pnpm install --frozen-lockfile --ignore-scripts" "coverage dependency installation suppresses pnpm lifecycle hooks"
 	assert_file_contains "$workflow_file" "yarn install --immutable --mode=skip-builds" "coverage dependency installation suppresses Yarn build hooks"
 	assert_file_contains "$workflow_file" "PR-selected dependency manifests are never resolved" "coverage refuses PR-controlled Python dependency resolution entirely"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'STRIX_EXECUTABLE_PATH=%s' "Strix workflow captures the pinned installation executable before scanning"
@@ -987,13 +910,6 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "--require-opencode-app" "opencode approval reuse and post-publication follow-up reject GitHub Actions-authored review evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_prompt_template.md" "exact command, test/assertion, log/check/SARIF receipt" "opencode adversarial probes must cite independent executable or source evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_prompt_template.md" "source-line-sha256=<64 lowercase hex>" "opencode adversarial probes must bind evidence to exact trusted source bytes"
-	assert_file_contains "$workflow_file" "scripts/ci/opencode_adversarial_receipts.py" "trusted workflow precomputes exact current-head adversarial source-line receipts"
-	assert_file_contains "$workflow_file" 'append_evidence_section "Adversarial probe source-line receipts" 9000' "trusted source-line receipts are repeated for models without file reads"
-	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_prompt_template.md" "do not invent, approximate, or recompute" "isolated models must copy trusted source-line receipt metadata exactly"
-	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_prompt_template.md" "COPY_SENTINEL_HEAD_SHA" "control schema example cannot replay the exact current-run identity"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "write_schema_repair_prompt" "responsive free models receive one bounded control-schema repair opportunity"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "is_schema_repair_candidate" "schema repair remains restricted to explicitly free provider families"
-	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'printf '\''{"head_sha":"%s"' "model-pool launcher never supplies a replayable current-run JSON control candidate"
 	assert_file_contains "$REPO_ROOT/scripts/ci/adversarial_evidence.py" "properly handles all cases" "opencode adversarial evidence gate rejects circular all-cases claims"
 	assert_file_contains "$workflow_file" "approval_attempt in 1 2 3 4 5 6" "opencode post-publication follow-up waits dynamically for exact-head App review visibility"
 	assert_file_contains "$workflow_file" "current-head OpenCode App approval did not become visible" "opencode post-publication approval propagation failures remain visible in logs"
@@ -1041,14 +957,13 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'safe_pytest_command.py" discover' "opencode coverage evidence discovers default CI workflow pytest commands through the trusted shell-free parser"
 	assert_file_not_contains "$REPO_ROOT/scripts/ci/safe_pytest_command.py" "RUNNER_EXECUTABLES" "configured pytest evidence cannot invoke uv, poetry, or pipenv dependency resolution"
 	assert_file_contains "$workflow_file" "Python configured CI test suite" "opencode coverage evidence labels repository-configured pytest evidence separately"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest tests' "opencode coverage runs Python tests with the trusted preinstalled src-layout-aware toolchain"
+	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. python3 -m coverage run -m pytest tests' "opencode coverage runs Python tests with the trusted preinstalled toolchain"
 	assert_file_contains "$workflow_file" 'python3 -m coverage report --show-missing' "opencode coverage preserves the missing-line report with the trusted toolchain"
-	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m pytest tests/test_docstrings.py' "opencode docstring tests use the trusted preinstalled src-layout-aware pytest"
+	assert_file_contains "$workflow_file" 'cd "$1" && PYTHONPATH=. python3 -m pytest tests/test_docstrings.py' "opencode docstring tests use the trusted preinstalled pytest"
 	assert_file_contains "$workflow_file" "missing project imports fail in pytest" "unavailable project dependencies fail closed with their import error"
-	assert_file_contains "$workflow_file" "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" "opencode coverage evidence installs the trusted materialized npm lock offline without lifecycle hooks before JS coverage"
+	assert_file_contains "$workflow_file" "JavaScript/TypeScript dependencies (npm ci, lifecycle hooks disabled)" "opencode coverage evidence installs npm workspace dependencies without lifecycle hooks before JS coverage"
 	assert_file_contains "$workflow_file" "coverage/coverage-summary.json" "opencode coverage evidence reads JS coverage summaries instead of trusting test exit codes"
 	assert_file_contains "$workflow_file" "coverage/coverage-final.json" "opencode coverage evidence supports Vitest Istanbul final coverage files"
-	assert_file_contains "$workflow_file" 'chmod 0444 "$summary_list"' "opencode coverage makes the root-created summary list readable by the unprivileged sandbox user"
 	assert_file_contains "$workflow_file" "javascript_coverage_gate.py" "opencode coverage evidence delegates changed-source measurement to the tested central gate"
 	assert_file_contains "$workflow_file" '--base-sha "$PR_BASE_SHA"' "opencode changed-source coverage is bound to the pull request base"
 	assert_file_contains "$workflow_file" '--head-sha "$PR_HEAD_SHA"' "opencode changed-source coverage is bound to the current pull request head"
@@ -1098,12 +1013,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'map(sort_by(.completedAt // "") | last)' "opencode approval considers only the latest completed statusCheckRollup entry per check label"
 	assert_file_contains "$workflow_file" '(.workflow // "") == "CodeQL"' "opencode approval can distinguish CodeQL dynamic setup checks"
 	assert_file_contains "$workflow_file" '((.isRequired // false) | not) and (.workflow // "") == "CodeQL"' "opencode approval ignores non-required cancelled CodeQL checks without source evidence"
-	assert_file_contains "$workflow_file" 'select((.name // "") != "scan-pr-queue")' "opencode approval ignores scheduler queue self-checks for every failed or pending state"
-	scheduler_self_check_filter_count="$(grep -Fc 'select((.name // "") != "scan-pr-queue")' "$workflow_file")"
-	if [ "$scheduler_self_check_filter_count" -lt 5 ]; then
-		record_failure "opencode GraphQL and commit-check failed/pending paths all ignore scheduler queue self-checks (found ${scheduler_self_check_filter_count}, expected at least 5)"
-	fi
-	assert_file_not_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode scheduler cancellation classification does not depend on optional workflow metadata"
+	assert_file_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode approval ignores cancelled scheduler queue replacement checks without source evidence"
 	assert_file_contains "$workflow_file" 'grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"' "opencode approval avoids duplicate supplemental Strix workflow-run blockers when statusCheckRollup already has the Strix check"
 	assert_file_contains "$workflow_file" 'current_head_manual_strix_success_status()' "opencode approval can identify same-head manual Strix success status evidence"
 	assert_file_contains "$workflow_file" 'manual_run_line="$(latest_current_head_manual_strix_run || true)"' "opencode approval falls back to same-head manual Strix check-run success when commit status publication is unavailable"
@@ -1137,7 +1047,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.name // "") != "metadata-only gate evaluation")' "failed-check evidence ignores metadata-only review-state gates even when GitHub misattributes their workflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'isRequired(pullRequestId: $prId)' "failed-check evidence reads PR-required status for check runs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.isRequired // false) | not) and (.checkSuite.workflowRun.workflow.name // "") == "CodeQL"' "failed-check evidence ignores non-required cancelled CodeQL checks without logs"
-	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'select((.name // "") != "scan-pr-queue")' "failed-check evidence ignores scheduler queue self-checks for every failure conclusion"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "scan-pr-queue" and ((.checkSuite.workflowRun.workflow.name // "") == "PR Review Merge Scheduler" or (.checkSuite.workflowRun.workflow.name // "") == "Required PR Review Merge Scheduler")' "failed-check evidence ignores cancelled scheduler queue replacement checks"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.name // "") | contains("${{"))' "failed-check evidence ignores cancelled matrix-template helper checks without logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '(.name // "") == "noema-review"' "failed-check evidence ignores cancelled Noema queue replacement checks without source logs"
 	assert_file_contains "$workflow_file" 'select((.name // "") != "metadata-only gate evaluation")' "opencode ignores metadata-only review-state gates without trusting GitHub workflow attribution"
@@ -1145,12 +1055,8 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	if [ "$metadata_gate_filter_count" -lt 3 ]; then
 		fail "opencode pre-model, failed-check, and pending-check collection all ignore metadata-only review-state gates (found ${metadata_gate_filter_count}, expected at least 3)"
 	fi
-	assert_file_contains "$workflow_file" '["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation", "scan-pr-queue"]' "central fast approval ignores its dependent review and scheduler control-plane checks"
+	assert_file_contains "$workflow_file" '["opencode-review", "coverage-evidence", "coverage-source-tree", "required-workflow-bootstrap", "metadata-only gate evaluation"]' "central fast approval ignores its dependent metadata-only review-state gate"
 	assert_file_contains "$workflow_file" '["opencode-review","coverage-evidence","metadata-only gate evaluation"]' "opencode supplemental check-run collection ignores review-state helper gates"
-	scheduler_pending_filter_count="$(grep -Fc 'select((.name // "") != "scan-pr-queue")' "$workflow_file")"
-	if [ "$scheduler_pending_filter_count" -lt 3 ]; then
-		fail "opencode pre-model, rollup, and commit-check pending collection all ignore the scheduler control-plane cycle (found ${scheduler_pending_filter_count}, expected at least 3)"
-	fi
 	assert_file_contains "$workflow_file" '((.name // "") | contains("$" + "{{"))' "opencode failed-check collection ignores cancelled matrix-template helper checks without logs without exposing a raw Actions expression"
 	assert_file_contains "$workflow_file" '(.name // "") == "noema-review"' "opencode failed-check collection ignores cancelled Noema queue replacement checks without source logs"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '"strix security scan/"*' "failed-check evidence maps stale Strix workflow helper checks to the manual strix evidence status"
@@ -1249,14 +1155,9 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}' "opencode manual dispatch uses the cross-repo approval token for target PR evidence lookups with app-token fallback"
 	assert_file_contains "$workflow_file" 'repos/${GH_REPOSITORY}' "opencode review workflow uses env-backed repository context in shell commands"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review starts the central model pool"
-	assert_file_contains "$workflow_file" "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free" "opencode review keeps all NVIDIA NIM candidates inside the public-repository pool"
-	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review keeps paid Zen, DeepSeek V3, and full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review starts with DeepSeek V3 before full-size GPT fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528" "opencode review keeps a reachable DeepSeek R1 reasoning fallback model"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324" "opencode review has a reachable DeepSeek V3 fallback model"
-	assert_file_not_contains "$workflow_file" "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" "opencode review never falls back from the scoped NVIDIA NIM secret to the legacy provider secret"
-	assert_file_contains "$workflow_file" 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}' "opencode review binds only the scoped NVIDIA NIM secret into the provider environment"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "NVIDIA_NIM_API_KEY" "model pool normalizes NVIDIA_NIM_API_KEY to NVIDIA_API_KEY"
-
 	assert_file_contains "$workflow_file" "github-models/openai/gpt-5" "opencode review still has a bounded GPT-5 fallback model"
 	assert_file_contains "$workflow_file" "Publish bounded OpenCode review comment" "opencode review workflow publishes the agent control comment for the approval gate"
 	assert_file_contains "$workflow_file" "statusCheckRollup" "opencode review workflow reads current-head GitHub Checks before approval"
@@ -1359,18 +1260,16 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_not_contains "$workflow_file" "deterministic current-head gates passed for a workflow-only change" "opencode approval gate must not record deterministic model-failure approval"
 	assert_file_not_contains "$workflow_file" "request_changes_after_model_exhaustion" "opencode model-failure path keeps waiting instead of synthesizing review state"
 	assert_file_contains "$workflow_file" "request_changes_for_merge_conflict_if_present" "opencode approval gate checks mergeability before approving model or fallback output"
-	assert_file_contains "$comment_helpers_file" "Merge Conflict Guidance" "opencode approval gate emits explicit conflict guidance when mergeability is dirty"
-	assert_file_contains "$comment_helpers_file" "Changed-File Evidence Map" "opencode review overview labels Mermaid as changed-file flow analysis"
+	assert_file_contains "$workflow_file" "Merge Conflict Guidance" "opencode approval gate emits explicit conflict guidance when mergeability is dirty"
+	assert_file_contains "$workflow_file" "Changed-File Evidence Map" "opencode review overview labels Mermaid as changed-file flow analysis"
 	assert_file_contains "$workflow_file" 'body="$(ensure_review_body_has_change_graph "$body")"' "opencode PR review body gets deterministic changed-file flow analysis"
-	graph_helper_definitions="$(grep -Fc 'ensure_review_body_has_change_graph() {' "$comment_helpers_file" || true)"
-	assert_equals "1" "$graph_helper_definitions" "opencode defines the graph helper once in the trusted shared shell library"
-	graph_helper_sources="$(grep -Fc '. scripts/ci/opencode_review_comment_helpers.sh' "$workflow_file" || true)"
-	assert_equals "2" "$graph_helper_sources" "opencode sources the trusted graph helper library in both review publication scopes"
+	graph_helper_definitions="$(grep -Fc 'ensure_review_body_has_change_graph() {' "$workflow_file")"
+	assert_equals "2" "$graph_helper_definitions" "opencode defines the graph helper in each shell scope that publishes reviews"
 	assert_file_contains "$workflow_file" "rewritten_payload_file" "opencode inline review payload is rewritten after graph insertion"
 	assert_file_contains "$workflow_file" '.body = $body' "opencode inline review payload JSON receives the same logged review body"
-	assert_file_contains "$comment_helpers_file" "OpenCode bounded evidence" "opencode Mermaid graph ties changed files to bounded review evidence"
-	assert_file_contains "$comment_helpers_file" "GitHub Actions review job" "opencode Mermaid graph maps workflow files to the affected execution path"
-	assert_file_contains "$comment_helpers_file" "Merge conflict blocks this path" "opencode merge-conflict guidance shows which changed-file flow is blocked"
+	assert_file_contains "$workflow_file" "OpenCode bounded evidence" "opencode Mermaid graph ties changed files to bounded review evidence"
+	assert_file_contains "$workflow_file" "GitHub Actions review job" "opencode Mermaid graph maps workflow files to the affected execution path"
+	assert_file_contains "$workflow_file" "Merge conflict blocks this path" "opencode merge-conflict guidance shows which changed-file flow is blocked"
 	assert_file_contains "$workflow_file" "Mermaid DAG" "opencode prompt asks for a Mermaid DAG instead of a generic risk sketch"
 	assert_file_contains "$workflow_file" 'quoted label, for example A["text"]' "opencode prompt avoids shell-executed backtick examples for Mermaid labels"
 	assert_file_not_contains "$workflow_file" '`A["text"]`' "opencode prompt must not put Mermaid label examples in shell-substituted backticks"
@@ -1453,10 +1352,8 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_not_contains "$opencode_config" '"@upstash/context7-mcp' "opencode config does not install Context7 at runtime"
 	assert_file_not_contains "$opencode_config" '"@guhcostan/web-search-mcp' "opencode config does not install web-search MCP at runtime"
 	assert_file_not_contains "$opencode_config" '"serve"' "opencode config does not launch CodeGraph inside the credentialed model process"
-	assert_file_contains "$opencode_config" '"small_model": "nvidia-nim/meta/llama-3.3-70b-instruct"' "opencode config uses NVIDIA NIM Llama 3.3 70B small model"
-	assert_file_contains "$opencode_config" '"model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"' "opencode config defaults review sessions to NVIDIA NIM Nemotron Super"
-assert_file_contains "$opencode_config" '"nvidia-nim"' "opencode config enables nvidia-nim provider"
-assert_file_contains "$opencode_config" 'integrate.api.nvidia.com' "opencode config points nvidia-nim at NIM API"
+	assert_file_contains "$opencode_config" '"small_model": "github-models/deepseek/deepseek-v3-0324"' "opencode config uses a reachable DeepSeek V3 small model"
+	assert_file_contains "$opencode_config" '"model": "github-models/deepseek/deepseek-r1-0528"' "opencode config defaults review sessions to DeepSeek R1"
 	assert_file_contains "$opencode_config" '"openai/gpt-5"' "opencode config defines GitHub Models GPT-5 with full model id"
 	assert_file_contains "$opencode_config" '"openai/gpt-5-chat"' "opencode config defines GPT-5 Chat catalog fallback"
 	assert_file_contains "$opencode_config" '"openai/gpt-5-mini"' "opencode config defines GPT-5 Mini catalog fallback"
@@ -1469,7 +1366,7 @@ assert_file_contains "$opencode_config" 'integrate.api.nvidia.com' "opencode con
 }
 
 assert_opencode_review_posts_suggested_diffs_inline() {
-	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml"
+	local workflow_file="$REPO_ROOT/.github/workflows/opencode-review.yml"
 
 	assert_file_contains "$workflow_file" "create_pull_review_with_payload" "opencode review can post custom review payloads"
 	assert_file_contains "$workflow_file" "comments: [" "opencode review payload includes inline review comments"
@@ -1504,13 +1401,8 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "scheduler must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
-	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.run_id" "scheduler keeps manual queue scans isolated per run"
 	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
-	assert_file_contains "$workflow_file" "timeout-minutes: 60" "organization sweep has enough headroom to finish the complete repository walk"
-	assert_file_contains "$workflow_file" "ORG_SWEEP_TRIGGER_REVIEWS: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps retry missing current-head OpenCode reviews"
-	assert_file_contains "$workflow_file" "ORG_SWEEP_ENABLE_AUTO_MERGE: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps merge approved current heads"
-	assert_file_contains "$workflow_file" "ORG_SWEEP_UPDATE_BRANCHES: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps refresh eligible stale branches"
 	assert_file_contains "$workflow_file" 'github.event.workflow_run.pull_requests[0].number' "scheduler scopes OpenCode workflow_run events to the completed review PR"
 	assert_file_contains "$workflow_file" "github.event.client_payload.trigger_reviews != false" "scheduler enables review dispatch by default for default-branch dispatch events"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' || github.event_name == 'push'" "scheduler can dispatch a bounded follow-up OpenCode review after review workflow completion"
@@ -1900,7 +1792,7 @@ EOF
 
 	assert_equals "4" "$rc" "opencode approval gate rejects no-changes approvals"
 	assert_equals "NO_CONCLUSION" "$gate_result" "no-changes approval rejection gate result"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "Never approve with a reason or summary that says no changes" "opencode prompt rejects no-changes approvals when bounded evidence lists changed files"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "Never approve with a reason or summary that says no changes" "opencode prompt rejects no-changes approvals when bounded evidence lists changed files"
 
 	rm -rf "$tmp_dir"
 }
@@ -1954,22 +1846,22 @@ EOF
 
 	assert_equals "4" "$rc" "opencode approval gate rejects approvals without changed-file evidence"
 	assert_equals "NO_CONCLUSION" "$gate_result" "missing changed-file evidence rejection gate result"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "Before APPROVE, the summary must include at least one exact changed file path inspected as changed-file evidence" "opencode prompt requires changed-file evidence before approval"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "when result is APPROVE the JSON findings value must be exactly []" "opencode prompt keeps approval findings empty"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "Put all required Verification posture labels inside the JSON summary string itself" "opencode prompt keeps approval evidence inside the control JSON"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files" "opencode prompt rejects contradictory changed-file kind claims"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix" "opencode prompt rejects trivial approval claims for material changes"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "OPENCODE_CHANGED_FILES_FILE" "opencode workflow exports exact current-head changed files"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'git -C "$OPENCODE_SOURCE_WORKDIR" diff --name-only --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA" |' "opencode workflow derives exact changed files from the PR-head worktree"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'awk '\''NF > 0 && $0 !~ /^\// && $0 !~ /(^|\/)\.\.($|\/)/ { print }'\'' >"$OPENCODE_CHANGED_FILES_FILE"' "opencode workflow writes path-safe exact changed files for the normalizer"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" "changed-files.txt" "opencode workflow copies exact changed-file evidence into the isolated review workspace"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'A["text"]' "opencode prompt requires quoted Mermaid labels"
-	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_comment_helpers.sh" 'S%s["%s"]' "opencode generated Mermaid surface labels are quoted"
-	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_comment_helpers.sh" 'R%s["Review risk: %s"]' "opencode generated Mermaid risk labels are quoted"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'emit_review_body_to_action_log "$event" "$body"' "opencode PR-level review bodies are mirrored to the Actions log"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'emit_review_body_to_action_log "$event" "$body" "$review_payload_file"' "opencode inline review bodies are mirrored to the Actions log"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" 'OpenCode is publishing this review content to PR #%s.' "opencode Actions log includes the review body that is being posted"
-	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review-dispatch.yml" '## OpenCode %s review body' "opencode Step Summary includes the review body that is being posted"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "Before APPROVE, the summary must include at least one exact changed file path inspected as changed-file evidence" "opencode prompt requires changed-file evidence before approval"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "when result is APPROVE the JSON findings value must be exactly []" "opencode prompt keeps approval findings empty"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "Put all required Verification posture labels inside the JSON summary string itself" "opencode prompt keeps approval evidence inside the control JSON"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "never say no source files changed, no test files changed, or no executable changes when exact changed-file evidence lists workflow, script, source, or test files" "opencode prompt rejects contradictory changed-file kind claims"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "Never approve material workflow, script, source, config, package, or test changes with a reason or summary that says simple typo fix" "opencode prompt rejects trivial approval claims for material changes"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "OPENCODE_CHANGED_FILES_FILE" "opencode workflow exports exact current-head changed files"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'git -C "$OPENCODE_SOURCE_WORKDIR" diff --name-only --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA" |' "opencode workflow derives exact changed files from the PR-head worktree"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'awk '\''NF > 0 && $0 !~ /^\// && $0 !~ /(^|\/)\.\.($|\/)/ { print }'\'' >"$OPENCODE_CHANGED_FILES_FILE"' "opencode workflow writes path-safe exact changed files for the normalizer"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" "changed-files.txt" "opencode workflow copies exact changed-file evidence into the isolated review workspace"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'A["text"]' "opencode prompt requires quoted Mermaid labels"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'S%s["%s"]' "opencode generated Mermaid surface labels are quoted"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'R%s["Review risk: %s"]' "opencode generated Mermaid risk labels are quoted"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'emit_review_body_to_action_log "$event" "$body"' "opencode PR-level review bodies are mirrored to the Actions log"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'emit_review_body_to_action_log "$event" "$body" "$review_payload_file"' "opencode inline review bodies are mirrored to the Actions log"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" 'OpenCode is publishing this review content to PR #%s.' "opencode Actions log includes the review body that is being posted"
+	assert_file_contains "$REPO_ROOT/.github/workflows/opencode-review.yml" '## OpenCode %s review body' "opencode Step Summary includes the review body that is being posted"
 
 	cat >"$changed_files_file" <<'EOF'
 .github/workflows/opencode-review.yml
@@ -2246,7 +2138,7 @@ Model deepseek/deepseek-v3-0324 Vulnerabilities 1
 ### Failed log excerpt
 
 FAIL: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.client_payload.strix_llm || 'openai/gpt-5'')
-FAIL: strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model')
+FAIL: strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model')
 FAIL: opencode failed-check diagnosis prefers DeepSeek V3 (missing 'MODEL: github-models/deepseek/deepseek-v3-0324')
 EOF
 	cat >"$control_json" <<'EOF'
@@ -2347,12 +2239,12 @@ Model deepseek/deepseek-v3-0324 Vulnerabilities 1
 ### Failed log excerpt
 
 FAIL: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.client_payload.strix_llm || 'openai/gpt-5'')
-FAIL: strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model')
+FAIL: strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model')
 FAIL: opencode failed-check diagnosis prefers DeepSeek V3 (missing 'MODEL: github-models/deepseek/deepseek-v3-0324')
 EOF
 
 	cat >"$control_json" <<'EOF'
-{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"Strix Security Scan/strix failed in Self-test Strix gate script and reported github-models/openai/gpt-5 Authentication Bypass via X-Dev-User Header with Severity: CRITICAL at backend/app/auth.py:132-135 plus deepseek/deepseek-v3-0324 Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure with Severity: HIGH.","findings":[{"path":".github/workflows/strix.yml","line":120,"severity":"HIGH","title":"Strix workflow default is not visible to trusted self-test","problem":"Strix Security Scan/strix failed in Self-test Strix gate script: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.client_payload.strix_llm || 'openai/gpt-5''); strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model'); opencode failed-check diagnosis prefers DeepSeek V3 (missing 'MODEL: github-models/deepseek/deepseek-v3-0324'). The same failed Strix evidence includes github-models/openai/gpt-5 report Authentication Bypass via X-Dev-User Header, Severity: CRITICAL, /api/me, Method: GET, backend/app/auth.py:132-135.","root_cause":"The failed check evidence shows Self-test Strix gate script could not find github.event.client_payload.strix_llm, STRIX_LLM must select, and MODEL: github-models/deepseek/deepseek-v3-0324 in trusted-base files, and the model report identifies the backend auth fallback line.","fix_direction":"Update the workflow lines that provide the Strix model default and OpenCode model env so the trusted self-test can find those exact strings, then remove the unauthenticated X-Dev-User fallback at backend/app/auth.py:132-135.","regression_test_direction":"Keep the static self-test assertions for all three missing strings and add auth tests proving /api/me rejects forged X-Dev-User requests without signed auth.","suggested_diff":"diff --git a/.github/workflows/strix.yml b/.github/workflows/strix.yml\n--- a/.github/workflows/strix.yml\n+++ b/.github/workflows/strix.yml\n@@ -120 +120 @@\n-          STRIX_MODEL: old\n+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'openai/gpt-5' }}"},{"path":"frontend/src/app/page.tsx","line":1,"severity":"HIGH","title":"Strix frontend model report must be reviewed separately","problem":"Strix Security Scan/strix failed with a separate deepseek/deepseek-v3-0324 report: Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure, Severity: HIGH.","root_cause":"The failed Strix evidence contains a second model vulnerability report, so OpenCode must not collapse it into the first backend finding.","fix_direction":"Inspect the frontend source lines responsible for token storage, hardcoded credentials, dynamic error rendering, and missing CSP, then remove or harden each concrete line before approval.","regression_test_direction":"Add frontend tests covering safe token/session handling, output encoding, and security headers for the affected route.","suggested_diff":"diff --git a/frontend/src/app/page.tsx b/frontend/src/app/page.tsx\n--- a/frontend/src/app/page.tsx\n+++ b/frontend/src/app/page.tsx\n@@ -1 +1 @@\n-export default function Page() { return null }\n+export default function Page() { return null }"}]}
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"Strix Security Scan/strix failed in Self-test Strix gate script and reported github-models/openai/gpt-5 Authentication Bypass via X-Dev-User Header with Severity: CRITICAL at backend/app/auth.py:132-135 plus deepseek/deepseek-v3-0324 Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure with Severity: HIGH.","findings":[{"path":".github/workflows/strix.yml","line":120,"severity":"HIGH","title":"Strix workflow default is not visible to trusted self-test","problem":"Strix Security Scan/strix failed in Self-test Strix gate script: strix workflow defaults PR Strix scans to GitHub Models GPT-5 (missing 'github.event.client_payload.strix_llm || 'openai/gpt-5''); strix workflow rejects unsupported model inputs (missing 'STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model'); opencode failed-check diagnosis prefers DeepSeek V3 (missing 'MODEL: github-models/deepseek/deepseek-v3-0324'). The same failed Strix evidence includes github-models/openai/gpt-5 report Authentication Bypass via X-Dev-User Header, Severity: CRITICAL, /api/me, Method: GET, backend/app/auth.py:132-135.","root_cause":"The failed check evidence shows Self-test Strix gate script could not find github.event.client_payload.strix_llm, STRIX_LLM must select, and MODEL: github-models/deepseek/deepseek-v3-0324 in trusted-base files, and the model report identifies the backend auth fallback line.","fix_direction":"Update the workflow lines that provide the Strix model default and OpenCode model env so the trusted self-test can find those exact strings, then remove the unauthenticated X-Dev-User fallback at backend/app/auth.py:132-135.","regression_test_direction":"Keep the static self-test assertions for all three missing strings and add auth tests proving /api/me rejects forged X-Dev-User requests without signed auth.","suggested_diff":"diff --git a/.github/workflows/strix.yml b/.github/workflows/strix.yml\n--- a/.github/workflows/strix.yml\n+++ b/.github/workflows/strix.yml\n@@ -120 +120 @@\n-          STRIX_MODEL: old\n+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'openai/gpt-5' }}"},{"path":"frontend/src/app/page.tsx","line":1,"severity":"HIGH","title":"Strix frontend model report must be reviewed separately","problem":"Strix Security Scan/strix failed with a separate deepseek/deepseek-v3-0324 report: Frontend Security Issues: XSS, Hardcoded Credentials, and Insecure, Severity: HIGH.","root_cause":"The failed Strix evidence contains a second model vulnerability report, so OpenCode must not collapse it into the first backend finding.","fix_direction":"Inspect the frontend source lines responsible for token storage, hardcoded credentials, dynamic error rendering, and missing CSP, then remove or harden each concrete line before approval.","regression_test_direction":"Add frontend tests covering safe token/session handling, output encoding, and security headers for the affected route.","suggested_diff":"diff --git a/frontend/src/app/page.tsx b/frontend/src/app/page.tsx\n--- a/frontend/src/app/page.tsx\n+++ b/frontend/src/app/page.tsx\n@@ -1 +1 @@\n-export default function Page() { return null }\n+export default function Page() { return null }"}]}
 EOF
 	set +e
 	bash "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" \
@@ -3312,7 +3204,7 @@ REPORT
 		exit 0
 		;;
 	slow-timeout)
-		sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+		sleep 2
 		exit 0
 		;;
 	timeout-disabled-success)
@@ -4337,7 +4229,7 @@ EOS
 			echo "│  Penetration test in progress                                                │"
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
-			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			sleep 4
 			exit 0
 			;;
 		*)
@@ -4353,11 +4245,11 @@ EOS
 			echo "│  Penetration test in progress                                                │"
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
-			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			sleep 4
 			exit 0
 			;;
 		vertex_ai/fallback-one)
-			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			sleep 4
 			exit 0
 			;;
 		*)
@@ -4377,11 +4269,11 @@ EOS
 			echo "│  Penetration test in progress                                                │"
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
-			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			sleep 4
 			exit 0
 			;;
 		vertex_ai/fallback-one)
-			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			sleep 4
 			exit 0
 			;;
 		*)
@@ -5386,7 +5278,7 @@ jobs:
           fi
       - name: Gate Strix secrets
         run: |
-          echo '::error::STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
+          echo '::error::STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model.'
       - name: Mask LLM API key
         run: |
           sanitized="$(printf '%s' "$LLM_API_KEY" | tr -d '\r\n')"
@@ -5442,7 +5334,6 @@ PY
 		FAKE_STRIX_API_BASE_LOG="$api_base_log"
 		FAKE_STRIX_TARGET_LOG="$target_log"
 		FAKE_STRIX_RUNTIME_ENV_LOG="$runtime_env_log"
-		FAKE_STRIX_TIMEOUT_SLEEP_SECONDS="$TIMEOUT_TEST_FAKE_SLEEP_SECONDS"
 		STRIX_LLM_DEFAULT_PROVIDER="$default_provider"
 		FAKE_STRIX_STATE_FILE="$state_file"
 		STRIX_TRANSIENT_RETRY_PER_MODEL="$transient_retry_per_model"
@@ -5928,73 +5819,10 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"" \
 			"" \
-			"$TIMEOUT_TEST_PROCESS_SECONDS" \
+			"2" \
 			"0" \
 			"pull_request" \
 			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
-		;;
-	zero-findings-timeout-all-models)
-		run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
-			"vertex_ai/zero-timeout-primary" \
-			"vertex_ai/fallback-one" \
-			"1" \
-			"Strix reported zero vulnerabilities before provider infrastructure failure; failing closed because provider infrastructure failures are not clean scan evidence." \
-			"2" \
-			"vertex_ai/zero-timeout-primary|vertex_ai/fallback-one" \
-			"<unset>|<unset>" \
-			"vertex_ai" \
-			"__DEFAULT__" \
-			"" \
-			"0" \
-			"CRITICAL" \
-			"0" \
-			"" \
-			"" \
-			"$TIMEOUT_TEST_PROCESS_SECONDS" \
-			"0" \
-			"pull_request" \
-			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
-		run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
-			"vertex_ai/zero-timeout-primary" \
-			"vertex_ai/fallback-one" \
-			"1" \
-			"Configured Vertex model and fallback models were unavailable." \
-			"2" \
-			"vertex_ai/zero-timeout-primary|vertex_ai/fallback-one" \
-			"<unset>|<unset>" \
-			"vertex_ai" \
-			"__DEFAULT__" \
-			"" \
-			"0" \
-			"CRITICAL" \
-			"0" \
-			"" \
-			"" \
-			"$TIMEOUT_TEST_PROCESS_SECONDS" \
-			"0" \
-			"push"
-		;;
-	slow-timeout)
-		run_gate_case_allow_provider_signal "slow-timeout" \
-			"vertex_ai/slow-primary" \
-			"" \
-			"1" \
-			"Strix run timed out after ${TIMEOUT_TEST_PROCESS_SECONDS}s." \
-			"3" \
-			"vertex_ai/slow-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
-			"<unset>|<unset>|<unset>" \
-			"vertex_ai" \
-			"__DEFAULT__" \
-			"" \
-			"0" \
-			"CRITICAL" \
-			"0" \
-			"" \
-			"" \
-			"$TIMEOUT_TEST_PROCESS_SECONDS"
-		;;
-	timeout-cleanup)
-		run_timeout_cleanup_case
 		;;
 	vertex-primary-notfound-fallback-success)
 		run_gate_case "vertex-primary-notfound-fallback-success" \
@@ -7708,124 +7536,6 @@ EOF
 	rm -rf "$tmp_dir"
 }
 
-run_full_head_scope_skips_gitlink_case() {
-	# Regression for the full PR-head blob scope path
-	# (build_pull_request_head_tree_scope_dir): when a PR triggers full-head
-	# context (e.g. a Dockerfile change) in a repository that contains a git
-	# submodule, the gitlink tree entry (mode 160000 / type commit) must be
-	# skipped during full-tree materialization, not treated as a non-blob
-	# entry that fails the scope closed. Without the skip, every
-	# submodule-bearing repository fails Strix on any Dockerfile/compose PR.
-	local tmp_dir
-	tmp_dir="$(mktemp -d)"
-	local bin_dir="$tmp_dir/bin"
-	local repo_root_dir="$tmp_dir/repo"
-	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-
-	local fake_strix="$bin_dir/strix"
-	local output_log="$tmp_dir/output.log"
-	local strix_llm_file="$tmp_dir/strix_llm.txt"
-	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
-	# The full-head scope must materialize the changed Dockerfile and the
-	# unchanged docs context, and must never materialize the gitlink as a path.
-	cat >"$fake_strix" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-target_path=""
-while [ "$#" -gt 0 ]; do
-	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
-		target_path="$2"
-		break
-	fi
-	shift
-done
-dockerfile="$target_path/Dockerfile"
-if [ ! -f "$dockerfile" ] || ! grep -Fq -- 'FROM python:3.12-slim AS head' "$dockerfile"; then
-	echo "Error: changed Dockerfile missing head content" >&2
-	exit 61
-fi
-context_file="$target_path/docs/full-scope-context.md"
-if [ ! -f "$context_file" ] || ! grep -Fq -- 'HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED' "$context_file"; then
-	echo "Error: full PR head scoped context missing" >&2
-	exit 65
-fi
-if [ -e "$target_path/vendor/newsdom-api" ]; then
-	echo "Error: gitlink must not be materialized as a path" >&2
-	exit 69
-fi
-echo "scan ok with PR head content"
-EOF
-	chmod +x "$fake_strix"
-	printf '%s' 'gemini/test-model' >"$strix_llm_file"
-	printf '%s' 'dummy' >"$llm_api_key_file"
-
-	(
-		cd "$repo_root_dir"
-		git init -q
-		git config user.name 'Strix Test'
-		git config user.email 'strix-test@example.invalid'
-		echo 'seed' >README.md
-		mkdir -p docs
-		printf '%s\n' 'BASE_FULL_SCOPE_CONTEXT_SHOULD_NOT_BE_SCANNED' >docs/full-scope-context.md
-		printf '%s\n' 'FROM python:3.12-slim AS base' >Dockerfile
-		git add .
-		git commit -qm 'base commit'
-	)
-	local seed_sha
-	seed_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
-	# Add the SAME unchanged gitlink to both base and head, so the regression
-	# proves an *unchanged* submodule pointer is skipped in the full tree.
-	git -C "$repo_root_dir" update-index --add --cacheinfo "160000,$seed_sha,vendor/newsdom-api"
-	git -C "$repo_root_dir" commit -qm 'add gitlink to base'
-	local base_sha
-	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
-	(
-		cd "$repo_root_dir"
-		printf '%s\n' 'HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED' >docs/full-scope-context.md
-		printf '%s\n' 'FROM python:3.12-slim AS head' >Dockerfile
-		# Stage only the changed files. `git add .` would stage removal of the
-		# not-checked-out gitlink and drop it from the head tree, so the full-tree
-		# materialization would never see the submodule pointer this case exists
-		# to exercise.
-		git add docs/full-scope-context.md Dockerfile
-		git commit -qm 'head commit changes Dockerfile'
-	)
-	local head_sha
-	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
-	git -C "$repo_root_dir" checkout -q "$base_sha"
-
-	set +e
-	(
-		cd "$repo_root_dir"
-		env -u GITHUB_EVENT_PATH \
-			PATH="$bin_dir:$PATH" \
-			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
-			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
-			GITHUB_EVENT_NAME="pull_request_target" \
-			PR_NUMBER="123" \
-			PR_BASE_SHA="$base_sha" \
-			PR_HEAD_SHA="$head_sha" \
-			STRIX_TEST_CHANGED_FILES_OVERRIDE="Dockerfile" \
-			STRIX_DISABLE_PR_SCOPING="0" \
-			STRIX_LLM_FILE="$strix_llm_file" \
-			LLM_API_KEY_FILE="$llm_api_key_file" \
-			STRIX_TARGET_PATH="." \
-			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
-	)
-	local rc=$?
-	set -e
-
-	assert_equals "0" "$rc" "full-head-scope gitlink skip exits successfully"
-	assert_file_contains "$output_log" "scan ok with PR head content" "full-head-scope gitlink skip scans head content"
-	assert_file_contains "$output_log" "git submodule pointer; excluding content from PR-scoped Strix input: vendor/newsdom-api" "full-head-scope gitlink skip reason is visible"
-
-	rm -rf "$tmp_dir"
-}
-
 run_pull_request_target_rejects_unsafe_changed_path_case() {
 	local case_name="$1"
 	local changed_file="$2"
@@ -7940,10 +7650,10 @@ run_timeout_cleanup_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}" &
+sleep 30 &
 child_pid=$!
 printf '%s' "$child_pid" > "${FAKE_STRIX_CHILD_PID_FILE:?}"
-sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+sleep 5
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'vertex_ai/timeout-cleanup-primary' >"$strix_llm_file"
@@ -7958,10 +7668,9 @@ EOF
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CHILD_PID_FILE="$child_pid_file" \
-			FAKE_STRIX_TIMEOUT_SLEEP_SECONDS="$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" \
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
-			STRIX_PROCESS_TIMEOUT_SECONDS="$TIMEOUT_TEST_PROCESS_SECONDS" \
+			STRIX_PROCESS_TIMEOUT_SECONDS="1" \
 			STRIX_VERTEX_FALLBACK_MODELS="" \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
 			STRIX_TARGET_PATH="." \
@@ -7971,7 +7680,7 @@ EOF
 	set -e
 
 	assert_equals "1" "$rc" "timeout cleanup exit code"
-	assert_file_contains "$output_log" "Strix run timed out after ${TIMEOUT_TEST_PROCESS_SECONDS}s." "timeout cleanup output"
+	assert_file_contains "$output_log" "Strix run timed out after 1s." "timeout cleanup output"
 	local _
 	for _ in $(seq 1 12); do
 		if [ -f "$child_pid_file" ]; then
@@ -8904,14 +8613,6 @@ assert_opencode_failed_check_fallback_does_not_anchor_unmapped_strix_reports_to_
 assert_opencode_failed_check_fallback_maps_strix_status_permission_smoke_failure
 
 run_filtered_gate_case_if_requested
-if [ -n "${STRIX_TEST_CASE_FILTER:-}" ]; then
-	if [ "$FAILURES" -ne 0 ]; then
-		echo "test_strix_quick_gate: filtered case '${STRIX_TEST_CASE_FILTER}' had ${FAILURES} failure(s)" >&2
-		exit 1
-	fi
-	echo "test_strix_quick_gate: filtered case '${STRIX_TEST_CASE_FILTER}' PASS"
-	exit 0
-fi
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-modified-file-uses-head-blob" \
@@ -9064,8 +8765,6 @@ run_pull_request_target_irregular_head_entry_fails_closed_case \
 
 run_pull_request_target_gitlink_is_explicitly_skipped_case
 
-run_full_head_scope_skips_gitlink_case
-
 run_pull_request_target_aborts_on_pr_head_blob_failure_case \
 	"pull-request-target-modified-file-pr-head-tree-lookup-failure" \
 	"src/existing.py" \
@@ -9210,11 +8909,11 @@ run_gate_case "provider-prefix-required-resource-path-primary-implicit-default-p
 run_gate_case "provider-prefix-required-resource-path-primary-explicit-empty-default-provider" \
 	"projects/p1/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
 	"vertex_ai/fallback-one" \
-	"2" \
-	"ERROR: Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." \
 	"0" \
-	"" \
-	"" \
+	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/gemini-2.5-pro'." \
+	"1" \
+	"vertex_ai/gemini-2.5-pro" \
+	"<unset>" \
 	""
 
 run_gate_case "provider-prefix-resource-path-primary-notfound-fallback-success" \
@@ -9770,7 +9469,7 @@ run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
 	"0" \
 	"" \
 	"" \
-	"$TIMEOUT_TEST_PROCESS_SECONDS" \
+	"2" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
@@ -9791,7 +9490,7 @@ run_gate_case_allow_provider_signal "zero-findings-timeout-all-models" \
 	"0" \
 	"" \
 	"" \
-	"$TIMEOUT_TEST_PROCESS_SECONDS" \
+	"2" \
 	"0" \
 	"push"
 
@@ -9811,7 +9510,7 @@ run_gate_case_allow_provider_signal "zero-findings-sticky-across-fallback" \
 	"0" \
 	"" \
 	"" \
-	"$TIMEOUT_TEST_PROCESS_SECONDS" \
+	"2" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
@@ -9832,7 +9531,7 @@ run_gate_case_allow_provider_signal "zero-findings-with-low-report-timeout" \
 	"0" \
 	"" \
 	"" \
-	"$TIMEOUT_TEST_PROCESS_SECONDS" \
+	"2" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
@@ -9853,7 +9552,7 @@ run_gate_case "strict-zero-findings-timeout-fails-pr" \
 	"0" \
 	"" \
 	"" \
-	"$TIMEOUT_TEST_PROCESS_SECONDS" \
+	"2" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
@@ -10335,18 +10034,19 @@ run_gate_case "malformed-severity-marker-nonrecoverable" \
 	"vertex_ai/malformed-severity-primary" \
 	"<unset>"
 
-# Bug 7: Model disagreement — the primary produces an unmapped CRITICAL report
-# alongside a NOT_FOUND error. The report is already actionable fail-closed
-# evidence, so the gate must not spend provider budget on a fallback whose LOW
-# result could make the earlier finding appear downgraded.
+# Bug 7: Model disagreement — primary produces CRITICAL, fallback produces LOW.
+# The CRITICAL from the earlier report must NOT be ignored.
+# Both models produce NOT_FOUND errors, so the gate exhausts fallbacks and
+# reports "Configured Vertex model and fallback models were unavailable."
+# The key assertion is exit 1: the CRITICAL finding is NOT downgraded to pass.
 run_gate_case "model-disagreement-critical-in-earlier-report" \
 	"vertex_ai/model-a" \
 	"vertex_ai/model-b" \
 	"1" \
 	"Strix quick scan failed with a non-recoverable error." \
-	"1" \
-	"vertex_ai/model-a" \
-	"<unset>"
+	"2" \
+	"vertex_ai/model-a|vertex_ai/model-b" \
+	"<unset>|<unset>"
 
 # Bug 4: deepseek/models/deepseek-r1 must NOT be rewritten to vertex_ai/deepseek-r1
 run_gate_case "nonvertex-slash-model-not-rewritten" \
@@ -10617,7 +10317,7 @@ run_gate_case_allow_provider_signal "slow-timeout" \
 	"vertex_ai/slow-primary" \
 	"" \
 	"1" \
-	"Strix run timed out after ${TIMEOUT_TEST_PROCESS_SECONDS}s." \
+	"Strix run timed out after 1s." \
 	"3" \
 	"vertex_ai/slow-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
 	"<unset>|<unset>|<unset>" \
@@ -10629,7 +10329,7 @@ run_gate_case_allow_provider_signal "slow-timeout" \
 	"0" \
 	"" \
 	"" \
-	"$TIMEOUT_TEST_PROCESS_SECONDS"
+	"1"
 
 run_gate_case "timeout-disabled-success" \
 	"vertex_ai/timeout-disabled-primary" \

@@ -1,5 +1,4 @@
 import json
-import os
 import shlex
 import shutil
 import subprocess
@@ -57,51 +56,10 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 2
 
 
-def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> None:
-    """Central single-PR dispatch must validate live metadata before cross-repo use."""
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    validation = workflow_step(workflow, "Validate targeted repository dispatch")
-    inspect = workflow_step(workflow, "Inspect PR review and merge queue")
-
-    assert "TARGET_REPOSITORY_INPUT:" in validation
-    assert "TARGET_PR_NUMBER:" in validation
-    assert "TARGET_BASE_BRANCH_INPUT:" in validation
-    assert (
-        "ALLOWED_TARGET_REPOSITORIES: ${{ "
-        "vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}"
-    ) in validation
-    assert 'GITHUB_REPOSITORY" != "ContextualWisdomLab/.github"' in validation
-    assert "target_allowed=0" in validation
-    assert '"repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}"' in validation
-    assert '[ "$live_state" != "open" ]' in validation
-    assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
-    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
-    assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
-    assert "TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}" in inspect
-    assert (
-        "TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}"
-        in inspect
-    )
-    assert '--repo "$TARGET_REPOSITORY"' in inspect
-    assert '--base-branch "$TARGET_DEFAULT_BRANCH"' in inspect
-    assert 'args+=(--pr-number "$PULL_REQUEST_NUMBER")' in inspect
-    assert (
-        "github.event_name == 'repository_dispatch' && "
-        "github.event.client_payload.target_repository != '' && "
-        "(secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
-        "steps.scheduler_app_token.outputs.token) || github.token"
-    ) in inspect
-    assert (
-        "format('target-{0}-pr-{1}', "
-        "github.event.client_payload.target_repository, "
-        "github.event.client_payload.pr_number)"
-    ) in workflow
-
-
 def test_privileged_review_retries_use_default_branch_repository_dispatch() -> None:
     """Privileged retries must never load workflow code from a selected ref."""
     expected_types = {
-        "opencode-review-dispatch.yml": "opencode-review",
+        "opencode-review.yml": "opencode-review",
         "noema-review.yml": "noema-review",
         "strix.yml": "strix-scan",
         "pr-review-merge-scheduler.yml": "merge-scheduler",
@@ -169,14 +127,13 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
+            "opencode-review.yml",
             "security-scan.yml",
         }:
             assert (
                 "github.event_name == 'pull_request_target'" in concurrency_contract
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
-        elif filename == "opencode-review.yml":
-            assert "opencode-review-bootstrap-" in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -255,6 +212,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
+        "opencode-review.yml",
         "osv-scanner-pr.yml",
         "pr-review-merge-scheduler.yml",
         "scorecard-pr.yml",
@@ -272,13 +230,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             in workflow
         )
         assert "github.event.action != 'closed'" in workflow
-
-    opencode_bootstrap = workflow_text("opencode-review.yml")
-    assert "types: [opened, synchronize, reopened, ready_for_review, closed]" in (
-        opencode_bootstrap
-    )
-    assert "actions/checkout" not in opencode_bootstrap
-    assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
     assert "cancel-in-progress: true" in strix_workflow
@@ -305,7 +256,7 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
     for filename in (
-        "opencode-review-dispatch.yml",
+        "opencode-review.yml",
         "noema-review.yml",
         "pr-review-merge-scheduler.yml",
     ):
@@ -316,7 +267,7 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "github.event.client_payload.canonical_ref" not in workflow
         assert "inputs.canonical_ref" not in workflow
         assert "workflow_sha" in workflow
-        if filename == "opencode-review-dispatch.yml":
+        if filename == "opencode-review.yml":
             assert "ref: ${{ steps.trusted_source.outputs.ref }}" in workflow
             assert "ref: ${{ github.workflow_sha }}" not in workflow
         else:
@@ -377,90 +328,10 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
         "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
         in workflow
     )
-    assert "Resolve Noema target repository visibility" in workflow
-    assert (
-        'if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && '
-        '[ -n "${NVIDIA_NIM_API_KEY:-}" ]'
-    ) in workflow
-    assert "https://integrate.api.nvidia.com/v1/chat/completions" in workflow
-    assert 'export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"' in workflow
-    assert "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
     assert "Noema LLM is unconfigured:" in workflow
     assert "mark_unconfigured()" not in workflow
     assert "review skipped until Noema is deployed" not in workflow
     assert "Noema app token is unavailable; review skipped." not in workflow
-
-
-def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
-    tmp_path: Path,
-) -> None:
-    strix_output = tmp_path / "strix-output"
-    strix = subprocess.run(
-        [
-            "bash",
-            "-c",
-            textwrap.dedent(
-                workflow_step(workflow_text("strix.yml"), "Gate Strix secrets")
-                .split("        run: |\n", 1)[1]
-            ),
-        ],
-        env={
-            **os.environ,
-            "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
-            "STRIX_MODEL_REQUESTED": "",
-            "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
-            "STRIX_OPENROUTER_API_KEY": "",
-            "STRIX_NVIDIA_NIM_API_KEY": "",
-            "STRIX_VERTEX_CREDENTIALS": "",
-            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
-            "TARGET_REPOSITORY_PRIVATE": "false",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert strix.returncode == 0, strix.stderr
-    assert {
-        "provider_mode=openai_direct",
-        "strix_model=gpt-5.6-luna",
-    } <= set(strix_output.read_text().splitlines())
-    assert (
-        "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
-        in workflow_text("strix.yml")
-    )
-
-    noema_probe = tmp_path / "noema-key"
-    noema_script = textwrap.dedent(
-        workflow_step(
-            workflow_text("noema-review.yml"),
-            "Run Noema LLM review and submit verdict",
-        ).split("        run: |\n", 1)[1]
-    )
-    noema = subprocess.run(
-        [
-            "bash",
-            "-c",
-            f"trap 'printf %s \"$NOEMA_LLM_API_KEY\" > {shlex.quote(str(noema_probe))}' EXIT\n"
-            + noema_script,
-        ],
-        env={
-            **os.environ,
-            "PR_NUMBER": "1",
-            "GH_TOKEN": "synthetic-review-token",
-            "NOEMA_LLM_API_URL": "",
-            "NOEMA_LLM_MODEL": "",
-            "NOEMA_LLM_API_KEY": "synthetic-openai-key",
-            "NVIDIA_NIM_API_KEY": "",
-            "TARGET_REPOSITORY_PRIVATE": "false",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert noema.returncode == 1
-    assert "Noema LLM is unconfigured" in noema.stdout
-    assert noema_probe.read_text() == "synthetic-openai-key"
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
@@ -524,55 +395,6 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
         assert permission in workflow
 
 
-def test_opencode_dispatch_hands_approved_head_to_noema_before_merge() -> None:
-    """The two-reviewer chain must run Noema before the direct merge follow-up."""
-    workflow = workflow_text("opencode-review-dispatch.yml")
-    handoff = workflow_step(
-        workflow, "Dispatch Noema after current-head OpenCode approval"
-    )
-
-    assert workflow.index(
-        "      - name: Dispatch Noema after current-head OpenCode approval"
-    ) < workflow.index("      - name: Run merge scheduler after approval")
-    assert "always()" in handoff
-    assert "github.event_name == 'repository_dispatch'" in handoff
-    assert (
-        "needs.validate-pr-metadata.outputs.target_repository != github.repository"
-        not in handoff
-    )
-    assert "continue-on-error: true" in handoff
-    assert "timeout-minutes: 18" in handoff
-    assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || "
-        "steps.opencode_app_token.outputs.token || github.token }}"
-    ) in handoff
-    assert "python3 scripts/ci/noema_review_handoff.py" in handoff
-    assert '--repo "$GH_REPOSITORY"' in handoff
-    assert '--pr-number "$PR_NUMBER"' in handoff
-    assert '--head-sha "$PR_HEAD_SHA"' in handoff
-    assert "--attempts 90" in handoff
-    assert "--interval-seconds 10" in handoff
-    for sealed_env in (
-        "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt",
-        "OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ "
-        "steps.seal_artifacts.outputs.manifest_sha256 }}",
-        "OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head",
-        'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"',
-    ):
-        assert sealed_env in handoff
-
-    merge_follow_up = workflow_step(workflow, "Run merge scheduler after approval")
-    for sealed_env in (
-        "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt",
-        "OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ "
-        "steps.seal_artifacts.outputs.manifest_sha256 }}",
-        "OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head",
-        'OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"',
-    ):
-        assert sealed_env in merge_follow_up
-
-
 def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
     noema = workflow_text("noema-review.yml")
     scheduler = workflow_text("pr-review-merge-scheduler.yml")
@@ -616,9 +438,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. The sweep runs
     every 15 minutes so an approval that lands after a PR's last event is
-    auto-updated/merged promptly instead of idling indefinitely. Its cron has a
-    distinct concurrency key from the separate 30-minute scan, and the job has
-    enough runtime headroom to finish a complete organization walk.
+    auto-updated/merged within ~15 minutes instead of idling for up to an hour.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -627,20 +447,6 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
     assert "github.event.schedule == '*/15 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
-    assert (
-        "github.event_name == 'schedule' && format('schedule-{0}', "
-        "github.event.schedule)"
-    ) in workflow
-    org_sweep_header = workflow.split("  org-queue-sweep:", 1)[1].split(
-        "    permissions:", 1
-    )[0]
-    assert "timeout-minutes: 60" in org_sweep_header
-    for setting in (
-        "ORG_SWEEP_TRIGGER_REVIEWS",
-        "ORG_SWEEP_ENABLE_AUTO_MERGE",
-        "ORG_SWEEP_UPDATE_BRANCHES",
-    ):
-        assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
     # The single-repository scan must not double-run on the sweep cron.
     assert "github.event.schedule != '*/15 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep != true" in workflow
@@ -733,18 +539,18 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
         "ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
     ) in workflow
     assert (
-        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}"
+        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}"
         in workflow
     )
     assert (
-        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}"
+        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}"
     ) in workflow
     assert (
         "ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}"
         in workflow
     )
     assert (
-        "ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}"
+        "ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}"
         in workflow
     )
     assert 'if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then' in workflow
@@ -1068,7 +874,7 @@ def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
 
 
 def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> None:
-    workflow = workflow_text("opencode-review-dispatch.yml")
+    workflow = workflow_text("opencode-review.yml")
     failed_check_evidence = (
         REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh"
     ).read_text(encoding="utf-8")

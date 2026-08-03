@@ -92,8 +92,8 @@ env_integer_or_default() {
 cap_dynamic_cadence_for_queue() {
 	local timeout_cap budget_cap cycle_cap previous_run_timeout previous_budget_seconds previous_max_cycles
 
-	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600)"
-	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 7200)"
+	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 600)"
+	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 1800)"
 	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 0)"
 	previous_run_timeout="$original_run_timeout"
 	previous_budget_seconds="$budget_seconds"
@@ -159,9 +159,7 @@ write_prompt() {
 	else
 		intro="Review PR #\${PR_NUMBER} in \${OPENCODE_SOURCE_WORKDIR} with \${model_candidate}."
 	fi
-	# Colon-safe: OpenRouter ":free" candidates would otherwise produce file
-	# names that Windows and actions/upload-artifact reject.
-	contract_file="$OPENCODE_REVIEW_WORKDIR/opencode-review-contract-${model_candidate//[\/:]/-}.md"
+	contract_file="$OPENCODE_REVIEW_WORKDIR/opencode-review-contract-${model_candidate//\//-}.md"
 	evidence_excerpt_file="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
 	evidence_file_in_workdir="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
 	cp "$GITHUB_WORKSPACE/scripts/ci/opencode_review_prompt_template.md" "$contract_file"
@@ -187,10 +185,11 @@ write_prompt() {
 		fi
 		printf 'Do not request changes solely because your tool call, MCP call, or full-file read was not executed. Treat that as a review source limitation unless current-head evidence explicitly reports a materialization failure; any such finding must be tied to that evidence, not a generic model-exhaustion message. REQUEST_CHANGES findings must cite a positive source/evidence line; never use line 0.\n'
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
-		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome and copy exactly one source-line-sha256=<64 lowercase hex> receipt with its matching path and line from the trusted receipt section; generic source-inspection or coverage-verification claims are invalid.\n'
-		printf 'Current-run identity values are head_sha=%s, run_id=%s, run_attempt=%s. Copy them into the one final control object required by the contract file.\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
-		printf 'Do not quote, repeat, or emit a schema example before the final sentinel. Choose exactly one result token, APPROVE or REQUEST_CHANGES; never emit the literal phrase "APPROVE or REQUEST_CHANGES".\n'
-		printf 'Before returning, verify: exactly one top-level current-run control object; non-empty reason, summary, and residual_risk; the required number of complete probes; APPROVE has status=passed, only falsified probes, and findings=[]; REQUEST_CHANGES has status=failed, a confirmed probe, and a same-location source-backed finding.\n'
+		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome and exactly one source-line-sha256=<64 lowercase hex> digest computed from the cited current-head line bytes without its line ending; generic source-inspection or coverage-verification claims are invalid.\n'
+		printf 'Required control block shape:\n'
+		printf '```json\n'
+		printf '{"head_sha":"%s","run_id":"%s","run_attempt":"%s","result":"APPROVE or REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete evidence and all required labels","adversarial_validation":{"status":"passed or failed","probes":[{"path":"exact/current-head/changed-file","line":1,"hypothesis":"concrete failure hypothesis","attack_or_counterexample":"input, state, race, threat, or boundary used to challenge it","evidence":"executed command or source-backed trace, observed outcome, and source-line-sha256=<exact cited line digest>","outcome":"falsified or confirmed"}],"residual_risk":"bounded residual risk after the probes"},"findings":[]}\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
+		printf '```\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'
 			if should_inline_prompt_evidence_excerpt "$model_candidate"; then
@@ -222,23 +221,6 @@ PY
 	} >"$prompt_file"
 }
 
-write_schema_repair_prompt() {
-	local model_candidate="$1"
-	local prompt_file="$2"
-
-	write_prompt "$model_candidate" "$prompt_file"
-	{
-		printf '\nA previous response from this same provider reached the trusted validator but failed the control schema. Perform the review again from the same trusted evidence and return one corrected review body only.\n'
-		printf 'This is a schema repair opportunity, not permission to weaken, omit, or fabricate evidence. Check every item before returning:\n'
-		printf -- '- Emit exactly one sentinel and exactly one current-run JSON control object; do not quote any example object or earlier response.\n'
-		printf -- '- Choose exactly APPROVE or REQUEST_CHANGES, with a non-empty reason, summary, and residual_risk.\n'
-		printf -- '- Include "adversarial_validation" as an object with at least the required probe count. Copy each path, line, and source-line-sha256 receipt exactly from trusted bounded evidence.\n'
-		printf -- '- APPROVE requires status=passed, every probe outcome=falsified, and findings=[].\n'
-		printf -- '- REQUEST_CHANGES requires status=failed, at least one outcome=confirmed, and a non-empty source-backed finding at the same path and line.\n'
-		printf 'Return only the corrected review body now.\n'
-	} >>"$prompt_file"
-}
-
 assert_reasoning_effort_for_candidate() {
 	local model_candidate="$1"
 
@@ -261,7 +243,7 @@ is_fatal_provider_failure() {
 		return 0
 	fi
 	[ -s "$opencode_json_file" ] || return 1
-	grep -Eiq 'budget limit|insufficient_quota|insufficient credits|payment required|model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file"
+	grep -Eiq 'budget limit|insufficient_quota' "$opencode_json_file"
 }
 
 has_fatal_provider_error_event() {
@@ -271,29 +253,8 @@ has_fatal_provider_error_event() {
 	# Only structured "type":"error" events count while the process is still
 	# running: model prose or tool output quoting these signatures is
 	# JSON-escaped inside event strings, so a healthy streaming run is never
-	# killed for merely discussing context windows, quota errors, or missing
-	# models. Model-unavailable signatures (OpenRouter "No endpoints found" /
-	# "not a valid model ID", OpenAI-style model_not_found) matter because a
-	# delisted pinned free model would otherwise hang and burn the whole
-	# candidate run budget.
-	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota|insufficient credits|payment required|model_not_found|model not found|modelnotfounderror|not a valid model|no endpoints/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
-}
-
-is_credit_exhausted_failure() {
-	local opencode_json_file="$1"
-	local opencode_stderr_file="$2"
-
-	# Paid-provider credit exhaustion (OpenRouter HTTP 402 "Insufficient
-	# credits") can never recover within one run: every retry is a wasted
-	# paid request. Match structured "type":"error" events in the JSON
-	# stream (same trust model as has_fatal_provider_error_event) plus
-	# CLI diagnostics on stderr, which never contain model prose.
-	if [ -s "$opencode_json_file" ] &&
-		awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /insufficient credits|payment required|(^|[^0-9])402([^0-9]|$)/ { found = 1; exit } END { exit !found }' "$opencode_json_file"; then
-		return 0
-	fi
-	[ -s "$opencode_stderr_file" ] || return 1
-	grep -Eiq 'insufficient credits|payment required|"code"[[:space:]]*:[[:space:]]*402' "$opencode_stderr_file"
+	# killed for merely discussing context windows or quota errors.
+	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
 }
 
 emit_sanitized_opencode_failure_detail() {
@@ -313,12 +274,8 @@ emit_sanitized_opencode_failure_detail() {
 	failure_class="unclassified"
 	if grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="context-window"
-	elif grep -Eiq 'insufficient credits|payment required|"code"[[:space:]]*:[[:space:]]*402' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="credit-exhausted"
 	elif grep -Eiq 'budget limit|insufficient_quota|quota exceeded' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="quota-or-budget"
-	elif grep -Eiq 'model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="model-unavailable"
 	elif grep -Eiq 'rate.?limit|too many requests|(^|[^0-9])429([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
 		failure_class="rate-limit"
 	elif grep -Eiq 'permission denied|authentication|authorization|(^|[^0-9])(401|403)([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
@@ -354,37 +311,6 @@ is_direct_openai_candidate() {
 	esac
 }
 
-is_openrouter_candidate() {
-	case "$1" in
-	openrouter/*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-is_nvidia_nim_candidate() {
-	case "$1" in
-	nvidia-nim/*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-is_schema_repair_candidate() {
-	case "$1" in
-	nvidia-nim/* | opencode-free/*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-# Org secret name is NVIDIA_NIM_API_KEY (GitHub Actions / org secrets UI).
-# opencode.jsonc nvidia-nim provider block resolves {env:NVIDIA_API_KEY}.
-# Normalize only the scoped secret and discard any legacy provider credential so
-# it cannot activate NIM candidates outside the explicit governance boundary.
-if [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
-	export NVIDIA_API_KEY="$NVIDIA_NIM_API_KEY"
-else
-	unset NVIDIA_API_KEY
-fi
-
 is_low_sensitivity_candidate() {
 	case "$1" in
 	openai/*-mini | openai/*-nano | \
@@ -408,14 +334,6 @@ should_skip_model_candidate() {
 		printf 'Skipping OpenCode %s because OPENAI_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
-	if is_openrouter_candidate "$model_candidate" && [ -z "${OPENROUTER_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
-		return 0
-	fi
-	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because scoped NVIDIA_NIM_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
-		return 0
-	fi
 	return 1
 }
 
@@ -425,12 +343,6 @@ cap_model_run_timeout() {
 	local cap_seconds
 
 	case "$model_candidate" in
-	nvidia-nim/*)
-		cap_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180)"
-		;;
-	opencode-free/*)
-		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600)"
-		;;
 	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
 		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
 		;;
@@ -458,7 +370,7 @@ run_one_model_attempt() {
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
 	local opencode_pid fatal_poll_seconds
 
-	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
+	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
@@ -504,7 +416,7 @@ run_one_model_attempt() {
 			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
 		fi
 		if is_fatal_provider_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, quota, or model unavailable); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
@@ -515,7 +427,7 @@ run_one_model_attempt() {
 		printf 'OpenCode %s attempt %s/%s JSON output did not include a session id.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "sessionless-json" "$opencode_json_file"
 		if is_fatal_provider_failure "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, quota, or model unavailable); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
+			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, or quota); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
 		fi
 		return 1
@@ -536,38 +448,24 @@ run_one_model_attempt() {
 	if ! normalize_opencode_output "$candidate_output_file"; then
 		printf 'OpenCode %s attempt %s/%s output did not include a valid control conclusion.\n' "$model_candidate" "$attempt" "$attempts"
 		emit_rejected_opencode_artifact_metadata "invalid-control-output" "$candidate_output_file"
-		return 3
+		return 1
 	fi
 	return 0
 }
 
 main() {
-	local attempts schema_repair_attempts effective_attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
+	local attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
 	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
 	local uncapped_run_timeout
 	local changed_file_count small_file_threshold medium_file_threshold
-	local invalid_control_cap max_total_attempts total_attempts alive_candidates
-	local nim_budget_seconds nim_elapsed_seconds nim_remaining_seconds
-	local nim_attempt_started nim_attempt_elapsed non_nim_candidate_count
-	local -A dead_candidate_reasons invalid_control_counts
 	local -a model_candidates
 
-	# Spend guards, not timing: a paid candidate that keeps producing
-	# control-rejected output or has exhausted provider credits must stop
-	# consuming paid requests instead of cycling until the retry budget
-	# elapses (run 30120972549 burned the org OpenRouter credit in ~102
-	# cycles of re-sent full prompts). Timeouts/deadlines are untouched.
-	invalid_control_cap="$(env_integer_or_default OPENCODE_INVALID_CONTROL_OUTPUT_CAP 3)"
-	max_total_attempts="$(env_integer_or_default OPENCODE_POOL_MAX_TOTAL_ATTEMPTS 30)"
-	total_attempts=0
-
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
-	schema_repair_attempts="$(env_integer_or_default OPENCODE_SCHEMA_REPAIR_ATTEMPTS 1)"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
+	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-600}"
 	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ]; then
-		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-3600}"
+		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-600}"
 		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-3600}"
 		max_cycles="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES:-1}"
 		printf 'Central review-process evidence fallback eligible for scope "%s"; limiting OpenCode model pool to %ss per attempt, %ss total budget, and %s cycle(s) so provider delay is logged before the publish fallback evaluates current-head peer evidence.\n' \
@@ -580,7 +478,7 @@ main() {
 				original_run_timeout="$(env_integer_or_default OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS 900)"
 				budget_seconds="$(env_integer_or_default OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS 2100)"
 			elif [ "$changed_file_count" -le "$medium_file_threshold" ]; then
-				original_run_timeout="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
+				original_run_timeout="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
 				budget_seconds="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
 			else
 				original_run_timeout="$(env_integer_or_default OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
@@ -591,7 +489,7 @@ main() {
 			printf 'OpenCode dynamic review cadence selected %ss per attempt and %ss total budget for %s changed file(s); max-cycles=%s.\n' \
 				"$original_run_timeout" "$budget_seconds" "$changed_file_count" "$max_cycles"
 		else
-			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
+			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 1800)"
 			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
 			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
 			cap_dynamic_cadence_for_queue
@@ -613,81 +511,32 @@ main() {
 		fi
 		exit 1
 	fi
-	nim_budget_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 900)"
-	nim_elapsed_seconds=0
-	non_nim_candidate_count=0
-	for model_candidate in "${model_candidates[@]}"; do
-		if ! is_nvidia_nim_candidate "$model_candidate"; then
-			non_nim_candidate_count=$((non_nim_candidate_count + 1))
-		fi
-	done
-	if [ "$non_nim_candidate_count" -gt 0 ] &&
-		[ "$budget_seconds" -gt 0 ] &&
-		[ "$nim_budget_seconds" -ge "$budget_seconds" ]; then
-		nim_budget_seconds=$((budget_seconds / 2))
-		printf 'OpenCode NVIDIA NIM combined runtime budget was capped at %ss so %s non-NIM fallback candidate(s) retain retry budget.\n' \
-			"$nim_budget_seconds" "$non_nim_candidate_count"
-	fi
-	printf 'Configured OpenCode model pool: candidates=%s attempts=%s per-model-timeout=%ss retry-budget=%ss max-cycles=%s NVIDIA-NIM-combined-budget=%ss.\n' \
-		"${#model_candidates[@]}" "$attempts" "$original_run_timeout" "$budget_seconds" "$max_cycles" "$nim_budget_seconds"
+	printf 'Configured OpenCode model pool: candidates=%s attempts=%s per-model-timeout=%ss retry-budget=%ss max-cycles=%s.\n' \
+		"${#model_candidates[@]}" "$attempts" "$original_run_timeout" "$budget_seconds" "$max_cycles"
 
 	cycle=1
 	while :; do
 		printf 'Starting OpenCode model pool cycle %s.\n' "$cycle"
 		for model_candidate in "${model_candidates[@]}"; do
-			if [ -n "${dead_candidate_reasons[$model_candidate]:-}" ]; then
-				printf 'Skipping OpenCode %s for the rest of this run: %s.\n' \
-					"$model_candidate" "${dead_candidate_reasons[$model_candidate]}"
-				continue
-			fi
 			if should_skip_model_candidate "$model_candidate"; then
 				continue
 			fi
-			if is_nvidia_nim_candidate "$model_candidate" &&
-				[ "$nim_elapsed_seconds" -ge "$nim_budget_seconds" ]; then
-				printf 'Skipping OpenCode %s because the NVIDIA NIM combined runtime budget of %ss is exhausted; preserving the remaining retry budget for fallback candidates.\n' \
-					"$model_candidate" "$nim_budget_seconds"
-				continue
-			fi
 			assert_reasoning_effort_for_candidate "$model_candidate"
-			safe_model="${model_candidate//[\/:]/-}"
+			safe_model="${model_candidate//\//-}"
 			prompt_file="${RUNNER_TEMP}/opencode-review-${safe_model}-prompt.md"
 			candidate_output_file="${RUNNER_TEMP}/opencode-review-${safe_model}.md"
 			opencode_json_file="${candidate_output_file}.jsonl"
 			opencode_export_file="${candidate_output_file}.session.json"
 			write_prompt "$model_candidate" "$prompt_file"
-			effective_attempts="$attempts"
-			if is_schema_repair_candidate "$model_candidate"; then
-				effective_attempts=$((effective_attempts + schema_repair_attempts))
-			fi
-			for attempt in $(seq 1 "$effective_attempts"); do
-				if [ "$attempt" -gt "$attempts" ]; then
-					write_schema_repair_prompt "$model_candidate" "$prompt_file"
-					printf 'OpenCode %s schema-repair attempt %s/%s will re-review from trusted evidence with a non-replayable control checklist.\n' \
-						"$model_candidate" "$attempt" "$effective_attempts"
-				fi
+			for attempt in $(seq 1 "$attempts"); do
 				now="$SECONDS"
-				if is_nvidia_nim_candidate "$model_candidate" &&
-					[ "$nim_elapsed_seconds" -ge "$nim_budget_seconds" ]; then
-					printf 'Stopping OpenCode %s retries because the NVIDIA NIM combined runtime budget of %ss is exhausted.\n' \
-						"$model_candidate" "$nim_budget_seconds"
-					break
-				fi
 				if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then
-					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$effective_attempts"
+					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$attempts"
 					if finish_pool_without_model; then
 						exit 0
 					fi
 					exit 1
 				fi
-				if [ "$max_total_attempts" -gt 0 ] && [ "$total_attempts" -ge "$max_total_attempts" ]; then
-					printf 'OpenCode model pool reached the per-run provider attempt ceiling of %s attempts; ending the pool to bound provider spend. Set OPENCODE_POOL_MAX_TOTAL_ATTEMPTS=0 to disable.\n' "$max_total_attempts"
-					if finish_pool_without_model; then
-						exit 0
-					fi
-					exit 1
-				fi
-				total_attempts=$((total_attempts + 1))
 				remaining="$original_run_timeout"
 				if [ "$deadline" -gt 0 ]; then
 					remaining=$((deadline - now))
@@ -696,29 +545,20 @@ main() {
 				if [ "$deadline" -gt 0 ] && [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -gt "$remaining" ]; then
 					OPENCODE_RUN_TIMEOUT_SECONDS="$remaining"
 				fi
-				if is_nvidia_nim_candidate "$model_candidate"; then
-					nim_remaining_seconds=$((nim_budget_seconds - nim_elapsed_seconds))
-					if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -gt "$nim_remaining_seconds" ]; then
-						printf 'OpenCode %s combined NVIDIA NIM budget cap selected %ss instead of %ss so fallback candidates retain retry budget.\n' \
-							"$model_candidate" "$nim_remaining_seconds" "$OPENCODE_RUN_TIMEOUT_SECONDS"
-						OPENCODE_RUN_TIMEOUT_SECONDS="$nim_remaining_seconds"
-					fi
-				fi
 				uncapped_run_timeout="$OPENCODE_RUN_TIMEOUT_SECONDS"
 				OPENCODE_RUN_TIMEOUT_SECONDS="$(cap_model_run_timeout "$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS")"
 				if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -lt "$uncapped_run_timeout" ]; then
-					printf 'OpenCode %s runtime cap selected %ss instead of %ss because this provider has a bounded failover window.\n' \
+					printf 'OpenCode %s runtime cap selected %ss instead of %ss because this installation has returned a constrained request-body limit for that endpoint.\n' \
 						"$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$uncapped_run_timeout"
 				fi
 				export OPENCODE_RUN_TIMEOUT_SECONDS
-				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$effective_attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"
+				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"
 				agent="${OPENCODE_AGENT:-ci-review-fallback}"
 				if [ "$attempt" -eq 1 ] && [ -n "${OPENCODE_FIRST_ATTEMPT_AGENT:-}" ]; then
 					agent="$OPENCODE_FIRST_ATTEMPT_AGENT"
 				fi
 				run_status=0
-				nim_attempt_started="$SECONDS"
-				if run_one_model_attempt "$model_candidate" "$attempt" "$effective_attempts" "$agent" "$prompt_file" "$candidate_output_file" "$opencode_json_file" "$opencode_export_file"; then
+				if run_one_model_attempt "$model_candidate" "$attempt" "$attempts" "$agent" "$prompt_file" "$candidate_output_file" "$opencode_json_file" "$opencode_export_file"; then
 					cp "$candidate_output_file" "$OPENCODE_OUTPUT_FILE"
 					record_review_model "$model_candidate"
 					record_review_status "success"
@@ -726,33 +566,10 @@ main() {
 				else
 					run_status=$?
 				fi
-				if is_nvidia_nim_candidate "$model_candidate"; then
-					nim_attempt_elapsed=$((SECONDS - nim_attempt_started))
-					nim_elapsed_seconds=$((nim_elapsed_seconds + nim_attempt_elapsed))
-					printf 'OpenCode NVIDIA NIM combined runtime used %ss/%ss after %s attempt %s/%s.\n' \
-						"$nim_elapsed_seconds" "$nim_budget_seconds" "$model_candidate" "$attempt" "$effective_attempts"
-				fi
-				if [ "$run_status" -ne 3 ] && is_credit_exhausted_failure "$opencode_json_file" "${opencode_json_file}.stderr"; then
-					dead_candidate_reasons[$model_candidate]="provider credits exhausted (HTTP 402 / payment required)"
-					printf 'OpenCode %s provider credits are exhausted; marking this candidate failed for the rest of the run so retries cannot accrue further spend.\n' "$model_candidate"
-					break
-				fi
-				if [ "$run_status" -eq 3 ]; then
-					invalid_control_counts[$model_candidate]=$((${invalid_control_counts[$model_candidate]:-0} + 1))
-					if [ "$invalid_control_cap" -gt 0 ] && [ "${invalid_control_counts[$model_candidate]}" -ge "$invalid_control_cap" ]; then
-						dead_candidate_reasons[$model_candidate]="produced ${invalid_control_counts[$model_candidate]} control-rejected outputs"
-						printf 'OpenCode %s produced %s control-rejected outputs; marking this candidate failed for the rest of the run so paid retries cannot loop on rejected output. Set OPENCODE_INVALID_CONTROL_OUTPUT_CAP=0 to disable.\n' \
-							"$model_candidate" "${invalid_control_counts[$model_candidate]}"
-						break
-					fi
-				fi
 				if [ "$run_status" -eq 2 ]; then
 					break
 				fi
-				if [ "$run_status" -ne 3 ] && [ "$attempt" -ge "$attempts" ]; then
-					break
-				fi
-				if [ "$attempt" -lt "$effective_attempts" ] && [ "$attempt" -lt "$attempts" ]; then
+				if [ "$attempt" -lt "$attempts" ]; then
 					retry_sleep="$(backoff_sleep "$attempt")"
 					if [ "$deadline" -gt 0 ] && [ $((SECONDS + retry_sleep)) -gt "$deadline" ]; then
 						retry_sleep=$((deadline - SECONDS))
@@ -764,20 +581,6 @@ main() {
 				fi
 			done
 		done
-
-		alive_candidates=0
-		for model_candidate in "${model_candidates[@]}"; do
-			if [ -z "${dead_candidate_reasons[$model_candidate]:-}" ]; then
-				alive_candidates=$((alive_candidates + 1))
-			fi
-		done
-		if [ "$alive_candidates" -eq 0 ]; then
-			printf 'Every OpenCode model candidate is marked failed for this run; ending the pool without further provider spend.\n'
-			if finish_pool_without_model; then
-				exit 0
-			fi
-			exit 1
-		fi
 
 		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the retry budget/GitHub Actions job timeout is reached.\n'
 		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then

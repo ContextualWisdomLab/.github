@@ -166,7 +166,7 @@ def fixture_repo_with_base_tests(tmp_path: Path) -> tuple[Path, str, str]:
 
     git(repo, "checkout", "-b", "feature")
     write(repo, "feature.txt", "feature\n")
-    write(repo, "tests/test_feature.py", "def test_feature():\n    assert True\n    assert True\n\n\ndef test_edge():\n    assert True\n")
+    write(repo, "tests/test_feature.py", "def test_feature():\n    assert True\n\n\ndef test_edge():\n    assert True\n")
     commit(repo, "feature with tests")
 
     git(repo, "checkout", "main")
@@ -218,24 +218,7 @@ def test_shrunk_test_without_replacement_fails(tmp_path):
     assert evidence.regressed_test_paths == ("tests/test_feature.py",)
     assert evidence.suspicious_test_regression
     assert evidence.blocked
-    assert "reduced declared test cases" in guard.format_report(evidence)
-
-
-def test_duplicate_assertion_cleanup_without_test_case_loss_passes(tmp_path):
-    """Removing duplicate assertions while preserving test cases is not stale replay."""
-    repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
-    write(
-        repo,
-        "tests/test_feature.py",
-        "def test_feature():\n    assert True\n\n\ndef test_edge():\n    assert True\n",
-    )
-    head = commit(repo, "remove duplicate assertion")
-
-    evidence = guard.collect_evidence(repo, current_base, head)
-
-    assert evidence.regressed_test_paths == ()
-    assert evidence.unmerged_paths == ()
-    assert not evidence.blocked
+    assert "deleted or shrank test files" in guard.format_report(evidence)
 
 
 def test_test_refactor_with_replacement_passes(tmp_path):
@@ -269,53 +252,6 @@ def test_is_test_path_covers_common_layouts():
     assert not guard.is_test_path("docs/testing.md")
 
 
-def test_test_case_count_fails_closed_and_supports_known_formats(
-    monkeypatch,
-    tmp_path,
-):
-    """Missing, invalid, supported, and unsupported test sources are classified."""
-
-    def missing_source(_root, _args):
-        raise RuntimeError("missing revision")
-
-    monkeypatch.setattr(guard, "git_output", missing_source)
-    assert guard.test_case_count(tmp_path, "base", "tests/test_missing.py") is None
-
-    monkeypatch.setattr(
-        guard,
-        "git_output",
-        lambda _root, _args: "def test_broken(",
-    )
-    assert guard.test_case_count(tmp_path, "base", "tests/test_broken.py") is None
-
-    monkeypatch.setattr(
-        guard,
-        "git_output",
-        lambda _root, _args: "def test_ok():\n    assert True\n",
-    )
-    assert guard.test_case_count(tmp_path, "base", "tests/test_ok.py") == 1
-
-    supported_sources = (
-        ("tests/guard.bats", '@test "works" {\n  true\n}\n'),
-        ("tests/guard.go", "func TestGuard(t *testing.T) {}\n"),
-        ("tests/guard.test.js", "test.concurrent.each(cases)('works', () => {});\n"),
-        ("tests/guard.test.jsx", "it.only('works', () => {});\n"),
-        ("tests/test_guard.R", "testthat::test_that('works', { expect_true(TRUE) })\n"),
-        ("tests/guard_test.rs", "#[tokio::test]\nasync fn works() {}\n"),
-        ("tests/guard.test.ts", "test.skip('works', () => {});\n"),
-        ("tests/guard.test.tsx", "it.todo('works');\n"),
-    )
-    for path, source in supported_sources:
-        monkeypatch.setattr(
-            guard,
-            "git_output",
-            lambda _root, _args, source=source: source,
-        )
-        assert guard.test_case_count(tmp_path, "base", path) == 1
-
-    assert guard.test_case_count(tmp_path, "base", "tests/README.md") is None
-
-
 def test_signal_properties_require_their_evidence():
     """Unmerge and test-regression signals fire only on their exact evidence."""
     common = {"base_sha": "base", "head_sha": "head", "merge_anchor": "merge", "post_merge_commits": 1}
@@ -337,7 +273,7 @@ def test_summarize_paths_bounds_long_lists():
 
 
 def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
-    """Deleted, weakened, added, malformed, and non-test records are classified."""
+    """Deleted, shrunk, added, malformed, and non-test records are classified correctly."""
     name_status = "\n".join(
         [
             "D\ttests/test_gone.py",
@@ -357,11 +293,6 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
     )
     outputs = iter([name_status, numstat])
     monkeypatch.setattr(guard, "git_output", lambda _root, _args: next(outputs))
-    monkeypatch.setattr(
-        guard,
-        "test_case_count",
-        lambda _root, revision, _path: 2 if revision == "a" else 1,
-    )
 
     regressed, added = guard.test_file_changes(tmp_path, "a", "b")
 

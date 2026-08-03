@@ -956,13 +956,13 @@ extract_strix_failed_check_block "$EVIDENCE_FILE" "$strix_evidence_file"
 
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b' || 'gpt-5.6-luna'" \
-	"Strix public scans must default to NVIDIA NIM while private scans retain the contracted provider" \
+	"github.event.client_payload.strix_llm || 'gpt-5.6-luna'" \
+	"Strix PR scans must default to direct OpenAI GPT-5.6 Luna" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model" \
+	"STRIX_LLM must select GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, or an approved organization Vertex AI model" \
 	"Strix unsupported-model errors must name the allowed providers" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"

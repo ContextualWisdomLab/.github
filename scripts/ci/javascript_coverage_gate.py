@@ -25,29 +25,10 @@ TEST_NAME_RE = re.compile(r"\.(?:spec|test)\.[cm]?[jt]sx?$")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
-def git_command(repo_root: Path, *args: str) -> list[str]:
-    """Build a read-only Git command for the validated coverage worktree.
-
-    The coverage sandbox deliberately keeps ``.git`` owned by root while tests
-    run as an unprivileged UID. Git therefore requires an explicit
-    ``safe.directory`` for trusted coverage code even though the worktree
-    itself belongs to the test UID.
-    """
-    resolved_root = repo_root.resolve()
-    return [
-        "git",
-        "-c",
-        f"safe.directory={resolved_root}",
-        "-C",
-        str(resolved_root),
-        *args,
-    ]
-
-
 def git(repo_root: Path, *args: str) -> str:
     """Run a read-only git command and return decoded stdout."""
     completed = subprocess.run(
-        git_command(repo_root, *args),
+        ["git", "-C", str(repo_root), *args],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -87,15 +68,17 @@ def changed_runtime_lines(
 ) -> dict[str, set[int]]:
     """Return added/modified line numbers for changed runtime source files."""
     raw_names = subprocess.run(
-        git_command(
-            repo_root,
+        [
+            "git",
+            "-C",
+            str(repo_root),
             "diff",
             "--name-only",
             "-z",
             "--diff-filter=ACMR",
             base_sha,
             head_sha,
-        ),
+        ],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
