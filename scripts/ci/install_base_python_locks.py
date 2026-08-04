@@ -1,10 +1,9 @@
 """Install trusted base-commit Python hash locks without package overlays.
 
-The coverage image can contain several independently hash-complete requirement
-files. Installing those files in separate pip transactions can leave a package
-partially overlaid when multiple locks pin the same distribution. This module
-preflights candidates and same-directory supplement groups, then resolves every
-accepted requirement file in one aggregate dry run and one aggregate install.
+Each candidate is preflighted independently, incomplete supplements may be
+recovered only with sibling locks, and accepted closures are installed in one
+pip transaction. The single transaction prevents repeated installs from
+leaving packages such as NumPy partially overlaid in the coverage image.
 """
 
 from __future__ import annotations
@@ -104,7 +103,6 @@ def _manifest_entries(requirements_root: pathlib.Path) -> list[LockCandidate]:
         raise ValueError(f"base Python lock manifest is invalid: {exc}") from exc
     if not isinstance(manifest, list):
         raise ValueError("base Python lock manifest must be a JSON array")
-
     entries: list[LockCandidate] = []
     seen_files: set[str] = set()
     for entry in manifest:
@@ -132,9 +130,7 @@ def _manifest_entries(requirements_root: pathlib.Path) -> list[LockCandidate]:
             raise ValueError(
                 f"materialized base Python lock {generated_file} must be a regular file"
             )
-        entries.append(
-            LockCandidate(generated_file, str(source_path), candidate)
-        )
+        entries.append(LockCandidate(generated_file, str(source_path), candidate))
     return entries
 
 
@@ -279,12 +275,10 @@ def _report_fatal_preflight_failure(
         print(failure_output, file=stderr)
 
 
-def _run_preflight(
-    requirements: Sequence[pathlib.Path],
-    *,
-    runner: Runner,
+def _preflight(
+    requirements: Sequence[pathlib.Path], runner: Runner
 ) -> subprocess.CompletedProcess[str]:
-    """Run one isolated resolver-only hash validation."""
+    """Run one resolver-only hash validation."""
 
     return runner(
         _pip_command(requirements, preflight=True),
@@ -302,7 +296,7 @@ def install_materialized_locks(
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
-    """Preflight accepted locks and install them in one atomic pip transaction."""
+    """Preflight accepted locks and install them in one pip transaction."""
 
     try:
         entries = _manifest_entries(requirements_root)
@@ -320,7 +314,7 @@ def install_materialized_locks(
             file=stdout,
             flush=True,
         )
-        preflight = _run_preflight([entry.path], runner=runner)
+        preflight = _preflight([entry.path], runner)
         preflight_results[entry.generated_file] = preflight
         if preflight.returncode == 0:
             independently_valid.add(entry.generated_file)
@@ -336,6 +330,7 @@ def install_materialized_locks(
 
     accepted: list[LockCandidate] = []
     covered_files: set[str] = set()
+    accepted_plan_count = 0
     for source_directory, directory_entries in by_source_directory.items():
         invalid_entries = [
             entry
@@ -351,8 +346,8 @@ def install_materialized_locks(
             file=stdout,
             flush=True,
         )
-        group_preflight = _run_preflight(
-            [entry.path for entry in directory_entries], runner=runner
+        group_preflight = _preflight(
+            [entry.path for entry in directory_entries], runner
         )
         if group_preflight.returncode != 0:
             if not _is_deferable_preflight_failure(group_preflight.stdout or ""):
@@ -365,6 +360,7 @@ def install_materialized_locks(
             continue
         accepted.extend(directory_entries)
         covered_files.update(entry.generated_file for entry in directory_entries)
+        accepted_plan_count += 1
         print(
             "Recovered trusted base Python supplement(s) through a complete "
             f"same-directory hash closure: {source_directory or '.'}.",
@@ -378,6 +374,7 @@ def install_materialized_locks(
         if entry.generated_file in independently_valid:
             accepted.append(entry)
             covered_files.add(entry.generated_file)
+            accepted_plan_count += 1
             continue
         skipped += 1
         print(
@@ -403,20 +400,21 @@ def install_materialized_locks(
     if unique_accepted:
         accepted_paths = [entry.path for entry in unique_accepted]
         accepted_sources = ", ".join(entry.source for entry in unique_accepted)
-        print(
-            "Preflighting aggregate trusted base Python lock closure: "
-            f"{accepted_sources}.",
-            file=stdout,
-            flush=True,
-        )
-        aggregate_preflight = _run_preflight(accepted_paths, runner=runner)
-        if aggregate_preflight.returncode != 0:
-            _report_fatal_preflight_failure(
-                accepted_sources,
-                aggregate_preflight.stdout or "",
-                stderr=stderr,
+        if accepted_plan_count > 1:
+            print(
+                "Preflighting aggregate trusted base Python lock closure: "
+                f"{accepted_sources}.",
+                file=stdout,
+                flush=True,
             )
-            return aggregate_preflight.returncode or 1
+            aggregate_preflight = _preflight(accepted_paths, runner)
+            if aggregate_preflight.returncode != 0:
+                _report_fatal_preflight_failure(
+                    accepted_sources,
+                    aggregate_preflight.stdout or "",
+                    stderr=stderr,
+                )
+                return aggregate_preflight.returncode or 1
         print(
             "Installing aggregate trusted base Python lock closure in one "
             f"transaction: {accepted_sources}.",
