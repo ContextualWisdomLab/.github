@@ -1,12 +1,12 @@
 """Install independently complete base-commit Python hash locks.
 
 The coverage image build may discover several hash-bearing requirements files
-from a trusted base commit.  A file can hash every requirement it names while
+from a trusted base commit. A file can hash every requirement it names while
 still being only a supplement to another lock, so syntax alone cannot prove
-that pip can install it as an independent dependency closure.  Preflight every
+that pip can install it as an independent dependency closure. Preflight every
 candidate with pip's hash enforcement, recover supplements only with sibling
 locks from the same source directory, and skip candidates that still cannot
-prove a complete closure.  Later coverage execution remains responsible for
+prove a complete closure. Later coverage execution remains responsible for
 proving that the resulting offline environment is sufficient for the target
 repository.
 """
@@ -38,6 +38,70 @@ DEFERABLE_PREFLIGHT_FAILURES = (
         re.IGNORECASE,
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
+)
+# A recognized deferable diagnostic must never hide independent integrity or
+# transport evidence emitted by the same failed pip process. These markers are
+# deliberately narrow and correspond to pip's stable failure wording already
+# enforced by the trusted-build regression suite.
+FATAL_PREFLIGHT_FAILURES = (
+    re.compile(
+        r"THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE",
+        re.IGNORECASE,
+    ),
+    re.compile(r"WARNING:\s*Retrying\b", re.IGNORECASE),
+    re.compile(r"Could not fetch URL", re.IGNORECASE),
+)
+# Defer only exact pip error lines that explain an incomplete hash closure or
+# interpreter mismatch. Binary-unavailability lines are handled separately and
+# must form a same-requirement pair; a second unknown ``ERROR:`` line therefore
+# remains fatal.
+DEFERABLE_ERROR_LINES = (
+    re.compile(
+        r"^ERROR:\s*In --require-hashes mode, all requirements must have "
+        r"their versions pinned with ==",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^ERROR:\s*Hashes are required in --require-hashes mode, but they "
+        r"are missing from some requirements",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^ERROR:.*requires a different Python", re.IGNORECASE),
+    # Pip can emit either context line before a paired binary-unavailability
+    # diagnostic. Neither context line is independently deferable.
+    re.compile(
+        r"^ERROR:\s*Ignored the following yanked versions:",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^ERROR:\s*Ignored the following versions that require a different "
+        r"python version:",
+        re.IGNORECASE,
+    ),
+)
+UNSATISFIED_REQUIREMENT_RE = re.compile(
+    r"^ERROR:\s*Could not find a version that satisfies the requirement "
+    r"(?P<requirement>[^\s(]+)[^\n]*"
+    r"\(from versions:\s*(?P<versions>[^)\n]*)\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+NO_MATCHING_DISTRIBUTION_RE = re.compile(
+    r"^ERROR:\s*No matching distribution found for "
+    r"(?P<requirement>\S+)",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Conservative PEP 440 subset for pip's normalized ``from versions`` tokens.
+# False negatives fail closed and keep the protected base lock blocking; false
+# positives would incorrectly skip a lock, so arbitrary alphanumeric prose is
+# intentionally rejected even when it contains digits.
+CONCRETE_VERSION_RE = re.compile(
+    r"^(?:v)?(?:[0-9]+!)?"
+    r"[0-9]+(?:\.[0-9]+)*"
+    r"(?:(?:a|b|rc)[0-9]+)?"
+    r"(?:(?:\.post|-)[0-9]+)?"
+    r"(?:\.dev[0-9]+)?"
+    r"(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$",
+    re.IGNORECASE,
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -146,19 +210,106 @@ def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
     )
 
 
+def _normalized_requirement_token(requirement: str) -> str:
+    """Normalize harmless diagnostic punctuation for exact token comparison."""
+    return requirement.rstrip(".,").casefold()
+
+
+def _is_concrete_version_list(version_list: str) -> bool:
+    """Return whether every comma-separated token is a concrete PEP 440 version.
+
+    Pip's diagnostic is used as evidence that an index was reached and offered
+    at least one alternative distribution. Empty values, ``none``, arbitrary
+    prose such as ``unavailable``, and mixed version/prose lists are not proof of
+    reachability and therefore fail closed.
+    """
+    tokens = [token.strip() for token in version_list.split(",")]
+    return bool(tokens) and all(
+        bool(token) and CONCRETE_VERSION_RE.fullmatch(token) is not None
+        for token in tokens
+    )
+
+
+def _matching_binary_unavailability_requirements(output: str) -> set[str]:
+    """Return exact pins paired across pip's binary-unavailability diagnostics."""
+    unsatisfied = {
+        _normalized_requirement_token(match.group("requirement"))
+        for match in UNSATISFIED_REQUIREMENT_RE.finditer(output)
+        if _is_concrete_version_list(match.group("versions"))
+    }
+    unmatched = {
+        _normalized_requirement_token(match.group("requirement"))
+        for match in NO_MATCHING_DISTRIBUTION_RE.finditer(output)
+    }
+    return unsatisfied if unsatisfied and unsatisfied == unmatched else set()
+
+
+def _contains_unclassified_error(output: str) -> bool:
+    """Return whether pip emitted an error outside the deferable contract."""
+    matching_requirements = _matching_binary_unavailability_requirements(output)
+    for line in output.splitlines():
+        normalized_line = line.strip()
+        if not normalized_line.casefold().startswith("error:"):
+            continue
+
+        unsatisfied_match = UNSATISFIED_REQUIREMENT_RE.search(normalized_line)
+        if unsatisfied_match is not None:
+            requirement = _normalized_requirement_token(
+                unsatisfied_match.group("requirement")
+            )
+            if requirement in matching_requirements and _is_concrete_version_list(
+                unsatisfied_match.group("versions")
+            ):
+                continue
+            return True
+
+        unmatched_distribution = NO_MATCHING_DISTRIBUTION_RE.search(normalized_line)
+        if unmatched_distribution is not None:
+            requirement = _normalized_requirement_token(
+                unmatched_distribution.group("requirement")
+            )
+            if requirement in matching_requirements:
+                continue
+            return True
+
+        if any(pattern.search(normalized_line) for pattern in DEFERABLE_ERROR_LINES):
+            continue
+        return True
+    return False
+
+
 def _is_deferable_preflight_failure(output: str) -> bool:
     """Return whether a failed candidate may be grouped or safely skipped.
 
     A hash-bearing supplement can fail pip's independent-closure check because a
-    transitive pin/hash lives in a sibling lock, and a base lock can explicitly
-    reject the pinned coverage-image interpreter. Those states are safe to
-    recover through a same-directory group or defer to the later networkless
-    coverage run. Hash mismatches, resolver crashes, empty diagnostics, and
-    registry/network failures remain fatal so a broken trusted build cannot be
-    mistaken for an optional lock.
+    transitive pin/hash lives in a sibling lock, a base lock can explicitly
+    reject the pinned coverage-image interpreter, and a base lock can pin a
+    version for which the reachable index exposes no matching binary for that
+    interpreter. Binary unavailability is deferable only when pip emits both
+    resolver lines for the same exact requirement and every listed alternative
+    is a concrete PEP 440 version. Those states are safe to recover through a
+    same-directory group or defer to the later networkless coverage run. Hash
+    mismatches, resolver crashes, empty diagnostics, and registry/network
+    failures — including fatal evidence mixed with an otherwise deferable
+    diagnostic — remain fatal so a broken trusted build cannot be mistaken for
+    an optional lock. Deferred paths retain a warning and bounded pip diagnostics
+    so the incompatibility stays visible without blocking unrelated coverage
+    evidence.
     """
-    return bool(output.strip()) and any(
-        pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
+    normalized_output = output.strip()
+    return (
+        bool(normalized_output)
+        and not any(
+            pattern.search(normalized_output) for pattern in FATAL_PREFLIGHT_FAILURES
+        )
+        and not _contains_unclassified_error(normalized_output)
+        and (
+            any(
+                pattern.search(normalized_output)
+                for pattern in DEFERABLE_PREFLIGHT_FAILURES
+            )
+            or bool(_matching_binary_unavailability_requirements(normalized_output))
+        )
     )
 
 
@@ -171,8 +322,9 @@ def _report_fatal_preflight_failure(
     """Publish one bounded, source-aware fatal preflight failure."""
     print(
         "::error::Trusted base Python lock preflight failed for "
-        f"{entry_label}; only incomplete hash closures or explicit Python "
-        "interpreter incompatibility may be deferred.",
+        f"{entry_label}; only incomplete hash closures, explicit Python "
+        "interpreter incompatibility, or paired same-requirement binary "
+        "unavailability with concrete version evidence may be deferred.",
         file=stderr,
     )
     failure_output = _bounded_failure_output(output)
@@ -280,9 +432,9 @@ def install_materialized_locks(
         skipped += 1
         print(
             "::warning::Skipping trusted base Python requirement candidate "
-            f"{entry.source}: hash-bearing content is not an independently "
-            "installable dependency closure and no same-directory lock group "
-            "completed it.",
+            f"{entry.source}: it is not an independently complete dependency "
+            "closure for the coverage interpreter and no same-directory lock "
+            "group completed it.",
             file=stderr,
         )
         failure_output = _bounded_failure_output(
