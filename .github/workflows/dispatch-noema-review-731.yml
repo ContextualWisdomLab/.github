@@ -1,0 +1,29 @@
+name: Dispatch Noema review for PR 731
+
+on:
+  push:
+    branches:
+      - ops/noema-review-731-dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch exact-head Noema review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          set -euo pipefail
+          payload='{"event_type":"noema-review","client_payload":{"target_repository":"ContextualWisdomLab/.github","pr_number":731,"pr_head_sha":"880486bb80676da2c4c9344f293a7727afe07d6b"}}'
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${API_URL}/repos/ContextualWisdomLab/.github/dispatches" \
+            -d "$payload"
