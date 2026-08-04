@@ -19,9 +19,19 @@
 # NOTE: contents: write is required for release-asset upload and for the
 # dependency submission API. Fork PR heads run without write and simply skip
 # those side effects; the artifact is still produced.
+#
+# NOTE on the push trigger: it exists so the DEFAULT BRANCH has a dependency
+# snapshot. dependency-review compares base...head in the dependency graph; with
+# PR-only runs the base commit never has one, so every comparison reports "the
+# number of snapshots compared for the base SHA (0) and the head SHA (1) do not
+# match" and the whole dependency set reads as newly added. That re-flags
+# pre-existing vulnerabilities on every PR instead of only the ones the PR adds.
+# Snapshotting pushes to the default branch gives the comparison a real base.
 name: SBOM Generation
 
 on:
+  push:
+    branches: [main, master, develop]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
     branches: [main, master, develop]
@@ -29,7 +39,10 @@ on:
     types: [published]
 
 concurrency:
-  group: sbom-generation-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.event.release.tag_name || github.ref }}
+  # Final fallback is the SHA, not the ref, so two pushes landing close together
+  # do not cancel each other: a cancelled push run leaves that commit without a
+  # snapshot, which is exactly the base-side gap this trigger exists to close.
+  group: sbom-generation-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.event.release.tag_name || github.sha }}
   cancel-in-progress: true
 
 permissions:
