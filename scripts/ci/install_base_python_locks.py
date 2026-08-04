@@ -1,14 +1,10 @@
-"""Install independently complete base-commit Python hash locks.
+"""Install trusted base-commit Python hash locks without package overlays.
 
-The coverage image build may discover several hash-bearing requirements files
-from a trusted base commit. A file can hash every requirement it names while
-still being only a supplement to another lock, so syntax alone cannot prove
-that pip can install it as an independent dependency closure. Preflight every
-candidate with pip's hash enforcement, recover supplements only with sibling
-locks from the same source directory, and skip candidates that still cannot
-prove a complete closure. Later coverage execution remains responsible for
-proving that the resulting offline environment is sufficient for the target
-repository.
+The coverage image can contain several independently hash-complete requirement
+files. Installing those files in separate pip transactions can leave a package
+partially overlaid when multiple locks pin the same distribution. This module
+preflights candidates and same-directory supplement groups, then resolves every
+accepted requirement file in one aggregate dry run and one aggregate install.
 """
 
 from __future__ import annotations
@@ -24,25 +20,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-
 GENERATED_LOCK_RE = re.compile(r"^requirements-[0-9]{3}\.txt$")
 DEFERABLE_PREFLIGHT_FAILURES = (
     re.compile(
-        r"In --require-hashes mode, all requirements must have their versions "
-        r"pinned with ==",
+        r"In --require-hashes mode, all requirements must have their versions pinned with ==",
         re.IGNORECASE,
     ),
     re.compile(
-        r"Hashes are required in --require-hashes mode, but they are missing "
-        r"from some requirements",
+        r"Hashes are required in --require-hashes mode, but they are missing from some requirements",
         re.IGNORECASE,
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
 )
-# A recognized deferable diagnostic must never hide independent integrity or
-# transport evidence emitted by the same failed pip process. These markers are
-# deliberately narrow and correspond to pip's stable failure wording already
-# enforced by the trusted-build regression suite.
 FATAL_PREFLIGHT_FAILURES = (
     re.compile(
         r"THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE",
@@ -51,31 +40,19 @@ FATAL_PREFLIGHT_FAILURES = (
     re.compile(r"WARNING:\s*Retrying\b", re.IGNORECASE),
     re.compile(r"Could not fetch URL", re.IGNORECASE),
 )
-# Defer only exact pip error lines that explain an incomplete hash closure or
-# interpreter mismatch. Binary-unavailability lines are handled separately and
-# must form a same-requirement pair; a second unknown ``ERROR:`` line therefore
-# remains fatal.
 DEFERABLE_ERROR_LINES = (
     re.compile(
-        r"^ERROR:\s*In --require-hashes mode, all requirements must have "
-        r"their versions pinned with ==",
+        r"^ERROR:\s*In --require-hashes mode, all requirements must have their versions pinned with ==",
         re.IGNORECASE,
     ),
     re.compile(
-        r"^ERROR:\s*Hashes are required in --require-hashes mode, but they "
-        r"are missing from some requirements",
+        r"^ERROR:\s*Hashes are required in --require-hashes mode, but they are missing from some requirements",
         re.IGNORECASE,
     ),
     re.compile(r"^ERROR:.*requires a different Python", re.IGNORECASE),
-    # Pip can emit either context line before a paired binary-unavailability
-    # diagnostic. Neither context line is independently deferable.
+    re.compile(r"^ERROR:\s*Ignored the following yanked versions:", re.IGNORECASE),
     re.compile(
-        r"^ERROR:\s*Ignored the following yanked versions:",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^ERROR:\s*Ignored the following versions that require a different "
-        r"python version:",
+        r"^ERROR:\s*Ignored the following versions that require a different python version:",
         re.IGNORECASE,
     ),
 )
@@ -86,21 +63,13 @@ UNSATISFIED_REQUIREMENT_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 NO_MATCHING_DISTRIBUTION_RE = re.compile(
-    r"^ERROR:\s*No matching distribution found for "
-    r"(?P<requirement>\S+)",
+    r"^ERROR:\s*No matching distribution found for (?P<requirement>\S+)",
     re.IGNORECASE | re.MULTILINE,
 )
-# Conservative PEP 440 subset for pip's normalized ``from versions`` tokens.
-# False negatives fail closed and keep the protected base lock blocking; false
-# positives would incorrectly skip a lock, so arbitrary alphanumeric prose is
-# intentionally rejected even when it contains digits.
 CONCRETE_VERSION_RE = re.compile(
-    r"^(?:v)?(?:[0-9]+!)?"
-    r"[0-9]+(?:\.[0-9]+)*"
-    r"(?:(?:a|b|rc)[0-9]+)?"
-    r"(?:(?:\.post|-)[0-9]+)?"
-    r"(?:\.dev[0-9]+)?"
-    r"(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$",
+    r"^(?:v)?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*"
+    r"(?:(?:a|b|rc)[0-9]+)?(?:(?:\.post|-)[0-9]+)?"
+    r"(?:\.dev[0-9]+)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$",
     re.IGNORECASE,
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -117,14 +86,14 @@ class LockCandidate:
     @property
     def source_directory(self) -> str:
         """Return the source directory used for supplement recovery groups."""
+
         parent = str(pathlib.PurePosixPath(self.source).parent)
         return "" if parent == "." else parent
 
 
-def _manifest_entries(
-    requirements_root: pathlib.Path,
-) -> list[LockCandidate]:
+def _manifest_entries(requirements_root: pathlib.Path) -> list[LockCandidate]:
     """Load and validate trusted materializer output."""
+
     root = requirements_root.resolve()
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file() or manifest_path.is_symlink():
@@ -158,24 +127,20 @@ def _manifest_entries(
         if generated_file in seen_files:
             raise ValueError("base Python lock manifest contains duplicate file names")
         seen_files.add(generated_file)
-
         candidate = root / generated_file
         if not candidate.is_file() or candidate.is_symlink():
             raise ValueError(
                 f"materialized base Python lock {generated_file} must be a regular file"
             )
         entries.append(
-            LockCandidate(
-                generated_file=generated_file,
-                source=str(source_path),
-                path=candidate,
-            )
+            LockCandidate(generated_file, str(source_path), candidate)
         )
     return entries
 
 
 def _pip_command(requirements: Sequence[pathlib.Path], *, preflight: bool) -> list[str]:
-    """Build a hash-enforced pip command for one candidate or recovery group."""
+    """Build one hash-enforced pip command for the supplied lock closure."""
+
     command = [
         sys.executable,
         "-m",
@@ -194,7 +159,8 @@ def _pip_command(requirements: Sequence[pathlib.Path], *, preflight: bool) -> li
 
 
 def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
-    """Keep the dependency root cause visible without flooding Actions logs."""
+    """Keep dependency root causes visible without flooding Actions logs."""
+
     lines = output.rstrip().splitlines()
     if len(lines) <= maximum_lines:
         return "\n".join(lines)
@@ -212,17 +178,13 @@ def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
 
 def _normalized_requirement_token(requirement: str) -> str:
     """Normalize harmless diagnostic punctuation for exact token comparison."""
+
     return requirement.rstrip(".,").casefold()
 
 
 def _is_concrete_version_list(version_list: str) -> bool:
-    """Return whether every comma-separated token is a concrete PEP 440 version.
+    """Return whether every comma-separated token is a concrete PEP 440 version."""
 
-    Pip's diagnostic is used as evidence that an index was reached and offered
-    at least one alternative distribution. Empty values, ``none``, arbitrary
-    prose such as ``unavailable``, and mixed version/prose lists are not proof of
-    reachability and therefore fail closed.
-    """
     tokens = [token.strip() for token in version_list.split(",")]
     return bool(tokens) and all(
         bool(token) and CONCRETE_VERSION_RE.fullmatch(token) is not None
@@ -231,7 +193,8 @@ def _is_concrete_version_list(version_list: str) -> bool:
 
 
 def _matching_binary_unavailability_requirements(output: str) -> set[str]:
-    """Return exact pins paired across pip's binary-unavailability diagnostics."""
+    """Return exact pins paired across pip binary-unavailability diagnostics."""
+
     unsatisfied = {
         _normalized_requirement_token(match.group("requirement"))
         for match in UNSATISFIED_REQUIREMENT_RE.finditer(output)
@@ -246,12 +209,12 @@ def _matching_binary_unavailability_requirements(output: str) -> set[str]:
 
 def _contains_unclassified_error(output: str) -> bool:
     """Return whether pip emitted an error outside the deferable contract."""
+
     matching_requirements = _matching_binary_unavailability_requirements(output)
     for line in output.splitlines():
         normalized_line = line.strip()
         if not normalized_line.casefold().startswith("error:"):
             continue
-
         unsatisfied_match = UNSATISFIED_REQUIREMENT_RE.search(normalized_line)
         if unsatisfied_match is not None:
             requirement = _normalized_requirement_token(
@@ -262,7 +225,6 @@ def _contains_unclassified_error(output: str) -> bool:
             ):
                 continue
             return True
-
         unmatched_distribution = NO_MATCHING_DISTRIBUTION_RE.search(normalized_line)
         if unmatched_distribution is not None:
             requirement = _normalized_requirement_token(
@@ -271,7 +233,6 @@ def _contains_unclassified_error(output: str) -> bool:
             if requirement in matching_requirements:
                 continue
             return True
-
         if any(pattern.search(normalized_line) for pattern in DEFERABLE_ERROR_LINES):
             continue
         return True
@@ -279,23 +240,8 @@ def _contains_unclassified_error(output: str) -> bool:
 
 
 def _is_deferable_preflight_failure(output: str) -> bool:
-    """Return whether a failed candidate may be grouped or safely skipped.
+    """Return whether a failed candidate may be grouped or safely skipped."""
 
-    A hash-bearing supplement can fail pip's independent-closure check because a
-    transitive pin/hash lives in a sibling lock, a base lock can explicitly
-    reject the pinned coverage-image interpreter, and a base lock can pin a
-    version for which the reachable index exposes no matching binary for that
-    interpreter. Binary unavailability is deferable only when pip emits both
-    resolver lines for the same exact requirement and every listed alternative
-    is a concrete PEP 440 version. Those states are safe to recover through a
-    same-directory group or defer to the later networkless coverage run. Hash
-    mismatches, resolver crashes, empty diagnostics, and registry/network
-    failures — including fatal evidence mixed with an otherwise deferable
-    diagnostic — remain fatal so a broken trusted build cannot be mistaken for
-    an optional lock. Deferred paths retain a warning and bounded pip diagnostics
-    so the incompatibility stays visible without blocking unrelated coverage
-    evidence.
-    """
     normalized_output = output.strip()
     return (
         bool(normalized_output)
@@ -320,6 +266,7 @@ def _report_fatal_preflight_failure(
     stderr: TextIO,
 ) -> None:
     """Publish one bounded, source-aware fatal preflight failure."""
+
     print(
         "::error::Trusted base Python lock preflight failed for "
         f"{entry_label}; only incomplete hash closures, explicit Python "
@@ -332,6 +279,22 @@ def _report_fatal_preflight_failure(
         print(failure_output, file=stderr)
 
 
+def _run_preflight(
+    requirements: Sequence[pathlib.Path],
+    *,
+    runner: Runner,
+) -> subprocess.CompletedProcess[str]:
+    """Run one isolated resolver-only hash validation."""
+
+    return runner(
+        _pip_command(requirements, preflight=True),
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
 def install_materialized_locks(
     requirements_root: pathlib.Path,
     *,
@@ -339,14 +302,14 @@ def install_materialized_locks(
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
-    """Preflight and install independent base lock closures."""
+    """Preflight accepted locks and install them in one atomic pip transaction."""
+
     try:
         entries = _manifest_entries(requirements_root)
     except (OSError, ValueError) as exc:
         print(f"::error::Could not validate base Python locks: {exc}", file=stderr)
         return 2
 
-    installed = 0
     skipped = 0
     preflight_results: dict[str, subprocess.CompletedProcess[str]] = {}
     independently_valid: set[str] = set()
@@ -357,21 +320,13 @@ def install_materialized_locks(
             file=stdout,
             flush=True,
         )
-        preflight = runner(
-            _pip_command([entry.path], preflight=True),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        preflight = _run_preflight([entry.path], runner=runner)
         preflight_results[entry.generated_file] = preflight
         if preflight.returncode == 0:
             independently_valid.add(entry.generated_file)
         elif not _is_deferable_preflight_failure(preflight.stdout or ""):
             _report_fatal_preflight_failure(
-                entry.source,
-                preflight.stdout or "",
-                stderr=stderr,
+                entry.source, preflight.stdout or "", stderr=stderr
             )
             return preflight.returncode or 1
 
@@ -379,7 +334,7 @@ def install_materialized_locks(
     for entry in entries:
         by_source_directory[entry.source_directory].append(entry)
 
-    install_plans: list[list[LockCandidate]] = []
+    accepted: list[LockCandidate] = []
     covered_files: set[str] = set()
     for source_directory, directory_entries in by_source_directory.items():
         invalid_entries = [
@@ -396,12 +351,8 @@ def install_materialized_locks(
             file=stdout,
             flush=True,
         )
-        group_preflight = runner(
-            _pip_command([entry.path for entry in directory_entries], preflight=True),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+        group_preflight = _run_preflight(
+            [entry.path for entry in directory_entries], runner=runner
         )
         if group_preflight.returncode != 0:
             if not _is_deferable_preflight_failure(group_preflight.stdout or ""):
@@ -412,7 +363,7 @@ def install_materialized_locks(
                 )
                 return group_preflight.returncode or 1
             continue
-        install_plans.append(directory_entries)
+        accepted.extend(directory_entries)
         covered_files.update(entry.generated_file for entry in directory_entries)
         print(
             "Recovered trusted base Python supplement(s) through a complete "
@@ -425,10 +376,9 @@ def install_materialized_locks(
         if entry.generated_file in covered_files:
             continue
         if entry.generated_file in independently_valid:
-            install_plans.append([entry])
+            accepted.append(entry)
             covered_files.add(entry.generated_file)
             continue
-
         skipped += 1
         print(
             "::warning::Skipping trusted base Python requirement candidate "
@@ -440,31 +390,54 @@ def install_materialized_locks(
         failure_output = _bounded_failure_output(
             preflight_results[entry.generated_file].stdout or ""
         )
-        print(failure_output, file=stderr)
+        if failure_output:
+            print(failure_output, file=stderr)
 
-    for plan in install_plans:
-        plan_sources = ", ".join(entry.source for entry in plan)
+    unique_accepted: list[LockCandidate] = []
+    seen_accepted: set[str] = set()
+    for entry in accepted:
+        if entry.generated_file not in seen_accepted:
+            seen_accepted.add(entry.generated_file)
+            unique_accepted.append(entry)
+
+    if unique_accepted:
+        accepted_paths = [entry.path for entry in unique_accepted]
+        accepted_sources = ", ".join(entry.source for entry in unique_accepted)
         print(
-            f"Installing validated trusted base Python lock closure: {plan_sources}.",
+            "Preflighting aggregate trusted base Python lock closure: "
+            f"{accepted_sources}.",
+            file=stdout,
+            flush=True,
+        )
+        aggregate_preflight = _run_preflight(accepted_paths, runner=runner)
+        if aggregate_preflight.returncode != 0:
+            _report_fatal_preflight_failure(
+                accepted_sources,
+                aggregate_preflight.stdout or "",
+                stderr=stderr,
+            )
+            return aggregate_preflight.returncode or 1
+        print(
+            "Installing aggregate trusted base Python lock closure in one "
+            f"transaction: {accepted_sources}.",
             file=stdout,
             flush=True,
         )
         installation = runner(
-            _pip_command([entry.path for entry in plan], preflight=False),
+            _pip_command(accepted_paths, preflight=False),
             check=False,
         )
         if installation.returncode != 0:
             print(
-                "::error::A preflight-valid trusted base Python lock closure failed "
-                f"during installation: {plan_sources}.",
+                "::error::The aggregate preflight-valid trusted base Python "
+                f"lock closure failed during installation: {accepted_sources}.",
                 file=stderr,
             )
             return installation.returncode or 1
-        installed += len(plan)
 
     print(
         "Trusted base Python lock installation summary: "
-        f"candidates={len(entries)} installed={installed} skipped={skipped}.",
+        f"candidates={len(entries)} installed={len(unique_accepted)} skipped={skipped}.",
         file=stdout,
     )
     return 0
@@ -472,6 +445,7 @@ def install_materialized_locks(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Install materialized lock candidates supplied by the trusted workflow."""
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--requirements-root", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
