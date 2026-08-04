@@ -37,6 +37,17 @@ jobs:
 
           path = Path('.github/workflows/pr-review-autofix.yml')
           text = path.read_text(encoding='utf-8')
+          expression_open = '$' + '{{'
+          old_token_line = (
+              '          STRIX_GITHUB_MODELS_TOKEN: '
+              + expression_open
+              + ' secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}\n'
+          )
+          new_token_line = (
+              '          NVIDIA_API_KEY: '
+              + expression_open
+              + ' secrets.NVIDIA_NIM_API_KEY }}\n'
+          )
 
           replacements = {
               '"model": "github-models/openai/gpt-5"':
@@ -45,8 +56,7 @@ jobs:
                   '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
               '"enabled_providers": ["github-models"]':
                   '"enabled_providers": ["nvidia-nim"]',
-              '          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}\n':
-                  '          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}\n',
+              old_token_line: new_token_line,
               '          MODEL: github-models/openai/gpt-5\n':
                   '          MODEL: nvidia-nim/mistralai/mistral-nemotron\n',
               '          USE_GITHUB_TOKEN: "true"\n': '',
@@ -55,7 +65,7 @@ jobs:
               '"model": "github-models/openai/gpt-5"': 1,
               '"small_model": "github-models/deepseek/deepseek-v3-0324"': 1,
               '"enabled_providers": ["github-models"]': 1,
-              '          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}\n': 2,
+              old_token_line: 2,
               '          MODEL: github-models/openai/gpt-5\n': 2,
               '          USE_GITHUB_TOKEN: "true"\n': 2,
           }
@@ -137,7 +147,7 @@ jobs:
               '"enabled_providers": ["nvidia-nim"]',
               '"baseURL": "https://integrate.api.nvidia.com/v1"',
               '"apiKey": "{env:NVIDIA_API_KEY}"',
-              'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
+              new_token_line.strip(),
               'MODEL: nvidia-nim/mistralai/mistral-nemotron',
           )
           for fragment in required:
@@ -155,8 +165,7 @@ jobs:
               if fragment in text:
                   raise SystemExit(f'legacy model-auth fragment remains: {fragment}')
 
-          binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
-          if text.count(binding) != 2:
+          if text.count(new_token_line.strip()) != 2:
               raise SystemExit('NVIDIA secret must be bound to exactly two OpenCode steps')
 
           path.write_text(text, encoding='utf-8')
