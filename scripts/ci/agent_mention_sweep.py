@@ -7,7 +7,7 @@ import argparse
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 from agent_mention_router import (
     GitHubClient,
@@ -17,7 +17,6 @@ from agent_mention_router import (
     parse_repository_allowlist,
     processed_comment_ids,
 )
-
 
 ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
@@ -51,9 +50,13 @@ def cutoff_timestamp(lookback_hours: int, *, now: datetime | None = None) -> str
 def flatten_pages(value: Any, *, collection_key: str | None = None) -> list[dict[str, Any]]:
     """Flatten ``gh api --paginate --slurp`` output into object records."""
 
+    if value is None:
+        raise ValueError("paginated GitHub response is empty")
     pages = value if isinstance(value, list) else [value]
     records: list[dict[str, Any]] = []
     for page in pages:
+        if collection_key and not isinstance(page, dict):
+            raise ValueError("paginated GitHub response page is not an object")
         collection = page.get(collection_key, []) if collection_key else page
         if not isinstance(collection, list):
             raise ValueError("paginated GitHub response is not a list")
@@ -75,7 +78,6 @@ def list_accessible_repositories(
         raise ValueError("invalid organization name")
     if repository_source not in REPOSITORY_SOURCES:
         raise ValueError("repository source must be organization or installation")
-
     if repository_source == "installation":
         response = client.request(
             [
@@ -104,7 +106,6 @@ def list_accessible_repositories(
             ]
         )
         repositories = flatten_pages(response)
-
     names: list[str] = []
     for repository in repositories:
         full_name = str(repository.get("full_name") or "")
@@ -125,11 +126,10 @@ def list_recent_pull_requests(
     organization: str,
     repository_source: str,
     since: str,
-) -> list[dict[str, Any]]:
-    """List open accessible pull requests updated within the lookback window."""
+) -> Iterator[dict[str, Any]]:
+    """Yield recent open pull requests and stop when the caller stops consuming."""
 
     cutoff = parse_timestamp(since)
-    candidates: list[dict[str, Any]] = []
     for repository in list_accessible_repositories(
         client,
         organization=organization,
@@ -158,16 +158,13 @@ def list_recent_pull_requests(
             number = pull_request.get("number")
             if not isinstance(number, int) or number < 1:
                 raise ValueError("GitHub returned an invalid pull request number")
-            candidates.append(
-                {
-                    "number": number,
-                    "repository": repository,
-                    "pull_request": {
-                        "url": f"https://api.github.com/repos/{repository}/pulls/{number}"
-                    },
-                }
-            )
-    return candidates
+            yield {
+                "number": number,
+                "repository": repository,
+                "pull_request": {
+                    "url": f"https://api.github.com/repos/{repository}/pulls/{number}"
+                },
+            }
 
 
 def list_recent_comments(
@@ -219,7 +216,6 @@ def build_requests_for_pull_request(
     live_pull = client.request([f"repos/{repository}/pulls/{number}"])
     if not isinstance(live_pull, dict) or live_pull.get("state") != "open":
         return ()
-
     requests: list[MentionRequest] = []
     for comment in comments:
         comment_id = comment.get("id")
@@ -256,19 +252,17 @@ def sweep(
         raise ValueError("max dispatches must be between 1 and 100")
     since = cutoff_timestamp(lookback_hours, now=now)
     dispatched = 0
-    issues = list_recent_pull_requests(
+    for issue in list_recent_pull_requests(
         target_client,
         organization=organization,
         repository_source=repository_source,
         since=since,
-    )
-    for issue in issues:
-        requests = build_requests_for_pull_request(
+    ):
+        for request in build_requests_for_pull_request(
             target_client,
             issue=issue,
             since=since,
-        )
-        for request in requests:
+        ):
             dispatch_request(
                 request,
                 target_client=target_client,
@@ -298,15 +292,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--max-dispatches", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-
-    target_token = os.environ.get("TARGET_REPOSITORY_TOKEN", "")
-    dispatch_token = os.environ.get("AGENT_DISPATCH_TOKEN", "")
     allowlist = parse_repository_allowlist(
         os.environ.get("OPENCODE_REPOSITORY_DISPATCH_TARGETS", "")
     )
     sweep(
-        target_client=GitHubClient(target_token),
-        dispatch_client=GitHubClient(dispatch_token),
+        target_client=GitHubClient(os.environ.get("TARGET_REPOSITORY_TOKEN", "")),
+        dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
         organization=args.organization,
         repository_source=args.repository_source,
         lookback_hours=args.lookback_hours,
