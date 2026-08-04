@@ -36,7 +36,8 @@ permissions:
 jobs:
   route-local-agent-mention:
     if: >-
-      github.event_name == 'issue_comment'
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event_name == 'issue_comment'
       && github.event.issue.pull_request
       && github.event.comment.user.type != 'Bot'
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
