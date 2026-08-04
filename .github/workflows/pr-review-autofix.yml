@@ -231,9 +231,9 @@ jobs:
           EOF
           jq -n --arg workspace "$TARGET_WORKSPACE" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "github-models/openai/gpt-5",
-            "small_model": "github-models/deepseek/deepseek-v3-0324",
-            "enabled_providers": ["github-models"],
+            "model": "nvidia-nim/mistralai/mistral-nemotron",
+            "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
+            "enabled_providers": ["nvidia-nim"],
             "permission": {
               "edit": "allow",
               "bash": "deny",
@@ -269,37 +269,29 @@ jobs:
               }
             },
             "provider": {
-              "github-models": {
+              "nvidia-nim": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "GitHub Models",
+                "name": "NVIDIA NIM",
                 "options": {
-                  "baseURL": "https://models.github.ai/inference",
-                  "apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"
+                  "baseURL": "https://integrate.api.nvidia.com/v1",
+                  "apiKey": "{env:NVIDIA_API_KEY}"
                 },
                 "models": {
-                  "openai/gpt-5": {
-                    "name": "OpenAI GPT-5",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "variants": {
-                      "high": {
-                        "reasoningEffort": "high"
-                      }
-                    },
-                    "limit": {
-                      "context": 200000,
-                      "output": 100000
-                    }
-                  },
-                  "deepseek/deepseek-v3-0324": {
-                    "name": "DeepSeek V3 0324",
+                  "mistralai/mistral-nemotron": {
+                    "name": "Mistral Nemotron",
                     "tool_call": true,
                     "limit": {
                       "context": 128000,
                       "output": 4096
+                    }
+                  },
+                  "nvidia/nemotron-3-nano-30b-a3b": {
+                    "name": "Nemotron 3 Nano 30B A3B",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 128000,
+                      "output": 32768
                     }
                   }
                 }
@@ -310,16 +302,19 @@ jobs:
       - name: Run OpenCode review autofix
         if: env.RESOLVE_CONFLICT != 'true'
         env:
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
-          MODEL: github-models/openai/gpt-5
-          USE_GITHUB_TOKEN: "true"
+          MODEL: nvidia-nim/mistralai/mistral-nemotron
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+            exit 1
+          fi
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
           allowed_paths_context="$(
             awk '
@@ -446,17 +441,20 @@ jobs:
       - name: Merge base branch and resolve conflicts with OpenCode
         if: env.RESOLVE_CONFLICT == 'true'
         env:
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
-          MODEL: github-models/openai/gpt-5
-          USE_GITHUB_TOKEN: "true"
+          MODEL: nvidia-nim/mistralai/mistral-nemotron
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+            exit 1
+          fi
           cd "$TARGET_WORKSPACE"
 
           # Merge the base branch into the detached head. A clean merge stays
