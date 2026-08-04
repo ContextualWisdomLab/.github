@@ -1,0 +1,52 @@
+name: Review Agent Mention Router
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: agent-mention-${{ github.repository }}-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read
+
+jobs:
+  route-agent-mention:
+    if: >-
+      github.event.issue.pull_request
+      && github.event.comment.user.type != 'Bot'
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      && (
+        contains(github.event.comment.body, '@cwl-noema-review')
+        || contains(github.event.comment.body, '@opencode-agent')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out trusted default-branch router
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Resolve immutable pull-request head
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          SOURCE_EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq --argjson pull_request "$pr_json" '. + {pull_request: $pull_request}' \
+            "$SOURCE_EVENT_PATH" >"${RUNNER_TEMP}/agent-mention-event.json"
+
+      - name: Route trusted agent mention
+        run: >-
+          python3 scripts/ci/agent_mention_router.py
+          --event-path "${RUNNER_TEMP}/agent-mention-event.json"
