@@ -3,38 +3,18 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import shutil
 from pathlib import Path, PurePosixPath
 
 import pytest
 
 from scripts.ci import npm_workspace_install_root as module
 from scripts.ci.npm_workspace_install_root import ResolutionError, resolve_install_root
-
-
-def _git(repo: Path, *args: str) -> str:
-    """Run one fixture Git command and return stripped standard output."""
-    completed = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    return completed.stdout.strip()
-
-
-def _write_json(path: Path, payload: object) -> None:
-    """Write deterministic UTF-8 JSON for a fixture file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def _commit(repo: Path, message: str = "fixture") -> str:
-    """Commit every fixture path and return the exact revision SHA."""
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", message)
-    return _git(repo, "rev-parse", "HEAD")
+from tests.npm_workspace_test_support import (
+    commit_all as _commit,
+    run_git as _git,
+    write_json as _write_json,
+)
 
 
 def _workspace_repo(
@@ -190,7 +170,7 @@ def test_rejects_symlink_in_existing_package_ancestor(tmp_path: Path) -> None:
     (repo / "apps").mkdir()
     _write_json(repo / "apps" / "desktop" / "package.json", {"name": "desktop"})
     revision = _commit(repo)
-    subprocess.run(["rm", "-rf", str(repo / "apps")], check=True)
+    shutil.rmtree(repo / "apps")
     try:
         (repo / "apps").symlink_to(outside, target_is_directory=True)
     except OSError as exc:
@@ -205,8 +185,8 @@ def test_cli_rejects_control_characters_in_resolver_output(
 ) -> None:
     """The command line never emits a path containing controls or extra lines."""
     repo = tmp_path / "repo"
-    repo.mkdir()
-    monkeypatch.setattr(module, "resolve_install_root", lambda *_args: "apps/desktop\nforged")
+    repo.mkdio(
+    monkeypatch.setattr(module, "_resolve_install_root", lambda *_args: "apps/desktop\nforged")
     with pytest.raises(SystemExit, match="2"):
         module.main(
             [

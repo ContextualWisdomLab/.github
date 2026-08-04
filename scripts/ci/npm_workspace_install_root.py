@@ -194,34 +194,33 @@ def _workspace_patterns(package_data: dict[str, Any]) -> list[str]:
     return patterns
 
 
+@lru_cache(maxsize=4096)
+def _segments_match(
+    path_parts: tuple[str, ...],
+    pattern_parts: tuple[str, ...],
+) -> bool:
+    """Match anchored workspace path segments, including recursive ``**`` tokens."""
+    if not pattern_parts:
+        return not path_parts
+    token = pattern_parts[0]
+    if token == "**":
+        return _segments_match(path_parts, pattern_parts[1:]) or (
+            bool(path_parts) and _segments_match(path_parts[1:], pattern_parts)
+        )
+    if not path_parts:
+        return False
+    return fnmatch.fnmatchcase(path_parts[0], token) and _segments_match(
+        path_parts[1:],
+        pattern_parts[1:],
+    )
+
+
 def _is_declared_workspace(relative_package: PurePosixPath, patterns: list[str]) -> bool:
     """Return whether a path fully matches one anchored workspace pattern."""
     path_parts = relative_package.parts
-
-    for pattern in patterns:
-        pattern_parts = tuple(pattern.split("/"))
-
-        @lru_cache(maxsize=None)
-        def matches(path_index: int, pattern_index: int) -> bool:
-            """Match anchored single-segment globs and recursive ``**`` tokens."""
-            if pattern_index == len(pattern_parts):
-                return path_index == len(path_parts)
-            token = pattern_parts[pattern_index]
-            if token == "**":
-                return matches(path_index, pattern_index + 1) or (
-                    path_index < len(path_parts)
-                    and matches(path_index + 1, pattern_index)
-                )
-            if path_index >= len(path_parts):
-                return False
-            return fnmatch.fnmatchcase(path_parts[path_index], token) and matches(
-                path_index + 1,
-                pattern_index + 1,
-            )
-
-        if matches(0, 0):
-            return True
-    return False
+    return any(
+        _segments_match(path_parts, tuple(pattern.split("/"))) for pattern in patterns
+    )
 
 
 def _lock_covers(lock_data: dict[str, Any], relative_package: str) -> bool:
@@ -339,8 +338,7 @@ def resolve_install_root(
 
         if candidate == PurePosixPath("."):
             break
-        parent = candidate.parent
-        candidate = parent if parent != PurePosixPath("") else PurePosixPath(".")
+        candidate = candidate.parent
 
     raise ResolutionError(
         "no validated package-lock.json or npm-shrinkwrap.json owns the npm package"
