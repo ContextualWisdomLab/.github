@@ -9,7 +9,10 @@ on:
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-hashes.txt"
       - "pyproject.toml"
       - ".github/workflows/opencode-coverage-diagnostics-ci.yml"
   push:
@@ -20,7 +23,10 @@ on:
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-hashes.txt"
       - "pyproject.toml"
       - ".github/workflows/opencode-coverage-diagnostics-ci.yml"
 
@@ -119,12 +125,13 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Run materializer regression tests with full branch coverage
+      - name: Run diagnostics and lock contracts with full branch coverage
         run: |
           python -m pytest \
             tests/test_materialize_base_javascript_packages.py \
             tests/test_materialize_base_python_requirements.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_strix_dependency_security_floor.py \
             --cov=scripts.ci.materialize_base_javascript_packages \
             --cov=scripts.ci.materialize_base_python_requirements \
             --cov-branch \
@@ -143,4 +150,5 @@ jobs:
           python -m compileall -q \
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
-            tests/test_coverage_materializer_failure_diagnostics.py
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_strix_dependency_security_floor.py
