@@ -18,7 +18,10 @@ The implementation therefore:
    absence;
 3. installs one process-wide urllib opener with an empty proxy map and a redirect
    handler that rejects every redirect before urllib creates a target request;
-4. downloads one fixed official Astral `uv` archive from a literal HTTPS URL;
+4. downloads one fixed official Astral `uv` archive from a literal HTTPS URL and
+   accepts a response only when its parsed origin remains HTTPS,
+   `releases.astral.sh`, and the absent or explicit default port 443; malformed
+   or nondefault ports fail closed;
 5. verifies the bounded archive with a pinned SHA-256 digest before extraction;
 6. accepts only the expected regular-file tar member within explicit size bounds;
 7. writes the executable with mode `0755` and verifies that it reports the exact
@@ -71,10 +74,12 @@ contain a `--hash=` substring.
 
 The download request uses neither ambient proxy configuration nor automatic
 redirect following. Any HTTP redirect is rejected before a request to the target
-location can be created. The fixed HTTPS origin is still verified on the
-response as defense in depth, and the archive bytes must match the pinned digest.
-The redirect boundary prevents unintended network side effects; the digest pin
-separately establishes executable payload identity.
+location can be created. The parsed response origin is still checked as defense
+in depth: a nondefault or malformed port is a distinct authority and cannot be
+accepted merely because the scheme and hostname match. The archive bytes must
+then match the pinned digest. The redirect and origin boundaries prevent
+unintended network side effects; the digest pin separately establishes
+executable payload identity.
 
 ## Modular and workspace boundary
 
@@ -101,8 +106,10 @@ Regression coverage must prove:
   cannot be read propagates a fatal error before uv starts;
 - the download opener is cached, disables ambient proxies, and rejects redirects
   before following them;
-- fixed-host response validation, bounded reads, archive digest, member type,
-  member size, executable size, executable mode, and exact version;
+- fixed HTTPS scheme and hostname validation, acceptance only of an absent or
+  explicit port 443, rejection of malformed and nondefault ports, bounded reads,
+  archive digest, member type, member size, executable size, executable mode,
+  and exact version;
 - frozen, offline, cacheless, noninteractive exporter arguments;
 - isolated environment directories and exclusion of arbitrary ambient variables;
 - continued project metadata discovery with no `--no-config` regression;
@@ -110,8 +117,8 @@ Regression coverage must prove:
 - orphan locks and empty third-party closures remain nonfatal and explicit;
 - every nonempty line is a normalized exact package pin with one or more complete
   SHA-256 hashes; and
-- the changed production module retains 100% statement and branch coverage and
-  100% production docstrings.
+- `pyproject.toml` enables branch measurement and the changed production module
+  retains 100% statement and branch coverage plus 100% production docstrings.
 
 ## References
 
@@ -123,6 +130,10 @@ August 4, 2026, from https://docs.astral.sh/uv/concepts/projects/sync/
 
 Astral Software, Inc. (n.d.). *The uv command-line interface*. uv documentation.
 Retrieved August 4, 2026, from https://docs.astral.sh/uv/reference/cli/
+
+Berners-Lee, T., Fielding, R., & Masinter, L. (2005). *Uniform Resource Identifier
+(URI): Generic syntax* (STD 66; RFC 3986). Internet Engineering Task Force.
+https://doi.org/10.17487/RFC3986
 
 Supply-chain Levels for Software Artifacts. (2025). *SLSA specification
 (version 1.2)*. https://slsa.dev/spec/v1.2/
