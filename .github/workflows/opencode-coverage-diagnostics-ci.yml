@@ -1,0 +1,90 @@
+name: OpenCode Coverage Diagnostics CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/ci/materialize_base_javascript_packages.py"
+      - "scripts/ci/materialize_base_python_requirements.py"
+      - "tests/test_materialize_base_javascript_packages.py"
+      - "tests/test_materialize_base_python_requirements.py"
+      - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
+      - ".github/workflows/opencode-coverage-diagnostics-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/ci/materialize_base_javascript_packages.py"
+      - "scripts/ci/materialize_base_python_requirements.py"
+      - "tests/test_materialize_base_javascript_packages.py"
+      - "tests/test_materialize_base_python_requirements.py"
+      - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
+      - ".github/workflows/opencode-coverage-diagnostics-ci.yml"
+
+concurrency:
+  group: opencode-coverage-diagnostics-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics-contract:
+    name: Python ${{ matrix.python-version }} contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run materializer regression tests with full branch coverage
+        run: |
+          python -m pytest \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            --cov=scripts.ci.materialize_base_javascript_packages \
+            --cov=scripts.ci.materialize_base_python_requirements \
+            --cov-branch \
+            --cov-fail-under=100 \
+            -q
+
+      - name: Enforce complete production docstrings
+        run: |
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py
+
+      - name: Compile changed Python surfaces
+        run: |
+          python -m compileall -q \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_coverage_materializer_failure_diagnostics.py
