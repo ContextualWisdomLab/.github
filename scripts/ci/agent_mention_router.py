@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Route trusted pull-request comment mentions to CWL review agents.
-
-The router validates one enriched ``issue_comment`` event, dispatches the
-existing central Noema or OpenCode review entrypoint, and posts a visible
-receipt without checking out or executing pull-request-controlled code.
-"""
+"""Route trusted pull-request comment mentions to CWL review agents."""
 
 from __future__ import annotations
 
@@ -15,7 +10,6 @@ import re
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Sequence
-
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -100,10 +94,17 @@ def receipt_marker(comment_id: int) -> str:
 
 
 def processed_comment_ids(comments: Sequence[dict[str, Any]]) -> frozenset[int]:
-    """Extract invocation comment identifiers already acknowledged on a PR."""
+    """Extract receipt IDs authored by the trusted GitHub Actions bot only."""
 
     processed: set[int] = set()
     for comment in comments:
+        user = comment.get("user") or {}
+        if (
+            str(user.get("login") or "").casefold()
+            != "github-actions[bot]"
+            or str(user.get("type") or "").casefold() != "bot"
+        ):
+            continue
         body = str(comment.get("body") or "")
         processed.update(int(match) for match in RECEIPT_RE.findall(body))
     return frozenset(processed)
@@ -116,7 +117,6 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
     comment = event.get("comment") or {}
     repository = event.get("repository") or {}
     pull_request = event.get("pull_request") or {}
-
     if not issue.get("pull_request"):
         return None
     if pull_request.get("state") != "open":
@@ -125,7 +125,6 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         return None
     if str(comment.get("author_association", "")).upper() not in TRUSTED_ASSOCIATIONS:
         return None
-
     agents = exact_mentions(str(comment.get("body") or ""))
     if not agents:
         return None
@@ -136,7 +135,6 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
     base_branch = str(pull_request.get("base", {}).get("ref") or "").strip()
     number = issue.get("number")
     comment_id = comment.get("id")
-
     if not REPOSITORY_RE.fullmatch(repository_name):
         raise ValueError(
             "agent mentions are limited to ContextualWisdomLab repositories"
@@ -153,15 +151,14 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         raise ValueError("pull request base branch is missing or invalid")
     if not actor:
         raise ValueError("comment actor is missing")
-
     return MentionRequest(
-        repository=repository_name,
-        pull_request_number=number,
-        pull_request_head_sha=head_sha.lower(),
-        pull_request_base_branch=base_branch,
-        comment_id=comment_id,
-        actor=actor,
-        agents=agents,
+        repository_name,
+        number,
+        head_sha.lower(),
+        base_branch,
+        comment_id,
+        actor,
+        agents,
     )
 
 
@@ -261,7 +258,6 @@ def dispatch_request(
             f"reject={','.join(rejected) or 'none'}"
         )
         return handles
-
     dispatch_endpoint = f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/dispatches"
     if "cwl-noema-review" in dispatchable:
         dispatch_client.request(
@@ -273,7 +269,6 @@ def dispatch_request(
             [dispatch_endpoint, "-X", "POST"],
             input_payload=opencode_payload(request),
         )
-
     target_api = f"repos/{request.repository}"
     target_client.request(
         [f"{target_api}/issues/comments/{request.comment_id}/reactions", "-X", "POST"],
@@ -320,12 +315,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.event_path:
         parser.error("--event-path or GITHUB_EVENT_PATH is required")
-
     request = parse_event(load_event(args.event_path))
     if request is None:
         print("No trusted pull-request agent mention found; nothing to dispatch.")
         return 0
-
     target_token = os.environ.get("TARGET_REPOSITORY_TOKEN") or os.environ.get(
         "GH_TOKEN", ""
     )
