@@ -1,0 +1,270 @@
+name: One-shot OpenCode coverage failure diagnostics repair
+
+on:
+  push:
+    branches:
+      - fix/opencode-coverage-failure-diagnostics
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-opencode-coverage-failure-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: fix/opencode-coverage-failure-diagnostics
+
+      - name: Install hash-locked test tooling
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Add regression tests first
+        run: |
+          set -euo pipefail
+          cat > tests/test_coverage_materializer_failure_diagnostics.py <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+          import pytest
+
+          from scripts.ci import materialize_base_javascript_packages as javascript_materializer
+          from scripts.ci import materialize_base_python_requirements as python_materializer
+
+
+          def _failing_materializer(error: BaseException):
+              """Return a materializer stub that raises the supplied failure."""
+
+              def fail(*_args: object, **_kwargs: object) -> None:
+                  raise error
+
+              return fail
+
+
+          def _run_main(module: object, tmp_path: Path) -> int:
+              """Invoke one materializer CLI with a valid-shaped isolated argument set."""
+              return module.main(
+                  [
+                      "--repo-root",
+                      str(tmp_path),
+                      "--base-sha",
+                      "a" * 40,
+                      "--output-dir",
+                      str(tmp_path / "output"),
+                  ]
+              )
+
+
+          def test_javascript_failure_publishes_exact_coverage_reason(
+              tmp_path: Path,
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              """The deterministic review receives the exact early npm-lock failure."""
+              output_file = tmp_path / "github-output"
+              exact_reason = (
+                  "current-head npm lock package-lock.json package "
+                  "apps/desktop/node_modules/@types/react-dom must pin a registry "
+                  "tarball and SHA-512 integrity"
+              )
+              monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+              monkeypatch.setattr(
+                  javascript_materializer,
+                  "materialize",
+                  _failing_materializer(ValueError(exact_reason)),
+              )
+
+              assert _run_main(javascript_materializer, tmp_path) == 1
+
+              published = output_file.read_text(encoding="utf-8")
+              assert "coverage_summary<<CWL_COVERAGE_SUMMARY_EOF" in published
+              assert "- Result: FAIL" in published
+              assert "- Failed stage: Base JavaScript package lock materialization" in published
+              assert exact_reason in published
+              assert "rerun the current-head coverage-evidence job" in published
+
+
+          def test_python_failure_publishes_sanitized_bounded_coverage_reason(
+              tmp_path: Path,
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              """Early Python-lock failures remain concrete without output-file injection."""
+              output_file = tmp_path / "github-output"
+              monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+              monkeypatch.setattr(
+                  python_materializer,
+                  "materialize",
+                  _failing_materializer(
+                      OSError(
+                          "fixture <unsafe>\nCWL_COVERAGE_SUMMARY_EOF "
+                          + ("x" * 5000)
+                      )
+                  ),
+              )
+
+              assert _run_main(python_materializer, tmp_path) == 1
+
+              published = output_file.read_text(encoding="utf-8")
+              assert "- Failed stage: Base Python lock materialization" in published
+              assert "OSError: fixture &lt;unsafe&gt; CWL_COVERAGE_SUMMARY_END" in published
+              assert "<unsafe>" not in published
+              assert published.count("CWL_COVERAGE_SUMMARY_EOF\n") == 2
+              assert len(published) < 5000
+
+
+          @pytest.mark.parametrize(
+              "module",
+              [javascript_materializer, python_materializer],
+              ids=["javascript", "python"],
+          )
+          def test_failure_diagnostics_are_optional_outside_github_actions(
+              module: object,
+              tmp_path: Path,
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              """Local CLI failures keep their status when no Actions output file exists."""
+              monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+              monkeypatch.setattr(
+                  module,
+                  "materialize",
+                  _failing_materializer(RuntimeError("local fixture failure")),
+              )
+
+              assert _run_main(module, tmp_path) == 1
+          PY
+
+      - name: Prove the regression test is red before implementation
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest tests/test_coverage_materializer_failure_diagnostics.py -q \
+            >"${RUNNER_TEMP}/coverage-diagnostics-red.log" 2>&1
+          status=$?
+          set -e
+          cat "${RUNNER_TEMP}/coverage-diagnostics-red.log"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Regression test unexpectedly passed before the implementation."
+            exit 1
+          fi
+          if ! grep -Fq "coverage_summary<<CWL_COVERAGE_SUMMARY_EOF" \
+            "${RUNNER_TEMP}/coverage-diagnostics-red.log"; then
+            echo "::error::Regression test did not fail on the missing concrete coverage summary."
+            exit 1
+          fi
+
+      - name: Implement bounded exact failure propagation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              """Replace one exact trusted source fragment or fail closed."""
+              text = path.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise SystemExit(
+                      f"expected exactly one source fragment in {path}, found {text.count(old)}"
+                  )
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          helper = '''\n\ndef _publish_coverage_failure_summary(\n    stage: str, error: BaseException, remediation: str\n) -> None:\n    """Publish bounded exact setup failure evidence for deterministic reviews."""\n    github_output = os.environ.get("GITHUB_OUTPUT")\n    if not github_output:\n        return\n\n    delimiter = "CWL_COVERAGE_SUMMARY_EOF"\n    safe_stage = html.escape(" ".join(stage.split())[:256], quote=True).replace(\n        delimiter, "CWL_COVERAGE_SUMMARY_END"\n    )\n    safe_reason = html.escape(\n        f"{error.__class__.__name__}: {' '.join(str(error).split())}"[:4096],\n        quote=True,\n    ).replace(delimiter, "CWL_COVERAGE_SUMMARY_END")\n    safe_remediation = html.escape(\n        " ".join(remediation.split())[:1024], quote=True\n    ).replace(delimiter, "CWL_COVERAGE_SUMMARY_END")\n    summary = (\n        "## Coverage Decision\\n"\n        "- Result: FAIL\\n"\n        f"- Failed stage: {safe_stage}\\n"\n        "- Exact failure:\\n"\n        f"<pre>{safe_reason}</pre>\\n"\n        f"- Next action: {safe_remediation}\\n"\n    )\n    with pathlib.Path(github_output).open("a", encoding="utf-8") as output:\n        output.write(\n            f"coverage_summary<<{delimiter}\\n{summary}{delimiter}\\n"\n        )\n'''
+
+          javascript_path = Path("scripts/ci/materialize_base_javascript_packages.py")
+          replace_once(
+              javascript_path,
+              "import argparse\nimport json\nimport pathlib\n",
+              "import argparse\nimport html\nimport json\nimport os\nimport pathlib\n",
+          )
+          replace_once(
+              javascript_path,
+              "\n\ndef main(argv: list[str] | None = None) -> int:\n",
+              helper + "\n\ndef main(argv: list[str] | None = None) -> int:\n",
+          )
+          replace_once(
+              javascript_path,
+              '''    except (OSError, RuntimeError, ValueError) as exc:\n        print(\n            f"::error::Could not materialize base JavaScript package locks: {exc}",\n            file=sys.stderr,\n        )\n        return 1\n''',
+              '''    except (OSError, RuntimeError, ValueError) as exc:\n        print(\n            f"::error::Could not materialize base JavaScript package locks: {exc}",\n            file=sys.stderr,\n        )\n        _publish_coverage_failure_summary(\n            "Base JavaScript package lock materialization",\n            exc,\n            "Repair or regenerate the reported lock entry so every non-link "\n            "package selected for the networked cache is registry- and "\n            "SHA-512-bounded, then rerun the current-head coverage-evidence job.",\n        )\n        return 1\n''',
+          )
+
+          python_path = Path("scripts/ci/materialize_base_python_requirements.py")
+          replace_once(
+              python_path,
+              "import argparse\nimport fnmatch\nimport json\n",
+              "import argparse\nimport fnmatch\nimport html\nimport json\nimport os\n",
+          )
+          replace_once(
+              python_path,
+              "\n\ndef main(argv: list[str] | None = None) -> int:\n",
+              helper + "\n\ndef main(argv: list[str] | None = None) -> int:\n",
+          )
+          replace_once(
+              python_path,
+              '''    except (OSError, RuntimeError, ValueError) as exc:\n        print(\n            f"::error::Could not materialize base Python locks: {exc}", file=sys.stderr\n        )\n        return 1\n''',
+              '''    except (OSError, RuntimeError, ValueError) as exc:\n        print(\n            f"::error::Could not materialize base Python locks: {exc}", file=sys.stderr\n        )\n        _publish_coverage_failure_summary(\n            "Base Python lock materialization",\n            exc,\n            "Repair the reported trusted lock or Git metadata boundary, then "\n            "rerun the current-head coverage-evidence job.",\n        )\n        return 1\n''',
+          )
+          PY
+
+      - name: Verify focused regression, coverage, docstrings, and syntax
+        run: |
+          set -euo pipefail
+          python -m pytest \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_materialize_base_python_requirements.py \
+            --cov=scripts.ci.materialize_base_javascript_packages \
+            --cov=scripts.ci.materialize_base_python_requirements \
+            --cov-branch \
+            --cov-fail-under=100 \
+            -q
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py
+          python -m compileall -q \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_coverage_materializer_failure_diagnostics.py
+          git diff --check
+
+      - name: Verify OpenCode workflow contracts
+        run: |
+          set -euo pipefail
+          python -m pytest \
+            tests/test_opencode_agent_contract.py \
+            tests/test_opencode_model_pool_runner.py \
+            tests/test_sanitize_github_output_summary.py \
+            -q
+
+      - name: Commit verified repair and remove bootstrap workflow
+        env:
+          BRANCH_NAME: fix/opencode-coverage-failure-diagnostics
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/one-shot-fix-opencode-coverage-diagnostics.yml
+          git config user.name "opencode-agent[bot]"
+          git config user.email "219766164+opencode-agent[bot]@users.noreply.github.com"
+          git add \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            .github/workflows/one-shot-fix-opencode-coverage-diagnostics.yml
+          git diff --cached --check
+          git commit -m "fix(opencode-review): surface exact coverage setup failures"
+          git push origin "HEAD:${BRANCH_NAME}"
