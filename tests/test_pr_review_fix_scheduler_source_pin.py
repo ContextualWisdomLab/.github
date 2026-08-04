@@ -14,12 +14,34 @@ def _workflow_text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_reusable_scheduler_checks_out_the_called_workflow_sha() -> None:
-    """Privileged scheduler code comes from the immutable called-workflow revision."""
+def test_reusable_scheduler_validates_called_workflow_identity_before_checkout() -> None:
+    """Missing workflow identity must fail before checkout can use defaults."""
     workflow = _workflow_text()
-    assert "repository: ${{ job.workflow_repository }}" in workflow
-    assert "ref: ${{ job.workflow_sha }}" in workflow
-    assert "persist-credentials: false" in workflow
+    guard = workflow.index("Resolve immutable called-workflow source")
+    checkout = workflow.index("Checkout immutable called-workflow source")
+
+    assert guard < checkout
+    assert "WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}" in workflow
+    assert "WORKFLOW_SHA: ${{ job.workflow_sha }}" in workflow
+    assert "WORKFLOW_REF: ${{ job.workflow_ref }}" in workflow
+    assert "WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}" in workflow
+    assert 'expected_repository="ContextualWisdomLab/.github"' in workflow
+    assert 'expected_file=".github/workflows/pr-review-fix-scheduler.yml"' in workflow
+    assert '[[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]' in workflow
+    assert "repository: ${{ steps.trusted_source.outputs.repository }}" in workflow
+    assert "ref: ${{ steps.trusted_source.outputs.sha }}" in workflow
+
+
+def test_reusable_scheduler_verifies_checked_out_called_workflow_sha() -> None:
+    """The checked-out commit must equal the validated called-workflow SHA."""
+    workflow = _workflow_text()
+    verification = workflow.index("Verify immutable called-workflow checkout")
+    self_test = workflow.index("Self-test fix scheduler contract")
+
+    assert verification < self_test
+    assert 'actual_sha="$(git rev-parse HEAD)"' in workflow
+    assert '[ "$actual_sha" != "$EXPECTED_SHA" ]' in workflow
+    assert '[ ! -f "$EXPECTED_FILE" ] || [ -L "$EXPECTED_FILE" ]' in workflow
 
 
 def test_reusable_scheduler_source_is_not_caller_input_controlled() -> None:
@@ -29,6 +51,7 @@ def test_reusable_scheduler_source_is_not_caller_input_controlled() -> None:
     assert "github.event.client_payload.canonical_ref" not in workflow
     assert "ref: ${{ env.CANONICAL_REF }}" not in workflow
     assert "ref: ${{ github.sha }}" not in workflow
+    assert "ref: ${{ github.workflow_sha }}" not in workflow
 
 
 def test_deprecated_canonical_ref_input_is_accepted_but_never_consumed() -> None:
