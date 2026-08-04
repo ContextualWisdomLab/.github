@@ -2,13 +2,12 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router.yml"
 
 
 def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() -> None:
-    """The router is local-fast, organization-wide, and least-privileged by job."""
+    """The router is central-only, organization-wide, and least-privileged."""
 
     text = WORKFLOW.read_text(encoding="utf-8")
     header, jobs = text.split("\njobs:\n", 1)
@@ -20,6 +19,7 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
 
     local, sweep = jobs.split("\n  sweep-organization-agent-mentions:\n", 1)
     assert "route-local-agent-mention:" in local
+    assert "github.repository == 'ContextualWisdomLab/.github'" in local
     assert (
         "permissions:\n"
         "      contents: write\n"
@@ -31,6 +31,7 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "conversation_comments" in local
 
     assert "permissions:\n      contents: write\n      id-token: write" in sweep
+    assert "github.repository == 'ContextualWisdomLab/.github'" in sweep
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in sweep
     assert "secrets.OPENCODE_APPROVE_TOKEN" in sweep
     assert "TARGET_REPOSITORY_SOURCE" in sweep
