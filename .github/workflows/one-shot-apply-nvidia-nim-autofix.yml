@@ -1,0 +1,201 @@
+name: One-shot apply NVIDIA NIM autofix
+
+on:
+  push:
+    branches: [fix/hourly-nvidia-nim-autofix]
+
+concurrency:
+  group: one-shot-apply-nvidia-nim-autofix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/hourly-nvidia-nim-autofix
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.2.0
+        with:
+          python-version: '3.14'
+
+      - name: Apply the bounded provider migration
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/pr-review-autofix.yml')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = {
+              '"model": "github-models/openai/gpt-5"':
+                  '"model": "nvidia-nim/mistralai/mistral-nemotron"',
+              '"small_model": "github-models/deepseek/deepseek-v3-0324"':
+                  '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
+              '"enabled_providers": ["github-models"]':
+                  '"enabled_providers": ["nvidia-nim"]',
+              '          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}\n':
+                  '          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}\n',
+              '          MODEL: github-models/openai/gpt-5\n':
+                  '          MODEL: nvidia-nim/mistralai/mistral-nemotron\n',
+              '          USE_GITHUB_TOKEN: "true"\n': '',
+          }
+          expected_counts = {
+              '"model": "github-models/openai/gpt-5"': 1,
+              '"small_model": "github-models/deepseek/deepseek-v3-0324"': 1,
+              '"enabled_providers": ["github-models"]': 1,
+              '          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}\n': 2,
+              '          MODEL: github-models/openai/gpt-5\n': 2,
+              '          USE_GITHUB_TOKEN: "true"\n': 2,
+          }
+          for old, expected_count in expected_counts.items():
+              actual_count = text.count(old)
+              if actual_count != expected_count:
+                  raise SystemExit(
+                      f'expected {expected_count} occurrences of {old!r}, found {actual_count}'
+                  )
+              text = text.replace(old, replacements[old])
+
+          provider_start_marker = (
+              '            "provider": {\n'
+              '              "github-models": {'
+          )
+          provider_start = text.index(provider_start_marker)
+          root_close_marker = (
+              '\n          }\' >"${OPENCODE_AUTOFIX_WORKDIR}/opencode.jsonc"'
+          )
+          provider_end = text.index(root_close_marker, provider_start)
+          new_provider = '''            "provider": {
+              "nvidia-nim": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "NVIDIA NIM",
+                "options": {
+                  "baseURL": "https://integrate.api.nvidia.com/v1",
+                  "apiKey": "{env:NVIDIA_API_KEY}"
+                },
+                "models": {
+                  "mistralai/mistral-nemotron": {
+                    "name": "Mistral Nemotron",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 128000,
+                      "output": 4096
+                    }
+                  },
+                  "nvidia/nemotron-3-nano-30b-a3b": {
+                    "name": "Nemotron 3 Nano 30B A3B",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 128000,
+                      "output": 32768
+                    }
+                  }
+                }
+              }
+            }'''
+          text = text[:provider_start] + new_provider + text[provider_end:]
+
+          guard = '''          set -euo pipefail
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+            exit 1
+          fi
+'''
+
+          ordinary_start = text.index('      - name: Run OpenCode review autofix\n')
+          ordinary_end = text.index('      - name: Validate changed files\n', ordinary_start)
+          ordinary = text[ordinary_start:ordinary_end]
+          if ordinary.count('          set -euo pipefail\n') != 1:
+              raise SystemExit('ordinary OpenCode step did not contain exactly one shell preamble')
+          ordinary = ordinary.replace('          set -euo pipefail\n', guard, 1)
+          text = text[:ordinary_start] + ordinary + text[ordinary_end:]
+
+          conflict_start = text.index(
+              '      - name: Merge base branch and resolve conflicts with OpenCode\n'
+          )
+          conflict = text[conflict_start:]
+          if conflict.count('          set -euo pipefail\n') != 1:
+              raise SystemExit('conflict OpenCode step did not contain exactly one shell preamble')
+          conflict = conflict.replace('          set -euo pipefail\n', guard, 1)
+          text = text[:conflict_start] + conflict
+
+          required = (
+              '"model": "nvidia-nim/mistralai/mistral-nemotron"',
+              '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
+              '"enabled_providers": ["nvidia-nim"]',
+              '"baseURL": "https://integrate.api.nvidia.com/v1"',
+              '"apiKey": "{env:NVIDIA_API_KEY}"',
+              'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
+              'MODEL: nvidia-nim/mistralai/mistral-nemotron',
+          )
+          for fragment in required:
+              if fragment not in text:
+                  raise SystemExit(f'missing migrated fragment: {fragment}')
+
+          forbidden = (
+              'STRIX_GITHUB_MODELS_TOKEN:',
+              'MODEL: github-models/',
+              'USE_GITHUB_TOKEN:',
+              '"enabled_providers": ["github-models"]',
+              '"baseURL": "https://models.github.ai/inference"',
+          )
+          for fragment in forbidden:
+              if fragment in text:
+                  raise SystemExit(f'legacy model-auth fragment remains: {fragment}')
+
+          binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
+          if text.count(binding) != 2:
+              raise SystemExit('NVIDIA secret must be bound to exactly two OpenCode steps')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install the hash-locked central test toolchain
+        run: |
+          set -euo pipefail
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify focused and complete contracts
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q tests/test_pr_review_autofix_nvidia_nim_contract.py
+          python3 -m pytest -q
+          python3 -m compileall -q scripts tests
+          python3 -m interrogate -c pyproject.toml .
+          git diff --check
+          if git diff --name-only | grep -Fx '.github/workflows/opencode-review-dispatch.yml'; then
+            echo '::error::Read-only review-agent workflow changed during autofix migration.'
+            exit 1
+          fi
+
+      - name: Publish the verified migration and remove this one-shot workflow
+        env:
+          BRANCH_NAME: fix/hourly-nvidia-nim-autofix
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/one-shot-apply-nvidia-nim-autofix.yml
+          git add \
+            .github/workflows/pr-review-autofix.yml \
+            docs/doctoring/hourly-nvidia-nim-autofix.md \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(ci): route scheduled autofix through NVIDIA NIM'
+          git push origin "HEAD:${BRANCH_NAME}"
