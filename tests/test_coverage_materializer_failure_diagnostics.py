@@ -169,11 +169,11 @@ def test_npm_project_without_packages_map_keeps_root_inputs(
     ]
 
 
-def test_npm_workspace_scan_iterates_multiple_regular_manifests(
+def test_npm_workspace_scan_iterates_missing_and_regular_manifests(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every regular workspace manifest is copied from the validated revision."""
+    """Missing workspace manifests are skipped without hiding later regular ones."""
     regular_paths = {
         "package.json",
         "package-lock.json",
@@ -186,6 +186,7 @@ def test_npm_workspace_scan_iterates_multiple_regular_manifests(
             "lockfileVersion": 3,
             "packages": {
                 "": {"name": "workspace-root"},
+                "packages/aaa-missing": {"name": "missing"},
                 "packages/alpha": {"name": "alpha"},
                 "packages/beta": {"name": "beta"},
             },
@@ -211,5 +212,6 @@ def test_npm_workspace_scan_iterates_multiple_regular_manifests(
     projects = javascript_materializer.base_npm_projects(tmp_path, "a" * 40)
 
     assert len(projects) == 1
+    assert "packages/aaa-missing/package.json" not in projects[0][2]
     assert projects[0][2]["packages/alpha/package.json"] == b'{"name":"alpha"}'
     assert projects[0][2]["packages/beta/package.json"] == b'{"name":"beta"}'
