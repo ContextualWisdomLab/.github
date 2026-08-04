@@ -82,13 +82,26 @@ DEFERABLE_ERROR_LINES = (
 UNSATISFIED_REQUIREMENT_RE = re.compile(
     r"^ERROR:\s*Could not find a version that satisfies the requirement "
     r"(?P<requirement>[^\s(]+)[^\n]*"
-    r"\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
+    r"\(from versions:\s*(?P<versions>[^)\n]*)\)",
     re.IGNORECASE | re.MULTILINE,
 )
 NO_MATCHING_DISTRIBUTION_RE = re.compile(
     r"^ERROR:\s*No matching distribution found for "
     r"(?P<requirement>\S+)",
     re.IGNORECASE | re.MULTILINE,
+)
+# Conservative PEP 440 subset for pip's normalized ``from versions`` tokens.
+# False negatives fail closed and keep the protected base lock blocking; false
+# positives would incorrectly skip a lock, so arbitrary alphanumeric prose is
+# intentionally rejected even when it contains digits.
+CONCRETE_VERSION_RE = re.compile(
+    r"^(?:v)?(?:[0-9]+!)?"
+    r"[0-9]+(?:\.[0-9]+)*"
+    r"(?:(?:a|b|rc)[0-9]+)?"
+    r"(?:(?:\.post|-)[0-9]+)?"
+    r"(?:\.dev[0-9]+)?"
+    r"(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$",
+    re.IGNORECASE,
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -202,11 +215,27 @@ def _normalized_requirement_token(requirement: str) -> str:
     return requirement.rstrip(".,").casefold()
 
 
+def _is_concrete_version_list(version_list: str) -> bool:
+    """Return whether every comma-separated token is a concrete PEP 440 version.
+
+    Pip's diagnostic is used as evidence that an index was reached and offered
+    at least one alternative distribution. Empty values, ``none``, arbitrary
+    prose such as ``unavailable``, and mixed version/prose lists are not proof of
+    reachability and therefore fail closed.
+    """
+    tokens = [token.strip() for token in version_list.split(",")]
+    return bool(tokens) and all(
+        bool(token) and CONCRETE_VERSION_RE.fullmatch(token) is not None
+        for token in tokens
+    )
+
+
 def _matching_binary_unavailability_requirements(output: str) -> set[str]:
     """Return exact pins paired across pip's binary-unavailability diagnostics."""
     unsatisfied = {
         _normalized_requirement_token(match.group("requirement"))
         for match in UNSATISFIED_REQUIREMENT_RE.finditer(output)
+        if _is_concrete_version_list(match.group("versions"))
     }
     unmatched = {
         _normalized_requirement_token(match.group("requirement"))
@@ -246,14 +275,15 @@ def _is_deferable_preflight_failure(output: str) -> bool:
     reject the pinned coverage-image interpreter, and a base lock can pin a
     version for which the reachable index exposes no matching binary for that
     interpreter. Binary unavailability is deferable only when pip emits both
-    resolver lines for the same exact requirement and lists at least one concrete
-    available version. Those states are safe to recover through a same-directory
-    group or defer to the later networkless coverage run. Hash mismatches,
-    resolver crashes, empty diagnostics, and registry/network failures — including
-    fatal evidence mixed with an otherwise deferable diagnostic — remain fatal so
-    a broken trusted build cannot be mistaken for an optional lock. Deferred
-    paths retain a warning and bounded pip diagnostics so the incompatibility
-    stays visible without blocking unrelated coverage evidence.
+    resolver lines for the same exact requirement and every listed alternative
+    is a concrete PEP 440 version. Those states are safe to recover through a
+    same-directory group or defer to the later networkless coverage run. Hash
+    mismatches, resolver crashes, empty diagnostics, and registry/network
+    failures — including fatal evidence mixed with an otherwise deferable
+    diagnostic — remain fatal so a broken trusted build cannot be mistaken for
+    an optional lock. Deferred paths retain a warning and bounded pip diagnostics
+    so the incompatibility stays visible without blocking unrelated coverage
+    evidence.
     """
     normalized_output = output.strip()
     return (
@@ -283,7 +313,7 @@ def _report_fatal_preflight_failure(
         "::error::Trusted base Python lock preflight failed for "
         f"{entry_label}; only incomplete hash closures, explicit Python "
         "interpreter incompatibility, or paired same-requirement binary "
-        "unavailability from a reachable index may be deferred.",
+        "unavailability with concrete version evidence may be deferred.",
         file=stderr,
     )
     failure_output = _bounded_failure_output(output)
