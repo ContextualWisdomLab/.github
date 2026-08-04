@@ -163,6 +163,27 @@ def test_non_version_index_evidence_remains_fatal(
     assert "installed=" not in stdout
 
 
+def test_valid_pair_cannot_mask_duplicate_malformed_version_evidence(
+    tmp_path: Path,
+) -> None:
+    """Every resolver line for a paired requirement must carry concrete versions."""
+
+    output = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "pypdf==6.13.3 (from versions: 6.14.1)\n"
+        "ERROR: Could not find a version that satisfies the requirement "
+        "pypdf==6.13.3 (from versions: unavailable)\n"
+        "ERROR: No matching distribution found for pypdf==6.13.3"
+    )
+
+    result, stdout, stderr = _run_preflight_failure(tmp_path, output)
+
+    assert result == 1
+    assert "preflight failed" in stderr
+    assert "unavailable" in stderr
+    assert "installed=" not in stdout
+
+
 def test_atheris_binary_wheel_unavailability_is_deferable(tmp_path: Path) -> None:
     """The real Python 3.14 binary-only diagnostic is a visible skipped lock."""
 
