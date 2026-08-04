@@ -1,0 +1,89 @@
+name: Branch Patch Four Pillars OpenCode Target
+
+on:
+  push:
+    branches:
+      - fix/four-pillars-opencode-target
+    paths:
+      - .github/workflows/branch-patch-four-pillars-opencode-target.yml
+      - .github/workflows/opencode-review-dispatch.yml
+      - tests/test_four_pillars_opencode_enrollment.py
+
+concurrency:
+  group: branch-patch-four-pillars-opencode-target
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  verify-red:
+    name: verify-red
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/four-pillars-opencode-target
+      - name: Require the focused enrollment contract to fail before implementation
+        run: |
+          python - <<'PY'
+          import runpy
+
+          namespace = runpy.run_path("tests/test_four_pillars_opencode_enrollment.py")
+          test = namespace[
+              "test_four_pillars_is_explicitly_enrolled_without_replacing_dynamic_targets"
+          ]
+          try:
+              test()
+          except AssertionError:
+              print("Observed expected RED: Four Pillars is absent from the dispatcher allowlist.")
+          else:
+              raise SystemExit("Focused enrollment contract unexpectedly passed before patching.")
+          PY
+
+  patch-workflow:
+    name: patch-workflow
+    needs: verify-red
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/four-pillars-opencode-target
+          fetch-depth: 0
+      - name: Append the exact Four Pillars target without replacing organization configuration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/opencode-review-dispatch.yml")
+          source = path.read_text(encoding="utf-8")
+          expression_open = chr(36) + "{{ "
+          old = (
+              "          ALLOWED_DISPATCH_TARGETS: "
+              + expression_open
+              + "vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}"
+          )
+          new = (
+              "          ALLOWED_DISPATCH_TARGETS: "
+              + expression_open
+              + "format('{0},ContextualWisdomLab/four-pillars', "
+              + "vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS) }}"
+          )
+          if new in source:
+              print("Four Pillars exact enrollment is already present.")
+              raise SystemExit(0)
+          if source.count(old) != 1:
+              raise SystemExit("Expected exactly one dispatcher allowlist expression.")
+          path.write_text(source.replace(old, new), encoding="utf-8")
+          PY
+      - name: Commit the least-privilege dispatcher update
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/opencode-review-dispatch.yml
+          git commit -m "fix: enroll Four Pillars in OpenCode dispatch"
+          git push origin HEAD:fix/four-pillars-opencode-target
