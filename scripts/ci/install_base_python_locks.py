@@ -38,15 +38,6 @@ DEFERABLE_PREFLIGHT_FAILURES = (
         re.IGNORECASE,
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
-    # A base lock can pin a version that has since been yanked or that offers no
-    # wheel for the pinned coverage-image interpreter. pip proves the index was
-    # reachable only when it lists at least one concrete version. Empty lists,
-    # ``none``, and unreachable-index diagnostics remain fatal.
-    re.compile(
-        r"Could not find a version that satisfies the requirement[^\n]*"
-        r"\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
-        re.IGNORECASE,
-    ),
 )
 # A recognized deferable diagnostic must never hide independent integrity or
 # transport evidence emitted by the same failed pip process. These markers are
@@ -60,9 +51,10 @@ FATAL_PREFLIGHT_FAILURES = (
     re.compile(r"WARNING:\s*Retrying\b", re.IGNORECASE),
     re.compile(r"Could not fetch URL", re.IGNORECASE),
 )
-# Defer only the exact pip error lines that explain an incomplete hash closure,
-# interpreter mismatch, or stale pin. A second unknown ``ERROR:`` line means
-# the process reported another root cause and must therefore fail closed.
+# Defer only exact pip error lines that explain an incomplete hash closure or
+# interpreter mismatch. Binary-unavailability lines are handled separately and
+# must form a same-requirement pair; a second unknown ``ERROR:`` line therefore
+# remains fatal.
 DEFERABLE_ERROR_LINES = (
     re.compile(
         r"^ERROR:\s*In --require-hashes mode, all requirements must have "
@@ -75,9 +67,8 @@ DEFERABLE_ERROR_LINES = (
         re.IGNORECASE,
     ),
     re.compile(r"^ERROR:.*requires a different Python", re.IGNORECASE),
-    # Pip can emit either context line before the concrete-version diagnostic.
-    # Neither is independently deferable; the primary pattern below must still
-    # prove that the reachable index offers another concrete version.
+    # Pip can emit either context line before a paired binary-unavailability
+    # diagnostic. Neither context line is independently deferable.
     re.compile(
         r"^ERROR:\s*Ignored the following yanked versions:",
         re.IGNORECASE,
@@ -87,12 +78,17 @@ DEFERABLE_ERROR_LINES = (
         r"python version:",
         re.IGNORECASE,
     ),
-    re.compile(
-        r"^ERROR:\s*Could not find a version that satisfies the requirement"
-        r"[^\n]*\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
-        re.IGNORECASE,
-    ),
-    re.compile(r"^ERROR:\s*No matching distribution found for\b", re.IGNORECASE),
+)
+UNSATISFIED_REQUIREMENT_RE = re.compile(
+    r"^ERROR:\s*Could not find a version that satisfies the requirement "
+    r"(?P<requirement>[^\s(]+)[^\n]*"
+    r"\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+NO_MATCHING_DISTRIBUTION_RE = re.compile(
+    r"^ERROR:\s*No matching distribution found for "
+    r"(?P<requirement>\S+)",
+    re.IGNORECASE | re.MULTILINE,
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -201,12 +197,41 @@ def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
     )
 
 
+def _normalized_requirement_token(requirement: str) -> str:
+    """Normalize harmless diagnostic punctuation for exact token comparison."""
+    return requirement.rstrip(".,").casefold()
+
+
+def _matching_binary_unavailability_requirements(output: str) -> set[str]:
+    """Return exact pins paired across pip's binary-unavailability diagnostics."""
+    unsatisfied = {
+        _normalized_requirement_token(match.group("requirement"))
+        for match in UNSATISFIED_REQUIREMENT_RE.finditer(output)
+    }
+    unmatched = {
+        _normalized_requirement_token(match.group("requirement"))
+        for match in NO_MATCHING_DISTRIBUTION_RE.finditer(output)
+    }
+    return unsatisfied if unsatisfied and unsatisfied == unmatched else set()
+
+
 def _contains_unclassified_error(output: str) -> bool:
     """Return whether pip emitted an error outside the deferable contract."""
+    matching_requirements = _matching_binary_unavailability_requirements(output)
     for line in output.splitlines():
         normalized_line = line.strip()
         if not normalized_line.casefold().startswith("error:"):
             continue
+        binary_match = UNSATISFIED_REQUIREMENT_RE.search(normalized_line)
+        if binary_match is None:
+            binary_match = NO_MATCHING_DISTRIBUTION_RE.search(normalized_line)
+        if binary_match is not None:
+            requirement = _normalized_requirement_token(
+                binary_match.group("requirement")
+            )
+            if requirement in matching_requirements:
+                continue
+            return True
         if any(pattern.search(normalized_line) for pattern in DEFERABLE_ERROR_LINES):
             continue
         return True
@@ -219,8 +244,10 @@ def _is_deferable_preflight_failure(output: str) -> bool:
     A hash-bearing supplement can fail pip's independent-closure check because a
     transitive pin/hash lives in a sibling lock, a base lock can explicitly
     reject the pinned coverage-image interpreter, and a base lock can pin a
-    version the reachable index no longer offers for that interpreter (yanked or
-    no matching wheel). Those states are safe to recover through a same-directory
+    version for which the reachable index exposes no matching binary for that
+    interpreter. Binary unavailability is deferable only when pip emits both
+    resolver lines for the same exact requirement and lists at least one concrete
+    available version. Those states are safe to recover through a same-directory
     group or defer to the later networkless coverage run. Hash mismatches,
     resolver crashes, empty diagnostics, and registry/network failures — including
     fatal evidence mixed with an otherwise deferable diagnostic — remain fatal so
@@ -235,9 +262,12 @@ def _is_deferable_preflight_failure(output: str) -> bool:
             pattern.search(normalized_output) for pattern in FATAL_PREFLIGHT_FAILURES
         )
         and not _contains_unclassified_error(normalized_output)
-        and any(
-            pattern.search(normalized_output)
-            for pattern in DEFERABLE_PREFLIGHT_FAILURES
+        and (
+            any(
+                pattern.search(normalized_output)
+                for pattern in DEFERABLE_PREFLIGHT_FAILURES
+            )
+            or bool(_matching_binary_unavailability_requirements(normalized_output))
         )
     )
 
@@ -252,8 +282,8 @@ def _report_fatal_preflight_failure(
     print(
         "::error::Trusted base Python lock preflight failed for "
         f"{entry_label}; only incomplete hash closures, explicit Python "
-        "interpreter incompatibility, or a reachable-index version that is no "
-        "longer available for the coverage interpreter may be deferred.",
+        "interpreter incompatibility, or paired same-requirement binary "
+        "unavailability from a reachable index may be deferred.",
         file=stderr,
     )
     failure_output = _bounded_failure_output(output)
