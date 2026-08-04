@@ -152,7 +152,7 @@ assert_file_contains "$gate_script" "STRIX_GITHUB_MODELS_KEY_FILE" "Strix gate s
 assert_file_contains "$gate_script" "is_infra_error_without_vulnerability_artifact" "Strix gate classifies artifact-less provider crashes as retryable"
 assert_file_contains "$gate_script" "Provider infrastructure error left log-only severity markers and no Strix vulnerability report artifact; treating the failure as retryable and continuing to fallback models." "Strix gate continues to fallback models after artifact-less provider crashes"
 assert_file_contains "$gate_script" "capture_attempt_preexisting_report_run_dirs" "Strix gate scopes report failure signals to the current attempt"
-assert_file_contains "$workflow_file" "-path '*/vulnerabilities/*.md'" "Strix workflow neutral-skips backend outages unless a vulnerability report artifact exists"
+assert_file_contains "$workflow_file" "Provider outages without a vulnerability report are incomplete security evidence and are not converted to success" "Strix workflow preserves fail-closed exhaustion after fallback attempts"
 assert_file_contains "$gate_script" "STRIX_REPO_ROOT" "Strix gate consumes explicit target root"
 assert_file_contains "$gate_script" "STRIX_REPO_ROOT must reference a regular directory" "Strix gate rejects invalid or symlink target roots"
 assert_file_contains "$gate_script" "TARGET_PATH_IS_INTERNAL_PR_SCOPE" "Strix gate separates generated PR scopes from user paths"
