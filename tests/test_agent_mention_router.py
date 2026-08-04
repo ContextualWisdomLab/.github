@@ -6,7 +6,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -27,84 +27,302 @@ def load_module() -> ModuleType:
     return module
 
 
-def event(body: str, *, association: str = "MEMBER", user_type: str = "User") -> dict:
-    """Build a representative issue-comment event with PR metadata attached."""
+def event(
+    body: str,
+    *,
+    association: str = "MEMBER",
+    user_type: str = "User",
+) -> dict:
+    """Build a representative enriched issue-comment event."""
 
     return {
         "repository": {"full_name": "ContextualWisdomLab/example"},
-        "issue": {"number": 17, "pull_request": {"url": "https://api.github.test/pr/17"}},
+        "issue": {
+            "number": 17,
+            "pull_request": {"url": "https://api.github.test/pr/17"},
+        },
         "comment": {
             "id": 91,
             "body": body,
             "author_association": association,
             "user": {"login": "maintainer", "type": user_type},
         },
-        "pull_request": {"head": {"sha": "a" * 40}},
+        "pull_request": {
+            "state": "open",
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "develop"},
+        },
     }
 
 
-def test_parse_event_recognizes_both_exact_mentions() -> None:
-    """Both supported exact mentions are emitted once in deterministic order."""
+class FakeClient:
+    """Capture JSON API calls for deterministic dispatch assertions."""
+
+    def __init__(self) -> None:
+        """Initialize an empty call ledger."""
+
+        self.calls: list[tuple[list[str], dict | None]] = []
+
+    def request(self, args, *, input_payload=None):
+        """Record one request and return no response body."""
+
+        self.calls.append((list(args), input_payload))
+        return None
+
+
+def test_exact_mentions_and_parse_event() -> None:
+    """Both exact mentions are recognized with immutable PR metadata."""
 
     module = load_module()
-    request = module.parse_event(event("please @cwl-noema-review and @opencode-agent"))
+    request = module.parse_event(
+        event("please @cwl-noema-review and @opencode-agent")
+    )
     assert request is not None
     assert request.agents == ("cwl-noema-review", "opencode-agent")
     assert request.pull_request_head_sha == "a" * 40
+    assert request.pull_request_base_branch == "develop"
+    assert module.exact_mentions("@opencode-agent-evil @cwl-noema-review2") == ()
 
 
 @pytest.mark.parametrize(
-    ("payload", "expected"),
+    "payload",
     [
-        (event("no agent here"), None),
-        (event("@opencode-agent", association="CONTRIBUTOR"), None),
-        (event("@opencode-agent", user_type="Bot"), None),
-        ({**event("@opencode-agent"), "issue": {"number": 17}}, None),
+        event("no agent here"),
+        event("@opencode-agent", association="CONTRIBUTOR"),
+        event("@opencode-agent", user_type="Bot"),
+        {**event("@opencode-agent"), "issue": {"number": 17}},
+        {
+            **event("@opencode-agent"),
+            "pull_request": {
+                **event("@opencode-agent")["pull_request"],
+                "state": "closed",
+            },
+        },
+        {
+            **event("@opencode-agent"),
+            "conversation_comments": [
+                {"body": "<!-- cwl-agent-mention-receipt:91 -->"}
+            ],
+        },
     ],
 )
-def test_parse_event_ignores_untrusted_or_irrelevant_comments(payload: dict, expected: None) -> None:
-    """Non-PR, bot, untrusted, and unrelated comments do not dispatch work."""
+def test_parse_event_ignores_untrusted_irrelevant_or_processed_comments(
+    payload: dict,
+) -> None:
+    """Untrusted, irrelevant, non-PR, and acknowledged comments are ignored."""
+
+    assert load_module().parse_event(payload) is None
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("repository", "full_name"), "outside/example", "limited"),
+        (("issue", "number"), 0, "number"),
+        (("comment", "id"), 0, "comment id"),
+        (("pull_request", "head", "sha"), "bad", "head SHA"),
+        (("pull_request", "base", "ref"), "-bad", "base branch"),
+        (("comment", "user", "login"), "", "actor"),
+    ],
+)
+def test_parse_event_rejects_malformed_trusted_requests(
+    path: tuple[str, ...],
+    value: object,
+    message: str,
+) -> None:
+    """Malformed trusted invocation metadata fails closed."""
+
+    payload = event("@opencode-agent")
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    with pytest.raises(ValueError, match=message):
+        load_module().parse_event(payload)
+
+
+def test_receipt_and_allowlist_helpers() -> None:
+    """Receipt extraction and exact repository allowlists are deterministic."""
 
     module = load_module()
-    assert module.parse_event(payload) is expected
+    assert module.receipt_marker(91) == "<!-- cwl-agent-mention-receipt:91 -->"
+    with pytest.raises(ValueError, match="positive"):
+        module.receipt_marker(0)
+    comments = [
+        {"body": "<!-- cwl-agent-mention-receipt:91 -->"},
+        {"body": "x <!-- cwl-agent-mention-receipt:92 --> y"},
+        {"body": None},
+    ]
+    assert module.processed_comment_ids(comments) == frozenset({91, 92})
+    assert module.parse_repository_allowlist(
+        "ContextualWisdomLab/example, ContextualWisdomLab/.github,"
+    ) == frozenset(
+        {"ContextualWisdomLab/example", "ContextualWisdomLab/.github"}
+    )
+    with pytest.raises(ValueError, match="invalid repository"):
+        module.parse_repository_allowlist("outside/example")
 
 
-def test_parse_event_rejects_lookalike_mentions() -> None:
-    """Agent-name prefixes and suffixes cannot trigger a dispatch."""
-
-    module = load_module()
-    assert module.parse_event(event("@opencode-agent-evil @cwl-noema-review2")) is None
-
-
-def test_dispatch_reuses_existing_review_events(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Noema and OpenCode mentions dispatch their established workflow events."""
+def test_eligible_agents_and_payloads() -> None:
+    """Eligibility and event bodies preserve the bounded review contract."""
 
     module = load_module()
     request = module.parse_event(event("@cwl-noema-review @opencode-agent"))
     assert request is not None
-    calls: list[tuple[list[str], dict | None]] = []
+    assert module.eligible_agents(
+        request,
+        opencode_allowlist=frozenset({request.repository}),
+    ) == (("cwl-noema-review", "opencode-agent"), ())
+    assert module.eligible_agents(
+        request,
+        opencode_allowlist=frozenset(),
+    ) == (("cwl-noema-review",), ("opencode-agent",))
+    noema = module.noema_payload(request)
+    assert noema["event_type"] == "noema-review"
+    assert noema["client_payload"]["pr_head_sha"] == "a" * 40
+    opencode = module.opencode_payload(request)
+    assert opencode["event_type"] == "merge-scheduler"
+    assert opencode["client_payload"]["base_branch"] == "develop"
+    assert opencode["client_payload"]["merge_mode"] == "disabled"
+    assert opencode["client_payload"]["enable_auto_merge"] is False
+    assert opencode["client_payload"]["update_branches"] is False
 
-    def fake_gh_api(args, *, input_payload=None):
-        calls.append((list(args), input_payload))
 
-    monkeypatch.setattr(module, "gh_api", fake_gh_api)
-    module.dispatch(request)
+def test_dispatch_uses_central_events_and_acknowledges() -> None:
+    """Both agents dispatch centrally with bounded review-only OpenCode options."""
 
-    dispatch_payloads = [payload for args, payload in calls if args[0].endswith("/dispatches")]
-    assert [payload["event_type"] for payload in dispatch_payloads] == [
+    module = load_module()
+    request = module.parse_event(event("@cwl-noema-review @opencode-agent"))
+    assert request is not None
+    target = FakeClient()
+    central = FakeClient()
+    result = module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset({request.repository}),
+    )
+    assert result == ("@cwl-noema-review", "@opencode-agent")
+    assert [payload["event_type"] for _, payload in central.calls] == [
         "noema-review",
         "merge-scheduler",
     ]
-    assert dispatch_payloads[1]["client_payload"]["requested_agent"] == "opencode-agent"
-    assert calls[0][1] == {"content": "eyes"}
-    assert "Queued @cwl-noema-review and @opencode-agent" in calls[-1][1]["body"]
+    assert all(
+        args[0] == "repos/ContextualWisdomLab/.github/dispatches"
+        for args, _ in central.calls
+    )
+    assert target.calls[0][1] == {"content": "eyes"}
+    assert "cwl-agent-mention-receipt:91" in target.calls[1][1]["body"]
 
 
-def test_load_event_requires_json_object(tmp_path: Path) -> None:
-    """Malformed event shapes fail closed before any GitHub mutation."""
+def test_dispatch_rejects_unallowlisted_opencode_and_supports_dry_run(
+    capsys,
+) -> None:
+    """OpenCode fails closed outside its allowlist while dry-run is mutation-free."""
 
     module = load_module()
-    path = tmp_path / "event.json"
-    path.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    request = module.parse_event(event("@opencode-agent"))
+    assert request is not None
+    target = FakeClient()
+    central = FakeClient()
+    assert module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset(),
+    ) == ()
+    assert central.calls == []
+    assert "Rejected @opencode-agent" in target.calls[-1][1]["body"]
+
+    target = FakeClient()
+    central = FakeClient()
+    assert module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset(),
+        dry_run=True,
+    ) == ()
+    assert target.calls == central.calls == []
+    output = capsys.readouterr().out
+    assert "DRY-RUN agent mention" in output
+    assert "reject=opencode-agent" in output
+
+
+def test_dispatch_noema_only_covers_non_opencode_path() -> None:
+    """A Noema-only request bypasses the OpenCode allowlist branch."""
+
+    module = load_module()
+    request = module.parse_event(event("@cwl-noema-review"))
+    assert request is not None
+    target = FakeClient()
+    central = FakeClient()
+    assert module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset(),
+    ) == ("@cwl-noema-review",)
+    assert central.calls[0][1]["event_type"] == "noema-review"
+
+
+def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
+    """The token-bound client never places credentials in command arguments."""
+
+    module = load_module()
+    with pytest.raises(ValueError, match="token"):
+        module.GitHubClient("")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout='{"ok": true}\n')
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    client = module.GitHubClient("secret-token")
+    assert client.request(["repos/x/y"], input_payload={"a": 1}) == {"ok": True}
+    command, kwargs = calls[0]
+    assert command == ["gh", "api", "repos/x/y", "--input", "-"]
+    assert "secret-token" not in command
+    assert kwargs["env"]["GH_TOKEN"] == "secret-token"
+    assert kwargs["input"] == '{"a": 1}'
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="  "),
+    )
+    assert client.request(["repos/x/y"]) is None
+
+
+def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
+    """CLI rejects malformed JSON, ignores irrelevant events, and dispatches input."""
+
+    module = load_module()
+    array_path = tmp_path / "array.json"
+    array_path.write_text(json.dumps(["bad"]), encoding="utf-8")
     with pytest.raises(ValueError, match="JSON object"):
-        module.load_event(str(path))
+        module.load_event(str(array_path))
+
+    ignored_path = tmp_path / "ignored.json"
+    ignored_path.write_text(json.dumps(event("nothing")), encoding="utf-8")
+    assert module.main(["--event-path", str(ignored_path)]) == 0
+    assert "nothing to dispatch" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        module.main([])
+
+    valid_path = tmp_path / "valid.json"
+    valid_path.write_text(json.dumps(event("@opencode-agent")), encoding="utf-8")
+    captured = []
+    monkeypatch.setenv("GH_TOKEN", "token")
+    monkeypatch.setenv(
+        "OPENCODE_REPOSITORY_DISPATCH_TARGETS",
+        "ContextualWisdomLab/example",
+    )
+    monkeypatch.setattr(
+        module,
+        "dispatch_request",
+        lambda request, **kwargs: captured.append((request, kwargs)) or (),
+    )
+    assert module.main(["--event-path", str(valid_path), "--dry-run"]) == 0
+    assert captured[0][1]["dry_run"] is True
