@@ -11,7 +11,7 @@ on:
 
 concurrency:
   group: branch-patch-four-pillars-opencode-target
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -19,14 +19,14 @@ permissions:
 jobs:
   verify-red:
     name: verify-red
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: fix/four-pillars-opencode-target
       - name: Require the focused enrollment contract to fail before implementation
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import runpy
 
           namespace = runpy.run_path("tests/test_four_pillars_opencode_enrollment.py")
@@ -44,7 +44,7 @@ jobs:
   patch-workflow:
     name: patch-workflow
     needs: verify-red
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -52,7 +52,7 @@ jobs:
           fetch-depth: 0
       - name: Append the exact Four Pillars target without replacing organization configuration
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
           path = Path(".github/workflows/opencode-review-dispatch.yml")
