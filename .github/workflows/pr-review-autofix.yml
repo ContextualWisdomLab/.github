@@ -310,7 +310,6 @@ jobs:
         if: env.RESOLVE_CONFLICT != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
           MODEL: nvidia-nim/mistralai/mistral-nemotron
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -376,7 +375,8 @@ jobs:
           }
           trap restore_workspace_config EXIT
           cd "$TARGET_WORKSPACE"
-          timeout 18000 opencode run "$(cat "$prompt_file")" \
+          env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            timeout 18000 opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-autofix \
             --model "$MODEL" \
@@ -521,7 +521,8 @@ jobs:
               fi
             }
             trap restore_workspace_config EXIT
-            timeout 18000 opencode run "$(cat "$prompt_file")" \
+            env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              timeout 18000 opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-autofix \
               --model "$MODEL" \
