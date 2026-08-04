@@ -1,6 +1,10 @@
 strix-agent==1.0.4
 google-cloud-aiplatform==1.133.0
 protobuf<7.0.0
-cryptography==49.0.0
+# CVE-2026-69247 (pkcs7 decrypt padding oracle) fixed in 50.0.0
+cryptography==50.0.0
 python-multipart==0.0.32
 pyasn1==0.6.4
+# Transitive via strix-agent; floor past aiohttp CVE-2026-59881 / -69243 (fixed 3.14.2)
+# and CVE-2026-69244 (fixed 3.14.3)
+aiohttp>=3.14.3
