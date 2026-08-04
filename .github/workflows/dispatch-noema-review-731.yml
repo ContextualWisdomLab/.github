@@ -6,8 +6,7 @@ on:
       - ops/noema-review-731-dispatch
 
 permissions:
-  contents: read
-  pull-requests: write
+  contents: write
 
 jobs:
   dispatch:
@@ -40,14 +39,17 @@ jobs:
               --data-binary "@${RUNNER_TEMP}/dispatch.json"
           }
 
-          dispatch ContextualWisdomLab/.github 731 880486bb80676da2c4c9344f293a7727afe07d6b
-          dispatch ContextualWisdomLab/naruon 1236 ec62a45acc2a214bc4de75346fbd9f9253d67fb4
-          dispatch ContextualWisdomLab/naruon 1211 eaaf0517eccece62ccc59b5868576501a607b25a
+          dispatch ContextualWisdomLab/.github 731 5b4929a682264712a2822d328bb5afadb1249a57
+          dispatch ContextualWisdomLab/naruon 1239 702623e80a4eebcef29dbd576c88cc0081783cde
+          dispatch ContextualWisdomLab/naruon 1211 782b36a033c1e3a265de7dc231cdbee699384c10
           dispatch ContextualWisdomLab/naruon 1206 6b8a5af5bd6630b5076eb1f5c1ac15ca7d2e1b2f
           dispatch ContextualWisdomLab/naruon 1203 c700e188dc9ef0996d476e2c777eaf9c291d9d42
-          dispatch ContextualWisdomLab/naruon 1239 702623e80a4eebcef29dbd576c88cc0081783cde
 
           gh api \
             --method POST \
             "repos/ContextualWisdomLab/.github/issues/731/comments" \
-            -f body='Noema repository_dispatch requests were accepted for central #731 and the exact current heads of naruon #1236, #1211, #1206, #1203, and #1239. Awaiting independent review verdicts.'
+            -f body='Noema repository_dispatch requests were accepted for central #731 and the exact current heads of naruon #1239, #1211, #1206, and #1203. Awaiting independent review verdicts.'
+
+          gh api \
+            --method DELETE \
+            "repos/ContextualWisdomLab/.github/git/refs/heads/ops/noema-review-731-dispatch"
