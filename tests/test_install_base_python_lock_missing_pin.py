@@ -16,11 +16,23 @@ def test_reachable_index_missing_pin_is_deferable() -> None:
 
 
 def test_empty_index_missing_pin_remains_fatal() -> None:
-    """An empty or unreachable package index must never be treated as optional."""
+    """An explicitly empty package index must never be treated as optional."""
 
     output = (
         "ERROR: Could not find a version that satisfies the requirement "
         "pypdf==6.13.3 (from versions: none)\n"
+        "ERROR: No matching distribution found for pypdf==6.13.3"
+    )
+
+    assert not installer._is_deferable_preflight_failure(output)
+
+
+def test_blank_version_list_missing_pin_remains_fatal() -> None:
+    """A blank version list is not affirmative proof that the index is reachable."""
+
+    output = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "pypdf==6.13.3 (from versions: )\n"
         "ERROR: No matching distribution found for pypdf==6.13.3"
     )
 
