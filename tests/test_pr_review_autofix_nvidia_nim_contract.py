@@ -1,10 +1,11 @@
-"""Contract tests for the scheduled OpenCode review-autofix model boundary."""
+"""Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
 from pathlib import Path
 
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
+REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 
 
 def _workflow_text(path: Path) -> str:
@@ -53,6 +54,41 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
         assert fragment not in workflow, fragment
 
 
+def test_trusted_autofix_source_is_bound_to_dispatch_sha() -> None:
+    """Prevent a moving default branch from replacing trusted autofix scripts."""
+
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    checkout_start = workflow.index("      - name: Checkout trusted autofix source")
+    checkout_end = workflow.index(
+        "      - name: Exchange OpenCode app token", checkout_start
+    )
+    checkout = workflow[checkout_start:checkout_end]
+
+    assert "ref: ${{ github.sha }}" in checkout
+    assert "ref: main" not in checkout
+    assert "fetch-depth: 1" in checkout
+    assert "persist-credentials: false" in checkout
+
+
+def test_opencode_agent_denies_non_file_interactions() -> None:
+    """Keep unattended repair bounded to local file inspection and edits."""
+
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+
+    for permission_name in (
+        "bash",
+        "task",
+        "skill",
+        "question",
+        "webfetch",
+        "websearch",
+        "lsp",
+        "external_directory",
+        "doom_loop",
+    ):
+        assert workflow.count(f'"{permission_name}": "deny"') == 2
+
+
 def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
     """Prevent the NVIDIA credential from leaking beyond the two OpenCode runs."""
 
@@ -91,3 +127,13 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
     assert workflow.count(guard) == 2
     assert guard in workflow[ordinary_start:ordinary_end]
     assert guard in workflow[conflict_start:]
+
+
+def test_independent_review_agent_key_system_is_unchanged() -> None:
+    """Keep scheduled write repair separate from the read-only review credentials."""
+
+    review_workflow = _workflow_text(REVIEW_DISPATCH_WORKFLOW)
+
+    assert "NVIDIA_NIM_API_KEY" not in review_workflow
+    assert "NVIDIA_API_KEY" not in review_workflow
+    assert "pr-review-autofix" not in review_workflow
