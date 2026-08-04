@@ -35,6 +35,8 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
     env:
       REPAIR_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -43,12 +45,12 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout exact pull request head without credentials
+      - name: Checkout exact pull request head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ env.REPAIR_SHA }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Install hash-pinned contract tools
         run: >-
@@ -58,7 +60,7 @@ jobs:
           --only-binary=:all:
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Apply reviewed final repair in the ephemeral worktree
+      - name: Apply reviewed final repair
         shell: bash
         run: |
           set -euo pipefail
@@ -127,21 +129,17 @@ jobs:
           test ! -e scripts/ci/bootstrap_patch_workflow.py
           test ! -e scripts/ci/bootstrap_pr703_final_repair.py
 
-      - name: Package verified canonical files
+      - name: Commit verified canonical state
         shell: bash
         run: |
           set -euo pipefail
-          tar -czf "$RUNNER_TEMP/pr703-final-state.tar.gz" \
-            .github/workflows/opencode-review-dispatch.yml \
-            scripts/ci/npm_workspace_install_root.py \
-            tests/test_npm_workspace_install_root.py \
-            tests/test_npm_workspace_install_root_hardening.py \
-            tests/test_opencode_agent_contract.py
-
-      - name: Upload verified final state
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: pr703-final-state-${{ env.REPAIR_SHA }}
-          path: ${{ runner.temp }}/pr703-final-state.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No canonical-state changes to commit."
+            exit 0
+          fi
+          git commit -m "fix(coverage): finalize npm workspace lock resolution"
+          git push origin HEAD:refs/heads/fix/npm-workspace-coverage-root
