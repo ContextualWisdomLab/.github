@@ -69,3 +69,25 @@ def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
     assert binding in workflow[conflict_start:]
     assert binding not in workflow[:ordinary_start]
     assert binding not in workflow[ordinary_end:conflict_start]
+
+
+def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None:
+    """Reject an empty model credential instead of falling back to another provider."""
+
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    guard = (
+        'if [ -z "${NVIDIA_API_KEY:-}" ]; then\n'
+        '            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled '
+        'OpenCode autofix."\n'
+        "            exit 1\n"
+        "          fi"
+    )
+    ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
+    ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
+    conflict_start = workflow.index(
+        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    )
+
+    assert workflow.count(guard) == 2
+    assert guard in workflow[ordinary_start:ordinary_end]
+    assert guard in workflow[conflict_start:]
