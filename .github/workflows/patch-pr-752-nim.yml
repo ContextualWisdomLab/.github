@@ -1,5 +1,6 @@
 name: Apply validated PR 752 NVIDIA NIM autofix migration
 
+# Re-trigger the reviewed one-shot migration after exact-head contract inspection.
 on:
   push:
     branches:
