@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts" / "ci"
 sys.path.insert(0, str(SCRIPTS))
@@ -37,6 +36,7 @@ def comment(
     *,
     association: str = "MEMBER",
     user_type: str = "User",
+    login: str = "maintainer",
 ) -> dict:
     """Build one issue-comment API object."""
 
@@ -44,7 +44,7 @@ def comment(
         "id": comment_id,
         "body": body,
         "author_association": association,
-        "user": {"login": "maintainer", "type": user_type},
+        "user": {"login": login, "type": user_type},
     }
 
 
@@ -87,7 +87,7 @@ def pull_list_item(number: int = 7, updated_at: str = "2026-08-05T11:00:00Z") ->
 
 
 def live_pull(state: str = "open") -> dict:
-    """Build the live pull-request metadata consumed by the router."""
+    """Build live pull-request metadata consumed by the router."""
 
     return {
         "state": state,
@@ -124,15 +124,17 @@ def test_timestamp_cutoff_and_page_validation() -> None:
             sweep.cutoff_timestamp(hours, now=now)
     with pytest.raises(ValueError, match="timezone-aware"):
         sweep.cutoff_timestamp(1, now=datetime(2026, 8, 5))
-
     assert sweep.flatten_pages([[{"a": 1}], [{"b": 2}]]) == [
         {"a": 1},
         {"b": 2},
     ]
     assert sweep.flatten_pages(
-        [{"items": [{"a": 1}]}],
-        collection_key="items",
+        [{"items": [{"a": 1}]}], collection_key="items"
     ) == [{"a": 1}]
+    with pytest.raises(ValueError, match="empty"):
+        sweep.flatten_pages(None)
+    with pytest.raises(ValueError, match="page is not an object"):
+        sweep.flatten_pages([[]], collection_key="items")
     with pytest.raises(ValueError, match="not a list"):
         sweep.flatten_pages({"items": {}}, collection_key="items")
     with pytest.raises(ValueError, match="non-object"):
@@ -143,14 +145,12 @@ def test_accessible_repository_sources_filter_and_validate() -> None:
     """PAT and installation-token repository inventories are both supported."""
 
     sweep = module()
-    organization_response = [
-        [
-            repository(),
-            repository("archived", archived=True),
-            repository("disabled", disabled=True),
-            repository("outside", owner="outside"),
-        ]
-    ]
+    organization_response = [[
+        repository(),
+        repository("archived", archived=True),
+        repository("disabled", disabled=True),
+        repository("outside", owner="outside"),
+    ]]
     organization_client = FakeClient(
         {"orgs/ContextualWisdomLab/repos": organization_response}
     )
@@ -159,20 +159,16 @@ def test_accessible_repository_sources_filter_and_validate() -> None:
         organization="ContextualWisdomLab",
         repository_source="organization",
     ) == ["ContextualWisdomLab/example"]
-
     installation_client = FakeClient(
-        {
-            "installation/repositories": [
-                {"repositories": [repository(), repository("second")]}
-            ]
-        }
+        {"installation/repositories": [
+            {"repositories": [repository(), repository("second")]}
+        ]}
     )
     assert sweep.list_accessible_repositories(
         installation_client,
         organization="ContextualWisdomLab",
         repository_source="installation",
     ) == ["ContextualWisdomLab/example", "ContextualWisdomLab/second"]
-
     with pytest.raises(ValueError, match="organization"):
         sweep.list_accessible_repositories(
             organization_client,
@@ -186,11 +182,9 @@ def test_accessible_repository_sources_filter_and_validate() -> None:
             repository_source="bad",
         )
     invalid_client = FakeClient(
-        {
-            "orgs/ContextualWisdomLab/repos": [
-                [{**repository(), "full_name": "bad/name"}]
-            ]
-        }
+        {"orgs/ContextualWisdomLab/repos": [[
+            {**repository(), "full_name": "bad/name"}
+        ]]}
     )
     with pytest.raises(ValueError, match="full_name"):
         sweep.list_accessible_repositories(
@@ -201,45 +195,42 @@ def test_accessible_repository_sources_filter_and_validate() -> None:
 
 
 def test_recent_pull_request_filtering() -> None:
-    """Only open accessible PRs updated at or after the cutoff are candidates."""
+    """Only open accessible PRs updated at or after the cutoff are yielded."""
 
     sweep = module()
     client = FakeClient(
         {
             "orgs/ContextualWisdomLab/repos": [[repository()]],
-            "repos/ContextualWisdomLab/example/pulls": [
-                [
-                    pull_list_item(7, "2026-08-05T11:00:00Z"),
-                    pull_list_item(8, "2026-08-04T11:59:59Z"),
-                ]
-            ],
+            "repos/ContextualWisdomLab/example/pulls": [[
+                pull_list_item(7, "2026-08-05T11:00:00Z"),
+                pull_list_item(8, "2026-08-04T11:59:59Z"),
+            ]],
         }
     )
-    assert sweep.list_recent_pull_requests(
+    assert list(sweep.list_recent_pull_requests(
         client,
         organization="ContextualWisdomLab",
         repository_source="organization",
         since="2026-08-04T12:00:00Z",
-    ) == [candidate()]
-
+    )) == [candidate()]
     bad_number_client = FakeClient(
         {
             "orgs/ContextualWisdomLab/repos": [[repository()]],
-            "repos/ContextualWisdomLab/example/pulls": [
-                [{"number": 0, "updated_at": "2026-08-05T11:00:00Z"}]
-            ],
+            "repos/ContextualWisdomLab/example/pulls": [[
+                {"number": 0, "updated_at": "2026-08-05T11:00:00Z"}
+            ]],
         }
     )
     with pytest.raises(ValueError, match="pull request number"):
-        sweep.list_recent_pull_requests(
+        list(sweep.list_recent_pull_requests(
             bad_number_client,
             organization="ContextualWisdomLab",
             repository_source="organization",
             since="2026-08-04T12:00:00Z",
-        )
+        ))
 
 
-def test_build_requests_skips_receipts_and_closed_pull_requests() -> None:
+def test_build_requests_skips_trusted_receipts_and_closed_pull_requests() -> None:
     """Only unacknowledged trusted comments on a live PR become requests."""
 
     sweep = module()
@@ -247,44 +238,39 @@ def test_build_requests_skips_receipts_and_closed_pull_requests() -> None:
     pull_endpoint = "repos/ContextualWisdomLab/example/pulls/7"
     comments = [
         comment(10, "@opencode-agent"),
-        comment(11, "<!-- cwl-agent-mention-receipt:10 -->"),
+        comment(
+            11,
+            "<!-- cwl-agent-mention-receipt:10 -->",
+            user_type="Bot",
+            login="github-actions[bot]",
+        ),
         comment(12, "@cwl-noema-review"),
         comment(13, "@opencode-agent", association="CONTRIBUTOR"),
     ]
     client = FakeClient({comments_endpoint: [comments], pull_endpoint: live_pull()})
     requests = sweep.build_requests_for_pull_request(
-        client,
-        issue=candidate(),
-        since="2026-08-04T00:00:00Z",
+        client, issue=candidate(), since="2026-08-04T00:00:00Z"
     )
     assert [request.comment_id for request in requests] == [12]
     assert requests[0].agents == ("cwl-noema-review",)
-
     closed = FakeClient(
         {comments_endpoint: [comments], pull_endpoint: live_pull("closed")}
     )
     assert sweep.build_requests_for_pull_request(
-        closed,
-        issue=candidate(),
-        since="2026-08-04T00:00:00Z",
+        closed, issue=candidate(), since="2026-08-04T00:00:00Z"
     ) == ()
-
     with pytest.raises(ValueError, match="repository"):
         sweep.build_requests_for_pull_request(
-            client,
-            issue={**candidate(), "repository": "bad/name"},
-            since="x",
+            client, issue={**candidate(), "repository": "bad/name"}, since="x"
         )
     with pytest.raises(ValueError, match="number"):
         sweep.build_requests_for_pull_request(
-            client,
-            issue={**candidate(), "number": 0},
-            since="x",
+            client, issue={**candidate(), "number": 0}, since="x"
         )
 
 
 def mention_request(number: int, comment_id: int, agent: str):
-    """Build one validated router request for sweep orchestration tests."""
+    """Build one validated router request for orchestration tests."""
 
     router = importlib.import_module("agent_mention_router")
     return router.MentionRequest(
@@ -305,9 +291,7 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
     request_a = mention_request(7, 10, "opencode-agent")
     request_b = mention_request(8, 11, "cwl-noema-review")
     monkeypatch.setattr(
-        sweep,
-        "list_recent_pull_requests",
-        lambda *args, **kwargs: [candidate()],
+        sweep, "list_recent_pull_requests", lambda *args, **kwargs: iter([candidate()])
     )
     monkeypatch.setattr(
         sweep,
@@ -320,7 +304,7 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
         "dispatch_request",
         lambda request, **kwargs: dispatched.append(request.comment_id) or (),
     )
-    count = sweep.sweep(
+    assert sweep.sweep(
         target_client=FakeClient(),
         dispatch_client=FakeClient(),
         organization="ContextualWisdomLab",
@@ -329,15 +313,11 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
         max_dispatches=1,
         opencode_allowlist=frozenset({"ContextualWisdomLab/example"}),
         now=datetime(2026, 8, 5, tzinfo=timezone.utc),
-    )
-    assert count == 1
+    ) == 1
     assert dispatched == [10]
     assert "reached dispatch limit" in capsys.readouterr().out
-
     monkeypatch.setattr(
-        sweep,
-        "list_recent_pull_requests",
-        lambda *args, **kwargs: [],
+        sweep, "list_recent_pull_requests", lambda *args, **kwargs: iter(())
     )
     assert sweep.sweep(
         target_client=FakeClient(),
@@ -364,19 +344,16 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
 
 
 def test_sweep_continues_across_empty_results_and_completes(
-    monkeypatch,
-    capsys,
+    monkeypatch, capsys
 ) -> None:
     """Empty candidate results do not stop later PR processing."""
 
     sweep = module()
-    first = candidate()
-    second = candidate(8)
     request = mention_request(8, 12, "cwl-noema-review")
     monkeypatch.setattr(
         sweep,
         "list_recent_pull_requests",
-        lambda *args, **kwargs: [first, second],
+        lambda *args, **kwargs: iter([candidate(), candidate(8)]),
     )
     monkeypatch.setattr(
         sweep,
@@ -411,23 +388,20 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     monkeypatch.setenv("TARGET_REPOSITORY_TOKEN", "target")
     monkeypatch.setenv("AGENT_DISPATCH_TOKEN", "dispatch")
     monkeypatch.setenv(
-        "OPENCODE_REPOSITORY_DISPATCH_TARGETS",
-        "ContextualWisdomLab/example",
+        "OPENCODE_REPOSITORY_DISPATCH_TARGETS", "ContextualWisdomLab/example"
     )
     monkeypatch.setattr(sweep, "sweep", lambda **kwargs: captured.append(kwargs) or 0)
-    assert sweep.main(
-        [
-            "--organization",
-            "ContextualWisdomLab",
-            "--repository-source",
-            "installation",
-            "--lookback-hours",
-            "48",
-            "--max-dispatches",
-            "3",
-            "--dry-run",
-        ]
-    ) == 0
+    assert sweep.main([
+        "--organization",
+        "ContextualWisdomLab",
+        "--repository-source",
+        "installation",
+        "--lookback-hours",
+        "48",
+        "--max-dispatches",
+        "3",
+        "--dry-run",
+    ]) == 0
     assert captured[0]["repository_source"] == "installation"
     assert captured[0]["lookback_hours"] == 48
     assert captured[0]["max_dispatches"] == 3
