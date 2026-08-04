@@ -146,3 +146,58 @@ def test_blank_version_list_missing_pin_remains_fatal(tmp_path: Path) -> None:
     assert result == 1
     assert "preflight failed" in stderr
     assert "installed=" not in stdout
+
+
+def test_atheris_binary_wheel_unavailability_is_deferable(tmp_path: Path) -> None:
+    """The real Python 3.14 binary-only diagnostic is a visible skipped lock."""
+
+    output = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "atheris==3.0.0 (from versions: 3.1.0)\n"
+        "ERROR: No matching distribution found for atheris==3.0.0"
+    )
+
+    result, stdout, stderr = _run_preflight_failure(tmp_path, output)
+
+    assert result == 0
+    assert "candidates=1 installed=0 skipped=1" in stdout
+    assert "atheris==3.0.0" in stderr
+
+
+def test_mismatched_binary_diagnostics_remain_fatal(tmp_path: Path) -> None:
+    """Two resolver lines for different exact pins cannot authorize deferral."""
+
+    output = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "pypdf==6.13.3 (from versions: 6.14.2)\n"
+        "ERROR: No matching distribution found for atheris==3.0.0"
+    )
+
+    result, stdout, stderr = _run_preflight_failure(tmp_path, output)
+
+    assert result == 1
+    assert "preflight failed" in stderr
+    assert "installed=" not in stdout
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        (
+            "ERROR: Could not find a version that satisfies the requirement "
+            "atheris==3.0.0 (from versions: 3.1.0)"
+        ),
+        "ERROR: No matching distribution found for atheris==3.0.0",
+    ],
+)
+def test_single_binary_diagnostic_remains_fatal(
+    tmp_path: Path,
+    output: str,
+) -> None:
+    """Neither half of pip's binary-unavailability evidence is sufficient alone."""
+
+    result, stdout, stderr = _run_preflight_failure(tmp_path, output)
+
+    assert result == 1
+    assert "preflight failed" in stderr
+    assert "installed=" not in stdout
