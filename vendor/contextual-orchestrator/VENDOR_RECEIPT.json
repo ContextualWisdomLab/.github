@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_repository": "ContextualWisdomLab/contextual-orchestrator",
+  "source_commit": "82ea37ee2673111b0a2f25642d637a305473f642",
+  "source_files": {
+    "contextual_orchestrator/_fallback_manifest.py": "60458fbdffb180e089cf6da378c560a476635557",
+    "contextual_orchestrator/_fallback_plan.py": "8f6e0c0e328a035e613456cf7a1d14062e1c4382",
+    "contextual_orchestrator/_fallback_types.py": "8f1cafdf26ba0e2371e310d377db5c0528a88557",
+    "LICENSE": "591bbf197b355e60604618c8a8a50bc5a839b204"
+  },
+  "integration_files": {
+    "contextual_orchestrator/__init__.py": "ec227439ce0c395682d086c24e7f0246a1dc612a",
+    "contextual_orchestrator/model_fallback.py": "2d7b183184c1d13a0465d01ea93042a1426ec38c"
+  }
+}
