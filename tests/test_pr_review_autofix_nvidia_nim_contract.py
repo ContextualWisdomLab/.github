@@ -1,0 +1,67 @@
+"""Contract tests for the scheduled OpenCode review-autofix model boundary."""
+
+from pathlib import Path
+
+
+AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
+FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
+
+
+def _workflow_text(path: Path) -> str:
+    """Read one central workflow as UTF-8 text for static trust-boundary checks."""
+
+    return path.read_text(encoding="utf-8")
+
+
+def test_review_fix_scheduler_runs_once_each_hour() -> None:
+    """Keep the actionable-review repair loop on the approved hourly cadence."""
+
+    scheduler = _workflow_text(FIX_SCHEDULER_WORKFLOW)
+
+    assert 'cron: "23 * * * *"' in scheduler
+    assert 'cron: "23 */2 * * *"' not in scheduler
+
+
+def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
+    """Require the write-capable OpenCode autofix agent to use NVIDIA NIM only."""
+
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+
+    required_fragments = (
+        '"model": "nvidia-nim/mistralai/mistral-nemotron"',
+        '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
+        '"enabled_providers": ["nvidia-nim"]',
+        '"nvidia-nim": {',
+        '"npm": "@ai-sdk/openai-compatible"',
+        '"baseURL": "https://integrate.api.nvidia.com/v1"',
+        '"apiKey": "{env:NVIDIA_API_KEY}"',
+        'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
+        'MODEL: nvidia-nim/mistralai/mistral-nemotron',
+    )
+    for fragment in required_fragments:
+        assert fragment in workflow, fragment
+
+    forbidden_fragments = (
+        'STRIX_GITHUB_MODELS_TOKEN:',
+        'MODEL: github-models/',
+        'USE_GITHUB_TOKEN:',
+        '"enabled_providers": ["github-models"]',
+        '"apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"',
+        '"baseURL": "https://models.github.ai/inference"',
+    )
+    for fragment in forbidden_fragments:
+        assert fragment not in workflow, fragment
+
+
+def test_nvidia_nim_secret_is_scoped_to_the_agent_execution_step() -> None:
+    """Prevent the NVIDIA model credential from leaking into setup or mutation steps."""
+
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
+
+    assert workflow.count(binding) == 1
+    run_step = workflow.index("      - name: Run OpenCode review autofix")
+    next_step = workflow.index("      - name: Validate changed files", run_step)
+    assert binding in workflow[run_step:next_step]
+    assert binding not in workflow[:run_step]
+    assert binding not in workflow[next_step:]
