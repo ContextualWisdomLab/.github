@@ -1,0 +1,169 @@
+name: One-shot Strix security lock refresh
+
+on:
+  push:
+    branches:
+      - fix/opencode-coverage-failure-diagnostics
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-strix-security-lock-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: fix/opencode-coverage-failure-diagnostics
+
+      - name: Set up lock compiler Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-locked uv compiler
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Raise vulnerable Strix dependency floors
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          requirements = Path("requirements-strix-ci.txt")
+          content = requirements.read_text(encoding="utf-8")
+          old = (
+              "strix-agent==1.0.4\n"
+              "google-cloud-aiplatform==1.133.0\n"
+              "protobuf<7.0.0\n"
+              "cryptography==49.0.0\n"
+          )
+          new = (
+              "strix-agent==1.0.4\n"
+              "aiohttp==3.14.3\n"
+              "google-cloud-aiplatform==1.133.0\n"
+              "protobuf<7.0.0\n"
+              "cryptography==50.0.0\n"
+          )
+          if content.count(old) != 1:
+              raise SystemExit("Strix requirements did not match the reviewed security baseline")
+          requirements.write_text(content.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Regenerate the Strix hash lock from its canonical input
+        run: |
+          set -euo pipefail
+          uv pip compile \
+            --generate-hashes \
+            --python-version 3.13 \
+            --python-platform x86_64-manylinux_2_28 \
+            --output-file requirements-strix-ci-hashes.txt \
+            requirements-strix-ci.txt
+          git diff --check
+
+      - name: Set up the Strix runtime Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install and smoke-test the regenerated hash lock
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/strix-runtime"
+          "${RUNNER_TEMP}/strix-runtime/bin/python" -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r requirements-strix-ci-hashes.txt
+          "${RUNNER_TEMP}/strix-runtime/bin/python" - <<'PY'
+          import aiohttp
+          import cryptography
+          import strix
+
+          assert aiohttp.__version__ == "3.14.3", aiohttp.__version__
+          assert cryptography.__version__ == "50.0.0", cryptography.__version__
+          assert strix is not None
+          PY
+
+      - name: Set up the audit Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Audit the regenerated lock
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/pip-audit"
+          "${RUNNER_TEMP}/pip-audit/bin/python" -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            -r requirements-pip-audit-ci-hashes.txt
+          "${RUNNER_TEMP}/pip-audit/bin/pip-audit" \
+            --strict \
+            --desc=on \
+            -r requirements-strix-ci-hashes.txt
+          "${RUNNER_TEMP}/pip-audit/bin/pip-audit" \
+            --strict \
+            --desc=on \
+            -r requirements-strix-ci.txt
+
+      - name: Add a durable Strix security-lock contract test
+        run: |
+          set -euo pipefail
+          cat > tests/test_strix_dependency_security_floor.py <<'PY'
+          """Contracts for the security-reviewed Strix dependency lock."""
+
+          from __future__ import annotations
+
+          from pathlib import Path
+
+
+          def test_strix_requirements_pin_reviewed_security_versions() -> None:
+              """The canonical input pins versions that close the August 2026 advisories."""
+              requirements = Path("requirements-strix-ci.txt").read_text(encoding="utf-8")
+              assert "aiohttp==3.14.3\n" in requirements
+              assert "cryptography==50.0.0\n" in requirements
+              assert "aiohttp==3.14.1\n" not in requirements
+              assert "cryptography==49.0.0\n" not in requirements
+
+
+          def test_strix_hash_lock_matches_the_canonical_security_pins() -> None:
+              """The generated lock retains the reviewed direct security pins."""
+              lock = Path("requirements-strix-ci-hashes.txt").read_text(encoding="utf-8")
+              assert "aiohttp==3.14.3 \\\n" in lock
+              assert "cryptography==50.0.0 \\\n" in lock
+              assert "aiohttp==3.14.1 \\\n" not in lock
+              assert "cryptography==49.0.0 \\\n" not in lock
+          PY
+          python -m compileall -q tests/test_strix_dependency_security_floor.py
+
+      - name: Commit the audited lock and remove this bootstrap workflow
+        env:
+          BRANCH_NAME: fix/opencode-coverage-failure-diagnostics
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/one-shot-refresh-strix-security-lock.yml
+          git config user.name "opencode-agent[bot]"
+          git config user.email "219766164+opencode-agent[bot]@users.noreply.github.com"
+          git add \
+            requirements-strix-ci.txt \
+            requirements-strix-ci-hashes.txt \
+            tests/test_strix_dependency_security_floor.py \
+            .github/workflows/one-shot-refresh-strix-security-lock.yml
+          git diff --cached --check
+          git commit -m "fix(security): refresh vulnerable Strix dependencies"
+          git push origin "HEAD:${BRANCH_NAME}"
