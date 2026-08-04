@@ -129,6 +129,19 @@ jobs:
           test ! -e scripts/ci/bootstrap_patch_workflow.py
           test ! -e scripts/ci/bootstrap_pr703_final_repair.py
 
+      - name: Preserve verified canonical state
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr703-canonical-state-${{ env.REPAIR_SHA }}
+          path: |
+            .github/workflows/opencode-review-dispatch.yml
+            scripts/ci/npm_workspace_install_root.py
+            tests/test_npm_workspace_install_root.py
+            tests/test_npm_workspace_install_root_hardening.py
+            tests/test_opencode_agent_contract.py
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Commit verified canonical state
         shell: bash
         run: |
