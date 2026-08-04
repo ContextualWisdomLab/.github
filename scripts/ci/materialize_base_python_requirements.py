@@ -20,6 +20,7 @@ import tarfile
 import tempfile
 import urllib.parse
 import urllib.request
+from typing import Any
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -43,6 +44,33 @@ TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
 TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
+
+
+class _RejectTrustedUvRedirects(urllib.request.HTTPRedirectHandler):
+    """Reject every redirect before urllib issues a request to its target."""
+
+    def redirect_request(
+        self,
+        request: urllib.request.Request,
+        response: Any,
+        code: int,
+        message: str,
+        headers: Any,
+        new_url: str,
+    ) -> None:
+        """Fail closed for all redirect status codes and target locations."""
+        del request, response, code, message, headers, new_url
+        raise RuntimeError("trusted uv archive redirects are forbidden")
+
+
+@functools.cache
+def _install_trusted_uv_url_opener() -> None:
+    """Install one process-wide no-proxy, no-redirect opener for the fixed URL."""
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _RejectTrustedUvRedirects(),
+    )
+    urllib.request.install_opener(opener)
 
 
 def _is_candidate_lock_name(name: str) -> bool:
@@ -133,6 +161,7 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
 
 def _download_trusted_uv_archive() -> bytes:
     """Download the fixed uv release archive through one HTTPS trust boundary."""
+    _install_trusted_uv_url_opener()
     try:
         # Keep the audited URL literal at the network sink so static analysis can
         # prove that neither user data nor repository content selects a scheme,
@@ -148,7 +177,7 @@ def _download_trusted_uv_archive() -> bytes:
                 "releases.astral.sh",
             ):
                 raise RuntimeError(
-                    "trusted uv archive redirected outside releases.astral.sh"
+                    "trusted uv archive response escaped releases.astral.sh"
                 )
             payload = response.read(TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1)
     except OSError as exc:
