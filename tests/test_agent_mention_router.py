@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -17,9 +18,11 @@ MODULE_PATH = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 def load_module() -> ModuleType:
     """Load the router module from its script path."""
 
-    spec = importlib.util.spec_from_file_location("agent_mention_router", MODULE_PATH)
+    module_name = "agent_mention_router"
+    spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
