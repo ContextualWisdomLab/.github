@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -13,41 +14,66 @@ _EXPECTED_URL = (
 )
 
 
-def _download_function_text() -> str:
-    """Return only the trusted-uv download function source."""
-    module_text = _MATERIALIZER.read_text(encoding="utf-8")
-    return module_text.split(
-        "def _download_trusted_uv_archive() -> bytes:", maxsplit=1
-    )[1].split("def _verified_uv_binary", maxsplit=1)[0]
+def _module_tree() -> ast.Module:
+    """Parse the materializer without importing or executing repository code."""
+    return ast.parse(_MATERIALIZER.read_text(encoding="utf-8"), filename=str(_MATERIALIZER))
+
+
+def _download_function() -> ast.FunctionDef:
+    """Return the trusted-uv downloader function from the parsed module."""
+    for node in _module_tree().body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_download_trusted_uv_archive":
+            return node
+    raise AssertionError("trusted uv downloader function is missing")
+
+
+def _assigned_literal(name: str) -> object:
+    """Return one module-level literal assignment without evaluating code."""
+    for node in _module_tree().body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id == name:
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"module literal {name} is missing")
+
+
+def _urlopen_calls() -> list[ast.Call]:
+    """Return calls whose attribute name is exactly ``urlopen``."""
+    return [
+        node
+        for node in ast.walk(_download_function())
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "urlopen"
+    ]
 
 
 def test_urlopen_receives_one_literal_https_release_url() -> None:
     """Static analysis can prove repository or user data never selects the URL."""
-    function_text = _download_function_text()
+    calls = _urlopen_calls()
 
-    assert "urllib.request.Request" not in function_text
-    assert function_text.count("urllib.request.urlopen(") == 1
-    assert '"https://releases.astral.sh/github/uv/releases/download/0.12.1/"' in function_text
-    assert '"uv-x86_64-unknown-linux-gnu.tar.gz"' in function_text
-    assert "TRUSTED_UV_ARCHIVE_URL" not in function_text
+    assert len(calls) == 1
+    assert len(calls[0].args) == 1
+    url_argument = calls[0].args[0]
+    assert isinstance(url_argument, ast.Constant)
+    assert isinstance(url_argument.value, str)
+    assert url_argument.value == _EXPECTED_URL
 
 
 def test_literal_network_sink_matches_the_documented_release_constant() -> None:
-    """The scanner-friendly literal cannot drift from the tested release identity."""
-    module_text = _MATERIALIZER.read_text(encoding="utf-8")
-    namespace: dict[str, object] = {}
-    constant_block = module_text.split(
-        "TRUSTED_UV_ARCHIVE_URL = (", maxsplit=1
-    )[1].split(")", maxsplit=1)[0]
+    """The scanner-friendly sink literal cannot drift from the release identity."""
+    assert _assigned_literal("TRUSTED_UV_ARCHIVE_URL") == _EXPECTED_URL
 
-    exec("TRUSTED_UV_ARCHIVE_URL = (" + constant_block + ")", {}, namespace)
 
-    assert namespace["TRUSTED_UV_ARCHIVE_URL"] == _EXPECTED_URL
-    function_text = _download_function_text()
-    assert _EXPECTED_URL == "".join(
-        (
-            "https://releases.astral.sh/github/uv/releases/download/0.12.1/",
-            "uv-x86_64-unknown-linux-gnu.tar.gz",
-        )
-    )
-    assert all(part in function_text for part in _EXPECTED_URL.rsplit("/", maxsplit=1))
+def test_downloader_never_constructs_a_dynamic_request_object() -> None:
+    """The audited downloader cannot hide a dynamic URL inside ``Request``."""
+    request_calls = [
+        node
+        for node in ast.walk(_download_function())
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Request"
+    ]
+
+    assert request_calls == []
