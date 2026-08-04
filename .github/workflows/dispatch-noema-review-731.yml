@@ -1,4 +1,4 @@
-name: Dispatch Noema review for PR 731
+name: Dispatch exact-head Noema reviews
 
 on:
   push:
@@ -12,23 +12,42 @@ permissions:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Dispatch exact-head Noema review
+      - name: Dispatch exact-head Noema reviews
         env:
           GH_TOKEN: ${{ github.token }}
           API_URL: ${{ github.api_url }}
         run: |
           set -euo pipefail
-          payload='{"event_type":"noema-review","client_payload":{"target_repository":"ContextualWisdomLab/.github","pr_number":731,"pr_head_sha":"880486bb80676da2c4c9344f293a7727afe07d6b"}}'
-          curl --fail-with-body --silent --show-error \
-            -X POST \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${API_URL}/repos/ContextualWisdomLab/.github/dispatches" \
-            -d "$payload"
+          dispatch() {
+            local target_repository="$1"
+            local pr_number="$2"
+            local head_sha="$3"
+            jq -cn \
+              --arg event_type "noema-review" \
+              --arg target_repository "$target_repository" \
+              --argjson pr_number "$pr_number" \
+              --arg pr_head_sha "$head_sha" \
+              '{event_type:$event_type,client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_head_sha:$pr_head_sha}}' \
+              >"${RUNNER_TEMP}/dispatch.json"
+            curl --fail-with-body --silent --show-error \
+              -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${API_URL}/repos/ContextualWisdomLab/.github/dispatches" \
+              --data-binary "@${RUNNER_TEMP}/dispatch.json"
+          }
+
+          dispatch ContextualWisdomLab/.github 731 880486bb80676da2c4c9344f293a7727afe07d6b
+          dispatch ContextualWisdomLab/naruon 1236 ec62a45acc2a214bc4de75346fbd9f9253d67fb4
+          dispatch ContextualWisdomLab/naruon 1211 eaaf0517eccece62ccc59b5868576501a607b25a
+          dispatch ContextualWisdomLab/naruon 1206 6b8a5af5bd6630b5076eb1f5c1ac15ca7d2e1b2f
+          dispatch ContextualWisdomLab/naruon 1203 c700e188dc9ef0996d476e2c777eaf9c291d9d42
+          dispatch ContextualWisdomLab/naruon 1239 702623e80a4eebcef29dbd576c88cc0081783cde
+
           gh api \
             --method POST \
             "repos/ContextualWisdomLab/.github/issues/731/comments" \
-            -f body='Noema repository_dispatch accepted for exact head `880486bb80676da2c4c9344f293a7727afe07d6b`; awaiting the independent review verdict.'
+            -f body='Noema repository_dispatch requests were accepted for central #731 and the exact current heads of naruon #1236, #1211, #1206, #1203, and #1239. Awaiting independent review verdicts.'
