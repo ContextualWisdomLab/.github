@@ -64,10 +64,9 @@ https://integrate.api.nvidia.com/v1
 
 The primary repair model is `mistralai/mistral-nemotron`; the small model used
 for bounded helper work is `nvidia/nemotron-3-nano-30b-a3b`. NVIDIA documents
-both identifiers. Mistral-Nemotron is suitable for agentic workflows because it
-supports tool calling. Nemotron 3 Nano is a commercially usable reasoning and
-agentic model and is used as a lower-active-parameter helper, not as a fallback
-provider.
+both identifiers. Mistral-Nemotron supports tool calling for agentic workflows.
+Nemotron 3 Nano is used as a lower-active-parameter reasoning helper, not as a
+fallback provider.
 
 Only the `nvidia-nim` provider is enabled. GitHub Models configuration, model
 identifiers, base URLs, and model-auth fallbacks are absent from the scheduled
@@ -91,6 +90,23 @@ substitutes `{env:NVIDIA_API_KEY}` into provider configuration. The key is never
 written to repository files, command arguments, generated prompts, or logs. A
 missing secret is a fatal configuration error; the workflow does not fall back
 to `GITHUB_TOKEN`, a GitHub Models token, or another provider.
+
+The ordinary repair step no longer binds a GitHub write token at step scope. The
+conflict-repair shell retains GitHub credentials because the same shell must
+re-read the live PR and push a verified merge result after model execution. In
+both paths, the OpenCode child process is launched through:
+
+```text
+env -u GITHUB_TOKEN -u GH_TOKEN \
+  -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL
+```
+
+Consequently, model-controlled file operations receive the NVIDIA model
+credential and non-secret execution controls, but cannot call GitHub APIs or
+mint an OIDC token. GitHub credentials remain available only to reviewed shell
+logic before or after the child process. This reduces the consequence of prompt
+injection without removing the worker's independently validated branch-update
+capability.
 
 GitHub documents that a missing secret expression resolves to an empty string
 and recommends delivering secrets through inputs or environment variables rather
@@ -145,13 +161,16 @@ or publish a release.
 ## Independent review-agent boundary
 
 `.github/workflows/opencode-review-dispatch.yml` is not modified by this
-migration. Its read-only review credential and model-pool contract remain an
-independent control. Static tests reject the NVIDIA secret name, NVIDIA provider
-environment name, and autofix event identifier in the review workflow.
+migration. The regression contract pins that workflow's Git blob SHA
+byte-for-byte rather than inferring independence from provider-name strings.
+This allows the existing reviewer to retain its own evolving, separately
+reviewed model-pool and credential design while proving that this autofix change
+did not alter it.
 
 This is not cosmetic separation: review produces the verdict that gates merge,
-whereas autofix proposes branch changes. Keeping their credentials and workflow
-sources independent limits the blast radius of either path.
+whereas autofix proposes branch changes. Keeping their credentials, workflow
+sources, and change histories independent limits the blast radius of either
+path.
 
 ## Verification contract
 
@@ -170,9 +189,12 @@ Automated tests must prove all of the following:
    mutable `main`, and does not persist credentials.
 8. Both OpenCode permission maps explicitly deny every non-file interaction
    listed in the sandbox section.
-9. The read-only review workflow is unchanged by this migration and contains no
-   NVIDIA NIM or autofix credential/event binding.
-10. The exact current head passes complete workflow, Python, security,
+9. Both OpenCode subprocesses explicitly remove GitHub and OIDC credentials;
+   the ordinary model step has no step-level GitHub token binding.
+10. The independent review workflow retains its exact reviewed Git blob SHA and
+    contains no coupling to the autofix event.
+11. A missing NVIDIA secret fails before either model process executes.
+12. The exact current head passes complete workflow, Python, security,
     CodeRabbit, independent-review, unresolved-thread, and branch-protection
     gates before merge.
 
@@ -187,11 +209,11 @@ workflow files are not represented as active organization automation.
 ## Rollback
 
 Rollback is a normal revert of the NVIDIA transport commit. A rollback must not
-reintroduce an implicit GitHub-token model-auth fallback, a mutable trusted
-source checkout, permissive unattended-agent tools, or any change to the
-independent review-agent credential system. If NVIDIA NIM is unavailable,
-scheduled autofix must fail closed while review, checks, and manual maintenance
-remain available.
+reintroduce an implicit GitHub-token model-auth fallback, GitHub or OIDC
+credentials inside the model child process, a mutable trusted source checkout,
+permissive unattended-agent tools, or any change to the independent review-agent
+credential system. If NVIDIA NIM is unavailable, scheduled autofix must fail
+closed while review, checks, and manual maintenance remain available.
 
 ## References
 
