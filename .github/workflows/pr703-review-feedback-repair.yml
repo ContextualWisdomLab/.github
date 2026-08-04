@@ -1,0 +1,237 @@
+name: Repair PR 703 review feedback
+
+on:
+  push:
+    branches:
+      - fix/npm-workspace-coverage-root
+    paths:
+      - .github/workflows/pr703-review-feedback-repair.yml
+
+concurrency:
+  group: pr703-review-feedback-repair
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout guarded PR branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Apply exact current-head review findings
+        env:
+          EXPECTED_PARENT_SHA: b824259d3503fd357bf38ec7ce5a855f67005e1b
+          REPAIR_WORKFLOW: .github/workflows/pr703-review-feedback-repair.yml
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
+          test "$(git diff --name-only "$EXPECTED_PARENT_SHA"...HEAD)" = "$REPAIR_WORKFLOW"
+
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import re
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          diagnostics = [
+              'Selected npm package directory is not a safe repository-relative path.',
+              'Selected npm package directory must be a real non-symlink directory.',
+              'Could not canonicalize the selected npm package directory.',
+              'Selected npm package directory escaped the validated coverage worktree.',
+              'Could not resolve a validated npm workspace lock owner for ${selected_package_dir}.',
+              'Resolved npm workspace lock owner is not a safe repository-relative path.',
+              'Resolved npm workspace lock owner must be a real non-symlink directory.',
+              'Could not canonicalize the resolved npm workspace lock owner.',
+              'Resolved npm workspace lock owner escaped the validated coverage worktree.',
+          ]
+          for diagnostic in diagnostics:
+              source = f'echo "::error::{diagnostic}"'
+              target = f'{source} >&2'
+              if workflow.count(target) == 1:
+                  continue
+              if workflow.count(source) != 1:
+                  raise SystemExit(f'unexpected diagnostic occurrence count for: {diagnostic}')
+              workflow = workflow.replace(source, target, 1)
+          for diagnostic in diagnostics:
+              if workflow.count(f'echo "::error::{diagnostic}" >&2') != 1:
+                  raise SystemExit(f'diagnostic was not redirected exactly once: {diagnostic}')
+          workflow_path.write_text(workflow, encoding='utf-8')
+
+          test_path = Path('tests/test_npm_workspace_install_root.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          old_imports = '''import json
+import subprocess
+from pathlib import Path
+'''
+          new_imports = '''import json
+from pathlib import Path, PurePosixPath
+'''
+          if old_imports not in test_text:
+              raise SystemExit('expected test import block was not found')
+          test_text = test_text.replace(old_imports, new_imports, 1)
+
+          production_import = (
+              'from scripts.ci.npm_workspace_install_root import '
+              'ResolutionError, resolve_install_root\n'
+          )
+          support_import = (
+              'from tests.npm_workspace_test_support import '
+              'commit_all, run_git, write_json\n'
+          )
+          if support_import not in test_text:
+              if production_import not in test_text:
+                  raise SystemExit('production resolver import was not found')
+              test_text = test_text.replace(
+                  production_import,
+                  production_import + support_import,
+                  1,
+              )
+
+          helper_start = test_text.index('def _git(')
+          helper_end = test_text.index('def _workspace(', helper_start)
+          init_repo = '''def _init_repo(repo: Path) -> None:
+    """Initialize a deterministic local Git repository for one test."""
+    repo.mkdir(parents=True, exist_ok=True)
+    run_git(repo, "init", "-q")
+    run_git(repo, "config", "user.email", "tests@example.invalid")
+    run_git(repo, "config", "user.name", "Coverage Tests")
+
+
+'''
+          test_text = test_text[:helper_start] + init_repo + test_text[helper_end:]
+          test_text = re.sub(r'(?<![\w.])_write_json\(', 'write_json(', test_text)
+          test_text = re.sub(r'(?<![\w.])_commit\(', 'commit_all(', test_text)
+          test_text = re.sub(r'(?<![\w.])_git\(', 'run_git(', test_text)
+          test_text = test_text.replace('module.PurePosixPath(', 'PurePosixPath(')
+
+          workspace_test = '''@pytest.mark.parametrize(
+    "package_data",
+    [
+        {"workspaces": "apps/*"},
+        {"workspaces": {}},
+    ],
+)
+def test_workspace_patterns_ignore_unsupported_declarations(
+    package_data: dict[str, object],
+) -> None:
+    """Unsupported npm workspace declaration shapes yield no trusted patterns."""
+    assert module._workspace_patterns(package_data) == []
+
+
+'''
+          insertion_marker = '''@pytest.mark.parametrize(
+    ("git_output", "match"),
+'''
+          if 'def test_workspace_patterns_ignore_unsupported_declarations(' not in test_text:
+              if insertion_marker not in test_text:
+                  raise SystemExit('tree metadata test insertion marker was not found')
+              test_text = test_text.replace(
+                  insertion_marker,
+                  workspace_test + insertion_marker,
+                  1,
+              )
+
+          forbidden = [
+              'def _git(',
+              'def _write_json(',
+              'def _commit(',
+              'module.PurePosixPath(',
+              'import subprocess\n',
+          ]
+          for marker in forbidden:
+              if marker in test_text:
+                  raise SystemExit(f'superseded test fixture marker remains: {marker}')
+          required = [
+              'def _init_repo(',
+              'commit_all(repo)',
+              'run_git(repo, "init", "-q")',
+              'write_json(repo / "package.json"',
+              'PurePosixPath("package.json")',
+              'def test_workspace_patterns_ignore_unsupported_declarations(',
+          ]
+          for marker in required:
+              if marker not in test_text:
+                  raise SystemExit(f'required repaired test marker is absent: {marker}')
+          test_path.write_text(test_text, encoding='utf-8')
+
+          Path('.github/workflows/pr703-review-feedback-repair.yml').unlink()
+          PY
+
+          actual_files="$(git diff --name-only "$EXPECTED_PARENT_SHA" -- | sort)"
+          expected_files="$(printf '%s\n' \
+            .github/workflows/opencode-review-dispatch.yml \
+            tests/test_npm_workspace_install_root.py | sort)"
+          test "$actual_files" = "$expected_files"
+          git diff --check
+
+      - name: Install hash-locked verification tools
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            --require-hashes \
+            -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify resolver and central contracts
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            scripts/ci/npm_workspace_install_root.py \
+            tests/npm_workspace_test_support.py \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py
+          python -m pytest -q \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py
+          python -m pytest -q \
+            --cov=scripts.ci.npm_workspace_install_root \
+            --cov-branch \
+            --cov-report=term-missing \
+            --cov-fail-under=100 \
+            tests/test_npm_workspace_install_root.py \
+            tests/test_npm_workspace_install_root_hardening.py
+          python -m pytest -q tests/test_opencode_agent_contract.py
+          interrogate -c pyproject.toml scripts/ci/npm_workspace_install_root.py
+          git diff --check
+
+      - name: Commit verified repair
+        env:
+          EXPECTED_PARENT_SHA: b824259d3503fd357bf38ec7ce5a855f67005e1b
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          actual_files="$(git diff --cached --name-only | sort)"
+          expected_files="$(printf '%s\n' \
+            .github/workflows/opencode-review-dispatch.yml \
+            .github/workflows/pr703-review-feedback-repair.yml \
+            tests/test_npm_workspace_install_root.py | sort)"
+          test "$actual_files" = "$expected_files"
+          git commit -m "fix(coverage): address resolver review feedback"
+
+          final_files="$(git diff --name-only "$EXPECTED_PARENT_SHA"...HEAD | sort)"
+          expected_final_files="$(printf '%s\n' \
+            .github/workflows/opencode-review-dispatch.yml \
+            tests/test_npm_workspace_install_root.py | sort)"
+          test "$final_files" = "$expected_final_files"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
