@@ -1,0 +1,96 @@
+name: Refresh Strix security lock
+
+on:
+  push:
+    branches: [fix/npm-workspace-coverage-root]
+    paths:
+      - .github/workflows/refresh-strix-security-lock.yml
+  workflow_dispatch:
+
+concurrency:
+  group: refresh-strix-security-lock
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.actor != 'github-actions[bot]'
+      && github.ref_name == 'fix/npm-workspace-coverage-root'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact feature branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/npm-workspace-coverage-root
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.8.6"
+          enable-cache: false
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          check-latest: false
+
+      - name: Refresh vulnerable Strix dependencies
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("requirements-strix-ci.txt")
+          text = path.read_text(encoding="utf-8")
+          old = "cryptography==49.0.0\n"
+          new = "cryptography==50.0.0\n"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one cryptography 49.0.0 pin, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          uv pip compile \
+            --generate-hashes \
+            --upgrade \
+            --python-version 3.13 \
+            --python-platform x86_64-manylinux_2_28 \
+            --output-file requirements-strix-ci-hashes.txt \
+            requirements-strix-ci.txt
+
+      - name: Verify regenerated lock and vulnerability gate
+        run: |
+          set -euo pipefail
+          grep -F 'cryptography==50.0.0' requirements-strix-ci.txt >/dev/null
+          grep -F 'cryptography==50.0.0' requirements-strix-ci-hashes.txt >/dev/null
+          grep -F 'aiohttp==3.14.3' requirements-strix-ci-hashes.txt >/dev/null
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r requirements-pip-audit-ci-hashes.txt
+          pip-audit --strict --desc=on -r requirements-strix-ci-hashes.txt
+          git diff --check
+
+      - name: Commit regenerated dependency inputs
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements-strix-ci.txt requirements-strix-ci-hashes.txt
+          git diff --cached --check
+          git commit -m "fix(deps): update Strix cryptography and aiohttp"
+          git push origin HEAD:refs/heads/fix/npm-workspace-coverage-root
