@@ -60,13 +60,13 @@ and independent-review gates before merge.
 
 ## References (APA 7th edition)
 
-GitHub. (2026). *Contexts reference: Job context*. GitHub Docs. Retrieved August
+GitHub. (n.d.). *Contexts reference: Job context*. GitHub Docs. Retrieved August
 4, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context
 
-GitHub. (2026). *Reusing workflow configurations*. GitHub Docs. Retrieved August
+GitHub. (n.d.). *Reusing workflow configurations*. GitHub Docs. Retrieved August
 4, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
 
-GitHub. (2026). *Reusing workflows*. GitHub Docs. Retrieved August 4, 2026, from
+GitHub. (n.d.). *Reusing workflows*. GitHub Docs. Retrieved August 4, 2026, from
 https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows
