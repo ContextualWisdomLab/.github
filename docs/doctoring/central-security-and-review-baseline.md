@@ -18,7 +18,10 @@ same protected-branch decision:
 3. Trusted-base Python dependency preflight defers only narrowly classified
    incomplete closures, interpreter incompatibility, or binary-unavailable and
    stale pins proven by paired diagnostics for the same exact requirement on a
-   reachable index; mixed integrity, transport, or unknown errors fail closed.
+   reachable index. Every comma-separated alternative must be a concrete,
+   conservatively recognized PEP 440 version; blank values, `none`, arbitrary
+   prose, mixed version/prose lists, integrity, transport, and unknown errors
+   fail closed.
 4. Default-branch pushes submit dependency snapshots so pull-request dependency
    review compares a head snapshot with a real base snapshot.
 5. Review repair runs once per hour, dispatches at most one bounded repair job,
@@ -63,10 +66,13 @@ The exact pull-request head must prove:
 
 - one immutable CodeQL revision per affected workflow;
 - the central hash lock installs and vulnerability scanners accept it;
-- stale-pin deferral requires concrete reachable-index evidence and matching
-  exact-requirement resolver diagnostics;
-- blank, `none`, single-sided or mismatched resolver evidence, integrity, retry,
-  transport, mixed-unknown, and unclassified installer failures remain fatal;
+- stale-pin deferral requires paired exact-requirement resolver diagnostics and
+  a nonempty list in which every alternative is a conservatively valid PEP 440
+  version, including epoch, prerelease, postrelease, development, and local
+  forms used by pip;
+- blank, `none`, arbitrary prose, mixed version/prose lists, single-sided or
+  mismatched resolver evidence, integrity, retry, transport, mixed-unknown, and
+  unclassified installer failures remain fatal;
 - the changed installer has 100% statement and branch coverage and 100%
   production docstrings;
 - default-branch snapshot triggers, commit-SHA concurrency, and job-scoped write
