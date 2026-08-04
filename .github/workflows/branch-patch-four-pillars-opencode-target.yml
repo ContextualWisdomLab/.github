@@ -77,20 +77,25 @@ jobs:
           documentation = Path("docs/org-required-workflow-rollout.md")
           text = documentation.read_text(encoding="utf-8")
           marker = "## Explicit OpenCode dispatch enrollments"
-          section = """
-
-## Explicit OpenCode dispatch enrollments
-
-The privileged dispatcher preserves the configurable exact-repository list in
-`OPENCODE_REPOSITORY_DISPATCH_TARGETS` and also explicitly enrolls
-`ContextualWisdomLab/four-pillars`. This repository ships the standalone Four
-Pillars service and consumes the same central current-head OpenCode, independent
-Noema, and guarded merge chain as organization modules. Enrollment remains an
-exact `owner/name` match; no organization wildcard or fork authorization is
-introduced.
-"""
+          section_lines = [
+              "",
+              "",
+              marker,
+              "",
+              "The privileged dispatcher preserves the configurable exact-repository list in",
+              "`OPENCODE_REPOSITORY_DISPATCH_TARGETS` and also explicitly enrolls",
+              "`ContextualWisdomLab/four-pillars`. This repository ships the standalone Four",
+              "Pillars service and consumes the same central current-head OpenCode, independent",
+              "Noema, and guarded merge chain as organization modules. Enrollment remains an",
+              "exact `owner/name` match; no organization wildcard or fork authorization is",
+              "introduced.",
+              "",
+          ]
           if marker not in text:
-              documentation.write_text(text.rstrip() + section + "\n", encoding="utf-8")
+              documentation.write_text(
+                  text.rstrip() + "\n".join(section_lines),
+                  encoding="utf-8",
+              )
           PY
       - name: Remove the one-use branch patch workflow
         run: git rm .github/workflows/branch-patch-four-pillars-opencode-target.yml
