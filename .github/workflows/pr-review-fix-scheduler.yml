@@ -44,7 +44,7 @@ on:
         default: ""
         type: string
       canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for scheduler code
+        description: Immutable ContextualWisdomLab/.github commit used for scheduler code, or main for central self-runs
         required: false
         default: "main"
         type: string
@@ -83,8 +83,16 @@ jobs:
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
-      CANONICAL_REF: main
+      CANONICAL_REF: ${{ github.event.client_payload.canonical_ref || inputs.canonical_ref || 'main' }}
     steps:
+      - name: Validate canonical scheduler ref
+        run: |
+          set -euo pipefail
+          if [ "$CANONICAL_REF" != "main" ] && ! [[ "$CANONICAL_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::canonical_ref must be main for central self-runs or an immutable 40-character commit SHA."
+            exit 1
+          fi
+
       - name: Checkout canonical scheduler
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
