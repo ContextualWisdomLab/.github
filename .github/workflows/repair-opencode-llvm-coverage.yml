@@ -1,0 +1,142 @@
+name: Repair OpenCode LLVM coverage tooling
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-opencode-llvm-coverage-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/opencode-llvm-coverage-tools' &&
+      github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact audited parent and trigger-only delta
+        env:
+          EXPECTED_PARENT: 3f65dbee6672b78802e7d71d49c390f3817bb03b
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "${EXPECTED_PARENT}"
+          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/repair-opencode-llvm-coverage.yml"
+
+      - name: Prove the missing-tool regression before repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          source = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+              encoding="utf-8"
+          )
+          required = (
+              "ENV LLVM_COV=/usr/bin/llvm-cov-19",
+              "ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19",
+              'RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"',
+          )
+          if all(value in source for value in required):
+              raise SystemExit("expected the pre-repair workflow to lack LLVM tool bindings")
+          print("Confirmed RED: the trusted coverage image lacks complete LLVM tool bindings.")
+
+      - name: Add compatible LLVM coverage tools and permanent contract test
+        shell: python
+        run: |
+          from pathlib import Path
+
+          workflow_path = Path(".github/workflows/opencode-review-dispatch.yml")
+          source = workflow_path.read_text(encoding="utf-8")
+          slash = chr(92)
+          old_packages = (
+              f"              r-cran-testthat {slash}\n"
+              f"              rustc {slash}\n"
+              f"              util-linux {slash}\n"
+          )
+          new_packages = (
+              f"              r-cran-testthat {slash}\n"
+              f"              llvm-19 {slash}\n"
+              f"              rustc {slash}\n"
+              f"              util-linux {slash}\n"
+          )
+          old_runtime = (
+              "            && rm -rf /var/lib/apt/lists/*\n"
+              "          RUN curl --proto '=https'"
+          )
+          new_runtime = (
+              "            && rm -rf /var/lib/apt/lists/*\n"
+              "          ENV LLVM_COV=/usr/bin/llvm-cov-19\n"
+              "          ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19\n"
+              '          RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"\n'
+              "          RUN curl --proto '=https'"
+          )
+          if source.count(old_packages) != 1:
+              raise SystemExit(
+                  f"expected one Rust package anchor, found {source.count(old_packages)}"
+              )
+          if source.count(old_runtime) != 1:
+              raise SystemExit(
+                  f"expected one Docker runtime anchor, found {source.count(old_runtime)}"
+              )
+          source = source.replace(old_packages, new_packages, 1)
+          source = source.replace(old_runtime, new_runtime, 1)
+          workflow_path.write_text(source, encoding="utf-8")
+
+          test_path = Path("tests/test_opencode_agent_contract.py")
+          tests = test_path.read_text(encoding="utf-8")
+          test_name = "test_opencode_coverage_image_provisions_compatible_llvm_tools"
+          if test_name in tests:
+              raise SystemExit(f"{test_name} already exists")
+          tests = tests.rstrip() + '''\n\n\ndef test_opencode_coverage_image_provisions_compatible_llvm_tools():\n    """Keep Rust coverage independent of a rustup-managed toolchain."""\n    workflow = Path(\n        ".github/workflows/opencode-review-dispatch.yml"\n    ).read_text(encoding="utf-8")\n\n    assert "              llvm-19 " + chr(92) in workflow\n    assert "ENV LLVM_COV=/usr/bin/llvm-cov-19" in workflow\n    assert "ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19" in workflow\n    assert 'RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"' in workflow\n''' 
+          test_path.write_text(tests, encoding="utf-8")
+
+      - name: Validate the repaired contract
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q tests
+          python3 <<'PY'
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+              encoding="utf-8"
+          )
+          assert "              llvm-19 " + chr(92) in workflow
+          assert "ENV LLVM_COV=/usr/bin/llvm-cov-19" in workflow
+          assert "ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19" in workflow
+          assert 'RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"' in workflow
+          PY
+          git diff --check
+
+      - name: Commit validated repair and remove workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/opencode-llvm-coverage-tools
+          test "$(git rev-parse origin/fix/opencode-llvm-coverage-tools)" = "${ORIGINAL_HEAD}"
+          rm .github/workflows/repair-opencode-llvm-coverage.yml
+          test "$(git diff --name-only | sort)" = $'.github/workflows/opencode-review-dispatch.yml\n.github/workflows/repair-opencode-llvm-coverage.yml\ntests/test_opencode_agent_contract.py'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/opencode-review-dispatch.yml \
+            .github/workflows/repair-opencode-llvm-coverage.yml \
+            tests/test_opencode_agent_contract.py
+          git diff --cached --check
+          git commit -m "ci(opencode-review): provision LLVM coverage tools"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease=refs/heads/fix/opencode-llvm-coverage-tools:${ORIGINAL_HEAD} \
+            origin HEAD:refs/heads/fix/opencode-llvm-coverage-tools
