@@ -68,6 +68,9 @@ jobs:
             > tests/test_materialize_base_python_requirements.py
           chmod 0755 scripts/ci/materialize_base_python_requirements.py
 
+          sha256sum \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_materialize_base_python_requirements.py
           printf '%s  %s\n' "$EXPECTED_SCRIPT_SHA256" scripts/ci/materialize_base_python_requirements.py \
             | sha256sum --check --strict
           printf '%s  %s\n' "$EXPECTED_TEST_SHA256" tests/test_materialize_base_python_requirements.py \
