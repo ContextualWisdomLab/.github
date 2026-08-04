@@ -30,8 +30,8 @@ def test_emit_result_redacts_payload_fields(capsys, tmp_path) -> None:
         backend_cmd = f"echo {api_key}"
         frontend_cmd = f"echo {session_key}"
         e2e_cmd = f"echo {password}"
-        allow_env: list[str] = []
-        evidence_note = "used nothing_sensitive"
+        allow_env: tuple[str, ...] = ()
+        evidence_note = f"used {api_key}"
         network = "default"
         keep_sandbox = True
 
@@ -46,6 +46,7 @@ def test_emit_result_redacts_payload_fields(capsys, tmp_path) -> None:
     )
     captured = capsys.readouterr()
     assert "[REDACTED]" in captured.out
+    assert api_key not in captured.out
     assert "mock_token_string" not in captured.out
     assert "mock_session_value" not in captured.out
     assert "mock_password_value" not in captured.out
