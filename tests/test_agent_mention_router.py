@@ -10,7 +10,6 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 
@@ -25,6 +24,18 @@ def load_module() -> ModuleType:
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def receipt(comment_id: int, *, trusted: bool = True) -> dict:
+    """Build one trusted or attacker-controlled receipt-looking comment."""
+
+    return {
+        "body": f"<!-- cwl-agent-mention-receipt:{comment_id} -->",
+        "user": {
+            "login": "github-actions[bot]" if trusted else "attacker",
+            "type": "Bot" if trusted else "User",
+        },
+    }
 
 
 def event(
@@ -100,9 +111,7 @@ def test_exact_mentions_and_parse_event() -> None:
         },
         {
             **event("@opencode-agent"),
-            "conversation_comments": [
-                {"body": "<!-- cwl-agent-mention-receipt:91 -->"}
-            ],
+            "conversation_comments": [receipt(91)],
         },
     ],
 )
@@ -112,6 +121,14 @@ def test_parse_event_ignores_untrusted_irrelevant_or_processed_comments(
     """Untrusted, irrelevant, non-PR, and acknowledged comments are ignored."""
 
     assert load_module().parse_event(payload) is None
+
+
+def test_untrusted_receipt_marker_cannot_suppress_invocation() -> None:
+    """A user-authored marker does not acknowledge a trusted invocation."""
+
+    payload = event("@opencode-agent")
+    payload["conversation_comments"] = [receipt(91, trusted=False)]
+    assert load_module().parse_event(payload) is not None
 
 
 @pytest.mark.parametrize(
@@ -149,9 +166,13 @@ def test_receipt_and_allowlist_helpers() -> None:
     with pytest.raises(ValueError, match="positive"):
         module.receipt_marker(0)
     comments = [
-        {"body": "<!-- cwl-agent-mention-receipt:91 -->"},
-        {"body": "x <!-- cwl-agent-mention-receipt:92 --> y"},
-        {"body": None},
+        receipt(91),
+        {
+            "body": "x <!-- cwl-agent-mention-receipt:92 --> y",
+            "user": {"login": "github-actions[bot]", "type": "Bot"},
+        },
+        receipt(93, trusted=False),
+        {"body": None, "user": {"login": "github-actions[bot]", "type": "Bot"}},
     ]
     assert module.processed_comment_ids(comments) == frozenset({91, 92})
     assert module.parse_repository_allowlist(
@@ -233,7 +254,6 @@ def test_dispatch_rejects_unallowlisted_opencode_and_supports_dry_run(
     ) == ()
     assert central.calls == []
     assert "Rejected @opencode-agent" in target.calls[-1][1]["body"]
-
     target = FakeClient()
     central = FakeClient()
     assert module.dispatch_request(
@@ -286,7 +306,6 @@ def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
     assert "secret-token" not in command
     assert kwargs["env"]["GH_TOKEN"] == "secret-token"
     assert kwargs["input"] == '{"a": 1}'
-
     monkeypatch.setattr(
         module.subprocess,
         "run",
@@ -303,14 +322,12 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     array_path.write_text(json.dumps(["bad"]), encoding="utf-8")
     with pytest.raises(ValueError, match="JSON object"):
         module.load_event(str(array_path))
-
     ignored_path = tmp_path / "ignored.json"
     ignored_path.write_text(json.dumps(event("nothing")), encoding="utf-8")
     assert module.main(["--event-path", str(ignored_path)]) == 0
     assert "nothing to dispatch" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         module.main([])
-
     valid_path = tmp_path / "valid.json"
     valid_path.write_text(json.dumps(event("@opencode-agent")), encoding="utf-8")
     captured = []
