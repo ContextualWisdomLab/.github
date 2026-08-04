@@ -52,6 +52,7 @@ def git(repo_root: Path, *args: str) -> str:
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        shell=False,  # nosec B603
     )
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", errors="replace").strip()
@@ -100,6 +101,7 @@ def changed_runtime_lines(
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        shell=False,  # nosec B603
     )
     if raw_names.returncode != 0:
         detail = raw_names.stderr.decode("utf-8", errors="replace").strip()

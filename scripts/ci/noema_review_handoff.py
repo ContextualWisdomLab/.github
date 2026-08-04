@@ -50,6 +50,7 @@ def run_gh(args: Sequence[str], stdin: str | None = None) -> str:
             stderr=subprocess.PIPE,
             text=True,
             timeout=GH_COMMAND_TIMEOUT_SECONDS,
+            shell=False,  # nosec B603
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(

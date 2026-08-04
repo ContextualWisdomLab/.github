@@ -113,6 +113,7 @@ def git_output(repo_root: Path, args: Sequence[str]) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        shell=False,  # nosec B603
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "git command failed"

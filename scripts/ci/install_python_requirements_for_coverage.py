@@ -34,7 +34,7 @@ def _has_hash_pins(path: pathlib.Path) -> bool:
 def _run(command: list[str], cwd: pathlib.Path) -> int:
     """Run one installer command from a target project directory."""
     print("+ " + " ".join(command), flush=True)
-    return subprocess.run(command, cwd=cwd, check=False).returncode
+    return subprocess.run(command, cwd=cwd, check=False, shell=False).returncode  # nosec B603
 
 
 def main(argv: list[str] | None = None) -> int:

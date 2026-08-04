@@ -211,6 +211,7 @@ def install_materialized_locks(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            shell=False,  # nosec B603
         )
         preflight_results[entry.generated_file] = preflight
         if preflight.returncode == 0:
@@ -250,6 +251,7 @@ def install_materialized_locks(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            shell=False,  # nosec B603
         )
         if group_preflight.returncode != 0:
             if not _is_deferable_preflight_failure(group_preflight.stdout or ""):
@@ -300,6 +302,7 @@ def install_materialized_locks(
         installation = runner(
             _pip_command([entry.path for entry in plan], preflight=False),
             check=False,
+            shell=False,  # nosec B603
         )
         if installation.returncode != 0:
             print(

@@ -73,6 +73,7 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        shell=False,  # nosec B603
     )
     if completed.returncode != 0:
         stderr = completed.stderr.decode("utf-8", errors="replace").strip()
