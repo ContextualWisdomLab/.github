@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import ModuleType
 from typing import Callable
@@ -109,3 +110,106 @@ def test_failure_diagnostics_are_optional_outside_github_actions(
 
     assert _run_main(module, tmp_path) == 1
     assert not (tmp_path / "github-output").exists()
+
+
+def test_javascript_tree_filter_continues_after_non_regular_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Symlinks and gitlinks cannot hide later regular lock inputs."""
+    tree_output = (
+        b"120000 blob " + (b"1" * 40) + b"\tsymlinked-lock\0"
+        b"160000 commit " + (b"2" * 40) + b"\tvendored-module\0"
+        b"100644 blob " + (b"3" * 40) + b"\tpackage.json\0"
+    )
+    monkeypatch.setattr(
+        javascript_materializer,
+        "_git",
+        lambda *_args: tree_output,
+    )
+
+    assert javascript_materializer._regular_base_paths(tmp_path, "a" * 40) == {
+        "package.json"
+    }
+
+
+def test_npm_project_without_packages_map_keeps_root_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy npm locks without a packages map still preserve trusted root inputs."""
+    regular_paths = {"package.json", "package-lock.json"}
+    lock_content = json.dumps({"name": "legacy", "lockfileVersion": 1}).encode()
+    monkeypatch.setattr(
+        javascript_materializer,
+        "_regular_base_paths",
+        lambda *_args: regular_paths,
+    )
+
+    def fake_git(_repo_root: Path, _command: str, object_spec: str) -> bytes:
+        if object_spec.endswith(":package.json"):
+            return b'{"name":"legacy"}'
+        if object_spec.endswith(":package-lock.json"):
+            return lock_content
+        raise AssertionError(f"unexpected git object: {object_spec}")
+
+    monkeypatch.setattr(javascript_materializer, "_git", fake_git)
+
+    projects = javascript_materializer.base_npm_projects(tmp_path, "a" * 40)
+
+    assert projects == [
+        (
+            "package-lock.json",
+            "npm",
+            {
+                "package.json": b'{"name":"legacy"}',
+                "package-lock.json": lock_content,
+            },
+        )
+    ]
+
+
+def test_npm_workspace_scan_iterates_multiple_regular_manifests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every regular workspace manifest is copied from the validated revision."""
+    regular_paths = {
+        "package.json",
+        "package-lock.json",
+        "packages/alpha/package.json",
+        "packages/beta/package.json",
+    }
+    lock_content = json.dumps(
+        {
+            "name": "workspace-root",
+            "lockfileVersion": 3,
+            "packages": {
+                "": {"name": "workspace-root"},
+                "packages/alpha": {"name": "alpha"},
+                "packages/beta": {"name": "beta"},
+            },
+        }
+    ).encode()
+    blobs = {
+        "package.json": b'{"name":"workspace-root"}',
+        "package-lock.json": lock_content,
+        "packages/alpha/package.json": b'{"name":"alpha"}',
+        "packages/beta/package.json": b'{"name":"beta"}',
+    }
+    monkeypatch.setattr(
+        javascript_materializer,
+        "_regular_base_paths",
+        lambda *_args: regular_paths,
+    )
+
+    def fake_git(_repo_root: Path, _command: str, object_spec: str) -> bytes:
+        return blobs[object_spec.split(":", 1)[1]]
+
+    monkeypatch.setattr(javascript_materializer, "_git", fake_git)
+
+    projects = javascript_materializer.base_npm_projects(tmp_path, "a" * 40)
+
+    assert len(projects) == 1
+    assert projects[0][2]["packages/alpha/package.json"] == b'{"name":"alpha"}'
+    assert projects[0][2]["packages/beta/package.json"] == b'{"name":"beta"}'
