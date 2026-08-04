@@ -103,19 +103,19 @@ mitigating the risk of software vulnerabilities* (Initial Public Draft, NIST SP
 800-218 Rev. 1). National Institute of Standards and Technology.
 https://doi.org/10.6028/NIST.SP.800-218r1.ipd
 
-GitHub. (n.d.). *Contexts reference*. GitHub Docs. Retrieved August 5, 2026,
+GitHub. (n.d.). *Contexts reference*. GitHub Docs. Retrieved August 4, 2026,
 from
 https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
 
 GitHub. (n.d.). *Reusing workflow configurations*. GitHub Docs. Retrieved August
-5, 2026, from
+4, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
 
-GitHub. (n.d.). *Troubleshooting workflows*. GitHub Docs. Retrieved August 5,
+GitHub. (n.d.). *Troubleshooting workflows*. GitHub Docs. Retrieved August 4,
 2026, from https://docs.github.com/en/actions/how-tos/troubleshoot-workflows
 
 GitHub. (n.d.). *Using the dependency submission API*. GitHub Docs. Retrieved
-August 5, 2026, from
+August 4, 2026, from
 https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/use-dependency-submission-api
 
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure software development
