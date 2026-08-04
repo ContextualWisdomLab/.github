@@ -1,0 +1,69 @@
+name: PR 709 finalize least-privilege automation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-709-finalize-least-privilege-automation
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: github.event.pull_request.head.ref == 'ops/naruon-hourly-commercial-readiness-20260803'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout pull request branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ops/naruon-hourly-commercial-readiness-20260803
+          fetch-depth: 0
+
+      - name: Materialize retained workflows and contracts
+        run: python scripts/ci/pr709_finalize.py
+
+      - name: Validate YAML and automation contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.safe_load(File.read(path), aliases: true) }' \
+            .github/workflows/naruon-commercial-readiness-hourly.yml \
+            .github/workflows/naruon-commercial-readiness-development.yml
+          python -m pytest -q \
+            tests/test_naruon_commercial_readiness_hourly_contract.py \
+            tests/test_required_workflow_queue_contract.py
+          python -m pytest -q
+          git diff --check
+          test ! -e .github/workflows/pr709-commercial-readiness-hardening-v2.yml
+          test ! -e .github/workflows/pr709-least-privilege-repair.yml
+          test ! -e .github/workflows/pr709-finalize-commercial-readiness.yml
+          test ! -e scripts/ci/bootstrap_naruon_commercial_readiness_hardening_v2.py
+          test ! -e scripts/ci/pr709_finalize.py
+          agent_block="$(sed -n '/name: Run one commercial-readiness implementation slice/,/name: Validate bounded changed-file/p' .github/workflows/naruon-commercial-readiness-development.yml)"
+          ! grep -q 'GITHUB_TOKEN:' <<<"$agent_block"
+          ! grep -q 'USE_GITHUB_TOKEN:' <<<"$agent_block"
+
+      - name: Commit final exact scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -- .github/workflows/pr709-finalize-least-privilege.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(automation): enforce least-privilege hourly loop"
+          git push origin HEAD:ops/naruon-hourly-commercial-readiness-20260803
