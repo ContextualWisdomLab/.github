@@ -1185,6 +1185,12 @@ pull_request_scope_context_files() {
 	for changed_file in "$@"; do
 		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
 		case "$normalized_changed_file" in
+		# Standalone support tools and their tests are not application runtime
+		# surfaces. Injecting the backend router/service inventory for these files
+		# creates an incomplete synthetic application and can turn valid imports in
+		# the real PR-head tree into false missing-module findings.
+		backend/scripts/* | backend/tests/*)
+			;;
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then
 				needs_backend_python=1
