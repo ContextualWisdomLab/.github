@@ -172,12 +172,21 @@ def _download_trusted_uv_archive() -> bytes:
             timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
         ) as response:
             final_url = urllib.parse.urlparse(response.geturl())
-            if (final_url.scheme, final_url.hostname) != (
-                "https",
-                "releases.astral.sh",
+            try:
+                final_port = final_url.port
+            except ValueError as exc:
+                raise RuntimeError(
+                    "trusted uv archive redirected outside the fixed "
+                    "releases.astral.sh HTTPS origin"
+                ) from exc
+            if (
+                (final_url.scheme, final_url.hostname)
+                != ("https", "releases.astral.sh")
+                or final_port not in (None, 443)
             ):
                 raise RuntimeError(
-                    "trusted uv archive response escaped releases.astral.sh"
+                    "trusted uv archive redirected outside the fixed "
+                    "releases.astral.sh HTTPS origin"
                 )
             payload = response.read(TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1)
     except OSError as exc:
