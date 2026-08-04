@@ -38,6 +38,15 @@ DEFERABLE_PREFLIGHT_FAILURES = (
         re.IGNORECASE,
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
+    # A base lock can pin a version that has since been yanked or that offers no
+    # wheel for the pinned coverage-image interpreter. pip proves the index was
+    # reachable only when it lists at least one concrete version. Empty lists,
+    # ``none``, and unreachable-index diagnostics remain fatal.
+    re.compile(
+        r"Could not find a version that satisfies the requirement[^\n]*"
+        r"\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
+        re.IGNORECASE,
+    ),
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -150,12 +159,16 @@ def _is_deferable_preflight_failure(output: str) -> bool:
     """Return whether a failed candidate may be grouped or safely skipped.
 
     A hash-bearing supplement can fail pip's independent-closure check because a
-    transitive pin/hash lives in a sibling lock, and a base lock can explicitly
-    reject the pinned coverage-image interpreter. Those states are safe to
-    recover through a same-directory group or defer to the later networkless
-    coverage run. Hash mismatches, resolver crashes, empty diagnostics, and
-    registry/network failures remain fatal so a broken trusted build cannot be
-    mistaken for an optional lock.
+    transitive pin/hash lives in a sibling lock, a base lock can explicitly
+    reject the pinned coverage-image interpreter, and a base lock can pin a
+    version the reachable index no longer offers for that interpreter (yanked or
+    no matching wheel). Those states are safe to recover through a same-directory
+    group or defer to the later networkless coverage run. Hash mismatches,
+    resolver crashes, empty diagnostics, and registry/network failures — including
+    empty or ``none`` version lists — remain fatal so a broken trusted build cannot
+    be mistaken for an optional lock. Deferred paths retain a warning and bounded
+    pip diagnostics so the incompatibility stays visible without blocking
+    unrelated coverage evidence.
     """
     return bool(output.strip()) and any(
         pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
@@ -171,8 +184,9 @@ def _report_fatal_preflight_failure(
     """Publish one bounded, source-aware fatal preflight failure."""
     print(
         "::error::Trusted base Python lock preflight failed for "
-        f"{entry_label}; only incomplete hash closures or explicit Python "
-        "interpreter incompatibility may be deferred.",
+        f"{entry_label}; only incomplete hash closures, explicit Python "
+        "interpreter incompatibility, or a reachable-index version that is no "
+        "longer available for the coverage interpreter may be deferred.",
         file=stderr,
     )
     failure_output = _bounded_failure_output(output)
@@ -280,9 +294,8 @@ def install_materialized_locks(
         skipped += 1
         print(
             "::warning::Skipping trusted base Python requirement candidate "
-            f"{entry.source}: hash-bearing content is not an independently "
-            "installable dependency closure and no same-directory lock group "
-            "completed it.",
+            f"{entry.source}: it could not be installed independently for the "
+            "coverage interpreter and no same-directory lock group completed it.",
             file=stderr,
         )
         failure_output = _bounded_failure_output(
