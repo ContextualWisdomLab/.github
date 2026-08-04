@@ -314,8 +314,9 @@ def install_materialized_locks(
         skipped += 1
         print(
             "::warning::Skipping trusted base Python requirement candidate "
-            f"{entry.source}: it could not be installed independently for the "
-            "coverage interpreter and no same-directory lock group completed it.",
+            f"{entry.source}: it is not an independently complete dependency "
+            "closure for the coverage interpreter and no same-directory lock "
+            "group completed it.",
             file=stderr,
         )
         failure_output = _bounded_failure_output(
