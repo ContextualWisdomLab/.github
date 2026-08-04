@@ -16,7 +16,8 @@ same protected-branch decision:
 2. The central Strix dependency closure removes known-vulnerable package pins
    and remains fully hash-pinned.
 3. Trusted-base Python dependency preflight defers only narrowly classified
-   incomplete closures, interpreter incompatibility, or stale pins proven by a
+   incomplete closures, interpreter incompatibility, or binary-unavailable and
+   stale pins proven by paired diagnostics for the same exact requirement on a
    reachable index; mixed integrity, transport, or unknown errors fail closed.
 4. Default-branch pushes submit dependency snapshots so pull-request dependency
    review compares a head snapshot with a real base snapshot.
@@ -62,9 +63,10 @@ The exact pull-request head must prove:
 
 - one immutable CodeQL revision per affected workflow;
 - the central hash lock installs and vulnerability scanners accept it;
-- stale-pin deferral accepts only concrete reachable-index evidence;
-- blank, `none`, integrity, retry, transport, mixed-unknown, and unclassified
-  installer failures remain fatal;
+- stale-pin deferral requires concrete reachable-index evidence and matching
+  exact-requirement resolver diagnostics;
+- blank, `none`, single-sided or mismatched resolver evidence, integrity, retry,
+  transport, mixed-unknown, and unclassified installer failures remain fatal;
 - the changed installer has 100% statement and branch coverage and 100%
   production docstrings;
 - default-branch snapshot triggers, commit-SHA concurrency, and job-scoped write
