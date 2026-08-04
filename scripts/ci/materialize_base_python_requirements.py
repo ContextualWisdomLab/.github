@@ -4,18 +4,38 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import fnmatch
+import functools
+import hashlib
+import io
 import json
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import urllib.parse
+import urllib.request
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 UV_EXPORT_TIMEOUT_SECONDS = 120
+TRUSTED_UV_VERSION = "0.12.1"
+TRUSTED_UV_ARCHIVE_URL = (
+    "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
+    "uv-x86_64-unknown-linux-gnu.tar.gz"
+)
+TRUSTED_UV_ARCHIVE_SHA256 = (
+    "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb"
+)
+TRUSTED_UV_ARCHIVE_MEMBER = "uv-x86_64-unknown-linux-gnu/uv"
+TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
+TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
+TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
+TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
 
 
 def _is_candidate_lock_name(name: str) -> bool:
@@ -80,6 +100,98 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     return completed.stdout
 
 
+def _download_trusted_uv_archive() -> bytes:
+    """Download the fixed uv release archive through one HTTPS trust boundary."""
+    request = urllib.request.Request(
+        TRUSTED_UV_ARCHIVE_URL,
+        headers={"User-Agent": "ContextualWisdomLab-coverage/1"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(  # nosec B310 -- fixed URL plus SHA-256 pin
+            request, timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS
+        ) as response:
+            final_url = urllib.parse.urlparse(response.geturl())
+            if (final_url.scheme, final_url.hostname) != (
+                "https",
+                "releases.astral.sh",
+            ):
+                raise RuntimeError(
+                    "trusted uv archive redirected outside releases.astral.sh"
+                )
+            payload = response.read(TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1)
+    except OSError as exc:
+        raise RuntimeError(
+            f"trusted uv archive download failed: {type(exc).__name__}"
+        ) from exc
+
+    if len(payload) > TRUSTED_UV_DOWNLOAD_MAX_BYTES:
+        raise RuntimeError("trusted uv archive exceeded the bounded download size")
+    return payload
+
+
+def _verified_uv_binary(archive_payload: bytes) -> bytes:
+    """Return the bounded uv executable after archive and member verification."""
+    digest = hashlib.sha256(archive_payload).hexdigest()
+    if digest != TRUSTED_UV_ARCHIVE_SHA256:
+        raise RuntimeError("trusted uv archive checksum verification failed")
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_payload), mode="r:gz") as bundle:
+            try:
+                member = bundle.getmember(TRUSTED_UV_ARCHIVE_MEMBER)
+            except KeyError as exc:
+                raise RuntimeError("trusted uv archive omitted the uv executable") from exc
+            if not member.isfile():
+                raise RuntimeError("trusted uv archive member is not a regular file")
+            if member.size > TRUSTED_UV_BINARY_MAX_BYTES:
+                raise RuntimeError("trusted uv executable exceeded the bounded size")
+            extracted = bundle.extractfile(member)
+            if extracted is None:  # pragma: no cover - guarded by member.isfile()
+                raise AssertionError("regular tar members must be extractable")
+            binary = extracted.read(TRUSTED_UV_BINARY_MAX_BYTES + 1)
+    except tarfile.TarError as exc:
+        raise RuntimeError("trusted uv archive could not be parsed") from exc
+
+    if len(binary) != member.size:
+        raise RuntimeError("trusted uv executable size did not match its archive metadata")
+    return binary
+
+
+@functools.cache
+def _install_trusted_uv() -> str:
+    """Install and verify the pinned uv exporter once for this process."""
+    tool_dir = pathlib.Path(tempfile.mkdtemp(prefix="opencode-trusted-uv-"))
+    tool_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    uv_path = tool_dir / "uv"
+    try:
+        uv_path.write_bytes(_verified_uv_binary(_download_trusted_uv_archive()))
+        uv_path.chmod(0o755)
+        try:
+            completed = subprocess.run(
+                [str(uv_path), "--version"],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=TRUSTED_UV_VERSION_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(
+                f"trusted uv executable verification failed: {type(exc).__name__}"
+            ) from exc
+        observed = completed.stdout.decode("utf-8", errors="replace").strip()
+        if completed.returncode != 0 or observed != f"uv {TRUSTED_UV_VERSION}":
+            raise RuntimeError(
+                "trusted uv executable reported an unexpected version or exit status"
+            )
+    except Exception:
+        shutil.rmtree(tool_dir, ignore_errors=True)
+        raise
+
+    atexit.register(shutil.rmtree, tool_dir, ignore_errors=True)
+    return str(uv_path)
+
+
 def _run_uv_export(
     work_dir: pathlib.Path,
     uv_path: str,
@@ -116,46 +228,61 @@ def _run_uv_export(
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
 ) -> bytes | None:
-    """Export a base ``uv.lock`` to a hash-pinned requirements closure, or ``None``.
+    """Export one tracked base ``uv.lock`` into a trusted hash-pinned closure.
 
-    ``uv.lock`` is not a pip-installable format, so a uv-managed repository
-    materializes no dependencies and its offline coverage run fails at import.
-    When ``uv`` is available, reconstruct the exact base ``uv.lock`` and its
-    sibling ``pyproject.toml`` in an isolated temporary directory and run
-    ``uv export --frozen`` to produce a fully hash-pinned closure the trusted
-    installer can consume like any other lock. Both inputs are read only from
-    the validated base commit, so no PR-mutable content reaches ``uv``. Return
-    ``None`` — degrading to the prior no-uv behavior — when ``uv`` is absent,
-    the sibling ``pyproject.toml`` is missing at the base commit, the export
-    fails, or its output is not fully hash-pinned, so this can never break an
-    otherwise-working build.
+    The sibling ``pyproject.toml`` determines whether the lock belongs to an
+    exportable project. Orphan locks are ignored, and a successful comment-only
+    export represents a valid project with no third-party dependency closure.
+    Every other exporter failure is fatal: silently dropping a tracked project
+    lock would execute coverage without the base dependencies and could turn
+    import failures into misleading review feedback.
     """
-    uv_path = shutil.which("uv")
-    if uv_path is None:
-        return None
     project_dir = pathlib.PurePosixPath(lock_path).parent
     pyproject_path = (
         "pyproject.toml"
         if str(project_dir) == "."
         else f"{project_dir}/pyproject.toml"
     )
+    lock_content = _git(repo_root, "show", f"{base_sha}:{lock_path}")
     try:
-        lock_content = _git(repo_root, "show", f"{base_sha}:{lock_path}")
         pyproject_content = _git(repo_root, "show", f"{base_sha}:{pyproject_path}")
     except RuntimeError:
         return None
+
+    uv_path = _install_trusted_uv()
+
     with tempfile.TemporaryDirectory() as work_dir:
         work_path = pathlib.Path(work_dir)
         (work_path / "uv.lock").write_bytes(lock_content)
         (work_path / "pyproject.toml").write_bytes(pyproject_content)
         try:
             completed = _run_uv_export(work_path, uv_path)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(
+                f"could not run trusted uv export for tracked base lock {lock_path}: "
+                f"{type(exc).__name__}"
+            ) from exc
+
     if completed.returncode != 0:
-        return None
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        normalized_stderr = " ".join(stderr.split())
+        detail = (
+            normalized_stderr[:500]
+            if normalized_stderr
+            else f"exit status {completed.returncode}"
+        )
+        raise RuntimeError(
+            f"uv export failed for tracked base lock {lock_path}: {detail}"
+        )
+
     exported = completed.stdout
-    return exported if _is_hash_pinned(exported) else None
+    if not _requirement_lines(exported):
+        return None
+    if not _is_hash_pinned(exported):
+        raise RuntimeError(
+            f"uv export for tracked base lock {lock_path} was not fully hash-pinned"
+        )
+    return exported
 
 
 def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
