@@ -6243,6 +6243,18 @@ run_filtered_gate_case_if_requested() {
 			"Materialized PR-head changed-file scope" \
 			"repository_dispatch"
 		;;
+	pull-request-target-rust-file-uses-head-blob)
+		run_pull_request_target_head_scope_case \
+			"pull-request-target-rust-file-uses-head-blob" \
+			"src-tauri/src/commands.rs" \
+			"const BASE_RUST_CONTEXT: &str = \"must not be scanned\";" \
+			"const HEAD_RUST_CONTEXT: &str = \"must be scanned\";" \
+			"0" \
+			"0" \
+			"__PR_SCOPE__" \
+			"0" \
+			"Materialized PR-head changed-file scope"
+		;;
 	pull-request-target-backend-script-omits-app-context)
 		run_pull_request_target_head_scope_case \
 			"pull-request-target-backend-script-omits-app-context" \
@@ -8982,6 +8994,17 @@ run_pull_request_target_head_scope_case \
 	"src/new_module.py" \
 	"__ABSENT__" \
 	"HEAD_ONLY_NEW_FILE_SHOULD_BE_SCANNED"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-rust-file-uses-head-blob" \
+	"src-tauri/src/commands.rs" \
+	"const BASE_RUST_CONTEXT: &str = \"must not be scanned\";" \
+	"const HEAD_RUST_CONTEXT: &str = \"must be scanned\";" \
+	"0" \
+	"0" \
+	"__PR_SCOPE__" \
+	"0" \
+	"Materialized PR-head changed-file scope"
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-source-file-with-space-uses-head-blob" \

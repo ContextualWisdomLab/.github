@@ -609,7 +609,10 @@ copy_pr_head_blob_to_file() {
 
 is_supported_source_file() {
 	case "$1" in
-	*.java | *.kt | *.kts | *.groovy | *.scala | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
+	# Rust is an application security boundary for Tauri and native services. Keep changed Rust
+	# sources in the same PR-head scope as frontend IPC wrappers so findings are not inferred from
+	# an incomplete client-only view.
+	*.java | *.kt | *.kts | *.groovy | *.scala | *.rs | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
 		return 0
 		;;
 	Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile)
