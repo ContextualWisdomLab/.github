@@ -1,0 +1,125 @@
+name: PR 709 finalize least-privilege automation v2
+
+on:
+  push:
+    branches:
+      - ops/naruon-hourly-commercial-readiness-20260803
+    paths:
+      - .github/workflows/pr709-finalize-least-privilege-v2.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-709-finalize-least-privilege-automation-v2
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.repository == 'ContextualWisdomLab/.github' && github.ref_name == 'ops/naruon-hourly-commercial-readiness-20260803'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ops/naruon-hourly-commercial-readiness-20260803
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Normalize bounded-change source block
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/naruon-commercial-readiness-development.yml')
+          text = path.read_text(encoding='utf-8')
+          replacement = '''          git add -A -N
+          git add -A
+          mapfile -t changed_files < <(
+            git diff --cached --name-only | sort -u
+          )
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "has_changes=false" >>"$GITHUB_OUTPUT"
+            echo "Agent produced no safe repository change."
+            exit 0
+          fi
+          echo "has_changes=true" >>"$GITHUB_OUTPUT"
+
+          if git diff --cached --numstat \
+            | awk '$1 == "-" || $2 == "-" {found=1} END {exit !found}'; then
+            echo "::error::Binary changes are outside the bounded autonomous product-edit contract."
+            exit 1
+          fi
+          changed_file_count="${#changed_files[@]}"
+          new_file_count="$(
+            git diff --cached --name-only --diff-filter=A \
+              | awk 'NF {count += 1} END {print count + 0}'
+          )"
+          changed_lines="$(
+            git diff --cached --numstat \
+              | awk '{added += $1; deleted += $2} END {print added + deleted + 0}'
+          )"
+'''
+          if replacement not in text:
+              start_marker = '          git add -N -- .\n'
+              end_marker = '          if [ "$changed_file_count" -gt "$MAX_CHANGED_FILES" ]; then\n'
+              start = text.index(start_marker)
+              end = text.index(end_marker, start)
+              text = text[:start] + replacement + text[end:]
+              path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Materialize retained workflows and contracts
+        run: python scripts/ci/pr709_finalize.py
+
+      - name: Validate YAML and automation contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.safe_load(File.read(path), aliases: true) }' \
+            .github/workflows/naruon-commercial-readiness-hourly.yml \
+            .github/workflows/naruon-commercial-readiness-development.yml
+          python -m pytest -q \
+            tests/test_naruon_commercial_readiness_hourly_contract.py \
+            tests/test_required_workflow_queue_contract.py
+          python -m pytest -q
+          git diff --check
+          test ! -e .github/workflows/pr709-commercial-readiness-hardening-v2.yml
+          test ! -e .github/workflows/pr709-least-privilege-repair.yml
+          test ! -e .github/workflows/pr709-finalize-commercial-readiness.yml
+          test ! -e scripts/ci/bootstrap_naruon_commercial_readiness_hardening_v2.py
+          test ! -e scripts/ci/pr709_finalize.py
+          agent_block="$(sed -n '/name: Run one commercial-readiness implementation slice/,/name: Validate bounded changed-file/p' .github/workflows/naruon-commercial-readiness-development.yml)"
+          ! grep -q 'GITHUB_TOKEN:' <<<"$agent_block"
+          ! grep -q 'USE_GITHUB_TOKEN:' <<<"$agent_block"
+          grep -q 'target_token="$APP_TOKEN"' .github/workflows/naruon-commercial-readiness-development.yml
+          grep -q 'timeout-minutes: 15' .github/workflows/naruon-commercial-readiness-hourly.yml
+
+      - name: Commit verified final scope
+        shell: bash
+        env:
+          BRANCH_NAME: ops/naruon-hourly-commercial-readiness-20260803
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "ContextualWisdomLab/.github"
+          test "$GITHUB_REF_NAME" = "$BRANCH_NAME"
+          rm -f \
+            .github/workflows/pr709-finalize-least-privilege.yml \
+            .github/workflows/pr709-finalize-least-privilege-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo "No verified finalization changes to commit."; exit 1; }
+          git commit -m "fix(automation): enforce least-privilege hourly loop"
+          git push origin "HEAD:${BRANCH_NAME}"
