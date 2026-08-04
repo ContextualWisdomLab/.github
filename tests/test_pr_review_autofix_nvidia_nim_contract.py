@@ -107,6 +107,29 @@ def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
     assert binding not in workflow[ordinary_end:conflict_start]
 
 
+def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> None:
+    """Strip GitHub write and OIDC credentials from both OpenCode processes."""
+
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
+    ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
+    ordinary = workflow[ordinary_start:ordinary_end]
+    conflict_start = workflow.index(
+        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    )
+    conflict = workflow[conflict_start:]
+    sanitized_invocation = (
+        "env -u GITHUB_TOKEN -u GH_TOKEN "
+        "-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL"
+    )
+
+    assert "GITHUB_TOKEN:" not in ordinary
+    assert "GH_TOKEN:" not in ordinary
+    assert sanitized_invocation in ordinary
+    assert sanitized_invocation in conflict
+    assert workflow.count(sanitized_invocation) == 2
+
+
 def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None:
     """Reject an empty model credential instead of falling back to another provider."""
 
