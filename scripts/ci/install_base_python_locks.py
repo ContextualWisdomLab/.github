@@ -251,16 +251,27 @@ def _contains_unclassified_error(output: str) -> bool:
         normalized_line = line.strip()
         if not normalized_line.casefold().startswith("error:"):
             continue
-        binary_match = UNSATISFIED_REQUIREMENT_RE.search(normalized_line)
-        if binary_match is None:
-            binary_match = NO_MATCHING_DISTRIBUTION_RE.search(normalized_line)
-        if binary_match is not None:
+
+        unsatisfied_match = UNSATISFIED_REQUIREMENT_RE.search(normalized_line)
+        if unsatisfied_match is not None:
             requirement = _normalized_requirement_token(
-                binary_match.group("requirement")
+                unsatisfied_match.group("requirement")
+            )
+            if requirement in matching_requirements and _is_concrete_version_list(
+                unsatisfied_match.group("versions")
+            ):
+                continue
+            return True
+
+        unmatched_distribution = NO_MATCHING_DISTRIBUTION_RE.search(normalized_line)
+        if unmatched_distribution is not None:
+            requirement = _normalized_requirement_token(
+                unmatched_distribution.group("requirement")
             )
             if requirement in matching_requirements:
                 continue
             return True
+
         if any(pattern.search(normalized_line) for pattern in DEFERABLE_ERROR_LINES):
             continue
         return True
