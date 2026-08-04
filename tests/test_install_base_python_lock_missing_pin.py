@@ -67,6 +67,25 @@ def test_reachable_index_missing_pin_is_visible_and_nonfatal(tmp_path: Path) -> 
     assert "Could not find a version that satisfies the requirement" in stderr
 
 
+def test_reachable_index_context_lines_remain_deferable(tmp_path: Path) -> None:
+    """Pip's yanked and incompatible-version context does not mask a proven stale pin."""
+
+    output = (
+        "ERROR: Ignored the following yanked versions: 6.13.3\n"
+        "ERROR: Ignored the following versions that require a different python "
+        "version: 6.13.4 Requires-Python <3.14\n"
+        "ERROR: Could not find a version that satisfies the requirement "
+        "pypdf==6.13.3 (from versions: 6.14.1, 6.14.2)\n"
+        "ERROR: No matching distribution found for pypdf==6.13.3"
+    )
+
+    result, stdout, stderr = _run_preflight_failure(tmp_path, output)
+
+    assert result == 0
+    assert "candidates=1 installed=0 skipped=1" in stdout
+    assert "Ignored the following yanked versions" in stderr
+
+
 @pytest.mark.parametrize(
     "fatal_fragment",
     [
