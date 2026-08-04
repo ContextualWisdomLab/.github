@@ -86,17 +86,82 @@ jobs:
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
     steps:
+      - name: Resolve immutable called-workflow source
+        id: trusted_source
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          expected_repository="ContextualWisdomLab/.github"
+          expected_file=".github/workflows/pr-review-fix-scheduler.yml"
+
+          if [ "$WORKFLOW_REPOSITORY" != "$expected_repository" ]; then
+            printf '::error::Called workflow repository resolved to %s, expected %s.\n' \
+              "${WORKFLOW_REPOSITORY:-<empty>}" "$expected_repository"
+            exit 1
+          fi
+          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '::error::Called workflow SHA is missing or malformed: %s.\n' \
+              "${WORKFLOW_SHA:-<empty>}"
+            exit 1
+          fi
+          if [ "$WORKFLOW_FILE_PATH" != "$expected_file" ]; then
+            printf '::error::Called workflow file resolved to %s, expected %s.\n' \
+              "${WORKFLOW_FILE_PATH:-<empty>}" "$expected_file"
+            exit 1
+          fi
+          expected_ref_prefix="${WORKFLOW_REPOSITORY}/${WORKFLOW_FILE_PATH}@"
+          case "$WORKFLOW_REF" in
+            "$expected_ref_prefix"*) ;;
+            *)
+              printf '::error::Called workflow ref is missing or inconsistent: %s.\n' \
+                "${WORKFLOW_REF:-<empty>}"
+              exit 1
+              ;;
+          esac
+
+          {
+            printf 'repository=%s\n' "$WORKFLOW_REPOSITORY"
+            printf 'sha=%s\n' "$WORKFLOW_SHA"
+            printf 'workflow_ref=%s\n' "$WORKFLOW_REF"
+            printf 'workflow_file_path=%s\n' "$WORKFLOW_FILE_PATH"
+          } >>"$GITHUB_OUTPUT"
+          printf 'Resolved immutable called-workflow source repository=%s file=%s sha=%s ref=%s.\n' \
+            "$WORKFLOW_REPOSITORY" "$WORKFLOW_FILE_PATH" "$WORKFLOW_SHA" "$WORKFLOW_REF"
+
       - name: Checkout immutable called-workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # In a reusable workflow the ordinary github context belongs to the
-          # caller. The job workflow context identifies the called workflow's
-          # repository and immutable resolved SHA, preventing a caller input or
-          # mutable branch from selecting the privileged scheduler code.
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
+          # GitHub documents job.workflow_repository and job.workflow_sha as
+          # the called workflow identity. The preceding step validates every
+          # field before checkout so an absent property cannot select defaults.
+          repository: ${{ steps.trusted_source.outputs.repository }}
+          ref: ${{ steps.trusted_source.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Verify immutable called-workflow checkout
+        env:
+          EXPECTED_SHA: ${{ steps.trusted_source.outputs.sha }}
+          EXPECTED_FILE: ${{ steps.trusted_source.outputs.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            printf '::error::Checked-out scheduler SHA %s does not match called-workflow SHA %s.\n' \
+              "$actual_sha" "$EXPECTED_SHA"
+            exit 1
+          fi
+          if [ ! -f "$EXPECTED_FILE" ] || [ -L "$EXPECTED_FILE" ]; then
+            printf '::error::Called workflow source file is missing or symlinked: %s.\n' \
+              "$EXPECTED_FILE"
+            exit 1
+          fi
+          printf 'Verified immutable scheduler checkout at %s (%s).\n' \
+            "$actual_sha" "$EXPECTED_FILE"
 
       - name: Self-test fix scheduler contract
         run: python3 scripts/ci/pr_review_fix_scheduler.py --self-test
