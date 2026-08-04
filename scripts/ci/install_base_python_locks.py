@@ -40,13 +40,11 @@ DEFERABLE_PREFLIGHT_FAILURES = (
     re.compile(r"requires a different Python", re.IGNORECASE),
     # A base lock can pin a version that has since been yanked or that offers no
     # wheel for the pinned coverage-image interpreter. pip proves the index was
-    # reachable by listing the versions it *did* find, so this is an
-    # interpreter/availability incompatibility (defer to the later coverage run),
-    # not a registry outage. The "(from versions: none)" shape — an empty or
-    # unreachable index — is deliberately excluded and stays fatal.
+    # reachable only when it lists at least one concrete version. Empty lists,
+    # ``none``, and unreachable-index diagnostics remain fatal.
     re.compile(
         r"Could not find a version that satisfies the requirement[^\n]*"
-        r"\(from versions:(?! none\))",
+        r"\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
         re.IGNORECASE,
     ),
 )
@@ -167,10 +165,10 @@ def _is_deferable_preflight_failure(output: str) -> bool:
     no matching wheel). Those states are safe to recover through a same-directory
     group or defer to the later networkless coverage run. Hash mismatches,
     resolver crashes, empty diagnostics, and registry/network failures — including
-    the "(from versions: none)" empty/unreachable-index shape — remain fatal so a
-    broken trusted build cannot be mistaken for an optional lock. Deferred paths
-    retain a warning and bounded pip diagnostics so the incompatibility stays
-    visible without blocking unrelated coverage evidence.
+    empty or ``none`` version lists — remain fatal so a broken trusted build cannot
+    be mistaken for an optional lock. Deferred paths retain a warning and bounded
+    pip diagnostics so the incompatibility stays visible without blocking
+    unrelated coverage evidence.
     """
     return bool(output.strip()) and any(
         pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
