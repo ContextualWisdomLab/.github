@@ -43,11 +43,23 @@ and called-workflow source binding reduce mutable control-plane inputs in line
 with that model without claiming a SLSA level.
 
 GitHub documents that a reusable workflow's ordinary `github` context belongs
-to the caller, while reusable-workflow permissions can only remain equal or
-become more restrictive through a nested chain. The scheduler therefore binds
-its checkout to `job.workflow_repository` and `job.workflow_sha`, rejects caller
-or compatibility inputs as executable-source selectors, and omits contents-write
-and pull-requests-write permissions.
+to the caller. GitHub's current contexts reference separately defines
+`job.workflow_repository`, `job.workflow_sha`, `job.workflow_ref`, and
+`job.workflow_file_path` as the repository, immutable commit, full ref, and path
+of the workflow file that defines the current job. The same reference gives
+`job.workflow_repository` plus `job.workflow_sha` as the supported pattern for
+checking out files co-located with a reusable workflow; these properties are a
+GitHub.com capability and are not available on GitHub Enterprise Server.
+
+The scheduler therefore keeps the documented `job.workflow_*` identity rather
+than substituting caller-associated `github.workflow_*` values. Before checkout,
+it rejects an empty, malformed, unexpected-repository, unexpected-file, or
+inconsistent workflow identity and exports only the validated repository and
+full SHA. After checkout, it compares `git rev-parse HEAD` with that SHA and
+requires the workflow file to be a regular non-symlink file before any scheduler
+self-test or credential-bearing dispatch can execute. Caller and compatibility
+inputs remain excluded as executable-source selectors, and contents-write and
+pull-requests-write permissions remain absent.
 
 GitHub also documents that scheduled events can be delayed at the start of an
 hour. The hourly heartbeat therefore runs at minute 23. A one-hour same-head
@@ -77,8 +89,9 @@ The exact pull-request head must prove:
   production docstrings;
 - default-branch snapshot triggers, commit-SHA concurrency, and job-scoped write
   permissions remain pinned by tests;
-- hourly cadence, one-hour retry, single dispatch, immutable called-workflow
-  source, and least-privilege permissions remain pinned by tests; and
+- hourly cadence, one-hour retry, single dispatch, least-privilege permissions,
+  pre-checkout validation of every `job.workflow_*` identity field, and
+  post-checkout SHA/file verification remain pinned by tests; and
 - every current-head security, review, unresolved-thread, and branch-protection
   gate succeeds before merge.
 
@@ -90,15 +103,19 @@ mitigating the risk of software vulnerabilities* (Initial Public Draft, NIST SP
 800-218 Rev. 1). National Institute of Standards and Technology.
 https://doi.org/10.6028/NIST.SP.800-218r1.ipd
 
+GitHub. (n.d.). *Contexts reference*. GitHub Docs. Retrieved August 5, 2026,
+from
+https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+
 GitHub. (n.d.). *Reusing workflow configurations*. GitHub Docs. Retrieved August
-4, 2026, from
+5, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
 
-GitHub. (n.d.). *Troubleshooting workflows*. GitHub Docs. Retrieved August 4,
+GitHub. (n.d.). *Troubleshooting workflows*. GitHub Docs. Retrieved August 5,
 2026, from https://docs.github.com/en/actions/how-tos/troubleshoot-workflows
 
 GitHub. (n.d.). *Using the dependency submission API*. GitHub Docs. Retrieved
-August 4, 2026, from
+August 5, 2026, from
 https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/use-dependency-submission-api
 
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure software development
