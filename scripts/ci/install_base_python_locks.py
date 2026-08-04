@@ -75,6 +75,13 @@ DEFERABLE_ERROR_LINES = (
         re.IGNORECASE,
     ),
     re.compile(r"^ERROR:.*requires a different Python", re.IGNORECASE),
+    # Pip can emit this context line before the concrete-version diagnostic.
+    # It is not independently deferable; the primary pattern below must still
+    # prove that the reachable index offers another concrete version.
+    re.compile(
+        r"^ERROR:\s*Ignored the following yanked versions:",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"^ERROR:\s*Could not find a version that satisfies the requirement"
         r"[^\n]*\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
