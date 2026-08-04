@@ -6,6 +6,12 @@ on:
       - fix/opencode-trusted-uv-lock-coverage
     paths:
       - .tmp/uv-materializer/READY
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - fix/npm-workspace-coverage-root
+    paths:
+      - .tmp/uv-materializer/READY
 
 concurrency:
   group: bootstrap-trusted-uv-materializer
@@ -24,11 +30,12 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout guarded branch
+      - name: Checkout guarded branch head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: true
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -46,9 +53,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "$(git rev-parse HEAD^^)" = "$EXPECTED_STAGE_PARENT_SHA"
-          test "$(git diff --name-only HEAD^^...HEAD^)" = "$BOOTSTRAP_WORKFLOW"
-          test "$(git diff --name-only HEAD^...HEAD)" = "$READY_SENTINEL"
+          git merge-base --is-ancestor "$EXPECTED_STAGE_PARENT_SHA" HEAD
+          stage_files="$(git diff --name-only "$EXPECTED_STAGE_PARENT_SHA"...HEAD | sort)"
+          expected_stage_files="$(printf '%s\n' "$BOOTSTRAP_WORKFLOW" "$READY_SENTINEL" | sort)"
+          test "$stage_files" = "$expected_stage_files"
 
           cat .tmp/uv-materializer/script.*.b64 \
             | tr -d '\n' \
@@ -104,8 +112,10 @@ jobs:
       - name: Commit verified implementation
         env:
           STACK_BASE_SHA: b824259d3503fd357bf38ec7ce5a855f67005e1b
+          TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
         run: |
           set -euo pipefail
+          test -n "$TARGET_BRANCH"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
@@ -117,4 +127,4 @@ jobs:
             scripts/ci/materialize_base_python_requirements.py \
             tests/test_materialize_base_python_requirements.py | sort)"
           test "$actual_files" = "$expected_files"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${TARGET_BRANCH}"
