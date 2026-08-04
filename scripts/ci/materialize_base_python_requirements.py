@@ -102,14 +102,14 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
 
 def _download_trusted_uv_archive() -> bytes:
     """Download the fixed uv release archive through one HTTPS trust boundary."""
-    request = urllib.request.Request(
-        TRUSTED_UV_ARCHIVE_URL,
-        headers={"User-Agent": "ContextualWisdomLab-coverage/1"},
-        method="GET",
-    )
     try:
-        with urllib.request.urlopen(  # nosec B310 -- fixed URL plus SHA-256 pin
-            request, timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS
+        # Keep the audited URL literal at the network sink so static analysis can
+        # prove that neither user data nor repository content selects a scheme,
+        # host, path, query, fragment, method, or request header.
+        with urllib.request.urlopen(  # nosec B310 -- literal HTTPS URL plus SHA pin
+            "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
+            "uv-x86_64-unknown-linux-gnu.tar.gz",
+            timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
         ) as response:
             final_url = urllib.parse.urlparse(response.geturl())
             if (final_url.scheme, final_url.hostname) != (
