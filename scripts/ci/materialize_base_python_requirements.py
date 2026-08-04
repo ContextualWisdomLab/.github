@@ -283,30 +283,30 @@ def _run_uv_export(
     )
 
 
+def _uv_pyproject_path(lock_path: str) -> str:
+    """Return the sibling project metadata path for one safe tracked uv lock."""
+    project_dir = pathlib.PurePosixPath(lock_path).parent
+    return (
+        "pyproject.toml"
+        if str(project_dir) == "."
+        else f"{project_dir}/pyproject.toml"
+    )
+
+
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
 ) -> bytes | None:
     """Export one tracked base ``uv.lock`` into a trusted hash-pinned closure.
 
-    The sibling ``pyproject.toml`` determines whether the lock belongs to an
-    exportable project. Orphan locks are ignored, and a successful comment-only
-    export represents a valid project with no third-party dependency closure.
-    Every other exporter failure is fatal: silently dropping a tracked project
-    lock would execute coverage without the base dependencies and could turn
-    import failures into misleading review feedback.
+    The caller proves that the sibling ``pyproject.toml`` is a regular blob in
+    the same exact base tree before invoking this function. Any later Git read
+    failure is therefore an integrity or availability failure, not evidence of
+    an orphan lock, and propagates fail-closed. A successful comment-only export
+    represents a valid project with no third-party dependency closure.
     """
-    project_dir = pathlib.PurePosixPath(lock_path).parent
-    pyproject_path = (
-        "pyproject.toml"
-        if str(project_dir) == "."
-        else f"{project_dir}/pyproject.toml"
-    )
+    pyproject_path = _uv_pyproject_path(lock_path)
     lock_content = _git(repo_root, "show", f"{base_sha}:{lock_path}")
-    try:
-        pyproject_content = _git(repo_root, "show", f"{base_sha}:{pyproject_path}")
-    except RuntimeError:
-        return None
-
+    pyproject_content = _git(repo_root, "show", f"{base_sha}:{pyproject_path}")
     uv_path = _install_trusted_uv()
 
     with tempfile.TemporaryDirectory() as work_dir:
@@ -343,13 +343,9 @@ def _export_uv_lock(
     return exported
 
 
-def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
-    """Return regular hash-lock blobs from the exact validated base commit."""
-    if not SHA_RE.fullmatch(base_sha):
-        raise ValueError("base SHA must be exactly 40 hexadecimal characters")
-
-    locks: list[tuple[str, bytes]] = []
-    entries = _git(repo_root, "ls-tree", "-r", "-z", "--full-tree", base_sha)
+def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosixPath]]:
+    """Parse exact-tree output into safe regular blob paths in repository order."""
+    regular_blobs: list[tuple[str, pathlib.PurePosixPath]] = []
     for raw_entry in entries.split(b"\0"):
         if not raw_entry:
             continue
@@ -371,11 +367,27 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
             or ".." in candidate.parts
         ):
             continue
+        regular_blobs.append((path, candidate))
+    return regular_blobs
+
+
+def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
+    """Return regular hash-lock blobs from the exact validated base commit."""
+    if not SHA_RE.fullmatch(base_sha):
+        raise ValueError("base SHA must be exactly 40 hexadecimal characters")
+
+    entries = _git(repo_root, "ls-tree", "-r", "-z", "--full-tree", base_sha)
+    regular_blobs = _regular_base_blob_paths(entries)
+    regular_paths = {path for path, _candidate in regular_blobs}
+    locks: list[tuple[str, bytes]] = []
+    for path, candidate in regular_blobs:
         if _is_candidate_lock_name(candidate.name):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
             if _is_hash_pinned(content):
                 locks.append((path, content))
         elif candidate.name == "uv.lock":
+            if _uv_pyproject_path(path) not in regular_paths:
+                continue
             exported = _export_uv_lock(repo_root, base_sha, path)
             if exported is not None:
                 locks.append((path, exported))
