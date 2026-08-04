@@ -16,23 +16,25 @@ The implementation therefore:
    same immutable revision; an absent sibling is an explicit orphan, while a
    read failure for an inventoried blob is fatal and cannot be misclassified as
    absence;
-3. downloads one fixed official Astral `uv` archive from a literal HTTPS URL;
-4. verifies the bounded archive with a pinned SHA-256 digest before extraction;
-5. accepts only the expected regular-file tar member within explicit size bounds;
-6. writes the executable with mode `0755` and verifies that it reports the exact
+3. installs one process-wide urllib opener with an empty proxy map and a redirect
+   handler that rejects every redirect before urllib creates a target request;
+4. downloads one fixed official Astral `uv` archive from a literal HTTPS URL;
+5. verifies the bounded archive with a pinned SHA-256 digest before extraction;
+6. accepts only the expected regular-file tar member within explicit size bounds;
+7. writes the executable with mode `0755` and verifies that it reports the exact
    pinned `uv` version;
-7. executes `uv export` with `--frozen`, `--offline`, `--no-cache`,
+8. executes `uv export` with `--frozen`, `--offline`, `--no-cache`,
    `--no-progress`, `--color never`, `--no-emit-project`, and `--no-editable` in
    an isolated temporary project;
-8. supplies a minimal environment with isolated home, temporary, cache, and
+9. supplies a minimal environment with isolated home, temporary, cache, and
    configuration directories, disables dotenv loading and managed Python
    downloads, and does not inherit arbitrary runner variables;
-9. keeps project metadata discovery enabled because the reconstructed
-   `pyproject.toml` is an authoritative input; `--no-config` is deliberately not
-   used because uv documents that it disables `pyproject.toml` discovery;
-10. rejects every nonempty export unless every logical line is an exact normalized
+10. keeps project metadata discovery enabled because the reconstructed
+    `pyproject.toml` is an authoritative input; `--no-config` is deliberately not
+    used because uv documents that it disables `pyproject.toml` discovery;
+11. rejects every nonempty export unless every logical line is an exact normalized
     package `==` pin followed only by complete SHA-256 hashes; and
-11. exposes only generated requirements files and a source manifest to the later
+12. exposes only generated requirements files and a source manifest to the later
     networkless coverage environment.
 
 ## Standards and current-tool rationale
@@ -67,10 +69,12 @@ be a complete `sha256` digest. Option lines, direct or local references, other
 algorithms, truncated digests, and global directives are rejected even when they
 contain a `--hash=` substring.
 
-The download response is required to remain on the HTTPS
-`releases.astral.sh` host and the artifact bytes must match the pinned digest.
-The digest is the executable payload identity; the host check prevents an
-unreviewed cross-origin redirect from becoming the transport source.
+The download request uses neither ambient proxy configuration nor automatic
+redirect following. Any HTTP redirect is rejected before a request to the target
+location can be created. The fixed HTTPS origin is still verified on the
+response as defense in depth, and the archive bytes must match the pinned digest.
+The redirect boundary prevents unintended network side effects; the digest pin
+separately establishes executable payload identity.
 
 ## Modular and workspace boundary
 
@@ -95,9 +99,10 @@ Regression coverage must prove:
 - base-revision-only reads and rejection of unsafe revision/path shapes;
 - an absent sibling project is skipped, but an inventoried project blob that
   cannot be read propagates a fatal error before uv starts;
-- fixed-host download, cross-host redirect rejection, bounded reads, archive
-  digest, member type, member size, executable size, executable mode, and exact
-  version;
+- the download opener is cached, disables ambient proxies, and rejects redirects
+  before following them;
+- fixed-host response validation, bounded reads, archive digest, member type,
+  member size, executable size, executable mode, and exact version;
 - frozen, offline, cacheless, noninteractive exporter arguments;
 - isolated environment directories and exclusion of arbitrary ambient variables;
 - continued project metadata discovery with no `--no-config` regression;
