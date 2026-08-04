@@ -53,15 +53,19 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
         assert fragment not in workflow, fragment
 
 
-def test_nvidia_nim_secret_is_scoped_to_the_agent_execution_step() -> None:
-    """Prevent the NVIDIA model credential from leaking into setup or mutation steps."""
+def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
+    """Prevent the NVIDIA credential from leaking beyond the two OpenCode runs."""
 
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
+    ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
+    ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
+    conflict_start = workflow.index(
+        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    )
 
-    assert workflow.count(binding) == 1
-    run_step = workflow.index("      - name: Run OpenCode review autofix")
-    next_step = workflow.index("      - name: Validate changed files", run_step)
-    assert binding in workflow[run_step:next_step]
-    assert binding not in workflow[:run_step]
-    assert binding not in workflow[next_step:]
+    assert workflow.count(binding) == 2
+    assert binding in workflow[ordinary_start:ordinary_end]
+    assert binding in workflow[conflict_start:]
+    assert binding not in workflow[:ordinary_start]
+    assert binding not in workflow[ordinary_end:conflict_start]
