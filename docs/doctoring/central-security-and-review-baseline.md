@@ -76,6 +76,12 @@ The exact pull-request head must prove:
 
 ## References
 
+Booth, H., Ogata, M., Kent, K., Souppaya, M., & Dodson, D. (2025). *Secure
+software development framework (SSDF) version 1.2: Recommendations for
+mitigating the risk of software vulnerabilities* (Initial Public Draft, NIST SP
+800-218 Rev. 1). National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-218r1.ipd
+
 GitHub. (n.d.). *Reusing workflow configurations*. GitHub Docs. Retrieved August
 4, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
@@ -92,9 +98,9 @@ framework (SSDF) version 1.1: Recommendations for mitigating the risk of softwar
 vulnerabilities* (NIST SP 800-218). National Institute of Standards and
 Technology. https://doi.org/10.6028/NIST.SP.800-218
 
-Supply-chain Levels for Software Artifacts. (2026). *SLSA specification
+Supply-chain Levels for Software Artifacts. (2025). *SLSA specification
 (version 1.2)*. https://slsa.dev/spec/v1.2/
 
-Supply-chain Levels for Software Artifacts. (2026). *Source: Requirements for
+Supply-chain Levels for Software Artifacts. (2025). *Source: Requirements for
 producing source (version 1.2)*.
 https://slsa.dev/spec/v1.2/source-requirements
