@@ -1,12 +1,12 @@
 """Install independently complete base-commit Python hash locks.
 
 The coverage image build may discover several hash-bearing requirements files
-from a trusted base commit.  A file can hash every requirement it names while
+from a trusted base commit. A file can hash every requirement it names while
 still being only a supplement to another lock, so syntax alone cannot prove
-that pip can install it as an independent dependency closure.  Preflight every
+that pip can install it as an independent dependency closure. Preflight every
 candidate with pip's hash enforcement, recover supplements only with sibling
 locks from the same source directory, and skip candidates that still cannot
-prove a complete closure.  Later coverage execution remains responsible for
+prove a complete closure. Later coverage execution remains responsible for
 proving that the resulting offline environment is sufficient for the target
 repository.
 """
@@ -38,6 +38,20 @@ DEFERABLE_PREFLIGHT_FAILURES = (
         re.IGNORECASE,
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
+)
+FATAL_PREFLIGHT_FAILURES = (
+    re.compile(r"PACKAGES DO NOT MATCH THE HASHES", re.IGNORECASE),
+    re.compile(r"Retrying after connection broken", re.IGNORECASE),
+    re.compile(r"Could not fetch URL", re.IGNORECASE),
+)
+UNSATISFIED_REQUIREMENT_RE = re.compile(
+    r"Could not find a version that satisfies the requirement "
+    r"(?P<requirement>[^\s(]+)",
+    re.IGNORECASE,
+)
+NO_MATCHING_DISTRIBUTION_RE = re.compile(
+    r"No matching distribution found for (?P<requirement>\S+)",
+    re.IGNORECASE,
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -146,20 +160,47 @@ def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
     )
 
 
+def _is_matching_binary_unavailability(output: str) -> bool:
+    """Return whether pip rejected the same exact pin in both binary diagnostics.
+
+    pip's binary-only resolver emits two complementary diagnostics when a
+    trusted exact pin has no wheel compatible with the current interpreter,
+    ABI, or platform. Requiring both lines for the same normalized requirement
+    prevents a single ambiguous resolver message from weakening fail-closed
+    handling.
+    """
+
+    unsatisfied_requirements = {
+        match.group("requirement").rstrip(".,")
+        for match in UNSATISFIED_REQUIREMENT_RE.finditer(output)
+    }
+    unmatched_requirements = {
+        match.group("requirement").rstrip(".,")
+        for match in NO_MATCHING_DISTRIBUTION_RE.finditer(output)
+    }
+    return bool(unsatisfied_requirements & unmatched_requirements)
+
+
 def _is_deferable_preflight_failure(output: str) -> bool:
     """Return whether a failed candidate may be grouped or safely skipped.
 
     A hash-bearing supplement can fail pip's independent-closure check because a
-    transitive pin/hash lives in a sibling lock, and a base lock can explicitly
-    reject the pinned coverage-image interpreter. Those states are safe to
-    recover through a same-directory group or defer to the later networkless
-    coverage run. Hash mismatches, resolver crashes, empty diagnostics, and
+    transitive pin/hash lives in a sibling lock. A trusted lock can also reject
+    the coverage-image interpreter explicitly or lack a compatible wheel for the
+    central interpreter, ABI, or platform. Those states are safe to recover
+    through a same-directory group or defer to the later networkless coverage
+    run. Hash mismatches, resolver crashes, empty diagnostics, and
     registry/network failures remain fatal so a broken trusted build cannot be
     mistaken for an optional lock.
     """
-    return bool(output.strip()) and any(
+
+    if not output.strip():
+        return False
+    if any(pattern.search(output) for pattern in FATAL_PREFLIGHT_FAILURES):
+        return False
+    return any(
         pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
-    )
+    ) or _is_matching_binary_unavailability(output)
 
 
 def _report_fatal_preflight_failure(
@@ -171,8 +212,8 @@ def _report_fatal_preflight_failure(
     """Publish one bounded, source-aware fatal preflight failure."""
     print(
         "::error::Trusted base Python lock preflight failed for "
-        f"{entry_label}; only incomplete hash closures or explicit Python "
-        "interpreter incompatibility may be deferred.",
+        f"{entry_label}; only incomplete hash closures or proven Python/binary "
+        "compatibility mismatches may be deferred.",
         file=stderr,
     )
     failure_output = _bounded_failure_output(output)
