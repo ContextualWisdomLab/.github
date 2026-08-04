@@ -1,0 +1,84 @@
+name: One-shot tighten stale-pin classifier
+
+on:
+  push:
+    branches: [fix/strix-python-security-cves]
+
+concurrency:
+  group: one-shot-tighten-stale-pin-classifier-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/strix-python-security-cves
+          fetch-depth: 0
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+
+      - name: Apply the reviewed exact-pair patch
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/one_shot_tighten_stale_pin_classifier.py
+          git diff --check
+
+      - name: Install the hash-locked review test toolchain
+        run: |
+          set -euo pipefail
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify targeted behavior, coverage, docstrings, and full suite
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q \
+            tests/test_install_base_python_locks.py \
+            tests/test_install_base_python_lock_missing_pin.py
+          python3 -m coverage erase
+          python3 -m coverage run --branch -m pytest -q \
+            tests/test_install_base_python_locks.py \
+            tests/test_install_base_python_lock_missing_pin.py
+          python3 -m coverage report \
+            --include='scripts/ci/install_base_python_locks.py' \
+            --show-missing \
+            --fail-under=100
+          python3 -m interrogate \
+            --fail-under=100 \
+            --quiet \
+            scripts/ci/install_base_python_locks.py
+          python3 -m pytest -q
+          git diff --check
+
+      - name: Publish verified canonical changes and remove one-use files
+        env:
+          BRANCH_NAME: fix/strix-python-security-cves
+        run: |
+          set -euo pipefail
+          git rm \
+            .github/workflows/one-shot-tighten-stale-pin-classifier.yml \
+            scripts/ci/one_shot_tighten_stale_pin_classifier.py
+          git add \
+            scripts/ci/install_base_python_locks.py \
+            tests/test_install_base_python_lock_missing_pin.py \
+            docs/doctoring/central-security-and-review-baseline.md
+          git diff --cached --check
+          git config user.name "seonghobae"
+          git config user.email "8172694+seonghobae@users.noreply.github.com"
+          git commit -m "fix(ci): require matching stale-pin diagnostics"
+          git push origin "HEAD:${BRANCH_NAME}"
