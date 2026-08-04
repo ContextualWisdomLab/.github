@@ -73,13 +73,14 @@ def test_reachable_index_missing_pin_is_visible_and_nonfatal(tmp_path: Path) -> 
         "ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE",
         "WARNING: Retrying after connection broken by ConnectionError",
         "ERROR: Could not fetch URL https://pypi.org/simple/pypdf/",
+        "ERROR: pip resolver crashed after candidate enumeration",
     ],
 )
 def test_reachable_index_message_cannot_mask_fatal_failure(
     tmp_path: Path,
     fatal_fragment: str,
 ) -> None:
-    """Integrity or transport evidence must dominate a stale-pin diagnostic."""
+    """Any independent fatal evidence must dominate a stale-pin diagnostic."""
 
     output = (
         "ERROR: Could not find a version that satisfies the requirement "
