@@ -44,13 +44,15 @@ on:
         default: ""
         type: string
       canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for scheduler code
+        description: Deprecated compatibility input; accepted and ignored because privileged source is bound to the called workflow SHA
         required: false
-        default: "main"
+        default: ""
         type: string
   repository_dispatch:
     types: [pr-review-fix-scheduler]
   schedule:
+    # Run away from minute zero, where scheduled GitHub Actions are more likely
+    # to be delayed, while preserving a bounded one-dispatch-per-run repair loop.
     - cron: "23 * * * *"
 
 concurrency:
@@ -83,13 +85,16 @@ jobs:
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '1' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
-      CANONICAL_REF: main
     steps:
-      - name: Checkout canonical scheduler
+      - name: Checkout immutable called-workflow source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ env.CANONICAL_REF }}
+          # In a reusable workflow the ordinary github context belongs to the
+          # caller. The job workflow context identifies the called workflow's
+          # repository and immutable resolved SHA, preventing a caller input or
+          # mutable branch from selecting the privileged scheduler code.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
 
