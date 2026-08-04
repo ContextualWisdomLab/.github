@@ -50,6 +50,7 @@ RUN_START_EPOCH=0
 TOTAL_TIMEOUT_EXCEEDED=0
 ATTEMPT_LOG_SEQUENCE=0
 PREEXISTING_REPORT_DIRS=()
+ATTEMPT_PREEXISTING_REPORT_RUN_DIRS=()
 REPO_NAME="${REPO_ROOT##*/}"
 # shellcheck source=scripts/ci/strix_model_utils.sh
 # shellcheck disable=SC1091  # source path is repo-local; local lint may omit -x
@@ -202,14 +203,55 @@ PY
 	done
 }
 
+# Snapshot the report run directories that already exist before a strix
+# attempt starts, so the per-attempt failure-signal check does not
+# re-attribute an earlier attempt's crash artifacts to the current attempt.
+# Earlier-attempt infrastructure errors stay recorded in the sticky
+# INFRA_ERROR_DETECTED flag, and vulnerability report artifacts from every
+# attempt remain visible to the severity checks regardless of this snapshot.
+capture_attempt_preexisting_report_run_dirs() {
+	ATTEMPT_PREEXISTING_REPORT_RUN_DIRS=()
+	local report_root run_dir
+	for report_root in "$@"; do
+		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+			continue
+		fi
+		for run_dir in "$report_root"/*; do
+			if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+				ATTEMPT_PREEXISTING_REPORT_RUN_DIRS+=("$run_dir")
+			fi
+		done
+	done
+}
+
+is_attempt_preexisting_report_run_dir() {
+	local candidate="$1"
+	local run_dir
+	for run_dir in "${ATTEMPT_PREEXISTING_REPORT_RUN_DIRS[@]}"; do
+		if [ "$candidate" = "$run_dir" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
 has_strix_report_failure_signal() {
 	local report_root
 	local report_log
+	local attempt_run_dir
 	for report_root in "$@"; do
 		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
 			continue
 		fi
 		while IFS= read -r -d '' report_log; do
+			# ponytail: the snapshot assumes strix creates a fresh run
+			# directory per attempt; a log appended into an earlier
+			# attempt's run dir stays attributed to that earlier attempt.
+			attempt_run_dir="${report_log#"$report_root"/}"
+			attempt_run_dir="$report_root/${attempt_run_dir%%/*}"
+			if [ -d "$attempt_run_dir" ] && is_attempt_preexisting_report_run_dir "$attempt_run_dir"; then
+				continue
+			fi
 			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
 				return 0
 			fi
@@ -2349,6 +2391,7 @@ run_strix_once() {
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
+	capture_attempt_preexisting_report_run_dirs "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
@@ -3117,6 +3160,46 @@ has_blocking_vulnerability_reports() {
 	done
 
 	return 1
+}
+
+# Whether any attempt in this pipeline run produced an actual
+# vulnerabilities/*.md report artifact (report directories that pre-existed
+# the gate run are excluded).
+has_any_vulnerability_report_artifact() {
+	local run_dir vulnerabilities_dir vuln_file
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+		if is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+		vulnerabilities_dir="$run_dir/vulnerabilities"
+		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
+			if [ -f "$vuln_file" ] && [ ! -L "$vuln_file" ]; then
+				return 0
+			fi
+		done
+	done
+	return 1
+}
+
+# Provider infrastructure crashes can echo severity-like markers into the
+# console log without writing any vulnerability report artifact. Log-only
+# markers are incomplete evidence, so such failures are retryable across
+# fallback models instead of non-recoverable. Any attempt that produced an
+# actual vulnerabilities/*.md artifact keeps failing closed.
+is_infra_error_without_vulnerability_artifact() {
+	if [ "$INFRA_ERROR_DETECTED" -ne 1 ]; then
+		return 1
+	fi
+	if has_any_vulnerability_report_artifact; then
+		return 1
+	fi
+	return 0
 }
 
 fail_reported_vulnerabilities_before_fallback_success() {
@@ -3890,8 +3973,11 @@ run_current_target_scan() {
 		if [ "$strict_primary_provider_fallback" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
 			return 1
 		fi
-		echo "Strix quick scan failed with a non-recoverable error." >&2
-		return 1
+		if ! is_infra_error_without_vulnerability_artifact; then
+			echo "Strix quick scan failed with a non-recoverable error." >&2
+			return 1
+		fi
+		echo "Provider infrastructure error left log-only severity markers and no Strix vulnerability report artifact; treating the failure as retryable and continuing to fallback models." >&2
 		;;
 	esac
 	if fail_unmapped_threshold_report; then
@@ -3967,8 +4053,11 @@ run_current_target_scan() {
 			if [ "$strict_fallback_provider_signal" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
 				return 1
 			fi
-			echo "Strix quick scan failed with a non-recoverable error." >&2
-			return 1
+			if ! is_infra_error_without_vulnerability_artifact; then
+				echo "Strix quick scan failed with a non-recoverable error." >&2
+				return 1
+			fi
+			echo "Provider infrastructure error left log-only severity markers and no Strix vulnerability report artifact; treating the failure as retryable and continuing to fallback models." >&2
 			;;
 		esac
 		if fail_unmapped_threshold_report; then

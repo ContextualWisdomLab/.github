@@ -878,6 +878,19 @@ jobs:
             exit 0
           fi
 
+          # A provider crash can echo severity-like markers into the console log
+          # without ever writing a vulnerability report artifact. The gate treats
+          # log-only severity markers as incomplete evidence, so mirror that
+          # here: a backend outage is still a neutral skip unless an actual
+          # vulnerabilities/*.md report artifact exists on disk. Any attempt
+          # that produced a real report artifact keeps failing closed.
+          if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
+            && ! find "$TRUSTED_WORKSPACE/strix_runs" "$RUNNER_TEMP/strix_runs" \
+              -type f -path '*/vulnerabilities/*.md' -print 2>/dev/null | grep -q .; then
+            echo "::warning title=Strix backend unavailable::Strix crashed on provider infrastructure errors and left only log-text severity markers with no vulnerability report artifact; log-only markers are incomplete evidence. Treating as a neutral skip so an infrastructure outage does not block merges; genuine report artifacts still fail the check. See the strix-reports artifact and the run log."
+            exit 0
+          fi
+
           echo "Strix reported security findings or failed for a non-backend reason; failing the required check (gate exit ${strix_rc})." >&2
           exit "$strix_rc"
 

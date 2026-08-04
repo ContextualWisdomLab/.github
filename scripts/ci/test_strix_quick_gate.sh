@@ -192,7 +192,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_equals "1" "$status_token_count" "strix workflow defines GITHUB_STATUS_TOKEN once so GitHub can parse repository_dispatch"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "strix workflow must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "models: read" "strix workflow grants only the GitHub Models read permission needed for Strix"
-	assert_file_contains "$workflow_file" "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6" "strix workflow pins actions/setup-python"
+	assert_file_contains "$workflow_file" "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0" "strix workflow pins actions/setup-python"
 	assert_file_contains "$workflow_file" 'python-version: "3.13"' "strix workflow runs Python steps on Python 3.13"
 	assert_file_contains "$workflow_file" "Resolve trusted Strix source ref" "strix workflow resolves the central trusted Strix source ref"
 	assert_file_contains "$workflow_file" "toJSON(job)" "strix workflow derives the trusted source from the job workflow context"
@@ -3784,6 +3784,52 @@ EOS
 			;;
 		esac
 		;;
+	ratelimit-crash-log-only-severity-no-artifact-fallback-succeeds)
+		# Incident replay (wardnet PR #68 run 30879125169): the primary model
+		# crashes on a 429 RateLimitError, leaves warning/fatal markers in the
+		# report artifacts and severity-like markers in the console log, but
+		# writes NO vulnerabilities/*.md artifact. The gate must classify this
+		# as retryable provider infrastructure and continue to fallback models.
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-429-crash-run"
+			cat >"$STRIX_REPORTS_DIR/fake-429-crash-run/strix.log" <<'EOS'
+2026-08-04 05:12:11.000 FATAL strix - strix.llm: litellm.RateLimitError: provider returned HTTP 429
+EOS
+			echo "Error: litellm.RateLimitError: RateLimitError: OpenAIException - Error code: 429"
+			echo "Severity: HIGH"
+			exit 1
+			;;
+		openai/deepseek/deepseek-r1-0528)
+			echo "scan ok after provider crash fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: provider crash fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 41
+			;;
+		esac
+		;;
+	ratelimit-crash-with-report-artifact-fails-closed)
+		# Invariant guard: a 429 crash that DID produce an actual
+		# vulnerabilities/*.md artifact at/above the fail threshold must still
+		# fail closed and never be swallowed by fallback success.
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-429-artifact-run/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-429-artifact-run/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Description: location data unavailable
+EOS
+			echo "Error: litellm.RateLimitError: RateLimitError: OpenAIException - Error code: 429"
+			exit 1
+			;;
+		*)
+			echo "Error: 429 crash with report artifact must not reach fallback models (${STRIX_LLM:-})" >&2
+			exit 42
+			;;
+		esac
+		;;
 	gemini-high-demand-retry-same-model-success)
 		case "${STRIX_LLM:-}" in
 		gemini/retry-high-demand-primary)
@@ -6166,6 +6212,68 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			".github/workflows/build-ci-image.yml" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
+		;;
+	ratelimit-crash-log-only-severity-no-artifact-fallback-succeeds)
+		run_gate_case "ratelimit-crash-log-only-severity-no-artifact-fallback-succeeds" \
+			"openai/gpt-5" \
+			"" \
+			"0" \
+			"Provider infrastructure error left log-only severity markers and no Strix vulnerability report artifact; treating the failure as retryable and continuing to fallback models." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0" \
+			"MEDIUM" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
+		;;
+	ratelimit-crash-with-report-artifact-fails-closed)
+		run_gate_case "ratelimit-crash-with-report-artifact-fails-closed" \
+			"openai/gpt-5" \
+			"" \
+			"1" \
+			"Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." \
+			"1" \
+			"openai/gpt-5" \
+			"https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0" \
+			"MEDIUM" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
 			"" \
 			"" \
 			"0" \
@@ -9582,6 +9690,74 @@ run_gate_case "github-models-fallback-dockerfile-test-baseline-before-next-succe
 	"0" \
 	"pull_request" \
 	".github/workflows/build-ci-image.yml" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+	"1"
+
+# 429 provider crash with log-only severity markers and NO vulnerabilities/*.md
+# artifact must be classified as retryable provider infrastructure: the gate
+# proceeds to the configured fallback models instead of failing non-recoverably
+# before the fallback loop. The clean fallback success must not be poisoned by
+# the crashed attempt's report-log failure markers.
+run_gate_case "ratelimit-crash-log-only-severity-no-artifact-fallback-succeeds" \
+	"openai/gpt-5" \
+	"" \
+	"0" \
+	"Provider infrastructure error left log-only severity markers and no Strix vulnerability report artifact; treating the failure as retryable and continuing to fallback models." \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"0" \
+	"MEDIUM" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+	"1"
+
+# Invariant: a 429 crash whose attempt produced an actual vulnerabilities/*.md
+# artifact at/above STRIX_FAIL_ON_MIN_SEVERITY still fails closed before the
+# fallback loop and is never swallowed by fallback success.
+run_gate_case "ratelimit-crash-with-report-artifact-fails-closed" \
+	"openai/gpt-5" \
+	"" \
+	"1" \
+	"Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." \
+	"1" \
+	"openai/gpt-5" \
+	"https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"0" \
+	"MEDIUM" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
 	"" \
 	"" \
 	"0" \

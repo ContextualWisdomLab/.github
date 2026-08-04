@@ -1094,6 +1094,12 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert (
         '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
     )
+    # A provider crash can echo severity-like markers into the console log with
+    # no vulnerability report artifact; that must still neutral-skip. A real
+    # vulnerabilities/*.md artifact on disk keeps failing closed.
+    assert "-path '*/vulnerabilities/*.md'" in workflow
+    assert "log-only markers are incomplete evidence" in workflow
+    assert "genuine report artifacts still fail the check" in workflow
 
 
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
