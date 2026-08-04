@@ -6,7 +6,8 @@ on:
       - ops/noema-review-731-dispatch
 
 permissions:
-  contents: write
+  contents: read
+  pull-requests: write
 
 jobs:
   dispatch:
@@ -27,3 +28,7 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "${API_URL}/repos/ContextualWisdomLab/.github/dispatches" \
             -d "$payload"
+          gh api \
+            --method POST \
+            "repos/ContextualWisdomLab/.github/issues/731/comments" \
+            -f body='Noema repository_dispatch accepted for exact head `880486bb80676da2c4c9344f293a7727afe07d6b`; awaiting the independent review verdict.'
