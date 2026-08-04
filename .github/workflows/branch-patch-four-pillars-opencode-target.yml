@@ -50,13 +50,13 @@ jobs:
         with:
           ref: fix/four-pillars-opencode-target
           fetch-depth: 0
-      - name: Append the exact Four Pillars target without replacing organization configuration
+      - name: Append the exact Four Pillars target and document the enrollment
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path(".github/workflows/opencode-review-dispatch.yml")
-          source = path.read_text(encoding="utf-8")
+          workflow = Path(".github/workflows/opencode-review-dispatch.yml")
+          source = workflow.read_text(encoding="utf-8")
           expression_open = chr(36) + "{{ "
           old = (
               "          ALLOWED_DISPATCH_TARGETS: "
@@ -69,21 +69,36 @@ jobs:
               + "format('{0},ContextualWisdomLab/four-pillars', "
               + "vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS) }}"
           )
-          if new in source:
-              print("Four Pillars exact enrollment is already present.")
-              raise SystemExit(0)
-          if source.count(old) != 1:
-              raise SystemExit("Expected exactly one dispatcher allowlist expression.")
-          path.write_text(source.replace(old, new), encoding="utf-8")
+          if new not in source:
+              if source.count(old) != 1:
+                  raise SystemExit("Expected exactly one dispatcher allowlist expression.")
+              workflow.write_text(source.replace(old, new), encoding="utf-8")
+
+          documentation = Path("docs/org-required-workflow-rollout.md")
+          text = documentation.read_text(encoding="utf-8")
+          marker = "## Explicit OpenCode dispatch enrollments"
+          section = """
+
+## Explicit OpenCode dispatch enrollments
+
+The privileged dispatcher preserves the configurable exact-repository list in
+`OPENCODE_REPOSITORY_DISPATCH_TARGETS` and also explicitly enrolls
+`ContextualWisdomLab/four-pillars`. This repository ships the standalone Four
+Pillars service and consumes the same central current-head OpenCode, independent
+Noema, and guarded merge chain as organization modules. Enrollment remains an
+exact `owner/name` match; no organization wildcard or fork authorization is
+introduced.
+"""
+          if marker not in text:
+              documentation.write_text(text.rstrip() + section + "\n", encoding="utf-8")
           PY
+      - name: Remove the one-use branch patch workflow
+        run: git rm .github/workflows/branch-patch-four-pillars-opencode-target.yml
       - name: Commit the least-privilege dispatcher update
         run: |
-          if git diff --quiet; then
-            exit 0
-          fi
           git diff --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/workflows/opencode-review-dispatch.yml
+          git add .github/workflows/opencode-review-dispatch.yml docs/org-required-workflow-rollout.md
           git commit -m "fix: enroll Four Pillars in OpenCode dispatch"
           git push origin HEAD:fix/four-pillars-opencode-target
