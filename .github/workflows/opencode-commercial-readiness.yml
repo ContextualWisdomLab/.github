@@ -1,0 +1,535 @@
+name: Reusable OpenCode commercial readiness
+
+on:
+  workflow_call:
+    inputs:
+      default_branch:
+        description: Protected product branch used when the pull-request queue is empty.
+        required: false
+        type: string
+        default: ''
+      verification_script:
+        description: Trusted default-branch script executed after the model finishes.
+        required: false
+        type: string
+        default: .github/scripts/commercial_readiness_verify.sh
+      opencode_model:
+        description: NVIDIA NIM model identifier exposed to OpenCode.
+        required: false
+        type: string
+        default: qwen/qwen3-coder-480b-a35b-instruct
+      opencode_version:
+        description: OpenCode npm package version or latest for bootstrap installations.
+        required: false
+        type: string
+        default: latest
+      agent_timeout_minutes:
+        description: Bounded OpenCode execution time in minutes.
+        required: false
+        type: number
+        default: 25
+      product_gap_labels:
+        description: Comma-separated labels used to rank the next bounded product slice.
+        required: false
+        type: string
+        default: buyer-gap,commercial-readiness,security,reliability,performance
+    secrets:
+      NVIDIA_NIM_API_KEY:
+        description: NVIDIA NIM credential exposed only to the OpenCode execution step.
+        required: true
+
+permissions: read-all
+
+concurrency:
+  group: opencode-commercial-readiness-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    name: Review, repair, verify, and advance one protected slice
+    if: startsWith(github.repository, 'ContextualWisdomLab/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      REQUESTED_DEFAULT_BRANCH: ${{ inputs.default_branch }}
+      VERIFICATION_SCRIPT: ${{ inputs.verification_script }}
+      OPENCODE_NIM_MODEL: ${{ inputs.opencode_model }}
+      OPENCODE_VERSION: ${{ inputs.opencode_version }}
+      AGENT_TIMEOUT_MINUTES: ${{ inputs.agent_timeout_minutes }}
+      PRODUCT_GAP_LABELS: ${{ inputs.product_gap_labels }}
+    steps:
+      - name: Validate bounded caller inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os
+          import re
+          from pathlib import PurePosixPath
+
+          timeout = int(os.environ['AGENT_TIMEOUT_MINUTES'])
+          if not 5 <= timeout <= 40:
+              raise SystemExit('agent_timeout_minutes must be between 5 and 40')
+
+          model = os.environ['OPENCODE_NIM_MODEL']
+          if not re.fullmatch(r'[A-Za-z0-9._/-]+', model):
+              raise SystemExit('opencode_model contains an unsupported character')
+
+          version = os.environ['OPENCODE_VERSION']
+          if version != 'latest' and not re.fullmatch(
+              r'[0-9]+\.[0-9]+\.[0-9]+(?:[-.][0-9A-Za-z.-]+)?', version
+          ):
+              raise SystemExit('opencode_version must be latest or an explicit semantic version')
+
+          script = PurePosixPath(os.environ['VERIFICATION_SCRIPT'])
+          if script.is_absolute() or '..' in script.parts:
+              raise SystemExit('verification_script must be a repository-relative path without traversal')
+          if tuple(script.parts[:2]) != ('.github', 'scripts'):
+              raise SystemExit('verification_script must live below .github/scripts')
+          if script.suffix not in {'.sh', '.py'}:
+              raise SystemExit('verification_script must be a shell or Python script')
+
+          labels = [item.strip() for item in os.environ['PRODUCT_GAP_LABELS'].split(',') if item.strip()]
+          if not 1 <= len(labels) <= 20:
+              raise SystemExit('product_gap_labels must contain between 1 and 20 labels')
+          for label in labels:
+              if not re.fullmatch(r'[A-Za-z0-9._ -]{1,50}', label):
+                  raise SystemExit(f'unsupported product-gap label: {label!r}')
+          PY
+
+      - name: Select one trusted pull request or the next bounded product slice
+        id: target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${GH_TOKEN}"
+          repository="$GITHUB_REPOSITORY"
+          owner="${repository%%/*}"
+          name="${repository#*/}"
+          context_dir="${RUNNER_TEMP}/opencode-commercial-readiness"
+          mkdir -p "$context_dir"
+          printf 'OPENCODE_CONTEXT_DIR=%s\n' "$context_dir" >> "$GITHUB_ENV"
+
+          if [[ -n "$REQUESTED_DEFAULT_BRANCH" ]]; then
+            default_branch="$REQUESTED_DEFAULT_BRANCH"
+          else
+            default_branch="$(gh api "repos/${repository}" --jq '.default_branch')"
+          fi
+          test -n "$default_branch"
+          gh api "repos/${repository}/branches/${default_branch}" >/dev/null
+
+          gh api --paginate "repos/${repository}/pulls?state=open&per_page=100" \
+            > "${context_dir}/open-pull-requests.json"
+
+          CONTEXT_DIR="$context_dir" REPOSITORY="$repository" python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          context_dir = Path(os.environ['CONTEXT_DIR'])
+          repository = os.environ['REPOSITORY']
+          trusted_associations = {'OWNER', 'MEMBER', 'COLLABORATOR'}
+          trusted_bots = {'dependabot[bot]', 'github-actions[bot]', 'renovate[bot]'}
+          pulls = json.loads(
+              (context_dir / 'open-pull-requests.json').read_text(encoding='utf-8')
+          )
+          trusted = []
+          for pull in pulls:
+              head_repository = (pull.get('head') or {}).get('repo') or {}
+              author_login = ((pull.get('user') or {}).get('login') or '').lower()
+              same_repository = head_repository.get('full_name') == repository
+              trusted_author = (
+                  pull.get('author_association') in trusted_associations
+                  or author_login in trusted_bots
+              )
+              if same_repository and trusted_author:
+                  trusted.append(pull)
+
+          trusted.sort(
+              key=lambda pull: (
+                  bool(pull.get('draft')),
+                  pull.get('updated_at') or '',
+                  int(pull['number']),
+              )
+          )
+          selected = trusted[0] if trusted else None
+          (context_dir / 'selected-target.json').write_text(
+              json.dumps({'selected': selected}, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+          pr_number="$(jq -r '.selected.number // empty' "${context_dir}/selected-target.json")"
+          if [[ -n "$pr_number" ]]; then
+            head_branch="$(jq -r '.selected.head.ref' "${context_dir}/selected-target.json")"
+            head_sha="$(jq -r '.selected.head.sha' "${context_dir}/selected-target.json")"
+            test -n "$head_branch"
+            test "$head_sha" != 'null'
+            gh pr view "$pr_number" --repo "$repository" \
+              --json number,title,body,isDraft,mergeStateStatus,reviewDecision,reviews,comments,statusCheckRollup,files,baseRefName,headRefName,headRefOid \
+              > "${context_dir}/pull-request-context.json"
+            gh api graphql \
+              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved,isOutdated,path,line,comments(first:100){nodes{author{login},body,state,createdAt,url}}}}}}}' \
+              -F owner="$owner" -F name="$name" -F number="$pr_number" \
+              > "${context_dir}/review-threads.json"
+            printf 'mode=pull_request\n' >> "$GITHUB_OUTPUT"
+            printf 'pr_number=%s\n' "$pr_number" >> "$GITHUB_OUTPUT"
+            printf 'work_ref=%s\n' "$head_sha" >> "$GITHUB_OUTPUT"
+            printf 'head_branch=%s\n' "$head_branch" >> "$GITHUB_OUTPUT"
+          else
+            gh issue list --repo "$repository" --state open --limit 100 \
+              --json number,title,body,labels,createdAt,updatedAt \
+              > "${context_dir}/open-issues.json"
+            CONTEXT_DIR="$context_dir" PRODUCT_GAP_LABELS="$PRODUCT_GAP_LABELS" python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          context_dir = Path(os.environ['CONTEXT_DIR'])
+          labels = [item.strip() for item in os.environ['PRODUCT_GAP_LABELS'].split(',') if item.strip()]
+          priorities = {label: len(labels) - index for index, label in enumerate(labels)}
+          issues = json.loads((context_dir / 'open-issues.json').read_text(encoding='utf-8'))
+
+          def score(issue):
+              names = {item['name'] for item in issue.get('labels', [])}
+              return (
+                  max((priorities.get(name, 0) for name in names), default=0),
+                  issue.get('createdAt') or '',
+                  -int(issue['number']),
+              )
+
+          ranked = sorted(issues, key=score, reverse=True)
+          selected = ranked[0] if ranked and score(ranked[0])[0] > 0 else None
+          (context_dir / 'selected-product-gap.json').write_text(
+              json.dumps({'selected': selected}, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
+            issue_number="$(jq -r '.selected.number // empty' "${context_dir}/selected-product-gap.json")"
+            if [[ -z "$issue_number" ]]; then
+              echo 'No labeled buyer-visible issue is available for an empty pull-request queue.' >&2
+              exit 1
+            fi
+            branch_name="opencode/commercial-readiness-${issue_number}-${GITHUB_RUN_ID}"
+            printf 'mode=product_gap\n' >> "$GITHUB_OUTPUT"
+            printf 'pr_number=\n' >> "$GITHUB_OUTPUT"
+            printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
+            printf 'work_ref=%s\n' "$default_branch" >> "$GITHUB_OUTPUT"
+            printf 'head_branch=%s\n' "$branch_name" >> "$GITHUB_OUTPUT"
+          fi
+          printf 'default_branch=%s\n' "$default_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the trusted product policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.target.outputs.default_branch }}
+          path: trusted-policy
+          persist-credentials: false
+
+      - name: Check out the exact implementation target
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.target.outputs.work_ref }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Establish immutable product policy and implementation baselines
+        id: baseline
+        shell: bash
+        env:
+          TARGET_MODE: ${{ steps.target.outputs.mode }}
+          HEAD_BRANCH: ${{ steps.target.outputs.head_branch }}
+        run: |
+          set -euo pipefail
+          trusted_script="${GITHUB_WORKSPACE}/trusted-policy/${VERIFICATION_SCRIPT}"
+          test -f "$trusted_script"
+          policy_digest="$(sha256sum "$trusted_script" | awk '{print $1}')"
+          test -n "$policy_digest"
+
+          cd "${GITHUB_WORKSPACE}/workspace"
+          start_sha="$(git rev-parse HEAD)"
+          if [[ "$TARGET_MODE" == 'product_gap' ]]; then
+            git checkout -b "$HEAD_BRANCH"
+          fi
+          printf 'WORKSPACE_ROOT=%s\n' "${GITHUB_WORKSPACE}/workspace" >> "$GITHUB_ENV"
+          printf 'TRUSTED_POLICY_ROOT=%s\n' "${GITHUB_WORKSPACE}/trusted-policy" >> "$GITHUB_ENV"
+          printf 'start_sha=%s\n' "$start_sha" >> "$GITHUB_OUTPUT"
+          printf 'policy_digest=%s\n' "$policy_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Build the bounded implementation assignment
+        shell: bash
+        env:
+          TARGET_MODE: ${{ steps.target.outputs.mode }}
+          TARGET_PR: ${{ steps.target.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.target.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          assignment="${OPENCODE_CONTEXT_DIR}/assignment.md"
+          cat > "$assignment" <<'EOF'
+          You are the bounded implementation agent for the checked-out ContextualWisdomLab product repository. Work only in the provided workspace and stop before the workflow deadline.
+
+          1. Read AGENTS.md, the captured pull-request or issue context, current source, tests, CHANGELOG.md, and relevant documentation before editing.
+          2. For an existing pull request, inspect every captured review comment, unresolved inline thread, and failing or pending check. Reproduce each actionable failure before changing production code and resolve findings in code.
+          3. For an empty pull-request queue, implement only the selected labeled buyer-visible issue as the smallest complete vertical slice. Begin with a realistic failing test.
+          4. Follow strict red-green-refactor TDD. Never weaken, skip, quarantine, delete, or mark a meaningful test expected-to-fail merely to obtain green output.
+          5. Preserve standalone product operation and framework-independent module seams suitable for ContextualWisdomLab/.github, naruon, contextual-orchestrator, or a future MSA adapter.
+          6. Give every new function, exported constant, security invariant, and non-obvious branch beginner-readable documentation. New or materially changed production modules require 100% statement, branch, function, and line coverage.
+          7. Use descriptive multi-word snake_case for every new database table, column, index, trigger, constraint, and migration object.
+          8. Add realistic domain, concurrency, tenant-boundary, authorization, failure, privacy, recovery, and performance tests. LLM-dependent tests must use NVIDIA_NIM_API_KEY through the product's established contextual-orchestrator boundary; never hard-code credentials or call GitHub Copilot.
+          9. Ground material decisions in current authoritative standards or peer-reviewed research, add APA 7th references to the relevant documentation, and update CHANGELOG.md. Never fabricate citations.
+          10. Do not edit, copy, weaken, replace, or re-key CodeRabbit, Noema, OpenCode-review, Strix, security-review, or organization-central review workflows. Do not modify branch protection, use administrator bypass, push, merge, mark a pull request Ready, create a release, or rewrite history.
+          11. Run focused tests while developing. The workflow will execute the caller's trusted verification script after you finish.
+
+          Never enumerate environment variables or print, persist, summarize, or transmit credentials, tokens, private keys, GitHub contexts, process environments, or secret-bearing files.
+          EOF
+          {
+            printf '\nTarget mode: %s\n' "$TARGET_MODE"
+            printf 'Target PR: %s\n' "${TARGET_PR:-none}"
+            printf 'Selected issue: %s\n' "${ISSUE_NUMBER:-none}"
+            printf 'Captured context directory: %s\n' "$OPENCODE_CONTEXT_DIR"
+          } >> "$assignment"
+
+      - name: Set up the OpenCode runtime
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 22.13.0
+
+      - name: Install one resolved OpenCode release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$OPENCODE_VERSION" == 'latest' ]]; then
+            resolved_version="$(npm view opencode-ai version)"
+          else
+            resolved_version="$OPENCODE_VERSION"
+          fi
+          test -n "$resolved_version"
+          integrity="$(npm view "opencode-ai@${resolved_version}" dist.integrity)"
+          test -n "$integrity"
+          npm install --global "opencode-ai@${resolved_version}"
+          test -n "$(opencode --version)"
+          {
+            printf '## Reusable OpenCode execution\n\n'
+            printf -- '- Resolved package version: `%s`\n' "$resolved_version"
+            printf -- '- Registry integrity: `%s`\n' "$integrity"
+            printf -- '- NVIDIA NIM model: `%s`\n' "$OPENCODE_NIM_MODEL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute OpenCode with NVIDIA NIM
+        working-directory: workspace
+        shell: bash
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$NVIDIA_NIM_API_KEY"
+          config_path="${RUNNER_TEMP}/opencode-nvidia-nim.json"
+          output_path="${RUNNER_TEMP}/opencode-commercial-readiness.jsonl"
+          OPENCODE_NIM_MODEL="$OPENCODE_NIM_MODEL" python3 <<'PY' > "$config_path"
+          import json
+          import os
+
+          model = os.environ['OPENCODE_NIM_MODEL']
+          print(json.dumps({
+              '$schema': 'https://opencode.ai/config.json',
+              'model': f'nvidia_nim/{model}',
+              'provider': {
+                  'nvidia_nim': {
+                      'npm': '@ai-sdk/openai-compatible',
+                      'name': 'NVIDIA NIM',
+                      'options': {
+                          'baseURL': 'https://integrate.api.nvidia.com/v1',
+                          'apiKey': '{env:NVIDIA_NIM_API_KEY}',
+                      },
+                      'models': {model: {'name': 'NVIDIA NIM commercial-readiness model'}},
+                  }
+              },
+              'permission': {
+                  'bash': 'allow',
+                  'edit': 'allow',
+                  'write': 'allow',
+                  'read': 'allow',
+                  'glob': 'allow',
+                  'grep': 'allow',
+              },
+          }, separators=(',', ':')))
+          PY
+          export OPENCODE_CONFIG_CONTENT="$(cat "$config_path")"
+          set +e
+          timeout --signal=TERM --kill-after=30s "${AGENT_TIMEOUT_MINUTES}m" \
+            opencode run --model "nvidia_nim/${OPENCODE_NIM_MODEL}" --format json \
+              "$(cat "${OPENCODE_CONTEXT_DIR}/assignment.md")" > "$output_path" 2>&1
+          status=$?
+          set -e
+          if grep -Fq "$NVIDIA_NIM_API_KEY" "$output_path"; then
+            rm -f "$output_path" "$config_path"
+            echo 'OpenCode output contained the model credential and was destroyed.' >&2
+            exit 1
+          fi
+          rm -f "$config_path"
+          if [[ "$status" -ne 0 ]]; then
+            echo "OpenCode failed with status ${status}; raw model output is intentionally suppressed." >&2
+            exit "$status"
+          fi
+          printf -- '- Ephemeral OpenCode output records: `%s`\n' "$(wc -l < "$output_path")" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce central and product trust boundaries
+        working-directory: workspace
+        shell: bash
+        env:
+          START_SHA: ${{ steps.baseline.outputs.start_sha }}
+          POLICY_DIGEST: ${{ steps.baseline.outputs.policy_digest }}
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$START_SHA" HEAD
+          while IFS= read -r -d '' path; do
+            git add -N -- "$path"
+          done < <(git ls-files --others --exclude-standard -z)
+          git diff --check "$START_SHA" --
+
+          current_policy_digest="$(sha256sum "${TRUSTED_POLICY_ROOT}/${VERIFICATION_SCRIPT}" | awk '{print $1}')"
+          test "$current_policy_digest" = "$POLICY_DIGEST"
+
+          changed_file_list="${RUNNER_TEMP}/opencode-changed-files.txt"
+          {
+            git diff --name-only "$START_SHA" --
+            git ls-files --others --exclude-standard
+          } | awk 'NF' | sort -u > "$changed_file_list"
+          if grep -Fx "$VERIFICATION_SCRIPT" "$changed_file_list"; then
+            echo 'The agent may not modify the trusted verification entrypoint.' >&2
+            exit 1
+          fi
+          if grep -E '^\.github/workflows/.*(coderabbit|noema|opencode-review|review-agent|strix|security-review).*\.ya?ml$' "$changed_file_list"; then
+            echo 'The agent modified a protected review-agent workflow.' >&2
+            exit 1
+          fi
+          if grep -Fx '.gitmodules' "$changed_file_list"; then
+            echo 'The agent modified repository submodule trust.' >&2
+            exit 1
+          fi
+
+          START_SHA="$START_SHA" python3 <<'PY'
+          import os
+          import re
+          import subprocess
+
+          diff = subprocess.check_output(
+              ['git', 'diff', '--no-ext-diff', '--unified=0', os.environ['START_SHA'], '--'],
+              text=True,
+              errors='replace',
+          )
+          added = '\n'.join(
+              line[1:] for line in diff.splitlines()
+              if line.startswith('+') and not line.startswith('+++')
+          )
+          for label, pattern in {
+              'GitHub classic token': r'\bghp_[A-Za-z0-9]{20,}\b',
+              'GitHub fine-grained token': r'\bgithub_pat_[A-Za-z0-9_]{20,}\b',
+              'NVIDIA token': r'\bnvapi-[A-Za-z0-9_-]{20,}\b',
+              'private key': r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
+          }.items():
+              if re.search(pattern, added):
+                  raise SystemExit(f'added diff contains a literal {label}')
+          if 'pull_request_target:' in added:
+              raise SystemExit('added diff introduces pull_request_target')
+          PY
+
+      - name: Run the caller-owned trusted verification contract
+        shell: bash
+        env:
+          POLICY_DIGEST: ${{ steps.baseline.outputs.policy_digest }}
+        run: |
+          set -euo pipefail
+          trusted_script="${TRUSTED_POLICY_ROOT}/${VERIFICATION_SCRIPT}"
+          test "$(sha256sum "$trusted_script" | awk '{print $1}')" = "$POLICY_DIGEST"
+          case "$trusted_script" in
+            *.sh) bash "$trusted_script" "$WORKSPACE_ROOT" ;;
+            *.py) python3 "$trusted_script" "$WORKSPACE_ROOT" ;;
+            *) echo 'Unsupported verification script type.' >&2; exit 1 ;;
+          esac
+          git -C "$WORKSPACE_ROOT" diff --check
+
+      - name: Publish the verified exact head without exposing credentials to the agent
+        id: publish
+        working-directory: workspace
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_MODE: ${{ steps.target.outputs.mode }}
+          TARGET_PR: ${{ steps.target.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.target.outputs.issue_number }}
+          HEAD_BRANCH: ${{ steps.target.outputs.head_branch }}
+          DEFAULT_BRANCH: ${{ steps.target.outputs.default_branch }}
+          START_SHA: ${{ steps.baseline.outputs.start_sha }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${GH_TOKEN}"
+          if [[ "$TARGET_MODE" == 'pull_request' ]]; then
+            current_remote_sha="$(gh pr view "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')"
+            if [[ "$current_remote_sha" != "$START_SHA" ]]; then
+              echo 'The pull-request head moved during development; refusing to overwrite newer work.' >&2
+              exit 1
+            fi
+          fi
+
+          git merge-base --is-ancestor "$START_SHA" HEAD
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: advance verified commercial readiness'
+          fi
+          if [[ "$TARGET_MODE" == 'product_gap' && "$(git rev-parse HEAD)" == "$START_SHA" ]]; then
+            echo 'The agent produced no verified product change.' >&2
+            exit 1
+          fi
+
+          original_remote="$(git remote get-url origin)"
+          trap 'git remote set-url origin "$original_remote"' EXIT
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${HEAD_BRANCH}"
+          git remote set-url origin "$original_remote"
+          trap - EXIT
+
+          if [[ "$TARGET_MODE" == 'product_gap' ]]; then
+            title="$(jq -r '.selected.title' "${OPENCODE_CONTEXT_DIR}/selected-product-gap.json")"
+            pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$DEFAULT_BRANCH" --head "$HEAD_BRANCH" --draft \
+              --title "$title" \
+              --body "Automated OpenCode/NVIDIA NIM commercial-readiness slice for issue #${ISSUE_NUMBER}. The pull request remains Draft until exact-head required checks, independent review, complete coverage, documentation, and release gates pass. The model credential was unavailable to the publication and verification steps, and no existing review-agent workflow or key configuration was modified.\n\nCloses #${ISSUE_NUMBER}.")"
+            TARGET_PR="${pr_url##*/}"
+          fi
+          printf 'pr_number=%s\n' "$TARGET_PR" >> "$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Request current-head review and arm only protected auto-merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.publish.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.publish.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          marker="<!-- opencode-commercial-readiness:${HEAD_SHA} -->"
+          existing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq "[.[] | select(.body | contains(\"${marker}\"))] | length")"
+          if [[ "$existing" == '0' ]]; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "${marker}
+          @coderabbitai review
+
+          OpenCode with NVIDIA NIM completed the bounded implementation and caller-owned verification contract on exact head \`${HEAD_SHA}\`. Repository and organization-required checks, Noema/OpenCode-review/Strix policy, unresolved-thread rules, and independent approval remain authoritative."
+          fi
+          is_draft="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" == 'false' ]]; then
+            gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --auto || true
+          fi
