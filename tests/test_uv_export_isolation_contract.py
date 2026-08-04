@@ -95,3 +95,33 @@ def test_uv_export_accepts_exact_package_pins_with_markers_and_multiple_hashes()
     )
 
     assert materializer._is_fully_hash_pinned_export(content) is True
+
+
+def test_tracked_pyproject_read_failure_is_not_misclassified_as_orphan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A present sibling metadata blob that cannot be read must fail closed."""
+    tree = (
+        b"100644 blob " + b"a" * 40 + b"\tpyproject.toml\0"
+        b"100644 blob " + b"b" * 40 + b"\tuv.lock\0"
+    )
+
+    def fake_git(_repo_root: Path, *args: str) -> bytes:
+        if args[0] == "ls-tree":
+            return tree
+        if args[0] == "show" and args[1].endswith(":uv.lock"):
+            return b"version = 1\n"
+        if args[0] == "show" and args[1].endswith(":pyproject.toml"):
+            raise RuntimeError("tracked metadata blob could not be read")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+    monkeypatch.setattr(
+        materializer,
+        "_install_trusted_uv",
+        lambda: (_ for _ in ()).throw(AssertionError("uv must not start")),
+    )
+
+    with pytest.raises(RuntimeError, match="tracked metadata blob could not be read"):
+        materializer.base_hash_locks(tmp_path, "a" * 40)
