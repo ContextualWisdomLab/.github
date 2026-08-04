@@ -86,6 +86,20 @@ def _is_hash_pinned(content: bytes) -> bool:
     )
 
 
+def _is_fully_hash_pinned_export(content: bytes) -> bool:
+    """Return whether every emitted uv requirement carries its own hash.
+
+    The fixed exporter invocation does not request index, find-links, binary, or
+    global hash directives. Therefore every non-comment logical line must be one
+    concrete requirement with at least one ``--hash=`` value. This stricter check
+    is intentionally separate from generic requirements-file discovery, where a
+    global ``--require-hashes`` directive is still safe to pass to pip's later
+    closure preflight.
+    """
+    lines = _requirement_lines(content)
+    return bool(lines) and all("--hash=" in line for line in lines)
+
+
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     """Run one read-only git command in the materialized repository."""
     completed = subprocess.run(
@@ -278,7 +292,7 @@ def _export_uv_lock(
     exported = completed.stdout
     if not _requirement_lines(exported):
         return None
-    if not _is_hash_pinned(exported):
+    if not _is_fully_hash_pinned_export(exported):
         raise RuntimeError(
             f"uv export for tracked base lock {lock_path} was not fully hash-pinned"
         )
