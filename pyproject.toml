@@ -15,6 +15,7 @@ dev = [
 pythonpath = ["."]
 
 [tool.coverage.run]
+branch = true
 source = ["scripts/ci"]
 omit = ["tests/*"]
 
