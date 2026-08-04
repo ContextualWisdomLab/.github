@@ -48,6 +48,18 @@ DEFERABLE_PREFLIGHT_FAILURES = (
         re.IGNORECASE,
     ),
 )
+# A recognized deferable diagnostic must never hide independent integrity or
+# transport evidence emitted by the same failed pip process. These markers are
+# deliberately narrow and correspond to pip's stable failure wording already
+# enforced by the trusted-build regression suite.
+FATAL_PREFLIGHT_FAILURES = (
+    re.compile(
+        r"THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE",
+        re.IGNORECASE,
+    ),
+    re.compile(r"WARNING:\s*Retrying\b", re.IGNORECASE),
+    re.compile(r"Could not fetch URL", re.IGNORECASE),
+)
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -165,13 +177,21 @@ def _is_deferable_preflight_failure(output: str) -> bool:
     no matching wheel). Those states are safe to recover through a same-directory
     group or defer to the later networkless coverage run. Hash mismatches,
     resolver crashes, empty diagnostics, and registry/network failures — including
-    empty or ``none`` version lists — remain fatal so a broken trusted build cannot
-    be mistaken for an optional lock. Deferred paths retain a warning and bounded
-    pip diagnostics so the incompatibility stays visible without blocking
-    unrelated coverage evidence.
+    fatal evidence mixed with an otherwise deferable diagnostic — remain fatal so
+    a broken trusted build cannot be mistaken for an optional lock. Deferred
+    paths retain a warning and bounded pip diagnostics so the incompatibility
+    stays visible without blocking unrelated coverage evidence.
     """
-    return bool(output.strip()) and any(
-        pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
+    normalized_output = output.strip()
+    return (
+        bool(normalized_output)
+        and not any(
+            pattern.search(normalized_output) for pattern in FATAL_PREFLIGHT_FAILURES
+        )
+        and any(
+            pattern.search(normalized_output)
+            for pattern in DEFERABLE_PREFLIGHT_FAILURES
+        )
     )
 
 
