@@ -67,6 +67,22 @@ def test_reachable_index_missing_pin_is_visible_and_nonfatal(tmp_path: Path) -> 
     assert "Could not find a version that satisfies the requirement" in stderr
 
 
+def test_pep440_version_evidence_is_deferable(tmp_path: Path) -> None:
+    """Epoch, prerelease, postrelease, development, and local versions remain valid."""
+
+    output = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "pypdf==6.13.3 (from versions: v1!6.14.0rc1.post2.dev3+linux.x86_64)\n"
+        "ERROR: No matching distribution found for pypdf==6.13.3"
+    )
+
+    result, stdout, stderr = _run_preflight_failure(tmp_path, output)
+
+    assert result == 0
+    assert "candidates=1 installed=0 skipped=1" in stdout
+    assert "v1!6.14.0rc1.post2.dev3+linux.x86_64" in stderr
+
+
 def test_reachable_index_context_lines_remain_deferable(tmp_path: Path) -> None:
     """Pip's yanked and incompatible-version context does not mask a proven stale pin."""
 
@@ -116,28 +132,27 @@ def test_reachable_index_message_cannot_mask_fatal_failure(
     assert "installed=" not in stdout
 
 
-def test_empty_index_missing_pin_remains_fatal(tmp_path: Path) -> None:
-    """An explicitly empty package index must never be treated as optional."""
+@pytest.mark.parametrize(
+    "version_list",
+    [
+        "none",
+        "",
+        "unavailable",
+        "latest",
+        "release-6",
+        "6.14.1, unavailable",
+        "6.14.1 extra-text",
+    ],
+)
+def test_non_version_index_evidence_remains_fatal(
+    tmp_path: Path,
+    version_list: str,
+) -> None:
+    """Only a complete comma-separated PEP 440 version list proves reachability."""
 
     output = (
         "ERROR: Could not find a version that satisfies the requirement "
-        "pypdf==6.13.3 (from versions: none)\n"
-        "ERROR: No matching distribution found for pypdf==6.13.3"
-    )
-
-    result, stdout, stderr = _run_preflight_failure(tmp_path, output)
-
-    assert result == 1
-    assert "preflight failed" in stderr
-    assert "installed=" not in stdout
-
-
-def test_blank_version_list_missing_pin_remains_fatal(tmp_path: Path) -> None:
-    """A blank version list is not affirmative proof that the index is reachable."""
-
-    output = (
-        "ERROR: Could not find a version that satisfies the requirement "
-        "pypdf==6.13.3 (from versions: )\n"
+        f"pypdf==6.13.3 (from versions: {version_list})\n"
         "ERROR: No matching distribution found for pypdf==6.13.3"
     )
 
