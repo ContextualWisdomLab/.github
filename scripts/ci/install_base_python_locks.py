@@ -1,12 +1,12 @@
 """Install independently complete base-commit Python hash locks.
 
 The coverage image build may discover several hash-bearing requirements files
-from a trusted base commit.  A file can hash every requirement it names while
+from a trusted base commit. A file can hash every requirement it names while
 still being only a supplement to another lock, so syntax alone cannot prove
-that pip can install it as an independent dependency closure.  Preflight every
+that pip can install it as an independent dependency closure. Preflight every
 candidate with pip's hash enforcement, recover supplements only with sibling
 locks from the same source directory, and skip candidates that still cannot
-prove a complete closure.  Later coverage execution remains responsible for
+prove a complete closure. Later coverage execution remains responsible for
 proving that the resulting offline environment is sufficient for the target
 repository.
 """
@@ -59,6 +59,28 @@ FATAL_PREFLIGHT_FAILURES = (
     ),
     re.compile(r"WARNING:\s*Retrying\b", re.IGNORECASE),
     re.compile(r"Could not fetch URL", re.IGNORECASE),
+)
+# Defer only the exact pip error lines that explain an incomplete hash closure,
+# interpreter mismatch, or stale pin. A second unknown ``ERROR:`` line means
+# the process reported another root cause and must therefore fail closed.
+DEFERABLE_ERROR_LINES = (
+    re.compile(
+        r"^ERROR:\s*In --require-hashes mode, all requirements must have "
+        r"their versions pinned with ==",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^ERROR:\s*Hashes are required in --require-hashes mode, but they "
+        r"are missing from some requirements",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^ERROR:.*requires a different Python", re.IGNORECASE),
+    re.compile(
+        r"^ERROR:\s*Could not find a version that satisfies the requirement"
+        r"[^\n]*\(from versions:\s*(?!none\b)(?=[A-Za-z0-9])[^)\n]+\)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^ERROR:\s*No matching distribution found for\b", re.IGNORECASE),
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -167,6 +189,18 @@ def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
     )
 
 
+def _contains_unclassified_error(output: str) -> bool:
+    """Return whether pip emitted an error outside the deferable contract."""
+    for line in output.splitlines():
+        normalized_line = line.strip()
+        if not normalized_line.casefold().startswith("error:"):
+            continue
+        if any(pattern.search(normalized_line) for pattern in DEFERABLE_ERROR_LINES):
+            continue
+        return True
+    return False
+
+
 def _is_deferable_preflight_failure(output: str) -> bool:
     """Return whether a failed candidate may be grouped or safely skipped.
 
@@ -188,6 +222,7 @@ def _is_deferable_preflight_failure(output: str) -> bool:
         and not any(
             pattern.search(normalized_output) for pattern in FATAL_PREFLIGHT_FAILURES
         )
+        and not _contains_unclassified_error(normalized_output)
         and any(
             pattern.search(normalized_output)
             for pattern in DEFERABLE_PREFLIGHT_FAILURES
