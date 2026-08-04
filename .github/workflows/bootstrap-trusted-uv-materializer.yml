@@ -48,8 +48,8 @@ jobs:
           STACK_BASE_SHA: b824259d3503fd357bf38ec7ce5a855f67005e1b
           BOOTSTRAP_WORKFLOW: .github/workflows/bootstrap-trusted-uv-materializer.yml
           READY_SENTINEL: .tmp/uv-materializer/READY
-          EXPECTED_SCRIPT_SHA256: e9bc66884224af89fed5a13c0b229d3b4117826b01105c70f67ffa9acc6dbd18
-          EXPECTED_TEST_SHA256: bf9f934d2a89785a73b7c13579076dd4c9d6f1c498451114b72ac1e640098af3
+          EXPECTED_SCRIPT_SHA256: e9bc07ffdf9f0832296e080b89cc1ae598eeddf97fde73d2569b4b2db070a0e9
+          EXPECTED_TEST_SHA256: 6c7b06ab9dca4b54aad05f484c4fe90350d2e007b1c193bfb71a49064f1ed8a9
         run: |
           set -euo pipefail
 
