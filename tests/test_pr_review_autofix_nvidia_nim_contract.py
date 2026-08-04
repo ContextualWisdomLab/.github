@@ -1,11 +1,13 @@
 """Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
 from pathlib import Path
+import subprocess
 
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
+REVIEW_DISPATCH_BLOB_SHA = "d826ce67a4299c3730610b2aa5d83803af3406cc"
 
 
 def _workflow_text(path: Path) -> str:
@@ -153,10 +155,14 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
 
 
 def test_independent_review_agent_key_system_is_unchanged() -> None:
-    """Keep scheduled write repair separate from the read-only review credentials."""
+    """Pin the existing read-only reviewer workflow byte-for-byte."""
 
-    review_workflow = _workflow_text(REVIEW_DISPATCH_WORKFLOW)
+    result = subprocess.run(
+        ["git", "hash-object", str(REVIEW_DISPATCH_WORKFLOW)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
-    assert "NVIDIA_NIM_API_KEY" not in review_workflow
-    assert "NVIDIA_API_KEY" not in review_workflow
-    assert "pr-review-autofix" not in review_workflow
+    assert result.stdout.strip() == REVIEW_DISPATCH_BLOB_SHA
+    assert "pr-review-autofix" not in _workflow_text(REVIEW_DISPATCH_WORKFLOW)
