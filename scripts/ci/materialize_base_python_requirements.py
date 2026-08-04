@@ -10,6 +10,7 @@ import functools
 import hashlib
 import io
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -22,6 +23,12 @@ import urllib.request
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+UV_EXACT_REQUIREMENT_RE = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?"
+    r"==[^\s;]+(?:\s*;\s*\S(?:.*\S)?)?"
+)
+UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
 TRUSTED_UV_ARCHIVE_URL = (
@@ -86,18 +93,28 @@ def _is_hash_pinned(content: bytes) -> bool:
     )
 
 
+def _is_fully_hash_pinned_requirement(line: str) -> bool:
+    """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
+    fields = re.split(r"\s+(?=--hash=)", line)
+    if len(fields) < 2:
+        return False
+    requirement, *hashes = fields
+    if UV_EXACT_REQUIREMENT_RE.fullmatch(requirement) is None:
+        return False
+    return all(UV_SHA256_HASH_RE.fullmatch(hash_value) for hash_value in hashes)
+
+
 def _is_fully_hash_pinned_export(content: bytes) -> bool:
-    """Return whether every emitted uv requirement carries its own hash.
+    """Return whether every emitted uv requirement is exactly SHA-256 pinned.
 
     The fixed exporter invocation does not request index, find-links, binary, or
-    global hash directives. Therefore every non-comment logical line must be one
-    concrete requirement with at least one ``--hash=`` value. This stricter check
-    is intentionally separate from generic requirements-file discovery, where a
-    global ``--require-hashes`` directive is still safe to pass to pip's later
-    closure preflight.
+    global hash directives. Every non-comment logical line must therefore be one
+    normalized package ``==`` pin with at least one complete SHA-256 hash. Option
+    lines, local/direct references, other algorithms, and truncated hashes are
+    rejected even when they contain a ``--hash=`` substring.
     """
     lines = _requirement_lines(content)
-    return bool(lines) and all("--hash=" in line for line in lines)
+    return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -206,6 +223,28 @@ def _install_trusted_uv() -> str:
     return str(uv_path)
 
 
+def _trusted_uv_export_environment(work_dir: pathlib.Path) -> dict[str, str]:
+    """Create the minimal deterministic environment allowed to influence uv export."""
+    directories = {
+        "HOME": work_dir / ".uv-home",
+        "TMPDIR": work_dir / ".uv-tmp",
+        "XDG_CACHE_HOME": work_dir / ".uv-cache",
+        "XDG_CONFIG_HOME": work_dir / ".uv-config",
+    }
+    for directory in directories.values():
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return {
+        "HOME": str(directories["HOME"]),
+        "NO_COLOR": "1",
+        "PATH": os.defpath,
+        "TMPDIR": str(directories["TMPDIR"]),
+        "UV_NO_ENV_FILE": "1",
+        "UV_PYTHON_DOWNLOADS": "never",
+        "XDG_CACHE_HOME": str(directories["XDG_CACHE_HOME"]),
+        "XDG_CONFIG_HOME": str(directories["XDG_CONFIG_HOME"]),
+    }
+
+
 def _run_uv_export(
     work_dir: pathlib.Path,
     uv_path: str,
@@ -214,11 +253,11 @@ def _run_uv_export(
 ) -> subprocess.CompletedProcess[bytes]:
     """Run ``uv export`` for a reconstructed base project and return the result.
 
-    ``--frozen`` forbids lock mutation and ``--offline`` forbids network access,
-    so the export is a pure function of the already-trusted base ``uv.lock`` and
-    ``pyproject.toml``; ``--no-emit-project``/``--no-editable`` drop the project
-    itself (installed via ``PYTHONPATH`` in the sandbox) and keep only its
-    hash-pinned dependency closure.
+    ``--frozen`` forbids lock mutation and ``--offline`` forbids network access.
+    A minimal environment and ephemeral cache/config/home directories prevent
+    runner-level configuration, dotenv files, Python downloads, or persistent
+    cache state from selecting export behavior. Project metadata discovery stays
+    enabled so the reconstructed ``pyproject.toml`` remains authoritative.
     """
     return subprocess.run(
         [
@@ -226,6 +265,10 @@ def _run_uv_export(
             "export",
             "--frozen",
             "--offline",
+            "--no-cache",
+            "--no-progress",
+            "--color",
+            "never",
             "--no-emit-project",
             "--no-editable",
             "--format",
@@ -236,6 +279,7 @@ def _run_uv_export(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=timeout,
+        env=_trusted_uv_export_environment(work_dir),
     )
 
 
