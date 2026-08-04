@@ -1,4 +1,4 @@
-name: Dispatch exact-head Noema reviews
+name: Dispatch exact-head protected reviews
 
 on:
   push:
@@ -13,18 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Dispatch exact-head Noema reviews
+      - name: Dispatch exact-head OpenCode and Noema reviews
         env:
           GH_TOKEN: ${{ github.token }}
           API_URL: ${{ github.api_url }}
         run: |
           set -euo pipefail
           dispatch() {
-            local target_repository="$1"
-            local pr_number="$2"
-            local head_sha="$3"
+            local event_type="$1"
+            local target_repository="$2"
+            local pr_number="$3"
+            local head_sha="$4"
             jq -cn \
-              --arg event_type "noema-review" \
+              --arg event_type "$event_type" \
               --arg target_repository "$target_repository" \
               --argjson pr_number "$pr_number" \
               --arg pr_head_sha "$head_sha" \
@@ -39,16 +40,26 @@ jobs:
               --data-binary "@${RUNNER_TEMP}/dispatch.json"
           }
 
-          dispatch ContextualWisdomLab/.github 731 5b4929a682264712a2822d328bb5afadb1249a57
-          dispatch ContextualWisdomLab/naruon 1239 702623e80a4eebcef29dbd576c88cc0081783cde
-          dispatch ContextualWisdomLab/naruon 1211 782b36a033c1e3a265de7dc231cdbee699384c10
-          dispatch ContextualWisdomLab/naruon 1206 6b8a5af5bd6630b5076eb1f5c1ac15ca7d2e1b2f
-          dispatch ContextualWisdomLab/naruon 1203 c700e188dc9ef0996d476e2c777eaf9c291d9d42
+          dispatch_pair() {
+            local target_repository="$1"
+            local pr_number="$2"
+            local head_sha="$3"
+            dispatch opencode-review "$target_repository" "$pr_number" "$head_sha"
+            dispatch noema-review "$target_repository" "$pr_number" "$head_sha"
+          }
+
+          dispatch_pair ContextualWisdomLab/.github 731 a900f51331dfe5dd32256c05302ba49f6e3e41d6
+          dispatch_pair ContextualWisdomLab/naruon 1239 702623e80a4eebcef29dbd576c88cc0081783cde
+          dispatch_pair ContextualWisdomLab/naruon 1211 782b36a033c1e3a265de7dc231cdbee699384c10
+          dispatch_pair ContextualWisdomLab/naruon 1206 6b8a5af5bd6630b5076eb1f5c1ac15ca7d2e1b2f
+          dispatch_pair ContextualWisdomLab/naruon 1203 c700e188dc9ef0996d476e2c777eaf9c291d9d42
+          dispatch_pair ContextualWisdomLab/naruon 1238 cdf4ceaaa9136629b098c675e749c116b2c7258a
+          dispatch_pair ContextualWisdomLab/naruon 1231 4c0eed522590e927741479d1d4c3c5dbbfb2d492
 
           gh api \
             --method POST \
             "repos/ContextualWisdomLab/.github/issues/731/comments" \
-            -f body='Noema repository_dispatch requests were accepted for central #731 and the exact current heads of naruon #1239, #1211, #1206, and #1203. Awaiting independent review verdicts.'
+            -f body='Exact-head OpenCode and Noema repository_dispatch requests were accepted for central #731 and naruon #1239, #1211, #1206, #1203, #1238, and #1231. Each privileged workflow will independently validate the live PR head before publishing a verdict.'
 
           gh api \
             --method DELETE \
