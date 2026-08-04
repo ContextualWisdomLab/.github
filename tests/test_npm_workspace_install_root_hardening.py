@@ -185,8 +185,12 @@ def test_cli_rejects_control_characters_in_resolver_output(
 ) -> None:
     """The command line never emits a path containing controls or extra lines."""
     repo = tmp_path / "repo"
-    repo.mkdio(
-    monkeypatch.setattr(module, "_resolve_install_root", lambda *_args: "apps/desktop\nforged")
+    repo.mkdir()
+    monkeypatch.setattr(
+        module,
+        "resolve_install_root",
+        lambda *_args: "apps/desktop\nforged",
+    )
     with pytest.raises(SystemExit, match="2"):
         module.main(
             [
