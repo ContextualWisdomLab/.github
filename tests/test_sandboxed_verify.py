@@ -85,6 +85,8 @@ def test_timeout_output_text_normalizes_subprocess_payloads():
     assert sandboxed_verify.timeout_output_text(None) == ""
     assert sandboxed_verify.timeout_output_text(b"byte-output") == "byte-output"
     assert sandboxed_verify.timeout_output_text("text-output") == "text-output"
+    assert sandboxed_verify.timeout_output_text("my ghp_123456789012345678901234567890123456 token") == "my [REDACTED] token"
+    assert sandboxed_verify.timeout_output_text(b"my ghp_123456789012345678901234567890123456 token") == "my [REDACTED] token"
 
 
 def test_main_runs_command_in_copy_without_mutating_source(tmp_path, capsys):

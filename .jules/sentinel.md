@@ -36,6 +36,6 @@
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
 ## 2026-08-04 - Prevent Secret Leakage in Subprocess Error Traces
-**Vulnerability:** Information Disclosure / Secret Leakage
-**Learning:** When a subprocess commands times out or fails (e.g., `TimeoutExpired`), simply printing the captured `stdout` and `stderr` can inadvertently expose sensitive credentials, API keys, or tokens in the CI logs. Relying on an `ImportError` fallback for the redaction tool can silently fail open and bypass redaction.
-**Prevention:** Always use `scripts.ci.redact_sensitive_log.redact_text` to scrub sensitive tokens before printing subprocess outputs or timeout traces. Ensure the redaction module is imported unconditionally (e.g., by establishing the repository root on `sys.path`) to fail closed and prevent any possibility of unredacted logging.
+**Vulnerability:** 정보 노출 / 시크릿 유출 (Information Disclosure / Secret Leakage)
+**Learning:** 서브프로세스 명령어가 시간 초과되거나 실패할 때(예: `TimeoutExpired`), 캡처된 `stdout` 및 `stderr`를 단순히 출력하게 되면 CI 로그에 민감한 자격 증명, API 키 또는 토큰이 의도치 않게 노출될 수 있습니다. redaction 도구에 대해 `ImportError` 예외 처리에 의존할 경우, 조용히 실패하여 redaction 과정을 우회할 위험이 있습니다.
+**Prevention:** 서브프로세스 출력이나 시간 초과 에러 로그를 출력하기 전에는 항상 `scripts.ci.redact_sensitive_log.redact_text`를 사용하여 민감한 토큰을 스크러빙해야 합니다. redaction 모듈이 무조건적으로 임포트되도록 보장하여(예: `sys.path`에 저장소 루트를 명시적으로 추가하여), 임포트 실패 시 안전하게 시스템을 종료하고 필터링되지 않은 로그가 노출될 가능성을 원천 차단하십시오.

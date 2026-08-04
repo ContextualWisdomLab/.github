@@ -181,13 +181,13 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
     assert popen_calls[0][0] == (["npm", "run", "dev"],)
-    assert popen_calls[0][1]["shell"] is False
+    assert "shell" not in popen_calls[0][1]
     assert "executable" not in popen_calls[0][1]
     assert popen_calls[0][1]["start_new_session"] is True
     assert completed.returncode == 7
     assert run_calls[0][0] == (["npm", "test"],)
     assert run_calls[0][1]["timeout"] == 5
-    assert run_calls[0][1]["shell"] is False
+    assert "shell" not in run_calls[0][1]
     assert "executable" not in run_calls[0][1]
 
 
@@ -399,7 +399,7 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
 
     def fake_run_shell(command, cwd, env, timeout):
-        raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out", stderr=b"e2e-err")
+        raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out ghp_123456789012345678901234567890123456", stderr=b"e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
     monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
@@ -423,7 +423,8 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
 
     assert exit_code == 124
-    assert "e2e-out" in captured.out
+    assert "e2e-out [REDACTED]" in captured.out
+    assert "ghp_123456789012345678901234567890123456" not in captured.out
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 3s" in captured.err
 
@@ -470,7 +471,7 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     repo.mkdir()
 
     def fake_run_shell(command, cwd, env, timeout):
-        raise subprocess.TimeoutExpired(command, timeout, output="e2e-out", stderr="e2e-err")
+        raise subprocess.TimeoutExpired(command, timeout, output="e2e-out ghp_123456789012345678901234567890123456", stderr="e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
 
@@ -491,7 +492,8 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
 
     assert exit_code == 124
-    assert "e2e-out" in captured.out
+    assert "e2e-out [REDACTED]" in captured.out
+    assert "ghp_123456789012345678901234567890123456" not in captured.out
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 1s" in captured.err
     assert "SANDBOXED_WEB_E2E_RESULT" in captured.out
