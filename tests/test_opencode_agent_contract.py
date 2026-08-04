@@ -583,6 +583,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
     assert "trusted_npm_lock_is_materialized()" in measure_step
+    assert "resolve_npm_package_root()" in measure_step
+    assert "resolve_npm_install_root()" in measure_step
+    assert 'python3 -I "$GITHUB_WORKSPACE/scripts/ci/npm_workspace_install_root.py"' in measure_step
+    assert '--base-sha "$PR_BASE_SHA"' in measure_step
+    assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert (
         'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
         in measure_step
@@ -601,27 +606,35 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'cp -R /opt/npm-cache/. "$destination/"' in measure_step
     assert 'chmod -R u+rwX,go-rwx "$destination"' in measure_step
     assert '--cache "$writable_npm_cache_dir"' in measure_step
-    assert "npm offline ci" in measure_step
+    assert "npm workspace-root offline ci" in measure_step
     npm_install_case = (
         measure_step.split("install_package_dependencies() {", 1)[1]
         .split("npm)", 1)[1]
-        .split(";;", 1)[0]
+        .split(chr(10) + "              pnpm)", 1)[0]
     )
     assert (
-        "if ! trusted_npm_lock_is_materialized || "
+        'if ! trusted_npm_lock_is_materialized "$npm_install_root" || '
         "! prepare_writable_npm_cache; then"
     ) in npm_install_case
     assert (
-        "the current npm lock is not hash-bounded to the validated base or HEAD, "
+        "the resolved npm lock lacks an exact validated base-or-HEAD receipt, "
         "or the trusted npm cache is unavailable"
     ) in npm_install_case
     assert (
-        "offline npm coverage requires a tracked package-lock.json or "
-        "npm-shrinkwrap.json at the validated base and current head"
+        "no validated local or ancestor npm workspace lock owns the selected "
+        "package"
     ) in npm_install_case
-    assert npm_install_case.count("failures=$((failures + 1))") == 2
-    assert npm_install_case.count("return 0") == 2
+    assert npm_install_case.count("failures=$((failures + 1))") == 4
+    assert npm_install_case.count("return 0") == 4
     assert "return 1" not in npm_install_case
+    assert 'npm_workspace_args=(--workspace "$npm_workspace_selector")' in npm_install_case
+    assert 'npm ci --offline --ignore-scripts' in npm_install_case
+    assert 'bash "$npm_install_root"' in npm_install_case
+    assert '--cache "$writable_npm_cache_dir"' in npm_install_case
+    assert '"${npm_workspace_args[@]}"' in npm_install_case
+    assert 'ContextualWisdomLab/.github:scripts/ci/npm_workspace_install_root.py' in workflow
+    assert 'ContextualWisdomLab/.github:tests/test_npm_workspace_install_root.py' in workflow
+    assert 'ContextualWisdomLab/.github:tests/test_npm_workspace_install_root_hardening.py' in workflow
     assert "trusted_pnpm_lock_matches_base()" in measure_step
     assert (
         'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
@@ -874,6 +887,8 @@ def test_sandbox_git_config_env_marks_only_the_validated_worktree_safe(tmp_path)
     base_env = {
         **os.environ,
         "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
     }
     refused = subprocess.run(
         ["git", "-C", str(worktree), "status", "--short"],

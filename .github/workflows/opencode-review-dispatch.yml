@@ -1234,7 +1234,90 @@ jobs:
 
           writable_npm_cache_dir=""
           writable_pnpm_store_dir=""
+          resolve_npm_package_root() {
+            local selected_package_dir="$1"
+            local candidate_root
+
+            case "$selected_package_dir" in
+              "$COVERAGE_SOURCE_WORKDIR" | "$COVERAGE_SOURCE_WORKDIR"/*)
+                candidate_root="$selected_package_dir"
+                ;;
+              .)
+                candidate_root="$PWD"
+                ;;
+              "" | /* | ../* | */../* | */.. | *\\* | *$'\n'* | *$'\r'*)
+                echo "::error::Selected npm package directory is not a safe repository-relative path."
+                return 1
+                ;;
+              *)
+                candidate_root="$COVERAGE_SOURCE_WORKDIR/$selected_package_dir"
+                ;;
+            esac
+            if [ ! -d "$candidate_root" ] || [ -L "$candidate_root" ]; then
+              echo "::error::Selected npm package directory must be a real non-symlink directory."
+              return 1
+            fi
+            candidate_root="$(realpath -e -- "$candidate_root")" || {
+              echo "::error::Could not canonicalize the selected npm package directory."
+              return 1
+            }
+            case "$candidate_root" in
+              "$COVERAGE_SOURCE_WORKDIR" | "$COVERAGE_SOURCE_WORKDIR"/*) ;;
+              *)
+                echo "::error::Selected npm package directory escaped the validated coverage worktree."
+                return 1
+                ;;
+            esac
+            printf '%s\n' "$candidate_root"
+          }
+
+          resolve_npm_install_root() {
+            local selected_package_dir="$1"
+            local relative_root
+            local candidate_root
+
+            if ! relative_root="$(
+              python3 -I "$GITHUB_WORKSPACE/scripts/ci/npm_workspace_install_root.py" \
+                --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+                --package-dir "$selected_package_dir" \
+                --base-sha "$PR_BASE_SHA" \
+                --head-sha "$PR_HEAD_SHA"
+            )"; then
+              echo "::error::Could not resolve a validated npm workspace lock owner for ${selected_package_dir}."
+              return 1
+            fi
+            case "$relative_root" in
+              .)
+                candidate_root="$COVERAGE_SOURCE_WORKDIR"
+                ;;
+              "" | /* | ../* | */../* | */.. | *\\* | *$'\n'* | *$'\r'*)
+                echo "::error::Resolved npm workspace lock owner is not a safe repository-relative path."
+                return 1
+                ;;
+              *)
+                candidate_root="$COVERAGE_SOURCE_WORKDIR/$relative_root"
+                ;;
+            esac
+            if [ ! -d "$candidate_root" ] || [ -L "$candidate_root" ]; then
+              echo "::error::Resolved npm workspace lock owner must be a real non-symlink directory."
+              return 1
+            fi
+            candidate_root="$(realpath -e -- "$candidate_root")" || {
+              echo "::error::Could not canonicalize the resolved npm workspace lock owner."
+              return 1
+            }
+            case "$candidate_root" in
+              "$COVERAGE_SOURCE_WORKDIR" | "$COVERAGE_SOURCE_WORKDIR"/*) ;;
+              *)
+                echo "::error::Resolved npm workspace lock owner escaped the validated coverage worktree."
+                return 1
+                ;;
+            esac
+            printf '%s\n' "$candidate_root"
+          }
+
           trusted_npm_lock_is_materialized() {
+            local install_root="$1"
             local relative_dir
             local lock_name
             local relative_lock
@@ -1242,24 +1325,28 @@ jobs:
             local worktree_blob
             local trust_manifest
 
-            case "$PWD" in
+            case "$install_root" in
               "$COVERAGE_SOURCE_WORKDIR")
                 relative_dir=""
                 ;;
               "$COVERAGE_SOURCE_WORKDIR"/*)
-                relative_dir="${PWD#"$COVERAGE_SOURCE_WORKDIR"/}"
+                relative_dir="${install_root#"$COVERAGE_SOURCE_WORKDIR"/}"
                 ;;
               *)
-                echo "::error::npm project directory escaped the validated coverage worktree."
+                echo "::error::npm install root escaped the validated coverage worktree."
                 return 1
                 ;;
             esac
-            if [ -f npm-shrinkwrap.json ] && [ ! -L npm-shrinkwrap.json ]; then
+            if [ ! -d "$install_root" ] || [ -L "$install_root" ]; then
+              echo "::error::npm install root must be a real non-symlink directory."
+              return 1
+            fi
+            if [ -f "$install_root/npm-shrinkwrap.json" ] && [ ! -L "$install_root/npm-shrinkwrap.json" ]; then
               lock_name="npm-shrinkwrap.json"
-            elif [ -f package-lock.json ] && [ ! -L package-lock.json ]; then
+            elif [ -f "$install_root/package-lock.json" ] && [ ! -L "$install_root/package-lock.json" ]; then
               lock_name="package-lock.json"
             else
-              echo "::error::Current npm lock must be a regular non-symlink package-lock.json or npm-shrinkwrap.json."
+              echo "::error::Resolved npm lock owner must contain a regular non-symlink package-lock.json or npm-shrinkwrap.json."
               return 1
             fi
             relative_lock="${relative_dir:+${relative_dir}/}${lock_name}"
@@ -1269,8 +1356,7 @@ jobs:
               return 1
             }
             worktree_blob="$(
-              trusted_git hash-object --no-filters -- \
-                "$COVERAGE_SOURCE_WORKDIR/$relative_lock"
+              trusted_git hash-object --path="$relative_lock" -- "$install_root/$lock_name"
             )" || {
               echo "::error::Could not hash current npm lock ${relative_lock}."
               return 1
@@ -1297,7 +1383,7 @@ jobs:
                 and .lock_blob == $lock_blob
                 and (.revision_sha == $base_sha or .revision_sha == $head_sha)
               )' "$trust_manifest" >/dev/null; then
-              echo "::error::Current npm lock ${relative_lock} was not hash-bounded and materialized from the validated base or HEAD."
+              echo "::error::Current npm lock ${relative_lock} was not hash-bounded and materialized from the validated base or HEAD with an exact receipt."
               return 1
             fi
           }
@@ -1388,34 +1474,68 @@ jobs:
 
           install_package_dependencies() {
             local package_runner="$1"
+            local selected_package_dir="${2:-$PWD}"
             case "$package_runner" in
               npm)
-                if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-                  if ! trusted_npm_lock_is_materialized || ! prepare_writable_npm_cache; then
-                    append "### JavaScript/TypeScript dependencies (npm)"
-                    append ""
-                    append "- Result: FAIL"
-                    append "- Reason: the current npm lock is not hash-bounded to the validated base or HEAD, or the trusted npm cache is unavailable."
-                    append ""
-                    failures=$((failures + 1))
-                    return 0
-                  fi
-                  run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
-                    npm ci \
-                      --offline \
-                      --ignore-scripts \
-                      --cache "$writable_npm_cache_dir" \
-                      --no-audit \
-                      --no-fund
-                else
+                local selected_package_root
+                local npm_install_root
+                local npm_workspace_selector=""
+                local npm_workspace_args=()
+
+                if ! selected_package_root="$(resolve_npm_package_root "$selected_package_dir")" ||
+                  ! npm_install_root="$(resolve_npm_install_root "$selected_package_root")"; then
                   append "### JavaScript/TypeScript dependencies (npm)"
                   append ""
                   append "- Result: FAIL"
-                  append "- Reason: offline npm coverage requires a tracked package-lock.json or npm-shrinkwrap.json at the validated base and current head."
+                  append "- Reason: no validated local or ancestor npm workspace lock owns the selected package."
                   append ""
                   failures=$((failures + 1))
                   return 0
                 fi
+                if ! trusted_npm_lock_is_materialized "$npm_install_root" || ! prepare_writable_npm_cache; then
+                  append "### JavaScript/TypeScript dependencies (npm)"
+                  append ""
+                  append "- Result: FAIL"
+                  append "- Reason: the resolved npm lock lacks an exact validated base-or-HEAD receipt, or the trusted npm cache is unavailable."
+                  append ""
+                  failures=$((failures + 1))
+                  return 0
+                fi
+
+                case "$selected_package_root" in
+                  "$npm_install_root")
+                    ;;
+                  "$npm_install_root"/*)
+                    npm_workspace_selector="${selected_package_root#"$npm_install_root"/}"
+                    case "$npm_workspace_selector" in
+                      "" | /* | ../* | */../* | */.. | *\\* | *$'\n'* | *$'\r'*)
+                        append "### JavaScript/TypeScript dependencies (npm)"
+                        append ""
+                        append "- Result: FAIL"
+                        append "- Reason: the selected npm workspace path is not a safe lock-root-relative selector."
+                        append ""
+                        failures=$((failures + 1))
+                        return 0
+                        ;;
+                    esac
+                    npm_workspace_args=(--workspace "$npm_workspace_selector")
+                    ;;
+                  *)
+                    append "### JavaScript/TypeScript dependencies (npm)"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: the selected npm package is outside its validated lock owner."
+                    append ""
+                    failures=$((failures + 1))
+                    return 0
+                    ;;
+                esac
+
+                run_and_capture "JavaScript/TypeScript dependencies (npm workspace-root offline ci, lifecycle hooks disabled)" \
+                  bash -c 'cd "$1" && shift && exec "$@"' \
+                  bash "$npm_install_root" \
+                  npm ci --offline --ignore-scripts --cache "$writable_npm_cache_dir" --no-audit --no-fund \
+                  "${npm_workspace_args[@]}"
                 ;;
               pnpm)
                 trusted_pnpm_lock_matches_base
@@ -1512,7 +1632,7 @@ jobs:
               return 1
             fi
 
-            install_package_dependencies "$package_runner"
+            install_package_dependencies "$package_runner" "$package_dir"
             package_name="$(jq -r '.name // empty' "${package_dir}/package.json")"
             # A named package is not necessarily a workspace member: the default
             # single-package Tauri layout (root package.json + src-tauri/) has a
@@ -2329,6 +2449,7 @@ jobs:
               ContextualWisdomLab/.github:scripts/ci/changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/javascript_coverage_gate.py | \
               ContextualWisdomLab/.github:scripts/ci/materialize_base_javascript_packages.py | \
+              ContextualWisdomLab/.github:scripts/ci/npm_workspace_install_root.py | \
               ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \
               ContextualWisdomLab/.github:scripts/ci/pr_head_replay_guard.py | \
               ContextualWisdomLab/.github:scripts/ci/pr_review_merge_scheduler.py | \
@@ -2339,6 +2460,8 @@ jobs:
               ContextualWisdomLab/.github:tests/test_changed_file_syntax_gate.py | \
               ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \
               ContextualWisdomLab/.github:tests/test_materialize_base_javascript_packages.py | \
+              ContextualWisdomLab/.github:tests/test_npm_workspace_install_root.py | \
+              ContextualWisdomLab/.github:tests/test_npm_workspace_install_root_hardening.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
               ContextualWisdomLab/.github:tests/test_opencode_model_pool_runner.py | \
               ContextualWisdomLab/.github:tests/test_pr_head_replay_guard.py | \
