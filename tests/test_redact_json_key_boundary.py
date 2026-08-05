@@ -13,10 +13,10 @@ def test_json_object_keys_use_the_unstructured_redaction_boundary(monkeypatch) -
     monkeypatch.setattr(
         redactor,
         "PROVIDER_TOKEN_RES",
-        (re.compile(r"\bcredential_key_marker\b"),),
+        (re.compile(r"\bprovider_marker_value\b"),),
     )
 
-    assert redactor.redact_text('{"credential_key_marker":"safe"}\n') == (
+    assert redactor.redact_text('{"provider_marker_value":"safe"}\n') == (
         '{"[REDACTED]":"safe"}\n'
     )
 
