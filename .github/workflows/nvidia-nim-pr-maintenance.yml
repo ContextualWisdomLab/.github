@@ -52,17 +52,16 @@ concurrency:
     vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   dispatch-review-fixes:
     runs-on: ubuntu-24.04
     permissions:
-      actions: write
+      actions: read
       contents: read
       id-token: write
-      issues: write
+      issues: read
       pull-requests: read
       statuses: read
     env:
