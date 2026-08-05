@@ -1,0 +1,91 @@
+name: Add PR 743 Git config isolation regression
+
+on:
+  push:
+    branches:
+      - fix/trusted-uv-lock-coverage-clean
+    paths:
+      - .github/workflows/repair-pr743-git-config-red-test.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr743-git-config-red-test
+  cancel-in-progress: false
+
+jobs:
+  add-regression:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/trusted-uv-lock-coverage-clean'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          ref: ${{ github.sha }}
+
+      - name: Verify immutable parent
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD^)" = "7f270b35fb3bc25817375df0a28977be4418e6d4"
+
+      - name: Add failing runtime isolation contract
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_opencode_agent_contract.py")
+          content = path.read_text(encoding="utf-8")
+          old = '''    assert str(unrelated) not in configured.stdout
+          assert "*" not in configured.stdout
+          def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
+          '''
+          new = '''    assert str(unrelated) not in configured.stdout
+          assert "*" not in configured.stdout
+
+              workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+                  encoding="utf-8"
+              )
+              runtime = workflow.split("          trusted_git() {", 1)[0]
+              count_key = "              GIT_CONFIG_COUNT=1 " + chr(92)
+              nosystem_key = "              GIT_CONFIG_NOSYSTEM=1 " + chr(92)
+              global_key = "              GIT_CONFIG_GLOBAL=/dev/null " + chr(92)
+              runtime_invocations = runtime.count(count_key)
+              assert runtime_invocations == 3
+              assert runtime.count(nosystem_key) == runtime_invocations
+              assert runtime.count(global_key) == runtime_invocations
+
+
+          def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
+          '''
+          if content.count(old) != 1:
+              raise SystemExit("Git config regression anchor was not unique")
+          path.write_text(content.replace(old, new, 1), encoding="utf-8")
+          Path(".github/workflows/repair-pr743-git-config-red-test.yml").unlink()
+          PY
+          python3 -m py_compile tests/test_opencode_agent_contract.py
+          git diff --check
+
+      - name: Publish red-test commit
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test(opencode-review): require isolated Git config"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:refs/heads/fix/trusted-uv-lock-coverage-clean
