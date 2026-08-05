@@ -4,11 +4,14 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "scripts/ci/coverage_failure_summary.py"
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/sanitize_github_output_summary.py"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-review-ci-hashes.txt"
       - "requirements-strix-ci.txt"
@@ -18,11 +21,14 @@ on:
   push:
     branches: [main]
     paths:
+      - "scripts/ci/coverage_failure_summary.py"
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/sanitize_github_output_summary.py"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-review-ci-hashes.txt"
       - "requirements-strix-ci.txt"
@@ -48,10 +54,11 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout
+      - name: Checkout exact revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up minimum supported Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -61,8 +68,10 @@ jobs:
       - name: Compile production modules on Python 3.10
         run: |
           python -m compileall -q \
+            scripts/ci/coverage_failure_summary.py \
             scripts/ci/materialize_base_javascript_packages.py \
-            scripts/ci/materialize_base_python_requirements.py
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py
 
       - name: Exercise exact failure evidence on Python 3.10
         run: |
@@ -71,8 +80,8 @@ jobs:
           import pathlib
           import tempfile
 
-          from scripts.ci import materialize_base_javascript_packages as javascript
-          from scripts.ci import materialize_base_python_requirements as python
+          from scripts.ci import materialize_base_javascript_packages as javascript_materializer
+          from scripts.ci import materialize_base_python_requirements as python_materializer
 
           with tempfile.TemporaryDirectory() as directory:
               output = pathlib.Path(directory) / "github-output"
@@ -82,12 +91,12 @@ jobs:
                   "apps/desktop/node_modules/@types/react-dom must pin a registry "
                   "tarball and SHA-512 integrity"
               )
-              javascript._publish_coverage_failure_summary(
+              javascript_materializer._publish_coverage_failure_summary(
                   "Base JavaScript package lock materialization",
                   ValueError(exact_reason),
                   "Repair the lock and rerun coverage-evidence.",
               )
-              python._publish_coverage_failure_summary(
+              python_materializer._publish_coverage_failure_summary(
                   "Base Python lock materialization",
                   OSError("fixture <unsafe>\nCWL_COVERAGE_SUMMARY_EOF"),
                   "Repair the trusted lock and rerun coverage-evidence.",
@@ -108,10 +117,11 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout
+      - name: Checkout exact revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -131,9 +141,12 @@ jobs:
             tests/test_materialize_base_javascript_packages.py \
             tests/test_materialize_base_python_requirements.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py \
+            --cov=scripts.ci.coverage_failure_summary \
             --cov=scripts.ci.materialize_base_javascript_packages \
             --cov=scripts.ci.materialize_base_python_requirements \
+            --cov=scripts.ci.sanitize_github_output_summary \
             --cov-branch \
             --cov-fail-under=100 \
             -q
@@ -142,13 +155,18 @@ jobs:
         run: |
           python -m interrogate \
             --fail-under 100 \
+            scripts/ci/coverage_failure_summary.py \
             scripts/ci/materialize_base_javascript_packages.py \
-            scripts/ci/materialize_base_python_requirements.py
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py
 
       - name: Compile changed Python surfaces
         run: |
           python -m compileall -q \
+            scripts/ci/coverage_failure_summary.py \
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py
