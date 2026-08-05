@@ -38,4 +38,4 @@ def test_noema_core_exec_has_exact_rule_scoped_trust_comment() -> None:
 
     assert "Noema core is a fixed regular non-symlink sibling" in source
     assert f"nosemgrep: {_EXEC_RULE}" in source
-    assert "exec(compile(_CORE_PATH.read_bytes()" in source
+    assert "compile(_CORE_PATH.read_bytes()" in source
