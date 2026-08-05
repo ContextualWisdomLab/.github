@@ -1,0 +1,263 @@
+name: One-shot PR 782 conflict scope repair
+
+on:
+  pull_request:
+    branches: [main]
+    types: [ready_for_review]
+
+concurrency:
+  group: one-shot-pr782-conflict-scope-repair-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/hourly-nvidia-nim-review-repair-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact contributor head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 50
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install hash-locked verification tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify exact RED failure
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set +e
+          red_output="$(python -m pytest -q \
+            tests/test_pr_review_conflict_scope.py::test_workflow_snapshots_after_merge_and_verifies_before_staging \
+            2>&1)"
+          red_status=$?
+          set -e
+          printf '%s\n' "$red_output"
+          test "$red_status" -ne 0
+          printf '%s\n' "$red_output" | grep -F 'substring not found'
+
+      - name: Implement conflict-scope invocation and complete branch tests
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/pr-review-autofix.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          snapshot_anchor = '          if [ -n "$conflicted_files" ]; then\n'
+          snapshot_block = '''          conflict_snapshot_file="${RUNNER_TEMP}/pr-review-conflict-snapshot.json"
+          conflicted_paths_file="${RUNNER_TEMP}/pr-review-conflicted-paths.zlist"
+          git diff --name-only -z --diff-filter=U >"$conflicted_paths_file"
+          python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_conflict_scope.py" snapshot \\
+            --root "$TARGET_WORKSPACE" \\
+            --output "$conflict_snapshot_file"
+
+'''
+          if snapshot_block not in workflow:
+              if workflow.count(snapshot_anchor) != 1:
+                  raise SystemExit('conflict snapshot anchor drifted')
+              workflow = workflow.replace(snapshot_anchor, snapshot_block + snapshot_anchor, 1)
+
+          verify_anchor = '''            restore_workspace_config
+            trap - EXIT
+          fi
+
+          # Fail closed: never push unresolved conflict markers.
+'''
+          verify_block = '''            restore_workspace_config
+            trap - EXIT
+            python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_conflict_scope.py" verify \\
+              --root "$TARGET_WORKSPACE" \\
+              --snapshot "$conflict_snapshot_file" \\
+              --allowed-paths "$conflicted_paths_file"
+          fi
+
+          # Fail closed: never push unresolved conflict markers.
+'''
+          if verify_block not in workflow:
+              if workflow.count(verify_anchor) != 1:
+                  raise SystemExit('conflict verification anchor drifted')
+              workflow = workflow.replace(verify_anchor, verify_block, 1)
+          workflow_path.write_text(workflow, encoding='utf-8')
+
+          scope_path = Path('scripts/ci/pr_review_conflict_scope.py')
+          scope_source = scope_path.read_text(encoding='utf-8')
+          path_old = '''    path = Path(raw_path)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError("repository path must be a normalized relative path")
+    return raw_path
+'''
+          path_new = '''    path = Path(raw_path)
+    normalized_path = path.as_posix()
+    if (
+        path.is_absolute()
+        or normalized_path != raw_path
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError("repository path must be a normalized relative path")
+    return raw_path
+'''
+          if path_new not in scope_source:
+              if scope_source.count(path_old) != 1:
+                  raise SystemExit('relative path validator drifted')
+              scope_source = scope_source.replace(path_old, path_new, 1)
+          redundant = '''    if len(normalized) > _MAX_PATHS:
+        raise ValueError(f"{source_name} exceeds the path limit")
+'''
+          if scope_source.count(redundant) != 1:
+              raise SystemExit('redundant normalized length branch drifted')
+          scope_path.write_text(scope_source.replace(redundant, '', 1), encoding='utf-8')
+
+          test_path = Path('tests/test_pr_review_conflict_scope.py')
+          test_source = test_path.read_text(encoding='utf-8')
+          additions = '''
+
+@pytest.mark.parametrize("root_kind", ["file", "symlink"])
+def test_repository_root_must_be_a_real_directory(
+    tmp_path: Path, root_kind: str
+) -> None:
+    """Files and symlink roots fail before Git inventory or hashing."""
+    target = tmp_path / "target"
+    target.mkdir()
+    candidate = tmp_path / "candidate"
+    if root_kind == "file":
+        candidate.write_text("not a directory", encoding="utf-8")
+    else:
+        os.symlink(target, candidate)
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        scope.build_snapshot(candidate)
+
+
+@pytest.mark.parametrize(
+    "raw_path",
+    ["", "/absolute", "../escape", "nested/../escape", "./relative", "a//b"],
+)
+def test_repository_paths_must_be_bounded_normalized_relative_names(
+    raw_path: str,
+) -> None:
+    """Ambiguous, absolute, empty, and traversing path names fail closed."""
+    with pytest.raises(ValueError, match="repository path"):
+        scope._validated_relative_path(raw_path)
+
+
+def test_repository_path_byte_limit_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The path-byte limit applies before constructing a fingerprint."""
+    monkeypatch.setattr(scope, "_MAX_PATH_BYTES", 3)
+    with pytest.raises(ValueError, match="byte limit"):
+        scope._validated_relative_path("four")
+
+
+@pytest.mark.parametrize("payload", [b"{", b"\\xff"])
+def test_undecodable_snapshot_documents_fail_closed(
+    tmp_path: Path, payload: bytes
+) -> None:
+    """Malformed JSON and invalid UTF-8 cannot become snapshot evidence."""
+    root = _repository(tmp_path)
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_bytes(payload)
+    allowed = _allowed_file(tmp_path / "allowed.zlist", "conflicted.txt")
+    with pytest.raises(ValueError, match="could not be decoded"):
+        scope.verify_snapshot(root, snapshot, allowed)
+
+
+def test_missing_snapshot_and_allowed_path_files_fail_closed(tmp_path: Path) -> None:
+    """Missing evidence files produce bounded validation errors."""
+    root = _repository(tmp_path)
+    snapshot = tmp_path / "snapshot.json"
+    allowed = tmp_path / "missing-allowed.zlist"
+    with pytest.raises(ValueError, match="could not be decoded"):
+        scope.verify_snapshot(root, snapshot, allowed)
+    scope.write_snapshot(root, snapshot)
+    with pytest.raises(ValueError, match="could not be read"):
+        scope.verify_snapshot(root, snapshot, allowed)
+
+
+def test_snapshot_entry_inventory_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decoded snapshot cannot exceed the configured path budget."""
+    root = _repository(tmp_path)
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": {"stable.txt": {"kind": "missing"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    allowed = _allowed_file(tmp_path / "allowed.zlist")
+    monkeypatch.setattr(scope, "_MAX_PATHS", 0)
+    with pytest.raises(ValueError, match="snapshot entries exceed"):
+        scope.verify_snapshot(root, snapshot, allowed)
+'''
+          marker = 'def test_repository_root_must_be_a_real_directory'
+          if marker not in test_source:
+              test_path.write_text(test_source.rstrip() + additions + '\n', encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Verify GREEN focused quality gate
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q \
+            tests/test_pr_review_conflict_scope.py \
+            tests/test_pr_review_fix_hourly_contract.py \
+            tests/test_pr_review_fix_scheduler_source_pin.py \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py \
+            --cov=scripts.ci.pr_review_conflict_scope \
+            --cov-branch \
+            --cov-fail-under=100
+          python -m interrogate --fail-under 100 scripts/ci/pr_review_conflict_scope.py
+          python -m compileall -q \
+            scripts/ci/pr_review_conflict_scope.py \
+            tests/test_pr_review_conflict_scope.py
+          git diff --check
+
+      - name: Publish verified repair and remove this workflow
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          rm .github/workflows/one-shot-pr782-conflict-scope-repair.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(automation): enforce conflict repair write scope"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push origin "HEAD:refs/heads/${HEAD_BRANCH}"
