@@ -1,4 +1,4 @@
-name: Apply PR 782 verified artifact
+name: Apply PR 782 conflict-scope repair
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
       - .github/workflows/apply-pr782-artifact.yml
 
 concurrency:
-  group: apply-pr782-artifact-${{ github.event.pull_request.number }}
+  group: apply-pr782-conflict-scope-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 permissions:
@@ -26,10 +26,6 @@ jobs:
       contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      ARTIFACT_ID: "8931198871"
-      ARTIFACT_ZIP_SHA256: fc26b973ade5e867e3aa40ea8f29cccabe46f35fdde08af1279c4b598b7630d8
-      SOURCE_TAR_SHA256: 33e6543ffd6521b77010cdc4b0b7f06d9e40ea1cdae954b07c05d01eb5113005
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -43,53 +39,6 @@ jobs:
           fetch-depth: 50
           persist-credentials: false
 
-      - name: Download and verify the exact read-only source artifact
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          artifact_zip="${RUNNER_TEMP}/pr782-source.zip"
-          artifact_dir="${RUNNER_TEMP}/pr782-artifact"
-          source_dir="${RUNNER_TEMP}/pr782-source"
-          mkdir -p "$artifact_dir" "$source_dir"
-          curl -fsSL \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
-            -o "$artifact_zip"
-          printf '%s  %s\n' "$ARTIFACT_ZIP_SHA256" "$artifact_zip" | sha256sum -c -
-          unzip -q "$artifact_zip" -d "$artifact_dir"
-          printf '%s  %s\n' "$SOURCE_TAR_SHA256" "$artifact_dir/pr782-source.tar" | sha256sum -c -
-          tar -xf "$artifact_dir/pr782-source.tar" -C "$source_dir"
-          (
-            cd "$source_dir"
-            printf '%s  %s\n' 9097389deeb5e64bd4106537e6dd4be1b78b4ef4ddb52518aa774a0a8b2a1ffc .github/workflows/pr-review-autofix.yml | sha256sum -c -
-            printf '%s  %s\n' bb350c23783c4cb4411c6838a77c672fae34fb388d9ee4863d88ffe6104b93fa scripts/ci/pr_review_conflict_scope.py | sha256sum -c -
-            printf '%s  %s\n' b5f3d8311e79a348a66a5af0080c4ac6fdddde37be75d053b76b4c690a7a1883 tests/test_pr_review_conflict_scope.py | sha256sum -c -
-            printf '%s  %s\n' f90673a2ea69a4374464206c79dfba9c6b6d639c82cf04fa815e33f67b61d6cc docs/doctoring/hourly-nvidia-nim-autofix.md | sha256sum -c -
-            printf '%s  %s\n' 322492aa3afbe871e2aad22c0bc654be494b8c420595a31a4df6cf206a2a9a49 CHANGELOG.md | sha256sum -c -
-          )
-          echo "SOURCE_DIR=$source_dir" >>"$GITHUB_ENV"
-
-      - name: Install the reviewed final files and remove every temporary helper
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          install -m 0644 "$SOURCE_DIR/.github/workflows/pr-review-autofix.yml" .github/workflows/pr-review-autofix.yml
-          install -m 0644 "$SOURCE_DIR/scripts/ci/pr_review_conflict_scope.py" scripts/ci/pr_review_conflict_scope.py
-          install -m 0644 "$SOURCE_DIR/tests/test_pr_review_conflict_scope.py" tests/test_pr_review_conflict_scope.py
-          install -m 0644 "$SOURCE_DIR/docs/doctoring/hourly-nvidia-nim-autofix.md" docs/doctoring/hourly-nvidia-nim-autofix.md
-          install -m 0644 "$SOURCE_DIR/CHANGELOG.md" CHANGELOG.md
-          rm -f \
-            .github/workflows/apply-pr782-artifact.yml \
-            .github/workflows/export-pr782-source.yml \
-            .github/workflows/finalize-pr782-conflict-scope.yml \
-            .github/workflows/one-shot-pr782-conflict-scope-repair.yml \
-            .github/workflows/reopen-finalize-pr782.yml \
-            .github/workflows/repair-pr782-conflict-scope.yml \
-            scripts/ci/repair_pr782_conflict_scope_once.py
-          git diff --check
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -100,7 +49,78 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Verify behavior, 100 percent coverage, docstrings, and workflow order
+      - name: Preserve exact RED conflict-workflow evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set +e
+          output="$(python -m pytest -q \
+            tests/test_pr_review_conflict_scope.py::test_workflow_snapshots_after_merge_and_verifies_before_staging \
+            2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          printf '%s\n' "$output" | grep -F 'substring not found'
+
+      - name: Apply permanent workflow, path, documentation, and cleanup changes
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          scope_path = Path("scripts/ci/pr_review_conflict_scope.py")
+          source = scope_path.read_text(encoding="utf-8")
+          old_guard = '''    path = Path(raw_path)
+          if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+              raise ValueError("repository path must be a normalized relative path")
+          return raw_path
+          '''
+          new_guard = '''    path = Path(raw_path)
+          normalized_path = path.as_posix()
+          if (
+              path.is_absolute()
+              or normalized_path != raw_path
+              or any(part in {"", ".", ".."} for part in path.parts)
+          ):
+              raise ValueError("repository path must be a normalized relative path")
+          return raw_path
+          '''
+          if new_guard not in source:
+              if source.count(old_guard) != 1:
+                  raise SystemExit("relative-path validator drifted")
+              scope_path.write_text(source.replace(old_guard, new_guard, 1), encoding="utf-8")
+
+          test_path = Path("tests/test_pr_review_conflict_scope.py")
+          tests = test_path.read_text(encoding="utf-8")
+          old_cases = '''    ["", "/absolute", "../escape", "nested/../escape"],
+          '''
+          new_cases = '''    [
+              "",
+              "/absolute",
+              "../escape",
+              "nested/../escape",
+              "./relative",
+              "a//b",
+          ],
+          '''
+          if new_cases not in tests:
+              if tests.count(old_cases) != 1:
+                  raise SystemExit("invalid-path regression table drifted")
+              test_path.write_text(tests.replace(old_cases, new_cases, 1), encoding="utf-8")
+          PY
+          python scripts/ci/repair_pr782_conflict_scope_once.py
+          rm -f \
+            .github/workflows/apply-pr782-artifact.yml \
+            .github/workflows/export-pr782-source.yml \
+            .github/workflows/finalize-pr782-conflict-scope.yml \
+            .github/workflows/one-shot-pr782-conflict-scope-repair.yml \
+            .github/workflows/reopen-finalize-pr782.yml \
+            .github/workflows/reopen-finalize-pr782.yml \
+            .github/workflows/repair-pr782-conflict-scope.yml \
+            scripts/ci/repair_pr782_conflict_scope_once.py
+          git diff --check
+
+      - name: Verify GREEN behavior, 100 percent coverage, docstrings, and workflow order
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python -m pytest -q \
