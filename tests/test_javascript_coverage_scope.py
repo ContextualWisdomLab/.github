@@ -120,13 +120,17 @@ def test_tooling_only_change_is_explicitly_not_applicable(
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content, encoding="utf-8")
     base_sha = commit(repo_root, "base tooling")
-    for relative_path, content in tooling_files.items():
-        (repo_root / relative_path).write_text(
-            content.replace(";", ", version: 2 };", 1)
-            if relative_path.endswith(".ts")
-            else content.replace("package", "package v2"),
-            encoding="utf-8",
-        )
+    tooling_updates = {
+        "vite.autosave.config.ts": (
+            "export default { test: true, version: 2 };\n"
+        ),
+        "scripts/verify-framework-free-autosave-package.mjs": (
+            "console.log('verify framework-free package v2');\n"
+        ),
+        "scripts/verify-package.mjs": "console.log('verify package v2');\n",
+    }
+    for relative_path, content in tooling_updates.items():
+        (repo_root / relative_path).write_text(content, encoding="utf-8")
     head_sha = commit(repo_root, "update tooling")
     summary_list = empty_coverage_list(repo_root)
 
