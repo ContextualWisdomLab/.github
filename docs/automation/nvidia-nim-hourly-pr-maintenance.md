@@ -43,7 +43,7 @@ The broader commercial-development loop should route compute by task structure r
 - research-heavy architectural change: parallel evidence specialists followed by an independent synthesizer;
 - high-risk release decision: independent verification paths with no shared intermediate verdict.
 
-This direction is consistent with Conductor and TRINITY, which treat role assignment, worker selection, communication topology, and recursion depth as adaptable test-time decisions. Fugu operationalizes those ideas by routing work across a swappable model pool. The current workflow fixes agent count and recursion depth at one; future contextual-orchestrator integration must add an ablation proving that any deeper topology improves correctness or risk detection enough to justify its additional compute.
+This direction is consistent with Conductor and TRINITY, which treat communication topology, worker selection, role assignment, and recursive test-time delegation as adaptable decisions. Fugu operationalizes those ideas through a swappable model pool. The current workflow fixes agent count and recursion depth at one; future contextual-orchestrator integration must add an ablation proving that any deeper topology improves correctness or risk detection enough to justify its additional compute.
 
 ## Secret and rollback operations
 
@@ -87,10 +87,12 @@ GitHub. (2026). *OpenID Connect reference*. GitHub Docs. https://docs.github.com
 
 GitHub. (2026). *Reusing workflow configurations*. GitHub Docs. https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
 
-Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* [Preprint]. arXiv. https://arxiv.org/abs/2512.04388
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04388
 
 NVIDIA. (2026). *API reference for NVIDIA NIM for large language models*. NVIDIA Documentation. https://docs.nvidia.com/nim/large-language-models/latest/api-reference.html
 
 OpenCode. (2026). *Providers*. https://opencode.ai/docs/providers
 
 Sakana AI. (2026). *Sakana Fugu: Multi-agent system as a model*. https://sakana.ai/fugu/
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
