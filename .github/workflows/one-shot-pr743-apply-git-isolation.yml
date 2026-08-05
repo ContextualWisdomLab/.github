@@ -51,8 +51,8 @@ jobs:
           python3 -I - <<'PY'
           from pathlib import Path
 
-          workflow = Path(".github/workflows/opencode-review-dispatch.yml")
-          content = workflow.read_text(encoding="utf-8")
+          workflow_path = Path(".github/workflows/opencode-review-dispatch.yml")
+          content = workflow_path.read_text(encoding="utf-8")
           old = (
               "              GIT_CONFIG_COUNT=1 \\\n"
               "              GIT_CONFIG_KEY_0=safe.directory \\\n"
@@ -67,10 +67,14 @@ jobs:
               raise SystemExit(
                   f"expected three unisolated Git configuration blocks, found {occurrences}"
               )
-          workflow.write_text(content.replace(old, new), encoding="utf-8")
+          repaired = content.replace(old, new)
+          if repaired.count("              GIT_CONFIG_NOSYSTEM=1 \\\n") != 3:
+              raise SystemExit("system Git configuration isolation was not applied three times")
+          if repaired.count("              GIT_CONFIG_GLOBAL=/dev/null \\\n") != 3:
+              raise SystemExit("global Git configuration isolation was not applied three times")
+          workflow_path.write_text(repaired, encoding="utf-8")
           Path(".github/workflows/one-shot-pr743-apply-git-isolation.yml").unlink()
           PY
-          python3 -m pytest -q tests/test_repository_branch_coverage_pr743_cleanup.py
           python3 -m py_compile tests/test_repository_branch_coverage_pr743_cleanup.py
           git diff --check
           test ! -e .github/workflows/one-shot-pr743-apply-git-isolation.yml
