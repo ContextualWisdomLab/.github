@@ -31,3 +31,8 @@ def test_strix_hash_lock_matches_the_reviewed_security_closure() -> None:
     assert "pyopenssl==26.4.0 \\\n" in lock
     assert "aiohttp==3.14.1 \\\n" not in lock
     assert "cryptography==49.0.0 \\\n" not in lock
+
+
+if __name__ == "__main__":
+    test_strix_direct_dependencies_select_advisory_fixed_releases()
+    test_strix_hash_lock_matches_the_reviewed_security_closure()
