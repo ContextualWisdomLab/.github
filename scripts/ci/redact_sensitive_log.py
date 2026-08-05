@@ -17,9 +17,14 @@ SENSITIVE_KEY_RE = re.compile(
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
     re.IGNORECASE,
 )
-SENSITIVE_OPTION_RE = re.compile(
+SENSITIVE_OPTION_PATTERN = (
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
-    r"api[-_]?key|private[-_]?key|access[-_]?key|session[-_]?key)",
+    r"api[-_]?key|private[-_]?key|access[-_]?key|session[-_]?key)"
+)
+SENSITIVE_OPTION_RE = re.compile(SENSITIVE_OPTION_PATTERN, re.IGNORECASE)
+SEPARATE_SENSITIVE_OPTION_RE = re.compile(
+    rf"(?P<prefix>(?<![A-Za-z0-9_-])--{SENSITIVE_OPTION_PATTERN}\s+)"
+    r"(?P<value>(?!--)(?:\"[^\"]*\"|'[^']*'|[^\s,}]+))",
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
@@ -130,6 +135,10 @@ def _redact_assignments(text: str) -> str:
 def _redact_unstructured(text: str) -> str:
     """Redact credential-shaped values from non-JSON diagnostic text."""
     cleaned = _redact_assignments(text)
+    cleaned = SEPARATE_SENSITIVE_OPTION_RE.sub(
+        lambda match: f"{match.group('prefix')}{REDACTED}",
+        cleaned,
+    )
     cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
     cleaned = JWT_RE.sub(REDACTED, cleaned)
     for pattern in PROVIDER_TOKEN_RES:
