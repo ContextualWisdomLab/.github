@@ -41,7 +41,7 @@ jobs:
           fetch-depth: 20
           persist-credentials: false
 
-      - name: Verify exact bounded repair lineage
+      - name: Verify bounded test-first lineage
         env:
           EXPECTED_PRODUCT_PARENT: 53c6a1ca22c53e50b3752ec95c068984360be0b2
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -49,7 +49,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git cat-file -e "${EXPECTED_PRODUCT_PARENT}^{commit}"
           git merge-base --is-ancestor "$EXPECTED_PRODUCT_PARENT" "$GITHUB_SHA"
-          test "$(git diff --name-only "$EXPECTED_PRODUCT_PARENT" "$GITHUB_SHA")" = ".github/workflows/repair-pr790-transport-classification.yml"
+          mapfile -t changed_paths < <(git diff --name-only "$EXPECTED_PRODUCT_PARENT" "$GITHUB_SHA" | sort)
+          expected_paths=(
+            ".github/workflows/repair-pr790-transport-classification.yml"
+            "tests/test_trusted_uv_portability_and_streaming.py"
+          )
+          test "${#changed_paths[@]}" -eq "${#expected_paths[@]}"
+          for index in "${!expected_paths[@]}"; do
+            test "${changed_paths[$index]}" = "${expected_paths[$index]}"
+          done
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -64,226 +72,65 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Add exact failing transport contracts
+      - name: Complete the failing transport contract matrix
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           cat >>tests/test_trusted_uv_portability_and_streaming.py <<'PY'
 
 
-          @pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504])
-          def test_trusted_uv_download_retries_exact_http_status_set(
+          def test_trusted_uv_download_retries_timeout_failure(
               monkeypatch: pytest.MonkeyPatch,
-              status: int,
           ) -> None:
-              """Every accepted transient HTTP status receives one bounded retry."""
-              outcomes: list[object] = [
-                  _http_error(status),
-                  _ChunkedResponse([b"archive", b""]),
-              ]
-              calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+              """A real timeout receives one bounded retry with the exact request."""
+              calls: list[tuple[str, int]] = []
               sleeps: list[float] = []
-
-              def fake_urlopen(*args: object, **kwargs: object) -> object:
-                  calls.append((args, kwargs))
-                  outcome = outcomes[len(calls) - 1]
-                  if isinstance(outcome, BaseException):
-                      raise outcome
-                  return outcome
-
-              monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
+              monkeypatch.setattr(
+                  materializer.urllib.request,
+                  "urlopen",
+                  _scripted_urlopen(
+                      [TimeoutError(errno.ETIMEDOUT, "timed out"), _ChunkedResponse([b"ok", b""])],
+                      calls,
+                  ),
+              )
               monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
 
-              assert materializer._download_trusted_uv_archive() == b"archive"
+              assert materializer._download_trusted_uv_archive() == b"ok"
               assert calls == [
                   (
-                      (materializer.TRUSTED_UV_ARCHIVE_URL,),
-                      {"timeout": materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS},
+                      materializer.TRUSTED_UV_ARCHIVE_URL,
+                      materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
                   ),
                   (
-                      (materializer.TRUSTED_UV_ARCHIVE_URL,),
-                      {"timeout": materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS},
+                      materializer.TRUSTED_UV_ARCHIVE_URL,
+                      materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
                   ),
               ]
               assert sleeps == [1.0]
 
 
-          @pytest.mark.parametrize("status", [400, 404, 409, 426, 501])
-          def test_trusted_uv_download_rejects_permanent_http_statuses_immediately(
+          def test_trusted_uv_download_rejects_malformed_urlerror_reason(
               monkeypatch: pytest.MonkeyPatch,
-              status: int,
           ) -> None:
-              """Statuses outside the closed retry set perform one request and no sleep."""
-              calls = 0
+              """A non-exception URLError reason is permanent and never interpreted."""
+              calls: list[tuple[str, int]] = []
               sleeps: list[float] = []
-
-              def fake_urlopen(*_args: object, **_kwargs: object) -> object:
-                  nonlocal calls
-                  calls += 1
-                  raise _http_error(status)
-
-              monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
-              monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
-
-              with pytest.raises(RuntimeError, match=rf"HTTP {status}$"):
-                  materializer._download_trusted_uv_archive()
-
-              assert calls == 1
-              assert sleeps == []
-
-
-          def test_trusted_uv_download_does_not_retry_certificate_failure(
-              monkeypatch: pytest.MonkeyPatch,
-          ) -> None:
-              """TLS verification failures remain permanent and reveal no certificate text."""
-              certificate_failure = ssl.SSLCertVerificationError(
-                  1,
-                  "synthetic certificate details",
+              monkeypatch.setattr(
+                  materializer.urllib.request,
+                  "urlopen",
+                  _scripted_urlopen([urllib.error.URLError("malformed reason")], calls),
               )
-              calls = 0
-              sleeps: list[float] = []
-
-              def fake_urlopen(*_args: object, **_kwargs: object) -> object:
-                  nonlocal calls
-                  calls += 1
-                  raise urllib.error.URLError(certificate_failure)
-
-              monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
               monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
 
-              with pytest.raises(RuntimeError, match=r"failed: URLError$") as failure:
+              with pytest.raises(RuntimeError, match=r"URLError$"):
                   materializer._download_trusted_uv_archive()
 
-              assert "certificate details" not in str(failure.value)
-              assert calls == 1
+              assert len(calls) == 1
               assert sleeps == []
 
 
-          @pytest.mark.parametrize(
-              "failure",
-              [
-                  urllib.error.URLError(
-                      socket.gaierror(socket.EAI_AGAIN, "temporary DNS")
-                  ),
-                  urllib.error.URLError(
-                      ConnectionResetError(errno.ECONNRESET, "connection reset")
-                  ),
-                  ConnectionRefusedError(errno.ECONNREFUSED, "connection refused"),
-                  TimeoutError(errno.ETIMEDOUT, "timed out"),
-              ],
-          )
-          def test_trusted_uv_download_retries_provably_transient_transport_failures(
-              monkeypatch: pytest.MonkeyPatch,
-              failure: BaseException,
-          ) -> None:
-              """Only classified DNS, timeout, and connection failures receive retries."""
-              outcomes: list[object] = [
-                  failure,
-                  _ChunkedResponse([b"archive", b""]),
-              ]
-              calls = 0
-              sleeps: list[float] = []
-
-              def fake_urlopen(*_args: object, **_kwargs: object) -> object:
-                  nonlocal calls
-                  outcome = outcomes[calls]
-                  calls += 1
-                  if isinstance(outcome, BaseException):
-                      raise outcome
-                  return outcome
-
-              monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
-              monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
-
-              assert materializer._download_trusted_uv_archive() == b"archive"
-              assert calls == 2
-              assert sleeps == [1.0]
-
-
-          @pytest.mark.parametrize(
-              "failure",
-              [
-                  urllib.error.URLError(
-                      socket.gaierror(socket.EAI_NONAME, "permanent DNS")
-                  ),
-                  urllib.error.URLError("malformed reason"),
-                  ssl.SSLError("TLS protocol failure"),
-                  OSError(errno.EPERM, "local permission failure"),
-              ],
-          )
-          def test_trusted_uv_download_rejects_unclassified_transport_failures(
-              monkeypatch: pytest.MonkeyPatch,
-              failure: BaseException,
-          ) -> None:
-              """Permanent DNS, TLS, malformed, and local failures never retry."""
-              calls = 0
-              sleeps: list[float] = []
-
-              def fake_urlopen(*_args: object, **_kwargs: object) -> object:
-                  nonlocal calls
-                  calls += 1
-                  raise failure
-
-              monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
-              monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
-
-              with pytest.raises(RuntimeError, match=r"trusted uv archive download failed"):
-                  materializer._download_trusted_uv_archive()
-
-              assert calls == 1
-              assert sleeps == []
-
-
-          def test_transient_classifier_rejects_unrelated_exception() -> None:
-              """An unrelated exception cannot be promoted into retryable transport evidence."""
+          def test_transient_transport_classifier_rejects_unrelated_exception() -> None:
+              """An unrelated exception cannot become retryable transport evidence."""
               assert materializer._transient_transport_failure_label(ValueError()) is None
-
-
-          def test_trusted_uv_retry_discards_partial_failed_response(
-              monkeypatch: pytest.MonkeyPatch,
-          ) -> None:
-              """Bytes read before a connection reset never prefix the successful attempt."""
-
-              class _PartialFailureResponse(_ChunkedResponse):
-                  def read(self, size: int) -> bytes:
-                      """Return one prefix and then raise a classified reset."""
-                      chunk = super().read(size)
-                      if chunk == b"raise-reset":
-                          raise ConnectionResetError(
-                              errno.ECONNRESET,
-                              "connection reset after partial body",
-                          )
-                      return chunk
-
-              outcomes: list[object] = [
-                  _PartialFailureResponse([b"discard-me", b"raise-reset"]),
-                  _ChunkedResponse([b"complete-archive", b""]),
-              ]
-              calls = 0
-
-              def fake_urlopen(*_args: object, **_kwargs: object) -> object:
-                  nonlocal calls
-                  outcome = outcomes[calls]
-                  calls += 1
-                  return outcome
-
-              monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
-              monkeypatch.setattr(materializer.time, "sleep", lambda _delay: None)
-
-              assert materializer._download_trusted_uv_archive() == b"complete-archive"
-              assert calls == 2
-          PY
-
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("tests/test_trusted_uv_portability_and_streaming.py")
-          source = path.read_text(encoding="utf-8")
-          source = source.replace(
-              "import io\nimport platform\nimport urllib.error\n",
-              "import errno\nimport io\nimport platform\nimport socket\nimport ssl\nimport urllib.error\n",
-              1,
-          )
-          path.write_text(source, encoding="utf-8")
           PY
 
           set +e
@@ -293,7 +140,12 @@ jobs:
           set -e
           cat "${RUNNER_TEMP}/pr790-red.log"
           test "$red_status" -eq 1
-          grep -Eq "425|_transient_transport_failure_label" "${RUNNER_TEMP}/pr790-red.log"
+          grep -F 'retries_only_closed_http_status_set[425]' "${RUNNER_TEMP}/pr790-red.log"
+          grep -F 'does_not_retry_tls_certificate_failure' "${RUNNER_TEMP}/pr790-red.log"
+          grep -F 'does_not_retry_non_temporary_dns_failure' "${RUNNER_TEMP}/pr790-red.log"
+          grep -F 'does_not_retry_unclassified_os_error' "${RUNNER_TEMP}/pr790-red.log"
+          grep -F 'rejects_malformed_urlerror_reason' "${RUNNER_TEMP}/pr790-red.log"
+          grep -F '_transient_transport_failure_label' "${RUNNER_TEMP}/pr790-red.log"
 
       - name: Implement closed retry classifier
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -303,21 +155,25 @@ jobs:
 
           path = Path("scripts/ci/materialize_base_python_requirements.py")
           source = path.read_text(encoding="utf-8")
-          source = source.replace(
-              "import argparse\nimport atexit\n",
-              "import argparse\nimport atexit\nimport errno\n",
-              1,
+          replacements = (
+              (
+                  "import argparse\nimport atexit\n",
+                  "import argparse\nimport atexit\nimport errno\n",
+              ),
+              (
+                  "import shutil\nimport subprocess\nimport sys\n",
+                  "import shutil\nimport socket\nimport ssl\nimport subprocess\nimport sys\n",
+              ),
+              (
+                  "    {408, 429, 500, 502, 503, 504}\n",
+                  "    {408, 425, 429, 500, 502, 503, 504}\n",
+              ),
           )
-          source = source.replace(
-              "import shutil\nimport subprocess\nimport sys\n",
-              "import shutil\nimport socket\nimport ssl\nimport subprocess\nimport sys\n",
-              1,
-          )
-          source = source.replace(
-              "    {408, 429, 500, 502, 503, 504}\n",
-              "    {408, 425, 429, 500, 502, 503, 504}\n",
-              1,
-          )
+          for old, new in replacements:
+              if source.count(old) != 1:
+                  raise SystemExit(f"production replacement anchor drifted: {old!r}")
+              source = source.replace(old, new, 1)
+
           constant_anchor = "TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024\n"
           constant_block = '''TRUSTED_UV_TRANSIENT_ERRNO = frozenset(
               {
@@ -332,39 +188,43 @@ jobs:
               }
           )
           '''.replace("          ", "")
-          if constant_block not in source:
-              if source.count(constant_anchor) != 1:
-                  raise SystemExit("transient errno constant anchor drifted")
-              source = source.replace(constant_anchor, constant_block + constant_anchor, 1)
+          if source.count(constant_anchor) != 1:
+              raise SystemExit("transient errno constant anchor drifted")
+          source = source.replace(constant_anchor, constant_block + constant_anchor, 1)
 
           download_anchor = '''def _download_trusted_uv_archive() -> bytes:
               """Download the fixed archive with bounded transient transport retries."""
           '''.replace("          ", "")
-          classifier = '''def _transient_transport_failure_label(
+          helpers = '''def _transport_failure_root(error: BaseException) -> BaseException:
+              """Return the bounded diagnostic root for one transport exception."""
+              if (
+                  isinstance(error, urllib.error.URLError)
+                  and isinstance(error.reason, BaseException)
+              ):
+                  return error.reason
+              return error
+
+
+          def _transient_transport_failure_label(
               error: BaseException,
           ) -> str | None:
               """Return bounded evidence only for provably transient transport failures."""
-              if isinstance(error, urllib.error.URLError):
-                  reason = error.reason
-                  if not isinstance(reason, BaseException):
-                      return None
-                  return _transient_transport_failure_label(reason)
-              if isinstance(error, (ssl.SSLCertVerificationError, ssl.SSLError)):
+              root = _transport_failure_root(error)
+              if isinstance(root, (ssl.SSLCertVerificationError, ssl.SSLError)):
                   return None
-              if isinstance(error, socket.gaierror):
-                  return "temporary DNS" if error.errno == socket.EAI_AGAIN else None
-              if isinstance(error, TimeoutError):
+              if isinstance(root, socket.gaierror):
+                  return "temporary DNS" if root.errno == socket.EAI_AGAIN else None
+              if isinstance(root, TimeoutError):
                   return "timeout"
-              if isinstance(error, OSError) and error.errno in TRUSTED_UV_TRANSIENT_ERRNO:
-                  return f"transport errno {error.errno}"
+              if isinstance(root, OSError) and root.errno in TRUSTED_UV_TRANSIENT_ERRNO:
+                  return f"transport errno {root.errno}"
               return None
 
 
           '''.replace("          ", "")
-          if classifier not in source:
-              if source.count(download_anchor) != 1:
-                  raise SystemExit("transport classifier insertion anchor drifted")
-              source = source.replace(download_anchor, classifier + download_anchor, 1)
+          if source.count(download_anchor) != 1:
+              raise SystemExit("transport helper insertion anchor drifted")
+          source = source.replace(download_anchor, helpers + download_anchor, 1)
 
           old_except = '''        except (urllib.error.URLError, OSError) as exc:
                   failure_label = type(exc).__name__
@@ -373,9 +233,10 @@ jobs:
           new_except = '''        except (urllib.error.URLError, OSError) as exc:
                   failure_label = _transient_transport_failure_label(exc)
                   if failure_label is None:
+                      root = _transport_failure_root(exc)
                       raise RuntimeError(
                           "trusted uv archive download failed: "
-                          f"{type(exc).__name__}"
+                          f"{type(root).__name__}"
                       ) from exc
                   failure = exc
           '''.replace("          ", "")
@@ -406,7 +267,7 @@ jobs:
           Each attempt repeats the same literal Astral URL and exact timeout. A
           failed response body is scoped to that attempt, so partial bytes are
           discarded before retry. Diagnostics expose only a bounded HTTP status,
-          transport errno, or failure class and never exception text, URL-derived
+          transport errno, or exception class and never exception text, URL-derived
           credentials, headers, or body content.
           '''
           section = "\n".join(
