@@ -56,15 +56,17 @@ def test_quality_gate_tracks_every_idempotency_surface() -> None:
 
     text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
     for workflow_path in (
-        '.github/workflows/agent-mention-noema-dispatch.yml',
-        '.github/workflows/agent-mention-opencode-dispatch.yml',
+        ".github/workflows/agent-mention-noema-dispatch.yml",
+        ".github/workflows/agent-mention-opencode-dispatch.yml",
     ):
         assert f'      - "{workflow_path}"' in text
 
+    assert '      - "tests/test_agent_mention_*.py"' in text
     test_command = text.split("python -m coverage run -m pytest -q", 1)[1]
+    compile_command = text.split("python -m compileall -q", 1)[1]
     for test_path in (
-        'tests/test_agent_mention_idempotency.py',
-        'tests/test_agent_mention_downstream_idempotency.py',
+        "tests/test_agent_mention_idempotency.py",
+        "tests/test_agent_mention_downstream_idempotency.py",
     ):
-        assert f'      - "{test_path}"' in text
         assert test_path in test_command
+        assert test_path in compile_command
