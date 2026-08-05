@@ -155,9 +155,10 @@ def _add_current_contract_test() -> None:
     text = CONTRACT_PATH.read_text(encoding="utf-8")
     if CONTRACT_FUNCTION in text:
         raise SystemExit("npm workspace contract test already exists unexpectedly")
-    if not text.endswith("\n"):
-        text += "\n"
-    CONTRACT_PATH.write_text(text.rstrip() + CONTRACT_TEST + "\n", encoding="utf-8")
+    CONTRACT_PATH.write_text(
+        text.rstrip() + CONTRACT_TEST.rstrip() + "\n",
+        encoding="utf-8",
+    )
     _run("git", "add", str(CONTRACT_PATH))
 
 
