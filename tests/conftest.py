@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -15,11 +15,13 @@ def clear_trusted_uv_process_caches(monkeypatch: pytest.MonkeyPatch) -> Iterator
     """Isolate process caches and ambient Git configuration for every test."""
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-    materializer._install_trusted_uv.cache_clear()
-    materializer._install_trusted_uv_url_opener.cache_clear()
+    install_trusted_uv = materializer._install_trusted_uv
+    install_url_opener = materializer._install_trusted_uv_url_opener
+    install_trusted_uv.cache_clear()
+    install_url_opener.cache_clear()
     yield
-    materializer._install_trusted_uv.cache_clear()
-    materializer._install_trusted_uv_url_opener.cache_clear()
+    install_trusted_uv.cache_clear()
+    install_url_opener.cache_clear()
 
 
 class FakeHttpResponse:
