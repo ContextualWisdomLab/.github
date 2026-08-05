@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
 
 
 DISPATCH_PATH = Path(".github/workflows/opencode-review-dispatch.yml")
@@ -11,7 +10,135 @@ DIAGNOSTICS_PATH = Path(".github/workflows/opencode-coverage-diagnostics-ci.yml"
 TEST_PATH = Path("tests/test_opencode_libclang_toolchain_contract.py")
 CHANGELOG_PATH = Path("CHANGELOG.md")
 DOCTORING_PATH = Path("docs/doctoring/opencode-llvm-coverage-toolchain.md")
-PERMANENT_DIAGNOSTICS_COMMIT = "5a979466a7927c830102c153e449208ea8606f34"
+PERMANENT_DIAGNOSTICS_TEXT = '''name: OpenCode Coverage Diagnostics CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/opencode-review-dispatch.yml'
+      - '.github/workflows/opencode-coverage-diagnostics-ci.yml'
+      - 'requirements-opencode-review-ci*.txt'
+      - 'scripts/ci/coverage_failure_summary.py'
+      - 'scripts/ci/materialize_base_javascript_packages.py'
+      - 'scripts/ci/materialize_base_python_requirements.py'
+      - 'scripts/ci/sanitize_github_output_summary.py'
+      - 'tests/test_coverage_materializer_failure_diagnostics.py'
+      - 'tests/test_materialize_base_javascript_packages.py'
+      - 'tests/test_materialize_base_python_requirements.py'
+      - 'tests/test_opencode_libclang_toolchain_contract.py'
+      - 'tests/test_opencode_agent_contract.py'
+      - 'tests/test_sanitize_github_output_summary.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-coverage-diagnostics-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  python310:
+    name: Python 3.10 source compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout contributor head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up minimum supported Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.10'
+
+      - name: Compile changed Python source under 3.10
+        run: |
+          python -m compileall -q \
+            scripts/ci/coverage_failure_summary.py \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_opencode_libclang_toolchain_contract.py \
+            tests/test_sanitize_github_output_summary.py
+
+  quality:
+    name: Diagnostics sanitization and coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout contributor head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact reviewed test toolchain
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run materializer and sanitizer regressions at 100% coverage
+        run: |
+          python -m pytest \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_opencode_libclang_toolchain_contract.py \
+            tests/test_sanitize_github_output_summary.py \
+            --cov=scripts.ci.coverage_failure_summary \
+            --cov=scripts.ci.materialize_base_javascript_packages \
+            --cov=scripts.ci.materialize_base_python_requirements \
+            --cov=scripts.ci.sanitize_github_output_summary \
+            --cov-branch \
+            --cov-fail-under=100 \
+            -q
+
+      - name: Enforce production docstrings
+        run: >-
+          python -m interrogate --fail-under 100
+          scripts/ci/coverage_failure_summary.py
+          scripts/ci/materialize_base_javascript_packages.py
+          scripts/ci/materialize_base_python_requirements.py
+          scripts/ci/sanitize_github_output_summary.py
+
+      - name: Compile all changed source and tests
+        run: |
+          python -m compileall -q \
+            scripts/ci/coverage_failure_summary.py \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_opencode_libclang_toolchain_contract.py \
+            tests/test_sanitize_github_output_summary.py
+'''
 
 
 def _replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -24,17 +151,8 @@ def _replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 def _restore_permanent_diagnostics() -> None:
-    """Restore the permanent diagnostics workflow from its reviewed commit."""
-    result = subprocess.run(
-        [
-            "git",
-            "show",
-            f"{PERMANENT_DIAGNOSTICS_COMMIT}:{DIAGNOSTICS_PATH.as_posix()}",
-        ],
-        check=True,
-        capture_output=True,
-    )
-    DIAGNOSTICS_PATH.write_bytes(result.stdout)
+    """Restore the permanent diagnostics workflow from reviewed source text."""
+    DIAGNOSTICS_PATH.write_text(PERMANENT_DIAGNOSTICS_TEXT, encoding="utf-8")
 
 
 def _update_dispatch_workflow() -> None:
@@ -43,12 +161,7 @@ def _update_dispatch_workflow() -> None:
     slash = chr(92)
     package_old = f"              llvm-19 {slash}\n"
     package_new = f"              libclang-19-dev {slash}\n{package_old}"
-    dispatch = _replace_once(
-        dispatch,
-        package_old,
-        package_new,
-        "llvm-19 package",
-    )
+    dispatch = _replace_once(dispatch, package_old, package_new, "llvm-19 package")
     env_old = "          ENV LLVM_COV=/usr/bin/llvm-cov-19\n"
     env_new = "          ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib\n" + env_old
     dispatch = _replace_once(dispatch, env_old, env_new, "LLVM_COV environment")
@@ -128,10 +241,7 @@ def _update_records() -> None:
         anchor = "### Fixed\n\n"
         if changelog.count(anchor) != 1:
             raise SystemExit("changelog Fixed heading drifted")
-        CHANGELOG_PATH.write_text(
-            changelog.replace(anchor, anchor + bullet, 1),
-            encoding="utf-8",
-        )
+        CHANGELOG_PATH.write_text(changelog.replace(anchor, anchor + bullet, 1), encoding="utf-8")
 
     doctoring = DOCTORING_PATH.read_text(encoding="utf-8")
     section = '''
