@@ -66,6 +66,8 @@ def test_traversal_absolute_nested_glob_and_empty_values_fail_closed() -> None:
         "src/../etc",
         "src/api",
         "*",
+        "src[0-9]",
+        "src]",
         "-rf",
         "   ",
         "src\nbackend",
