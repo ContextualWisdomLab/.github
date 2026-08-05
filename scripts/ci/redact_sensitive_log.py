@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sys
+from collections.abc import Sequence
 from typing import Any
 
 REDACTED = "[REDACTED]"
@@ -13,6 +15,11 @@ KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
+    re.IGNORECASE,
+)
+SENSITIVE_OPTION_RE = re.compile(
+    r"(?:token|secret|password|passwd|credential|authorization|jwt|"
+    r"api[-_]?key|private[-_]?key|access[-_]?key|session[-_]?key)",
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
@@ -139,6 +146,40 @@ def redact_text(text: str) -> str:
         ending = raw_line[len(line) :]
         output.append(_redact_line(line) + ending)
     return "".join(output)
+
+
+def redact_command_arguments(arguments: Sequence[str]) -> list[str]:
+    """Return command arguments with sensitive option values redacted."""
+    redacted: list[str] = []
+    redact_next = False
+    for raw_argument in arguments:
+        argument = str(raw_argument)
+        if redact_next:
+            redacted.append(REDACTED)
+            redact_next = False
+            continue
+
+        option = argument.lstrip("-")
+        if "=" in option:
+            key, _value = option.split("=", 1)
+            if SENSITIVE_OPTION_RE.fullmatch(key):
+                separator_index = argument.find("=")
+                redacted.append(f"{argument[: separator_index + 1]}{REDACTED}")
+                continue
+
+        redacted.append(redact_text(argument))
+        if SENSITIVE_OPTION_RE.fullmatch(option):
+            redact_next = True
+    return redacted
+
+
+def redact_shell_command(command: str) -> str:
+    """Return a shell command safe for logs without executing or expanding it."""
+    try:
+        arguments = shlex.split(command)
+    except ValueError:
+        return redact_text(command)
+    return shlex.join(redact_command_arguments(arguments))
 
 
 def main() -> int:
