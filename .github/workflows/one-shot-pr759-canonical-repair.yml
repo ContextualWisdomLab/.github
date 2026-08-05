@@ -1,0 +1,296 @@
+name: One-shot PR 759 canonical repair
+
+on:
+  push:
+    branches:
+      - fix/opencode-coverage-failure-diagnostics
+    paths:
+      - .github/workflows/one-shot-pr759-canonical-repair.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: one-shot-pr759-canonical-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/opencode-coverage-failure-diagnostics'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Apply exact bounded repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -I - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              """Replace one exact reviewed source fragment and fail on drift."""
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected one repair anchor, found {count}: {old[:120]!r}"
+                  )
+              file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          def remove_top_level_function(path: str, function_name: str) -> None:
+              """Remove one top-level Python function including trailing blank lines."""
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              tree = ast.parse(text, filename=path)
+              matches = [
+                  node
+                  for node in tree.body
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and node.name == function_name
+              ]
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"{path}: expected one top-level {function_name}, found {len(matches)}"
+                  )
+              node = matches[0]
+              lines = text.splitlines(keepends=True)
+              start = node.lineno - 1
+              end = node.end_lineno
+              while end < len(lines) and not lines[end].strip():
+                  end += 1
+              file_path.write_text("".join(lines[:start] + lines[end:]), encoding="utf-8")
+
+
+          shared_import = '''sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+          from scripts.ci.coverage_failure_summary import (
+              publish_coverage_failure_summary as _publish_coverage_failure_summary,
+          )
+          '''
+
+          javascript_path = "scripts/ci/materialize_base_javascript_packages.py"
+          replace_once(javascript_path, "import html\n", "")
+          replace_once(javascript_path, "import os\n", "")
+          replace_once(
+              javascript_path,
+              "import sys\nimport urllib.parse\nfrom typing import Any\n\n\nSHA_RE",
+              "import sys\nimport urllib.parse\nfrom typing import Any\n\n\n"
+              + shared_import
+              + "\nSHA_RE",
+          )
+          remove_top_level_function(javascript_path, "_publish_coverage_failure_summary")
+
+          python_path = "scripts/ci/materialize_base_python_requirements.py"
+          replace_once(python_path, "import html\n", "")
+          replace_once(python_path, "import os\n", "")
+          replace_once(
+              python_path,
+              "import sys\nimport tempfile\n\n\nSHA_RE",
+              "import sys\nimport tempfile\n\n\n"
+              + shared_import
+              + "\nSHA_RE",
+          )
+          remove_top_level_function(python_path, "_publish_coverage_failure_summary")
+
+          helper_path = "scripts/ci/coverage_failure_summary.py"
+          replace_once(
+              helper_path,
+              '''import html
+          import os
+          import runpy
+          from collections.abc import Callable
+          from pathlib import Path
+          from typing import cast
+
+          _COVERAGE_DELIMITER = "CWL_COVERAGE_SUMMARY_EOF"
+          _SANITIZER_NAMESPACE = runpy.run_path(
+              str(Path(__file__).with_name("sanitize_github_output_summary.py"))
+          )
+          _SANITIZE_TEXT = cast(Callable[[str], str], _SANITIZER_NAMESPACE["sanitize_text"])
+          ''',
+              '''import html
+          import os
+          from pathlib import Path
+
+          from scripts.ci.sanitize_github_output_summary import sanitize_text
+
+          _COVERAGE_DELIMITER = "CWL_COVERAGE_SUMMARY_EOF"
+          ''',
+          )
+          replace_once(
+              helper_path,
+              "redacted = _SANITIZE_TEXT(normalized)",
+              "redacted = sanitize_text(normalized)",
+          )
+
+          sanitizer_path = "scripts/ci/sanitize_github_output_summary.py"
+          replace_once(
+              sanitizer_path,
+              '''if __name__ == "__main__":
+              raise SystemExit(main())
+          ''',
+              '''def _entrypoint(module_name: str) -> None:
+              """Run the file-oriented CLI only when executed as a script."""
+              if module_name == "__main__":
+                  raise SystemExit(main())
+
+
+          _entrypoint(__name__)
+          ''',
+          )
+
+          sanitizer_test = "tests/test_sanitize_github_output_summary.py"
+          replace_once(sanitizer_test, "import runpy\n", "")
+          replace_once(
+              sanitizer_test,
+              "from scripts.ci.sanitize_github_output_summary import sanitize_text",
+              "from scripts.ci.sanitize_github_output_summary import _entrypoint, sanitize_text",
+          )
+          replace_once(
+              sanitizer_test,
+              '''    with pytest.raises(SystemExit) as excinfo:
+                  runpy.run_path("scripts/ci/sanitize_github_output_summary.py", run_name="__main__")
+          ''',
+              '''    with pytest.raises(SystemExit) as excinfo:
+                  _entrypoint("__main__")
+          ''',
+          )
+
+          strix_path = "scripts/ci/strix_quick_gate.sh"
+          replace_once(
+              strix_path,
+              "uv.lock | */uv.lock)",
+              "uv.lock | */uv.lock | Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock)",
+          )
+          replace_once(
+              strix_path,
+              "backend/scripts/* | backend/tests/*)\n\t\t\t;;",
+              "backend/scripts/* | backend/tests/*)\n\t\t\t:\n\t\t\t;;",
+          )
+
+          strix_test_path = "scripts/ci/test_strix_quick_gate.sh"
+          strix_test = Path(strix_test_path).read_text(encoding="utf-8")
+          cargo_assertion = (
+              '\tassert_file_contains "$GATE_SCRIPT" '
+              '"Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock" '
+              '"strix gate includes Rust crate dependency and feature context"\n'
+          )
+          if cargo_assertion not in strix_test:
+              deployment_assertion = (
+                  '\tassert_file_contains "$GATE_SCRIPT" '
+                  '"Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | '
+                  'Containerfile | */Containerfile | Makefile | */Makefile" '
+                  '"strix gate treats deployment files as source files"\n'
+              )
+              if strix_test.count(deployment_assertion) != 1:
+                  raise SystemExit("Strix test deployment anchor mismatch")
+              strix_test = strix_test.replace(
+                  deployment_assertion,
+                  deployment_assertion + cargo_assertion,
+                  1,
+              )
+              Path(strix_test_path).write_text(strix_test, encoding="utf-8")
+
+          codeql_sha = "d1ba80a13dd99fba24a470575428917156a28b43"
+          for workflow_path in (
+              ".github/workflows/codeql-pr.yml",
+              ".github/workflows/scheduled-security-scan.yml",
+          ):
+              workflow = Path(workflow_path)
+              text = workflow.read_text(encoding="utf-8")
+              for old_sha, old_version in (
+                  ("99df26d4f13ea111d4ec1a7dddef6063f76b97e9", "v4.37.0"),
+                  ("f205ea1c3313d32999d8d6a48b4f6530d4437b38", "v4.37.4"),
+              ):
+                  text = text.replace(
+                      f"{old_sha} # {old_version}",
+                      f"{codeql_sha} # v4.37.5",
+                  )
+              workflow.write_text(text, encoding="utf-8")
+
+          doctoring = Path("docs/doctoring/coverage-failure-diagnostics.md")
+          doctoring.write_text(
+              '''# Credential-redacted coverage failure diagnostics
+
+          ## Decision
+
+          Coverage setup failures are security-relevant review evidence, but exception text is untrusted and may contain registry URL userinfo, authorization headers, API tokens, database connection strings, passwords, or encryption keys. JavaScript and Python trusted-lock materializers therefore delegate multiline `GITHUB_OUTPUT` publication to one shared helper. The helper normalizes whitespace, applies the central credential sanitizer, bounds each field, HTML-escapes Markdown-embedded evidence, and replaces the fixed multiline delimiter before publication.
+
+          The sanitizer applies URL-userinfo and authorization-header redaction before key-value truncation so mixed single-line failures cannot preserve an earlier credential. The final output retains the failure class, stage, bounded non-secret context, and remediation without exposing raw credentials. Local CLI status remains nonzero when publication is unavailable.
+
+          ## Verification contract
+
+          The exact-head gate requires Python 3.10 compilation, Python 3.14 tests, 100% production statement and branch coverage, 100% production docstrings, and direct execution of the shared sanitizer CLI contract. Regression cases cover mixed URL, bearer, and token secrets; delimiter injection; oversized errors; missing `GITHUB_OUTPUT`; and both materializer call paths. Temporary write-capable repair workflows are removed from the final tree.
+
+          ## Standards and guidance
+
+          GitHub environment files define delimiter-based multiline outputs and warn that a delimiter must not occur alone within arbitrary values. This implementation delimiter-proofs bounded fields before writing `GITHUB_OUTPUT`. OWASP logging guidance recommends removing, masking, sanitizing, hashing, or encrypting access tokens, passwords, database connection strings, encryption keys, session identifiers, and sensitive personal data rather than recording them directly. RFC 3986 deprecates secret passwords in URI userinfo because URIs are commonly displayed, stored, and logged.
+
+          ## Limitations
+
+          Pattern-based redaction is a defense-in-depth boundary, not a general secret classifier. Callers must not intentionally place secrets in exception messages. GitHub log masking and least-privilege workflow permissions remain required. The diagnostic helper does not make untrusted test output safe for shell evaluation or workflow-command execution.
+
+          ## References
+
+          Berners-Lee, T., Fielding, R., & Masinter, L. (2005). *Uniform resource identifier (URI): Generic syntax* (RFC 3986). Internet Engineering Task Force. https://doi.org/10.17487/RFC3986
+
+          GitHub. (2026). *Workflow commands for GitHub Actions*. GitHub Docs. Retrieved August 5, 2026, from https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands
+
+          OWASP Foundation. (n.d.). *Logging cheat sheet*. OWASP Cheat Sheet Series. Retrieved August 5, 2026, from https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html
+          ''',
+              encoding="utf-8",
+          )
+
+          Path(".github/workflows/one-shot-pr759-canonical-repair.yml").unlink()
+          PY
+
+      - name: Validate static repaired tree
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m py_compile \
+            scripts/ci/coverage_failure_summary.py \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_sanitize_github_output_summary.py
+          bash -n scripts/ci/strix_quick_gate.sh scripts/ci/test_strix_quick_gate.sh
+          git diff --check
+          test ! -e .github/workflows/one-shot-pr759-canonical-repair.yml
+
+      - name: Commit repair and remove one-shot workflow
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(opencode-review): centralize redacted diagnostics"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push origin "HEAD:${GITHUB_REF_NAME}"
