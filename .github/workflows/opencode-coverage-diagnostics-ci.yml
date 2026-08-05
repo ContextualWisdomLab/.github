@@ -8,6 +8,7 @@ on:
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "scripts/ci/materialize_base_python_requirements.py"
       - "scripts/ci/sanitize_github_output_summary.py"
+      - "scripts/ci/strix_model_utils.sh"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_control_plane_branch_writer_absence.py"
@@ -24,6 +25,7 @@ on:
       - "tests/test_uv_workspace_fail_closed.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
+      - "tests/test_strix_model_utils_source_dirs.py"
       - "requirements-opencode-python310-ci-hashes.txt"
       - "requirements-opencode-review-ci-hashes.txt"
       - "requirements-strix-ci.txt"
@@ -37,6 +39,7 @@ on:
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "scripts/ci/materialize_base_python_requirements.py"
       - "scripts/ci/sanitize_github_output_summary.py"
+      - "scripts/ci/strix_model_utils.sh"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_control_plane_branch_writer_absence.py"
@@ -53,6 +56,7 @@ on:
       - "tests/test_uv_workspace_fail_closed.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
+      - "tests/test_strix_model_utils_source_dirs.py"
       - "requirements-opencode-python310-ci-hashes.txt"
       - "requirements-opencode-review-ci-hashes.txt"
       - "requirements-strix-ci.txt"
@@ -183,6 +187,7 @@ jobs:
             tests/test_uv_workspace_fail_closed.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py \
+            tests/test_strix_model_utils_source_dirs.py \
             --cov=scripts.ci.coverage_failure_summary \
             --cov=scripts.ci.materialize_base_javascript_packages \
             --cov=scripts.ci.materialize_base_python_requirements \
@@ -219,4 +224,5 @@ jobs:
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
             tests/test_sanitize_github_output_summary.py \
-            tests/test_strix_dependency_security_floor.py
+            tests/test_strix_dependency_security_floor.py \
+            tests/test_strix_model_utils_source_dirs.py
