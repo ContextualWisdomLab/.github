@@ -178,6 +178,7 @@ def redact_command_arguments(arguments: Sequence[str]) -> list[str]:
             redact_next = False
             continue
 
+        is_option = argument.startswith("-")
         option = argument.lstrip("-")
         if "=" in option:
             key, _value = option.split("=", 1)
@@ -187,7 +188,7 @@ def redact_command_arguments(arguments: Sequence[str]) -> list[str]:
                 continue
 
         redacted.append(redact_text(argument))
-        if SENSITIVE_OPTION_RE.fullmatch(option):
+        if is_option and SENSITIVE_OPTION_RE.fullmatch(option):
             redact_next = True
     return redacted
 
