@@ -101,11 +101,9 @@ def test_permanent_diagnostics_runs_for_source_boundary_changes() -> None:
     """Bind source-directory boundary edits to exact-head executable evidence."""
 
     workflow = DIAGNOSTICS_WORKFLOW.read_text(encoding="utf-8")
+    executable_test_entry = "            tests/test_strix_model_utils_source_dirs.py"
 
     assert workflow.count('      - "scripts/ci/strix_model_utils.sh"') == 2
     assert workflow.count('      - "tests/test_strix_model_utils_source_dirs.py"') == 2
-    assert (
-        "            tests/test_strix_model_utils_source_dirs.py " + chr(92)
-        in workflow
-    )
-    assert "            tests/test_strix_model_utils_source_dirs.py" in workflow
+    assert workflow.count(executable_test_entry) == 2
+    assert executable_test_entry + " " + chr(92) in workflow
