@@ -1,0 +1,52 @@
+name: Inspect PR759 merge onto protected main
+
+on:
+  push:
+    branches:
+      - tmp/pr759-merge-inspection-20260805b
+    paths:
+      - .github/workflows/pr759-merge-inspection.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PR_HEAD_SHA: 87ca8d73d9804e3bd682c4d1727ed9ade4fffee3
+      MAIN_SHA: f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.PR_HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Materialize exact merge conflict evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          git config user.name merge-inspector
+          git config user.email merge-inspector@example.invalid
+          git fetch --no-tags origin "$MAIN_SHA"
+          set +e
+          git merge --no-commit --no-ff "$MAIN_SHA"
+          merge_exit=$?
+          set -e
+          printf '%s\n' "$merge_exit" > merge-exit-code.txt
+          git diff --name-only --diff-filter=U > conflict-files.txt
+          git status --porcelain=v1 > merge-status.txt
+          git diff --cc > combined-conflict.diff
+          rm -rf .git
+
+      - name: Upload read-only merge workspace
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: pr759-main-merge-${{ github.sha }}
+          path: .
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
