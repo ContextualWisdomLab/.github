@@ -1,14 +1,13 @@
 name: One-shot PR 743 apply Git isolation
 
 on:
-  push:
-    branches:
-      - fix/trusted-uv-lock-coverage-clean
+  pull_request:
+    branches: [main]
     paths:
       - .github/workflows/one-shot-pr743-apply-git-isolation.yml
 
 concurrency:
-  group: one-shot-pr743-apply-git-isolation
+  group: one-shot-pr743-apply-git-isolation-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 permissions:
@@ -22,7 +21,8 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       github.actor == 'seonghobae' &&
-      github.ref == 'refs/heads/fix/trusted-uv-lock-coverage-clean'
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/trusted-uv-lock-coverage-clean'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -33,19 +33,21 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Check out exact trigger
+      - name: Check out exact pull-request head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Apply, verify, and publish bounded repair
         shell: bash --noprofile --norc -e -o pipefail {0}
         env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.head_ref }}
           PUSH_TOKEN: ${{ github.token }}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 -I - <<'PY'
           from pathlib import Path
 
@@ -79,4 +81,4 @@ jobs:
           auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
           git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            push origin "HEAD:${GITHUB_REF_NAME}"
+            push origin "HEAD:refs/heads/${HEAD_BRANCH}"
