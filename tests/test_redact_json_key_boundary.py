@@ -1,46 +1,77 @@
-"""Regression evidence for credential-shaped JSON keys and bounded scanning."""
+"""Additional fail-closed JSON redaction boundary tests."""
 
 from __future__ import annotations
 
-import re
+import json
+
+import pytest
 
 from scripts.ci import redact_sensitive_log as redactor
 
 
-def test_json_object_keys_use_the_unstructured_redaction_boundary(monkeypatch) -> None:
-    """A JSON key matching a credential format must never bypass redaction."""
+def test_json_object_keys_are_redacted_when_the_key_contains_a_provider_token() -> None:
+    """Credential-shaped JSON object keys must not survive structured redaction."""
+    provider_token = "nv" + "api-" + ("K" * 24)
+    raw = json.dumps({provider_token: "ordinary-value"})
 
-    monkeypatch.setattr(
-        redactor,
-        "PROVIDER_TOKEN_RES",
-        (re.compile(r"\bcredential_key_marker\b"),),
-    )
+    redacted = redactor.redact_text(raw)
 
-    assert redactor.redact_text('{"credential_key_marker":"safe"}\n') == (
-        '{"[REDACTED]":"safe"}\n'
-    )
+    assert provider_token not in redacted
+    assert redactor.REDACTED in redacted
 
 
-def test_assignment_scan_does_not_rescan_one_long_ordinary_identifier(
+def test_json_object_keys_are_redacted_when_the_key_contains_an_assignment() -> None:
+    """Assignment-shaped JSON object keys must pass through the shared scanner."""
+    assignment_key = "api_key=" + ("S" * 24)
+    raw = json.dumps({assignment_key: "ordinary-value"})
+
+    redacted = redactor.redact_text(raw)
+
+    assert assignment_key not in redacted
+    assert redactor.REDACTED in redacted
+
+
+def test_long_ordinary_identifier_does_not_restart_assignment_scanning(
     monkeypatch,
 ) -> None:
-    """A long non-sensitive token must be inspected once rather than quadratically."""
+    """One long ordinary token must cause only one assignment classification."""
+    original = redactor._consume_sensitive_assignment
+    starts: list[int] = []
 
-    class CountingSensitivePattern:
-        """Count the total candidate characters inspected by key classification."""
+    def instrument(text: str, start: int):
+        starts.append(start)
+        return original(text, start)
 
-        def __init__(self) -> None:
-            self.inspected_characters = 0
-
-        def search(self, value: str):
-            """Record one candidate and report that it is not a sensitive key."""
-
-            self.inspected_characters += len(value)
-            return None
-
-    counting_pattern = CountingSensitivePattern()
-    monkeypatch.setattr(redactor, "SENSITIVE_KEY_RE", counting_pattern)
-    ordinary_identifier = "ordinary_identifier_" * 512
+    monkeypatch.setattr(redactor, "_consume_sensitive_assignment", instrument)
+    ordinary_identifier = "a" * 100_000
 
     assert redactor.redact_text(ordinary_identifier) == ordinary_identifier
-    assert counting_pattern.inspected_characters <= len(ordinary_identifier)
+    assert starts == [0, redactor.MAX_IDENTIFIER_CHARS]
+
+
+def test_json_depth_limit_replaces_the_remaining_subtree() -> None:
+    """Excessive valid JSON nesting is redacted before recursive publication."""
+    nested: object = "plain-secret"
+    for _ in range(redactor.MAX_JSON_DEPTH + 1):
+        nested = {"safe": nested}
+
+    encoded = json.dumps(redactor._redact_json(nested))
+
+    assert "plain-secret" not in encoded
+    assert redactor.REDACTED in encoded
+
+
+def test_json_parser_recursion_failure_redacts_the_entire_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parser recursion failure must not fall back to weaker key handling."""
+
+    def raise_recursion(_value: str) -> object:
+        raise RecursionError("synthetic deeply nested diagnostic")
+
+    monkeypatch.setattr(redactor.json, "loads", raise_recursion)
+
+    assert (
+        redactor.redact_text('{"api_key":"plain-secret"}\n')
+        == f"{redactor.REDACTED}\n"
+    )
