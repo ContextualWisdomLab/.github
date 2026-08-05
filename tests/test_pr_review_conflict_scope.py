@@ -46,6 +46,42 @@ def _allowed_file(path: Path, *relative_paths: str) -> Path:
     return path
 
 
+@pytest.mark.parametrize("root_kind", ["missing", "file", "symlink"])
+def test_invalid_repository_roots_fail_closed(
+    tmp_path: Path, root_kind: str
+) -> None:
+    """Missing, regular-file, and symbolic-link roots are never trusted."""
+    root = tmp_path / "candidate"
+    if root_kind == "file":
+        root.write_text("not a directory", encoding="utf-8")
+    elif root_kind == "symlink":
+        target = tmp_path / "target"
+        target.mkdir()
+        os.symlink(target, root)
+
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        scope.build_snapshot(root)
+
+
+@pytest.mark.parametrize(
+    "raw_path",
+    ["", "/absolute", "../escape", "nested/../escape"],
+)
+def test_invalid_repository_relative_paths_fail_closed(raw_path: str) -> None:
+    """Empty, absolute, and traversal-bearing path names are rejected."""
+    with pytest.raises(ValueError, match="repository path"):
+        scope._validated_relative_path(raw_path)
+
+
+def test_repository_relative_path_byte_limit_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path longer than the configured byte bound is rejected."""
+    monkeypatch.setattr(scope, "_MAX_PATH_BYTES", 3)
+    with pytest.raises(ValueError, match="byte limit"):
+        scope._validated_relative_path("long")
+
+
 def test_verify_snapshot_allows_only_the_declared_conflict_path(tmp_path: Path) -> None:
     """A model may change a conflicted file but no unrelated tracked file."""
     root = _repository(tmp_path)
@@ -108,10 +144,16 @@ def test_git_path_inventory_is_bounded(
     "document",
     [
         [],
+        {"schema_version": 1, "entries": {}, "extra": True},
         {"schema_version": 2, "entries": {}},
         {"schema_version": 1, "entries": []},
-        {"schema_version": 1, "entries": {1: {}}},
         {"schema_version": 1, "entries": {"path": "invalid"}},
+        {"schema_version": 1, "entries": {"path": {"kind": "invalid"}}},
+        {
+            "schema_version": 1,
+            "entries": {"path": {"kind": "missing", "extra": True}},
+        },
+        {"schema_version": 1, "entries": {"../escape": {"kind": "missing"}}},
     ],
 )
 def test_invalid_snapshot_documents_fail_closed(
@@ -123,8 +165,62 @@ def test_invalid_snapshot_documents_fail_closed(
     snapshot.write_text(json.dumps(document), encoding="utf-8")
     allowed = _allowed_file(tmp_path / "allowed.zlist", "conflicted.txt")
 
-    with pytest.raises(ValueError, match="snapshot"):
+    with pytest.raises(ValueError, match="snapshot|repository path"):
         scope.verify_snapshot(root, snapshot, allowed)
+
+
+@pytest.mark.parametrize("payload", [None, b"\xff", b"{"])
+def test_undecodable_snapshot_inputs_fail_closed(
+    tmp_path: Path, payload: bytes | None
+) -> None:
+    """Missing, non-UTF-8, and malformed JSON snapshots are rejected."""
+    snapshot = tmp_path / "snapshot.json"
+    if payload is not None:
+        snapshot.write_bytes(payload)
+    with pytest.raises(ValueError, match="snapshot document could not be decoded"):
+        scope._load_snapshot(snapshot)
+
+
+def test_valid_missing_and_other_fingerprints_round_trip(tmp_path: Path) -> None:
+    """Supported non-file fingerprint schemas remain loadable and deterministic."""
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": {
+                    "missing": {"kind": "missing"},
+                    "other": {"kind": "other", "mode": 493},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = scope._load_snapshot(snapshot)
+
+    assert loaded["missing"] == {"kind": "missing"}
+    assert loaded["other"] == {"kind": "other", "mode": 493}
+
+
+def test_snapshot_entry_inventory_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decoded snapshot cannot exceed the configured entry limit."""
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": {"path": {"kind": "missing"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(scope, "_MAX_PATHS", 0)
+
+    with pytest.raises(ValueError, match="snapshot entries exceed"):
+        scope._load_snapshot(snapshot)
 
 
 def test_unknown_allowed_path_fails_closed(tmp_path: Path) -> None:
@@ -136,6 +232,16 @@ def test_unknown_allowed_path_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="absent"):
         scope.verify_snapshot(root, snapshot, allowed)
+
+
+def test_missing_allowed_path_file_fails_closed(tmp_path: Path) -> None:
+    """A missing conflict-path inventory cannot authorize model changes."""
+    root = _repository(tmp_path)
+    snapshot = tmp_path / "snapshot.json"
+    scope.write_snapshot(root, snapshot)
+
+    with pytest.raises(ValueError, match="allowed-path inventory"):
+        scope.verify_snapshot(root, snapshot, tmp_path / "missing.zlist")
 
 
 def test_allowed_path_inventory_is_bounded(
@@ -157,10 +263,11 @@ def test_cli_reports_violation_and_success(
 ) -> None:
     """The CLI returns a nonzero code only for a verified scope violation."""
     root = _repository(tmp_path)
-    snapshot = tmp_path / "snapshot.json"
+    snapshot = tmp_path / "nested" / "snapshot.json"
     allowed = _allowed_file(tmp_path / "allowed.zlist", "conflicted.txt")
 
     assert scope.main(["snapshot", "--root", str(root), "--output", str(snapshot)]) == 0
+    assert snapshot.is_file()
     (root / "stable.txt").write_text("changed\n", encoding="utf-8")
     assert (
         scope.main(
