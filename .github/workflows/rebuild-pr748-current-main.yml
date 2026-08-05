@@ -42,7 +42,7 @@ jobs:
       - name: Verify exact trigger and apply reviewed patch
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "07f4e13a0daf17d9c12a5cbf227e9e273b51617b"
+          test "$(git rev-parse HEAD^)" = "16f0b9122c9ce8e32aa5ea2ac2ab0f5cbff578de"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 -m py_compile scripts/ci/apply_pr748_current_main.py
           python3 scripts/ci/apply_pr748_current_main.py
