@@ -1,0 +1,170 @@
+name: One-shot PR 767 capture startup fix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-pr767-capture-startup-fix.yml"
+
+concurrency:
+  group: one-shot-pr767-capture-startup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/sandboxed-output-resource-bounds'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked review toolchain
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply and verify capture-startup cleanup
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              """Replace one exact reviewed fragment and fail closed on drift."""
+              file_path = Path(path)
+              content = file_path.read_text(encoding="utf-8")
+              count = content.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected one repair anchor, found {count}"
+                  )
+              file_path.write_text(content.replace(old, new, 1), encoding="utf-8")
+
+
+          source_path = "scripts/ci/bounded_subprocess.py"
+          replace_once(
+              source_path,
+              "import threading\nfrom collections.abc import Callable, Mapping, Sequence\n",
+              "import threading\nfrom contextlib import suppress\n"
+              "from collections.abc import Callable, Mapping, Sequence\n",
+          )
+          replace_once(
+              source_path,
+              "def run_bounded_command(\n",
+              '''def _cleanup_capture_startup_failure(
+              process: subprocess.Popen[bytes],
+              captures: Sequence[BoundedOutputCapture],
+              streams: Sequence[BinaryIO],
+          ) -> None:
+              """Terminate, reap, close, and finalize partially started captures."""
+
+              with suppress(BaseException):
+                  kill_process_group(process)
+              with suppress(BaseException):
+                  process.wait(timeout=10)
+              for stream in streams:
+                  with suppress(BaseException):
+                      stream.close()
+              for capture in captures:
+                  with suppress(BaseException):
+                      capture.join(timeout=10)
+
+
+          def run_bounded_command(
+          ''',
+          )
+          replace_once(
+              source_path,
+              '''    stdout_capture = start_bounded_capture(
+              process.stdout,
+              evidence_limit_bytes=evidence_limit,
+              on_limit=stop_for_limit,
+          )
+              stderr_capture = start_bounded_capture(
+              process.stderr,
+              evidence_limit_bytes=evidence_limit,
+              on_limit=stop_for_limit,
+          )
+          ''',
+              '''    captures: list[BoundedOutputCapture] = []
+              streams = (process.stdout, process.stderr)
+              try:
+                  stdout_capture = start_bounded_capture(
+                      process.stdout,
+                      evidence_limit_bytes=evidence_limit,
+                      on_limit=stop_for_limit,
+                  )
+                  captures.append(stdout_capture)
+                  stderr_capture = start_bounded_capture(
+                      process.stderr,
+                      evidence_limit_bytes=evidence_limit,
+                      on_limit=stop_for_limit,
+                  )
+                  captures.append(stderr_capture)
+              except BaseException:  # noqa: BLE001 - preserve the startup root cause
+                  _cleanup_capture_startup_failure(process, captures, streams)
+                  raise
+          ''',
+          )
+
+          Path(".github/workflows/bounded-capture-startup-ci.yml").unlink()
+          Path(".github/workflows/one-shot-pr767-capture-startup-fix.yml").unlink()
+          PY
+          python -m pytest -q \
+            tests/test_bounded_subprocess.py \
+            tests/test_bounded_subprocess_capture_startup.py \
+            tests/test_bounded_subprocess_contract.py \
+            tests/test_sandboxed_service_capture_startup.py \
+            --cov=scripts.ci.bounded_subprocess \
+            --cov-branch \
+            --cov-fail-under=100
+          python -m pytest -q tests
+          python -m compileall -q scripts/ci tests
+          python -m interrogate --fail-under 100 scripts/ci/bounded_subprocess.py
+          git diff --check
+          test ! -e .github/workflows/bounded-capture-startup-ci.yml
+          test ! -e .github/workflows/one-shot-pr767-capture-startup-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 1
+          git commit -m "fix(ci): reap partial bounded capture startup"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push origin "HEAD:refs/heads/${HEAD_BRANCH}"
