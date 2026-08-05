@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` invocations, with bounded organization-wide sweeping, immutable current-head dispatch payloads, idempotent receipts, and fail-closed author/repository validation.
 - Add hourly bounded review-repair scheduling that preserves the existing reviewer identities and credential chain while continuing non-conflicting maintenance during pending checks or reviews.
+- Add a read-only exact-head Python quality workflow that compiles the changed central control-plane modules on Python 3.10 and runs their deterministic Python 3.14 tests with hash-locked tooling, 100% production statement and branch coverage, and 100% production docstrings.
 
 ### Security
 
