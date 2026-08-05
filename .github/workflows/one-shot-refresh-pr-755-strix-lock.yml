@@ -1,0 +1,89 @@
+name: Refresh PR 755 Strix security lock
+
+on:
+  push:
+    branches:
+      - fix/opencode-llvm-coverage-tools
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-pr-755-strix-lock-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-lock:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.ref == 'refs/heads/fix/opencode-llvm-coverage-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Materialize and verify the reviewed generated lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCK_BLOB_SHA: c305e9c84c90f6d6e3360ab12feff7362d875b2d
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${LOCK_BLOB_SHA}" \
+            | jq -r '.content' \
+            | tr -d '\n' \
+            | base64 --decode \
+            > requirements-strix-ci-hashes.txt
+          test "$(git hash-object requirements-strix-ci-hashes.txt)" = "$LOCK_BLOB_SHA"
+          grep -Fq 'aiohttp==3.14.3' requirements-strix-ci-hashes.txt
+          grep -Fq 'cryptography==50.0.0' requirements-strix-ci-hashes.txt
+          grep -Fxq 'aiohttp==3.14.3' requirements-strix-ci.txt
+          grep -Fxq 'cryptography==50.0.0' requirements-strix-ci.txt
+          git diff --check
+
+  publish-lock:
+    needs: validate-lock
+    if: needs.validate-lock.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Publish only the verified lock and remove this one-shot workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCK_BLOB_SHA: c305e9c84c90f6d6e3360ab12feff7362d875b2d
+          SOURCE_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: fix/opencode-llvm-coverage-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${SOURCE_BRANCH}" --jq '.commit.sha')"
+          test "$live_head" = "$SOURCE_HEAD"
+          gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${LOCK_BLOB_SHA}" \
+            | jq -r '.content' \
+            | tr -d '\n' \
+            | base64 --decode \
+            > requirements-strix-ci-hashes.txt
+          test "$(git hash-object requirements-strix-ci-hashes.txt)" = "$LOCK_BLOB_SHA"
+          grep -Fq 'aiohttp==3.14.3' requirements-strix-ci-hashes.txt
+          grep -Fq 'cryptography==50.0.0' requirements-strix-ci-hashes.txt
+          rm .github/workflows/one-shot-refresh-pr-755-strix-lock.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add requirements-strix-ci-hashes.txt \
+            .github/workflows/one-shot-refresh-pr-755-strix-lock.yml
+          git diff --cached --check
+          git commit -m 'fix(security): refresh remediated Strix hash lock'
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push \
+            --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
+            "$remote_url" \
+            "HEAD:refs/heads/${SOURCE_BRANCH}"
