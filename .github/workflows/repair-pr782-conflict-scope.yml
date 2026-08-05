@@ -67,6 +67,9 @@ jobs:
             tests/test_pr_review_fix_hourly_contract.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
             tests/test_pr_review_autofix_nvidia_nim_contract.py
+          test ! -e .github/workflows/repair-pr782-conflict-scope.yml
+          test ! -e .github/workflows/one-shot-pr782-conflict-scope-repair.yml
+          test ! -e scripts/ci/repair_pr782_conflict_scope_once.py
           git diff --check
 
       - name: Publish the verified repair commit
@@ -77,6 +80,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git diff --cached --check
           git commit -m "fix(automation): bound conflict repair writes"
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
