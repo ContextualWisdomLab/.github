@@ -23,6 +23,11 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised by Python 3.10 CI.
+    import tomli as tomllib
+
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 UV_EXACT_REQUIREMENT_RE = re.compile(
@@ -342,6 +347,29 @@ def _uv_pyproject_path(lock_path: str) -> str:
     )
 
 
+def _reject_unsupported_uv_workspace(
+    pyproject_content: bytes,
+    pyproject_path: str,
+) -> None:
+    """Reject uv workspace metadata until every immutable member is reconstructed."""
+    try:
+        metadata = tomllib.loads(pyproject_content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError(
+            f"could not parse tracked base pyproject metadata {pyproject_path}"
+        ) from exc
+
+    try:
+        workspace = metadata["tool"]["uv"]["workspace"]
+    except (KeyError, TypeError):
+        return
+
+    raise RuntimeError(
+        f"tracked base uv workspace in {pyproject_path} {workspace!r} is not "
+        "supported by isolated lock materialization"
+    )
+
+
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
 ) -> bytes | None:
@@ -356,6 +384,7 @@ def _export_uv_lock(
     pyproject_path = _uv_pyproject_path(lock_path)
     lock_content = _git(repo_root, "show", f"{base_sha}:{lock_path}")
     pyproject_content = _git(repo_root, "show", f"{base_sha}:{pyproject_path}")
+    _reject_unsupported_uv_workspace(pyproject_content, pyproject_path)
     uv_path = _install_trusted_uv()
 
     with tempfile.TemporaryDirectory() as work_dir:
