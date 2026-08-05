@@ -67,24 +67,32 @@ signals.
 ## Supply-chain pin
 
 The integration does not perform a mutable branch checkout at runtime. It
-vendors only the policy modules from
-`ContextualWisdomLab/contextual-orchestrator` commit
-`82ea37ee2673111b0a2f25642d637a305473f642`, plus a minimal integration facade.
-`VENDOR_RECEIPT.json` records every expected Git blob identity. The adapter
-verifies the exact repository, commit, file map, regular-file status, and blob
-identity before importing the module. Unknown receipt fields, symlinks,
-duplicate JSON keys, source drift, or an already imported module outside the
-verified vendor root stop the workflow.
+vendors only the fallback-policy modules from
+`ContextualWisdomLab/contextual-orchestrator` integrated commit
+`40c6a4b419cdf8fa90c422acb5443a0e1cca5d16`, which combines the reviewed
+free-first policy with the provider-egress hardening and interpreter-portable
+Atheris prerequisite, plus a minimal central integration facade. The fallback
+source blobs are unchanged from their original reviewed policy commit, and
+`VENDOR_RECEIPT.json` records every expected Git blob identity.
+
+The adapter verifies the exact repository, integrated commit, file map,
+regular-file status, and blob identity before importing the module. Unknown
+receipt fields, symlinks, duplicate JSON keys, source drift, or an already
+imported module outside the verified vendor root stop the workflow. The source
+pin therefore tracks the exact integrated upstream review surface rather than
+an ancestor that omits later security and validation prerequisites.
 
 ## Updating the policy
 
 1. Confirm provider billing and availability from current primary documentation.
-2. Update `contextual-orchestrator` first and obtain an exact reviewed commit.
+2. Update `contextual-orchestrator` first and obtain an exact reviewed integrated
+   commit containing any prerequisite security or packaging changes.
 3. Copy only the required policy files and license.
 4. Recalculate Git blob identities with Git's `blob <length>\0<content>` format.
 5. Update `VENDOR_RECEIPT.json`, adapter constants, and
    `config/llm-fallback-policy.json` in the same PR.
-6. Run the policy, Noema, OpenCode, and Strix contract tests on the exact head.
+6. Run the source-pin, policy, Noema, OpenCode, and Strix contract tests on the
+   exact head.
 7. Treat a provider's transition from included/free quota to metered use as a
    cost-tier change. Never infer cost from a model-name suffix.
 
