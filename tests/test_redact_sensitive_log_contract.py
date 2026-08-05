@@ -46,7 +46,7 @@ def test_unstructured_patterns_cover_basic_jwt_and_provider_values() -> None:
 
     provider_value = _synthetic_provider_token()
     assert redactor.redact_text("Authorization: Basic opaque-value") == (
-        "Authorization: [REDACTED] [REDACTED]"
+        "Authorization: [REDACTED]"
     )
     assert redactor.redact_text("header.payload.signature") == redactor.REDACTED
     assert redactor.redact_text(provider_value) == redactor.REDACTED
