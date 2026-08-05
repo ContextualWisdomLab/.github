@@ -1,22 +1,23 @@
 name: Repair PR 759 early coverage diagnostic redaction
 
 on:
-  push:
-    branches:
-      - fix/opencode-coverage-failure-diagnostics
+  pull_request:
+    branches: [main]
+    types: [synchronize]
 
 permissions:
   contents: read
 
 concurrency:
-  group: repair-pr759-early-redaction
+  group: repair-pr759-early-redaction-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.ref == 'refs/heads/fix/opencode-coverage-failure-diagnostics'
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/opencode-coverage-failure-diagnostics'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -25,14 +26,16 @@ jobs:
       - name: Check out exact repair source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact audited inputs
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           test "$(git hash-object scripts/ci/materialize_base_javascript_packages.py)" = "99802d6b62496d9e3791c9a50ca39562b0307f35"
           test "$(git hash-object scripts/ci/materialize_base_python_requirements.py)" = "4d37759621c2370ffccbcc9388ede71b38be1f15"
           test "$(git hash-object scripts/ci/sanitize_github_output_summary.py)" = "1a7036f755ef1d9c37ec4d7956c22b994c9e7915"
@@ -234,7 +237,7 @@ def _redact_coverage_failure_reason(reason: str) -> str:
       - name: Commit exact validated repair and remove one-shot workflow
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_HEAD: ${{ github.sha }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
           SOURCE_BRANCH: fix/opencode-coverage-failure-diagnostics
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
