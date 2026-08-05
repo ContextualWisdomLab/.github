@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 PRODUCTION_PATH = Path("scripts/ci/materialize_base_python_requirements.py")
+TEST_PATH = Path("tests/test_trusted_uv_portability_and_streaming.py")
 DOCTORING_PATH = Path("docs/doctoring/trusted-uv-transient-download-retry.md")
 CHANGELOG_PATH = Path("CHANGELOG.md")
 
@@ -119,6 +120,57 @@ def _transient_transport_failure_label(
     PRODUCTION_PATH.write_text(source, encoding="utf-8")
 
 
+def add_timeout_regression() -> None:
+    """Cover the explicit timeout classifier through the public download loop."""
+    source = TEST_PATH.read_text(encoding="utf-8")
+    test_name = "test_trusted_uv_download_retries_timeout_failure"
+    if test_name in source:
+        return
+    anchor = '''def test_trusted_uv_download_retries_connection_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+'''
+    regression = '''def test_trusted_uv_download_retries_timeout_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real timeout receives one bounded retry with the exact request."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen(
+            [TimeoutError(errno.ETIMEDOUT, "timed out"), _ChunkedResponse([b"ok", b""])],
+            calls,
+        ),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"ok"
+    assert calls == [
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+    ]
+    assert sleeps == [1.0]
+
+
+'''
+    source = replace_once(
+        source,
+        anchor,
+        regression + anchor,
+        "timeout regression anchor",
+    )
+    TEST_PATH.write_text(source, encoding="utf-8")
+
+
 def update_evidence() -> None:
     """Record the exact fail-closed retry boundary in permanent evidence."""
     doctoring = DOCTORING_PATH.read_text(encoding="utf-8")
@@ -162,6 +214,7 @@ body content.
 
 def main() -> int:
     """Apply the reviewed production change and permanent evidence."""
+    add_timeout_regression()
     repair_production()
     update_evidence()
     return 0
