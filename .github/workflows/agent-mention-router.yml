@@ -49,7 +49,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: Resolve immutable pull-request head and prior receipts
+      - name: Resolve immutable pull-request head
         env:
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
@@ -57,18 +57,9 @@ jobs:
         run: |
           set -euo pipefail
           pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          comments_json="$(
-            gh api --paginate --slurp \
-              "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
-              | jq -c 'add // []'
-          )"
           jq \
             --argjson pull_request "$pr_json" \
-            --argjson conversation_comments "$comments_json" \
-            '. + {
-              pull_request: $pull_request,
-              conversation_comments: $conversation_comments
-            }' \
+            '. + {pull_request: $pull_request}' \
             "$SOURCE_EVENT_PATH" >"${RUNNER_TEMP}/agent-mention-event.json"
 
       - name: Route trusted local agent mention
