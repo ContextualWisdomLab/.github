@@ -9,6 +9,7 @@ REVIEW_WORKFLOW_PATH = WORKFLOW_DIRECTORY / "opencode-review-dispatch.yml"
 TEMPORARY_REPAIR_WORKFLOW_PATHS = (
     WORKFLOW_DIRECTORY / "repair-pr743-git-config-red-test.yml",
     WORKFLOW_DIRECTORY / "one-shot-repair-uv-strix-ci.yml",
+    WORKFLOW_DIRECTORY / "one-shot-pr743-apply-git-isolation.yml",
 )
 
 
