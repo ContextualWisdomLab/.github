@@ -95,6 +95,40 @@ def test_python_failure_publishes_sanitized_bounded_coverage_reason(
     [javascript_materializer, python_materializer],
     ids=["javascript", "python"],
 )
+def test_materializer_failure_summary_redacts_mixed_credentials(
+    module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every materializer removes mixed credentials before GitHub publication."""
+    output_file = tmp_path / "github-output"
+    secret_values = ("url-secret", "bearer-secret", "token-secret")
+    reason = (
+        "failure https://alice:url-secret@example.invalid/a.tgz "
+        "Authorization: Bearer bearer-secret TOKEN=token-secret trailing context"
+    )
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setattr(
+        module,
+        "materialize",
+        _failing_materializer(RuntimeError(reason)),
+    )
+
+    assert _run_main(module, tmp_path) == 1
+
+    published = output_file.read_text(encoding="utf-8")
+    assert "https://&lt;redacted&gt;@example.invalid/a.tgz" in published
+    assert "Authorization: Bearer &lt;redacted&gt;" in published
+    assert "TOKEN=&lt;redacted&gt;" in published
+    for secret_value in secret_values:
+        assert secret_value not in published
+
+
+@pytest.mark.parametrize(
+    "module",
+    [javascript_materializer, python_materializer],
+    ids=["javascript", "python"],
+)
 def test_failure_diagnostics_are_optional_outside_github_actions(
     module: ModuleType,
     tmp_path: Path,
