@@ -1,0 +1,252 @@
+name: Repair PR 743 exact-head quality regressions
+
+on:
+  push:
+    branches: [fix/trusted-uv-lock-coverage-clean]
+    paths:
+      - ".github/workflows/repair-pr-743-quality.yml"
+
+concurrency:
+  group: repair-pr-743-quality
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Verify repair ancestry
+        run: |
+          set -euo pipefail
+          expected_parent="d3b6c79aed988120ce70c08274d76127a04a0c41"
+          actual_parent="$(git rev-parse HEAD^)"
+          if [ "$actual_parent" != "$expected_parent" ]; then
+            printf '::error::Repair trigger parent moved: expected %s, got %s.\n' "$expected_parent" "$actual_parent"
+            exit 1
+          fi
+
+      - name: Apply bounded regression repairs and doctoring
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              """Replace exactly one reviewed source fragment or fail closed."""
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected one reviewed fragment, found {count}"
+                  )
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          replace_once(
+              "tests/test_opencode_agent_contract.py",
+              '''    base_env = {
+                  **os.environ,
+                  "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+              }
+          ''',
+              '''    isolated_home = tmp_path / "git-config-home"
+              isolated_home.mkdir()
+              base_env = {
+                  **os.environ,
+                  "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+                  "GIT_CONFIG_NOSYSTEM": "1",
+                  "GIT_CONFIG_GLOBAL": os.devnull,
+                  "HOME": str(isolated_home),
+                  "XDG_CONFIG_HOME": str(isolated_home / "xdg"),
+              }
+          ''',
+          )
+
+          replace_once(
+              ".github/workflows/strix.yml",
+              '''          if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
+                      strix_model="gpt-5.6-luna"
+                    fi
+          ''',
+              '''          if [ -z "$STRIX_MODEL_REQUESTED" ]; then
+                      if [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b" ]; then
+                        strix_model="nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+                      fi
+                      if [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
+                        strix_model="gpt-5.6-luna"
+                      fi
+                    fi
+          ''',
+          )
+
+          changelog = Path("CHANGELOG.md")
+          changelog_text = changelog.read_text(encoding="utf-8")
+          fixed_marker = "### Fixed\n\n"
+          changelog_entries = (
+              "- Isolated Git system and global protected configuration in the sandbox "
+              "`safe.directory` regression so hosted-runner trust defaults cannot mask "
+              "an unrelated repository, while preserving the exact validated worktree "
+              "allowlist contract.\n"
+              "- Normalized the retired implicit NVIDIA NIM Strix default to the current "
+              "Nemotron 3 Super model before credential fallback selection, without "
+              "accepting an explicitly requested retired model.\n"
+          )
+          if changelog_entries not in changelog_text:
+              if changelog_text.count(fixed_marker) != 1:
+                  raise SystemExit("CHANGELOG.md: expected one Unreleased Fixed marker")
+              changelog.write_text(
+                  changelog_text.replace(
+                      fixed_marker, fixed_marker + changelog_entries, 1
+                  ),
+                  encoding="utf-8",
+              )
+
+          uv_record = Path("docs/doctoring/trusted-uv-lock-materialization.md")
+          uv_text = uv_record.read_text(encoding="utf-8")
+          uv_section = '''## Hermetic Git ownership-boundary verification
+
+The full-suite regression for the OpenCode coverage sandbox deliberately asks Git
+to treat two temporary repositories as differently owned. Git reads
+`safe.directory` only from protected configuration scopes. A hosted runner may
+therefore carry a system or global trust entry that makes both repositories look
+safe and turns the negative control into a false pass.
+
+The test now supplies an isolated `HOME` and `XDG_CONFIG_HOME`, disables system
+configuration with `GIT_CONFIG_NOSYSTEM`, and points global configuration at the
+null device before adding one command-scope `safe.directory` entry. The selected
+worktree must succeed, while a sibling repository must still fail with dubious
+ownership. This tests the production boundary rather than the runner image's
+ambient policy. Git 2.54.0 retains the test-only different-owner switch and
+resolves `safe.directory` through protected configuration, so the isolation is
+both current and version-explicit.
+
+'''
+          if uv_section not in uv_text:
+              marker = "## References\n"
+              if uv_text.count(marker) != 1:
+                  raise SystemExit("trusted uv doctoring: missing References marker")
+              uv_text = uv_text.replace(marker, uv_section + marker, 1)
+          git_refs = '''
+The Git Project. (2026a). *git-config documentation (Version 2.54.0)*.
+https://git-scm.com/docs/git-config/2.54.0
+
+The Git Project. (2026b). *setup.c (Version 2.54.0)* [Source code].
+https://github.com/git/git/blob/v2.54.0/setup.c
+'''
+          if git_refs.strip() not in uv_text:
+              uv_text = uv_text.rstrip() + "\n\n" + git_refs.strip() + "\n"
+          uv_record.write_text(uv_text, encoding="utf-8")
+
+          strix_record = Path(
+              "docs/doctoring/strix-nvidia-nim-not-found-fallback.md"
+          )
+          strix_text = strix_record.read_text(encoding="utf-8")
+          strix_section = '''## Legacy implicit-default migration
+
+An empty `STRIX_MODEL_REQUESTED` marker distinguishes a workflow-owned default
+from an operator's explicit model selection. If an older caller still supplies
+the retired implicit Nemotron 3 Ultra default, the gate first normalizes it to
+the current Nemotron 3 Super default. It then applies the ordinary credential
+rule: use NVIDIA NIM when its scoped key exists, or use the established direct
+OpenAI fallback when the implicit public default has no NVIDIA credential.
+
+The normalization never applies when a caller explicitly requests the retired
+model. Explicit unsupported selections continue to fail closed, so backward
+compatibility for inherited defaults does not broaden the accepted operator
+surface.
+
+'''
+          if strix_section not in strix_text:
+              marker = "## Verification contract\n"
+              if strix_text.count(marker) != 1:
+                  raise SystemExit("Strix doctoring: missing verification marker")
+              strix_record.write_text(
+                  strix_text.replace(marker, strix_section + marker, 1),
+                  encoding="utf-8",
+              )
+          PY
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run exact failing regressions
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_opencode_agent_contract.py::test_sandbox_git_config_env_marks_only_the_validated_worktree_safe \
+            tests/test_required_workflow_queue_contract.py::test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret
+
+      - name: Run complete central test and branch coverage gate
+        run: |
+          set -euo pipefail
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+
+      - name: Enforce production documentation and syntax
+        run: |
+          set -euo pipefail
+          python -m interrogate --fail-under 100 scripts/ci/materialize_base_python_requirements.py
+          python -m compileall -q \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_opencode_agent_contract.py \
+            tests/test_required_workflow_queue_contract.py
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          for path in (
+              Path(".github/workflows/strix.yml"),
+              Path(".github/workflows/repair-pr-743-quality.yml"),
+          ):
+              yaml.safe_load(path.read_text(encoding="utf-8"))
+          PY
+          git diff --check
+
+      - name: Commit verified repair and remove one-shot workflow
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/repair-pr-743-quality.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/strix.yml \
+            CHANGELOG.md \
+            docs/doctoring/strix-nvidia-nim-not-found-fallback.md \
+            docs/doctoring/trusted-uv-lock-materialization.md \
+            tests/test_opencode_agent_contract.py \
+            .github/workflows/repair-pr-743-quality.yml
+          git commit -m "fix(ci): make exact-head quality checks hermetic"
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:fix/trusted-uv-lock-coverage-clean"
