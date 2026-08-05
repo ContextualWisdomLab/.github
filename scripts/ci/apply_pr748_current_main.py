@@ -4,9 +4,9 @@
 This temporary branch-repair helper derives the six nonconflicting product and
 resolver-test files from one previously reviewed commit, normalizes one
 human-readable diagnostic so the current protected-main contract remains true,
-and adds a current-main-compatible workflow contract test directly. It does not
-import unrelated coverage-toolchain work from another pull request. The
-publishing workflow deletes this helper before committing the verified
+and updates the current-main test contract for the argument-bound lock owner.
+It does not import unrelated coverage-toolchain work from another pull request.
+The publishing workflow deletes this helper before committing the verified
 product-policy tree.
 """
 
@@ -39,6 +39,16 @@ TEMPORARY_PATHS = (
 CONTRACT_FUNCTION = "test_opencode_coverage_resolves_validated_npm_workspace_lock_owner"
 CURRENT_MAIN_DIAGNOSTIC = "npm offline ci (workspace root), lifecycle hooks disabled"
 REVIEWED_DIAGNOSTIC = "npm workspace-root offline ci, lifecycle hooks disabled"
+OLD_NPM_LOCK_ASSERTION = '''    assert (
+        "if ! trusted_npm_lock_is_materialized || "
+        "! prepare_writable_npm_cache; then"
+    ) in npm_install_case
+'''
+NEW_NPM_LOCK_ASSERTION = '''    assert (
+        'if ! trusted_npm_lock_is_materialized "$npm_install_root" || '
+        "! prepare_writable_npm_cache; then"
+    ) in npm_install_case
+'''
 CONTRACT_TEST = r'''
 
 
@@ -139,12 +149,20 @@ def _normalize_current_main_diagnostic() -> None:
     _run("git", "add", str(WORKFLOW_PATH))
 
 
-def _add_current_contract_test() -> None:
-    """Add a conflict-free workflow contract to the current-main test file."""
+def _update_current_contract_test() -> None:
+    """Update the stale lock assertion and add the workspace ownership contract."""
 
     text = CONTRACT_PATH.read_text(encoding="utf-8")
+    if text.count(OLD_NPM_LOCK_ASSERTION) != 1:
+        raise SystemExit(
+            "current-main legacy npm lock assertion count changed: "
+            f"{text.count(OLD_NPM_LOCK_ASSERTION)}"
+        )
+    if NEW_NPM_LOCK_ASSERTION in text:
+        raise SystemExit("argument-bound npm lock assertion already exists unexpectedly")
     if CONTRACT_FUNCTION in text:
         raise SystemExit("npm workspace contract test already exists unexpectedly")
+    text = text.replace(OLD_NPM_LOCK_ASSERTION, NEW_NPM_LOCK_ASSERTION, 1)
     CONTRACT_PATH.write_text(
         text.rstrip() + CONTRACT_TEST.rstrip() + "\n",
         encoding="utf-8",
@@ -160,6 +178,7 @@ def _verify_applied_tree() -> None:
         "resolve_npm_package_root()",
         "resolve_npm_install_root()",
         "npm_workspace_install_root.py",
+        'trusted_npm_lock_is_materialized "$npm_install_root"',
         '--workspace "$npm_workspace_selector"',
         CURRENT_MAIN_DIAGNOSTIC,
     )
@@ -172,6 +191,10 @@ def _verify_applied_tree() -> None:
     contract = CONTRACT_PATH.read_text(encoding="utf-8")
     if contract.count(f"def {CONTRACT_FUNCTION}(") != 1:
         raise SystemExit("current-main npm workspace contract test is not unique")
+    if contract.count(NEW_NPM_LOCK_ASSERTION) != 1:
+        raise SystemExit("argument-bound npm lock assertion is not unique")
+    if OLD_NPM_LOCK_ASSERTION in contract:
+        raise SystemExit("stale argument-free npm lock assertion remains")
 
     changed = set(
         _run("git", "diff", "--cached", "--name-only", capture=True).stdout.splitlines()
@@ -222,7 +245,7 @@ def main() -> int:
     PATCH_PATH.write_text(_validate_reviewed_patch(patch), encoding="utf-8")
     _run("git", "apply", "--3way", "--index", str(PATCH_PATH))
     _normalize_current_main_diagnostic()
-    _add_current_contract_test()
+    _update_current_contract_test()
     _run("git", "diff", "--cached", "--check")
     _verify_applied_tree()
     return 0
