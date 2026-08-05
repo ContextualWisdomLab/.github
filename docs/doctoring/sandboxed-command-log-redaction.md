@@ -9,8 +9,9 @@ One trusted redaction module owns this publication boundary:
 - captured standard output and standard error are redacted before printing;
 - `TimeoutExpired` byte and text payloads use the same redaction path;
 - service log tails are redacted before publication;
-- command arguments following sensitive options such as `--token`, `--password`, or `--api-key` are replaced;
-- sensitive `KEY=value` command arguments are replaced while preserving the key;
+- command arguments following dash-prefixed sensitive options such as `--token`, `--password`, or `--api-key` are replaced;
+- sensitive `KEY=value` and `--option=value` command arguments are replaced while preserving the key;
+- bare ordinary arguments such as a container environment name `TOKEN` do not consume and erase the following image or operand;
 - standalone provider-token shapes are removed;
 - valid JSON is traversed recursively so credential-shaped object keys and string values cannot bypass line-oriented patterns;
 - shell command strings are parsed without execution and reconstructed from redacted arguments; and
@@ -24,11 +25,14 @@ Repository verification commands and web end-to-end services can emit credential
 
 GitHub Actions logs and review envelopes are durable evidence with a potentially broader readership than the originating credential. MITRE classifies insertion of sensitive information into log files as CWE-532. OWASP's current logging guidance identifies access tokens, passwords, database connection strings, encryption keys, and other primary secrets as values that should normally be removed, masked, sanitized, hashed, or encrypted before logging. NIST SSDF requires protection of software and development artifacts from unauthorized access and disclosure.
 
+Over-redaction is also an operational integrity risk. Treating any bare word matching `TOKEN` or `PASSWORD` as a command-line option would cause the following ordinary argument to disappear from review evidence. For example, `docker run -e TOKEN image` names an environment variable and then an image; only the dashed option grammar may consume a subsequent argument. Assignment forms remain independently redacted before that decision.
+
 ## Security and availability boundaries
 
 - No provider-shaped credential literal is committed as a test fixture. Tests construct credential-shaped values from fragments at runtime so Secret Scan remains authoritative.
-- Redaction is fail-closed for recognized sensitive option names, assignments, bearer/basic values, JWTs, and known provider token formats, but it is not a general data-loss-prevention engine.
-- Sensitive option detection uses explicit credential terms. Ambiguous short flags such as `-p` are not guessed because they can mean port, path, project, or password depending on the child tool.
+- Redaction is fail-closed for recognized sensitive dash-prefixed option names, assignments, bearer/basic values, JWTs, and known provider token formats, but it is not a general data-loss-prevention engine.
+- Sensitive option detection uses explicit credential terms and requires the original argument to begin with `-` before the next argument is consumed. Ambiguous short flags such as `-p` are not guessed because they can mean port, path, project, or password depending on the child tool.
+- `TOKEN=value` and `--token=value` are processed before the next-argument option rule, so assignment values remain redacted without sacrificing the next operand.
 - Shell strings are tokenized with `shlex.split`; no shell is invoked for redaction. Malformed strings fall back to line-oriented redaction.
 - `subprocess.run` and `subprocess.Popen` receive structured argument arrays with `shell=False`. Preventing shell interpretation and preventing log disclosure are independent controls.
 - The assignment scanner advances through each ordinary identifier once. A deterministic instrumentation test prevents a long non-sensitive token from reintroducing quadratic rescanning and log-processing denial of service.
@@ -51,7 +55,7 @@ The focused regression suite constructs a credential-shaped token at runtime and
 8. nested JSON string values; or
 9. JSON object keys.
 
-The tests also cover separate sensitive options, `--option=value`, `KEY=value` assignments, standalone provider-token shapes, malformed shell quoting, missing logs, bounded final-line selection, recursive JSON structures, bounded assignment scanning, and both wrappers' end-to-end publication paths. Ordinary text, line endings, result envelopes, cleanup, timeouts, and child-process exit codes remain observable.
+The tests also cover separate dash-prefixed sensitive options, `--option=value`, `KEY=value` assignments, standalone provider-token shapes, malformed shell quoting, missing logs, bounded final-line selection, recursive JSON structures, bounded assignment scanning, and both wrappers' end-to-end publication paths. A dedicated command-array regression proves that `docker run -e TOKEN image` remains fully visible while `--token credential-value` still redacts only the credential value. Ordinary text, line endings, result envelopes, cleanup, timeouts, and child-process exit codes remain observable.
 
 The exact pull-request head must additionally pass the complete central unit suite, 100% production statement and branch coverage for the changed surface, production docstring checks, Secret Scan, CodeQL, Semgrep, Python Security, Security Scan, OpenCode, Noema, CodeRabbit, independent current-head approval, and branch protection before merge.
 
@@ -61,7 +65,7 @@ The exact pull-request head must additionally pass the complete central unit sui
 
 ## Rollback
 
-Rollback must restore every publication sink as one atomic change. Removing only command redaction, JSON traversal, service-tail redaction, or result-envelope redaction would recreate a bypass around the remaining controls. Before rollback, operators must prove that no allowlisted credential can reach child output or command metadata and must retain equivalent focused regression evidence.
+Rollback must restore every publication sink as one atomic change. Removing only command redaction, JSON traversal, service-tail redaction, or result-envelope redaction would recreate a bypass around the remaining controls. Before rollback, operators must prove that no allowlisted credential can reach child output or command metadata and must retain equivalent focused regression evidence. A rollback must also preserve ordinary operands after bare environment-variable names rather than reintroducing evidence loss through over-redaction.
 
 ## APA 7 references
 
