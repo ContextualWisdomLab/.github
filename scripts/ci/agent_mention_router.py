@@ -27,11 +27,11 @@ MENTION_PATTERNS = {
 AGENT_WORKFLOW_RUN_ENDPOINTS = {
     "cwl-noema-review": (
         f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/workflows/"
-        "noema-review.yml/runs"
+        "agent-mention-noema-dispatch.yml/runs"
     ),
     "opencode-agent": (
         f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/workflows/"
-        "pr-review-merge-scheduler.yml/runs"
+        "agent-mention-opencode-dispatch.yml/runs"
     ),
 }
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
@@ -316,11 +316,11 @@ def dispatched_agents(
 
 
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
-    """Return the central Noema repository-dispatch request body."""
+    """Return the durable Noema wrapper dispatch request body."""
 
     agent = "cwl-noema-review"
     return {
-        "event_type": "noema-review",
+        "event_type": "agent-mention-noema",
         "client_payload": {
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
@@ -334,11 +334,11 @@ def noema_payload(request: MentionRequest) -> dict[str, Any]:
 
 
 def opencode_payload(request: MentionRequest) -> dict[str, Any]:
-    """Return the review-only central OpenCode scheduler dispatch body."""
+    """Return the durable review-only OpenCode wrapper dispatch body."""
 
     agent = "opencode-agent"
     return {
-        "event_type": "merge-scheduler",
+        "event_type": "agent-mention-opencode",
         "client_payload": {
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
