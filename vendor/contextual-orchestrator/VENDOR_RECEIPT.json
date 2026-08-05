@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_repository": "ContextualWisdomLab/contextual-orchestrator",
-  "source_commit": "82ea37ee2673111b0a2f25642d637a305473f642",
+  "source_commit": "40c6a4b419cdf8fa90c422acb5443a0e1cca5d16",
   "source_files": {
     "contextual_orchestrator/_fallback_manifest.py": "60458fbdffb180e089cf6da378c560a476635557",
     "contextual_orchestrator/_fallback_plan.py": "8f6e0c0e328a035e613456cf7a1d14062e1c4382",
