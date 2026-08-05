@@ -35,7 +35,7 @@ jobs:
       - name: Verify repair ancestry and patch source
         run: |
           set -euo pipefail
-          expected_parent="5e57877595e2f08014d265bce43064e4e51f250e"
+          expected_parent="73843408bc3eb42f0684d82d67e1657d910b667d"
           actual_parent="$(git rev-parse HEAD^)"
           if [ "$actual_parent" != "$expected_parent" ]; then
             printf '::error::Repair trigger parent moved: expected %s, got %s.\n' "$expected_parent" "$actual_parent"
@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest -q \
-            tests/test_opencode_agent_contract.py::test_sandbox_git_config_env_marks_only_the_validated_worktree_safe \
+            tests/test_opencode_agent_contract.py::test_sandbox_git_config_env_trusts_only_the_validated_worktree \
             tests/test_required_workflow_queue_contract.py::test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret
 
       - name: Run complete central test and branch coverage gate
