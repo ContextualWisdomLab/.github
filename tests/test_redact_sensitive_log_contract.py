@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import io
+import runpy
 import sys
+from pathlib import Path
+
+import pytest
 
 from scripts.ci import redact_sensitive_log as redactor
 
@@ -33,12 +37,22 @@ def test_assignment_parser_covers_quoted_keys_values_and_incomplete_forms() -> N
     assert redactor.redact_text("token='escaped\\' value'") == (
         "token=[REDACTED]"
     )
+    assert redactor.redact_text("token='unterminated") == (
+        "token=[REDACTED]"
+    )
     assert redactor.redact_text("'token=value") == (
         "'token=[REDACTED]"
     )
     assert redactor.redact_text("token") == "token"
+    assert redactor.redact_text("token text") == "token text"
     assert redactor.redact_text("token=") == "token="
     assert redactor.redact_text("token=,") == "token=,"
+    assert redactor.redact_text("token=value ordinary") == (
+        "token=[REDACTED] ordinary"
+    )
+    assert redactor.redact_text("1token=value") == (
+        "1token=[REDACTED]"
+    )
 
 
 def test_unstructured_patterns_cover_basic_jwt_and_provider_values() -> None:
@@ -73,3 +87,18 @@ def test_empty_text_and_cli_main_preserve_stream_contract(monkeypatch) -> None:
 
     assert redactor.main() == 0
     assert output_stream.getvalue() == "password=[REDACTED]\nordinary\n"
+
+
+def test_module_entry_point_exits_after_redacting_standard_input(monkeypatch) -> None:
+    """Direct script execution preserves the same redacted stream contract."""
+
+    input_stream = io.StringIO("secret=value\n")
+    output_stream = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", input_stream)
+    monkeypatch.setattr(sys, "stdout", output_stream)
+
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_path(str(Path(redactor.__file__).resolve()), run_name="__main__")
+
+    assert raised.value.code == 0
+    assert output_stream.getvalue() == "secret=[REDACTED]\n"
