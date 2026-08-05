@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import io
 from pathlib import Path
 
 import pytest
@@ -12,12 +12,12 @@ from scripts.ci import sandboxed_web_e2e
 
 
 class _RunningProcess:
-    """Minimal process double active until explicitly killed and waited."""
+    """Minimal process double active until explicitly stopped and waited."""
 
     pid = 200
-    stdout = object()
 
     def __init__(self) -> None:
+        self.stdout = io.BytesIO(b"")
         self.returncode: int | None = None
         self.waited = False
 
@@ -35,11 +35,11 @@ class _RunningProcess:
         return self.returncode
 
 
-def test_capture_startup_failure_kills_and_reaps_the_service(
+def test_capture_startup_failure_stops_reaps_and_closes_the_service_pipe(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    """A failed drainer cannot leave an unobserved long-running child behind."""
+    """A failed drainer cannot leave a child or parent-side pipe uncollected."""
 
     process = _RunningProcess()
     monkeypatch.setattr(bounded, "require_supported_platform", lambda: None)
@@ -55,11 +55,11 @@ def test_capture_startup_failure_kills_and_reaps_the_service(
             RuntimeError("capture startup failed")
         ),
     )
-    killed: list[object] = []
+    stopped: list[object] = []
     monkeypatch.setattr(
         bounded,
         "kill_process_group",
-        lambda candidate: killed.append(candidate),
+        lambda candidate: stopped.append(candidate),
     )
 
     with pytest.raises(RuntimeError, match="capture startup failed"):
@@ -72,5 +72,6 @@ def test_capture_startup_failure_kills_and_reaps_the_service(
             4096,
         )
 
-    assert killed == [process]
+    assert stopped == [process]
     assert process.waited is True
+    assert process.stdout.closed is True
