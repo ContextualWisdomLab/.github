@@ -42,7 +42,7 @@ jobs:
       - name: Verify exact trigger and apply reviewed patch
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "810c7c9d69410701b78d0d636c0f0e8224f49e88"
+          test "$(git rev-parse HEAD^)" = "4512b35ec4e5dd10a082ef13b741b2e70ef3f76e"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 -m py_compile scripts/ci/apply_pr748_current_main.py
           python3 scripts/ci/apply_pr748_current_main.py
@@ -102,7 +102,7 @@ jobs:
               'resolve_npm_install_root()',
               'npm_workspace_install_root.py',
               '--workspace "$npm_workspace_selector"',
-              'npm workspace-root offline ci, lifecycle hooks disabled',
+              'npm offline ci (workspace root), lifecycle hooks disabled',
           )
           missing = [fragment for fragment in required if fragment not in workflow]
           if missing:
