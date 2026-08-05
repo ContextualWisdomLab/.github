@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: one-shot-pr759-libclang-finalization-v4
+  group: one-shot-pr759-libclang-finalization-v5
   cancel-in-progress: false
 
 env:
@@ -37,18 +37,17 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Bind execution to the reviewed staging parent
         env:
-          EXPECTED_PARENT_SHA: 9fba1dbc1e1c9a345cdd20ecc8a5e098e88c640e
+          EXPECTED_PARENT_SHA: bf7b9fa7c95430f707a4f5292e475762c3fac3b8
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
           test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/one-shot-pr759-libclang-final.yml"
           test "$(git ls-remote origin refs/heads/fix/opencode-coverage-failure-diagnostics | cut -f1)" = "$GITHUB_SHA"
-          git cat-file -e 5a979466a7927c830102c153e449208ea8606f34^{commit}
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
