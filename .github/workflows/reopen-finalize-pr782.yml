@@ -1,0 +1,153 @@
+name: Reopen-finalize PR 782
+
+on:
+  pull_request:
+    branches: [main]
+    types: [reopened]
+
+concurrency:
+  group: reopen-finalize-pr782-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.event.pull_request.number == 782 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/hourly-nvidia-nim-review-repair-main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact reopened head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 50
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked verification tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Preserve exact RED conflict-workflow evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set +e
+          output="$(python -m pytest -q \
+            tests/test_pr_review_conflict_scope.py::test_workflow_snapshots_after_merge_and_verifies_before_staging \
+            2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          printf '%s\n' "$output" | grep -F 'substring not found'
+
+      - name: Apply the reviewed permanent repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python scripts/ci/repair_pr782_conflict_scope_once.py
+          python - <<'PY'
+          from pathlib import Path
+
+          scope_path = Path("scripts/ci/pr_review_conflict_scope.py")
+          source = scope_path.read_text(encoding="utf-8")
+          old = '''    path = Path(raw_path)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError("repository path must be a normalized relative path")
+    return raw_path
+'''
+          new = '''    path = Path(raw_path)
+    normalized_path = path.as_posix()
+    if (
+        path.is_absolute()
+        or normalized_path != raw_path
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError("repository path must be a normalized relative path")
+    return raw_path
+'''
+          if new not in source:
+              if source.count(old) != 1:
+                  raise SystemExit("relative-path validator drifted")
+              scope_path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+          test_path = Path("tests/test_pr_review_conflict_scope.py")
+          tests = test_path.read_text(encoding="utf-8")
+          old_cases = '''    ["", "/absolute", "../escape", "nested/../escape"],
+'''
+          new_cases = '''    [
+        "",
+        "/absolute",
+        "../escape",
+        "nested/../escape",
+        "./relative",
+        "a//b",
+    ],
+'''
+          if new_cases not in tests:
+              if tests.count(old_cases) != 1:
+                  raise SystemExit("invalid-path test table drifted")
+              test_path.write_text(tests.replace(old_cases, new_cases, 1), encoding="utf-8")
+          PY
+          rm -f \
+            .github/workflows/finalize-pr782-conflict-scope.yml \
+            .github/workflows/one-shot-pr782-conflict-scope-repair.yml \
+            .github/workflows/repair-pr782-conflict-scope.yml \
+            scripts/ci/repair_pr782_conflict_scope_once.py
+          git diff --check
+
+      - name: Verify GREEN behavior, coverage, docstrings, and workflow order
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q \
+            tests/test_pr_review_conflict_scope.py \
+            tests/test_pr_review_fix_hourly_contract.py \
+            tests/test_pr_review_fix_scheduler_source_pin.py \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py \
+            --cov=scripts.ci.pr_review_conflict_scope \
+            --cov-branch \
+            --cov-fail-under=100
+          python -m interrogate --fail-under 100 scripts/ci/pr_review_conflict_scope.py
+          python -m compileall -q \
+            scripts/ci/pr_review_conflict_scope.py \
+            tests/test_pr_review_conflict_scope.py
+          git diff --check
+
+      - name: Publish the verified final tree and remove this workflow
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          rm .github/workflows/reopen-finalize-pr782.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(automation): enforce conflict repair write scope"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push origin "HEAD:refs/heads/${HEAD_BRANCH}"
