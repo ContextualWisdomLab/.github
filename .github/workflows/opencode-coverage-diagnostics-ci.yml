@@ -10,6 +10,7 @@ on:
       - "scripts/ci/sanitize_github_output_summary.py"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
+      - "tests/test_control_plane_branch_writer_absence.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
       - "tests/test_coverage_native_fuzz_lock_boundary.py"
       - "tests/conftest.py"
@@ -21,7 +22,6 @@ on:
       - "tests/test_uv_redirect_and_coverage_contract.py"
       - "tests/test_uv_redirect_boundary.py"
       - "tests/test_uv_workspace_fail_closed.py"
-      - "tests/test_opencode_llvm_toolchain_contract.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-python310-ci-hashes.txt"
@@ -39,6 +39,7 @@ on:
       - "scripts/ci/sanitize_github_output_summary.py"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
+      - "tests/test_control_plane_branch_writer_absence.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
       - "tests/test_coverage_native_fuzz_lock_boundary.py"
       - "tests/conftest.py"
@@ -50,7 +51,6 @@ on:
       - "tests/test_uv_redirect_and_coverage_contract.py"
       - "tests/test_uv_redirect_boundary.py"
       - "tests/test_uv_workspace_fail_closed.py"
-      - "tests/test_opencode_llvm_toolchain_contract.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-python310-ci-hashes.txt"
@@ -170,6 +170,7 @@ jobs:
           python -m pytest \
             tests/test_materialize_base_javascript_packages.py \
             tests/test_materialize_base_python_requirements.py \
+            tests/test_control_plane_branch_writer_absence.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
             tests/test_coverage_native_fuzz_lock_boundary.py \
             tests/test_materialize_uv_export_hash_contract.py \
@@ -180,7 +181,6 @@ jobs:
             tests/test_uv_redirect_and_coverage_contract.py \
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
-            tests/test_opencode_llvm_toolchain_contract.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py \
             --cov=scripts.ci.coverage_failure_summary \
@@ -207,6 +207,7 @@ jobs:
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
             scripts/ci/sanitize_github_output_summary.py \
+            tests/test_control_plane_branch_writer_absence.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
             tests/test_coverage_native_fuzz_lock_boundary.py \
             tests/test_materialize_uv_export_hash_contract.py \
@@ -217,6 +218,5 @@ jobs:
             tests/test_uv_redirect_and_coverage_contract.py \
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
-            tests/test_opencode_llvm_toolchain_contract.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py
