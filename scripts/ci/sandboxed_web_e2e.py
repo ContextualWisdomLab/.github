@@ -280,6 +280,7 @@ def emit_result(
         "sandboxed": True,
         "service_log_limit_bytes": args.service_log_limit_bytes,
     }
+    print()
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
 
 
