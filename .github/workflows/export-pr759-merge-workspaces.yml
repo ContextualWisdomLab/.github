@@ -29,17 +29,24 @@ jobs:
           path: pull_request_head
           persist-credentials: false
 
-      - name: Checkout current protected main
+      - name: Checkout exact protected-main observation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: main
+          ref: f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae
           path: protected_main
+          persist-credentials: false
+
+      - name: Checkout exact three-way merge base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 3f65dbee6672b78802e7d71d49c390f3817bb03b
+          path: merge_base
           persist-credentials: false
 
       - name: Remove Git metadata from exported workspaces
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          rm -rf pull_request_head/.git protected_main/.git
+          rm -rf pull_request_head/.git protected_main/.git merge_base/.git
 
       - name: Upload read-only merge workspaces
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -48,6 +55,7 @@ jobs:
           path: |
             pull_request_head/
             protected_main/
+            merge_base/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
