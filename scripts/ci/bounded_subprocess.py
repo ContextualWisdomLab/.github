@@ -1,34 +1,28 @@
-"""Run POSIX child processes with kernel-enforced bounded output files."""
+"""Run POSIX child processes with continuously drained bounded output pipes."""
 
 from __future__ import annotations
 
 import os
 import signal
 import subprocess
-import tempfile
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
+from typing import BinaryIO
 
-try:
-    import resource as _resource_module
-except ImportError:  # pragma: no cover - exercised by injected unsupported state
-    _resource_module = None
-
-
-_resource: ModuleType | None = _resource_module
 
 OUTPUT_LIMIT_EXIT_CODE = 123
 DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES = 1_048_576
 DEFAULT_SERVICE_LOG_LIMIT_BYTES = 4_194_304
 MAXIMUM_OUTPUT_LIMIT_BYTES = 67_108_864
 MINIMUM_OUTPUT_LIMIT_BYTES = 4_096
+READ_CHUNK_BYTES = 65_536
 TRUNCATION_MARKER = "...[output truncated]...\n"
 
 
 class OutputLimitUnsupportedError(RuntimeError):
-    """Report that the operating system cannot enforce child file-size limits."""
+    """Report that the operating system cannot isolate a child process group."""
 
 
 @dataclass(frozen=True)
@@ -42,7 +36,7 @@ class BoundedText:
 
 @dataclass(frozen=True)
 class BoundedCompletedProcess:
-    """A completed child result whose output was bounded before decoding."""
+    """A completed child result whose output was drained into bounded buffers."""
 
     args: tuple[str, ...]
     returncode: int
@@ -101,52 +95,162 @@ def _validate_read_limit(value: object) -> int:
     return value
 
 
-def _require_resource_module() -> ModuleType:
-    """Return the POSIX resource module or fail before child execution."""
+def require_supported_platform() -> None:
+    """Fail before execution when process-group termination is unavailable."""
 
-    if (
-        os.name != "posix"
-        or _resource is None
-        or not hasattr(_resource, "RLIMIT_FSIZE")
-        or not hasattr(_resource, "RLIM_INFINITY")
-    ):
+    if os.name != "posix" or not hasattr(os, "killpg"):
         raise OutputLimitUnsupportedError(
-            "POSIX RLIMIT_FSIZE support is required for bounded child output"
+            "POSIX process-group support is required for bounded child output"
         )
-    return _resource
 
 
-def bounded_file_preexec(evidence_limit_bytes: int) -> Callable[[], None]:
-    """Return a child-only callable that lowers the maximum writable file size."""
+def _render_bounded_bytes(buffer: bytes, limit: int, truncated: bool) -> bytes:
+    """Return evidence bytes no larger than the configured stream budget."""
 
-    evidence_limit = validate_output_limit(
-        evidence_limit_bytes,
-        "evidence output limit",
+    if not truncated:
+        return buffer
+    marker = TRUNCATION_MARKER.encode("utf-8")
+    suffix_budget = max(0, limit - len(marker))
+    suffix = buffer[-suffix_budget:] if suffix_budget else b""
+    return marker + suffix
+
+
+class BoundedOutputCapture:
+    """Continuously drain one binary pipe into a bounded final-suffix buffer."""
+
+    def __init__(
+        self,
+        stream: BinaryIO,
+        *,
+        evidence_limit_bytes: int,
+        on_limit: Callable[[], None],
+        destination: Path | None = None,
+    ) -> None:
+        """Start one background drain with an optional bounded evidence file."""
+
+        self._stream = stream
+        self._limit = validate_output_limit(
+            evidence_limit_bytes,
+            "evidence output limit",
+        )
+        self._on_limit = on_limit
+        self._destination = destination
+        self._buffer = bytearray()
+        self._total_bytes = 0
+        self._output_limited = False
+        self._error: BaseException | None = None
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(
+            target=self._drain,
+            name="bounded-output-drain",
+            daemon=True,
+        )
+        self._thread.start()
+
+    @property
+    def output_limited(self) -> bool:
+        """Return whether this stream exceeded its configured byte budget."""
+
+        with self._lock:
+            return self._output_limited
+
+    @property
+    def total_bytes(self) -> int:
+        """Return the complete byte count observed while draining the stream."""
+
+        with self._lock:
+            return self._total_bytes
+
+    @property
+    def text(self) -> str:
+        """Return the bounded final suffix decoded with replacement semantics."""
+
+        with self._lock:
+            evidence = _render_bounded_bytes(
+                bytes(self._buffer),
+                self._limit,
+                self._output_limited,
+            )
+        return evidence.decode("utf-8", errors="replace")
+
+    def _append(self, chunk: bytes) -> bool:
+        """Append one chunk and report the first transition into limited state."""
+
+        should_notify = False
+        with self._lock:
+            self._total_bytes += len(chunk)
+            self._buffer.extend(chunk)
+            overflow = len(self._buffer) - self._limit
+            if overflow > 0:
+                del self._buffer[:overflow]
+            if self._total_bytes > self._limit and not self._output_limited:
+                self._output_limited = True
+                should_notify = True
+        return should_notify
+
+    def _write_destination(self) -> None:
+        """Write at most the configured evidence budget to the destination file."""
+
+        if self._destination is None:
+            return
+        self._destination.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            evidence = _render_bounded_bytes(
+                bytes(self._buffer),
+                self._limit,
+                self._output_limited,
+            )
+        self._destination.write_bytes(evidence)
+
+    def _drain(self) -> None:
+        """Drain until EOF, killing the child once on the first byte overflow."""
+
+        try:
+            while True:
+                chunk = self._stream.read(READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                if self._append(chunk):
+                    self._on_limit()
+        except BaseException as error:  # noqa: BLE001 - propagated by join()
+            self._error = error
+        finally:
+            try:
+                self._stream.close()
+                self._write_destination()
+            except BaseException as error:  # noqa: BLE001 - propagated by join()
+                if self._error is None:
+                    self._error = error
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for EOF and re-raise any background capture failure."""
+
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise RuntimeError("bounded output drain did not finish")
+        if self._error is not None:
+            raise self._error
+
+
+def start_bounded_capture(
+    stream: BinaryIO,
+    *,
+    evidence_limit_bytes: int,
+    on_limit: Callable[[], None],
+    destination: Path | None = None,
+) -> BoundedOutputCapture:
+    """Start one bounded background drain for a binary subprocess stream."""
+
+    return BoundedOutputCapture(
+        stream,
+        evidence_limit_bytes=evidence_limit_bytes,
+        on_limit=on_limit,
+        destination=destination,
     )
-    resource_module = _require_resource_module()
-    kernel_limit = evidence_limit + 1
-
-    def apply_limit() -> None:
-        """Lower the child soft and hard file-size limits without raising either."""
-
-        _soft_limit, hard_limit = resource_module.getrlimit(
-            resource_module.RLIMIT_FSIZE
-        )
-        target_limit = (
-            kernel_limit
-            if hard_limit == resource_module.RLIM_INFINITY
-            else min(kernel_limit, hard_limit)
-        )
-        resource_module.setrlimit(
-            resource_module.RLIMIT_FSIZE,
-            (target_limit, target_limit),
-        )
-
-    return apply_limit
 
 
 def read_bounded_suffix(path: Path, maximum_bytes: int) -> BoundedText:
-    """Read at most the final byte budget from one regular capture file."""
+    """Read at most the final byte budget from one regular evidence file."""
 
     read_limit = _validate_read_limit(maximum_bytes)
     stored_bytes = path.stat().st_size
@@ -162,26 +266,6 @@ def read_bounded_suffix(path: Path, maximum_bytes: int) -> BoundedText:
         truncated=truncated,
         stored_bytes=stored_bytes,
     )
-
-
-def file_limit_reached(
-    path: Path,
-    evidence_limit_bytes: int,
-    return_code: int | None,
-) -> bool:
-    """Return whether file size or SIGXFSZ proves an attempted output overflow."""
-
-    evidence_limit = validate_output_limit(
-        evidence_limit_bytes,
-        "evidence output limit",
-    )
-    file_exceeded = path.stat().st_size > evidence_limit
-    file_size_signal = getattr(signal, "SIGXFSZ", None)
-    signal_exceeded = (
-        file_size_signal is not None
-        and return_code == -int(file_size_signal)
-    )
-    return file_exceeded or signal_exceeded
 
 
 def _normalized_command(arguments: Sequence[object]) -> tuple[str, ...]:
@@ -205,6 +289,17 @@ def _validated_timeout(timeout: object) -> int | float:
     return timeout
 
 
+def kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Kill one isolated POSIX child process group exactly when still running."""
+
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
 def run_bounded_command(
     arguments: Sequence[object],
     *,
@@ -213,64 +308,74 @@ def run_bounded_command(
     timeout: int | float,
     evidence_limit_bytes: int,
 ) -> BoundedCompletedProcess:
-    """Run a structured command with bounded private stdout and stderr files."""
+    """Run a structured command while continuously draining bounded pipe suffixes."""
 
+    require_supported_platform()
     command = _normalized_command(arguments)
     timeout_seconds = _validated_timeout(timeout)
     evidence_limit = validate_output_limit(
         evidence_limit_bytes,
         "evidence output limit",
     )
-    preexec_function = bounded_file_preexec(evidence_limit)
+    process = subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        env=dict(env),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+        shell=False,
+        start_new_session=True,
+    )
+    if process.stdout is None or process.stderr is None:
+        kill_process_group(process)
+        process.wait()
+        raise RuntimeError("subprocess pipes were not created")
 
-    with tempfile.TemporaryDirectory(prefix="bounded-subprocess-") as capture_root:
-        capture_directory = Path(capture_root)
-        stdout_path = capture_directory / "stdout.log"
-        stderr_path = capture_directory / "stderr.log"
-        completed: subprocess.CompletedProcess[bytes] | None = None
-        timeout_error: subprocess.TimeoutExpired | None = None
-        with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
-            try:
-                completed = subprocess.run(
-                    list(command),
-                    cwd=cwd,
-                    env=dict(env),
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    timeout=timeout_seconds,
-                    check=False,
-                    shell=False,
-                    preexec_fn=preexec_function,
-                )
-            except subprocess.TimeoutExpired as error:
-                timeout_error = error
+    limit_triggered = threading.Event()
 
-        return_code = completed.returncode if completed is not None else None
-        stdout = read_bounded_suffix(stdout_path, evidence_limit)
-        stderr = read_bounded_suffix(stderr_path, evidence_limit)
-        output_limited = file_limit_reached(
-            stdout_path,
-            evidence_limit,
-            return_code,
-        ) or file_limit_reached(
-            stderr_path,
-            evidence_limit,
-            return_code,
-        )
-        if timeout_error is not None:
-            raise BoundedTimeoutExpired(
-                command,
-                timeout_seconds,
-                stdout=stdout.text,
-                stderr=stderr.text,
-                output_limited=output_limited,
-            ) from timeout_error
-        if completed is None:  # pragma: no cover - defensive subprocess invariant
-            raise RuntimeError("subprocess returned neither completion nor timeout")
-        return BoundedCompletedProcess(
-            args=command,
-            returncode=completed.returncode,
-            stdout=stdout.text,
-            stderr=stderr.text,
+    def stop_for_limit() -> None:
+        """Kill the process group only for the first overflowing stream."""
+
+        if not limit_triggered.is_set():
+            limit_triggered.set()
+            kill_process_group(process)
+
+    stdout_capture = start_bounded_capture(
+        process.stdout,
+        evidence_limit_bytes=evidence_limit,
+        on_limit=stop_for_limit,
+    )
+    stderr_capture = start_bounded_capture(
+        process.stderr,
+        evidence_limit_bytes=evidence_limit,
+        on_limit=stop_for_limit,
+    )
+    timed_out = False
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_process_group(process)
+        process.wait()
+
+    stdout_capture.join()
+    stderr_capture.join()
+    output_limited = (
+        stdout_capture.output_limited or stderr_capture.output_limited
+    )
+    if timed_out:
+        raise BoundedTimeoutExpired(
+            command,
+            timeout_seconds,
+            stdout=stdout_capture.text,
+            stderr=stderr_capture.text,
             output_limited=output_limited,
         )
+    return BoundedCompletedProcess(
+        args=command,
+        returncode=process.returncode,
+        stdout=stdout_capture.text,
+        stderr=stderr_capture.text,
+        output_limited=output_limited,
+    )
