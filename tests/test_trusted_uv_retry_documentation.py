@@ -10,8 +10,9 @@ def test_trusted_uv_retry_documentation_matches_closed_policy() -> None:
         repository_root / "docs/doctoring/trusted-uv-transient-download-retry.md"
     ).read_text(encoding="utf-8")
     changelog = (repository_root / "CHANGELOG.md").read_text(encoding="utf-8")
+    normalized_doctoring = doctoring.replace("`", "")
 
-    assert "HTTP 408, 425, 429, 500, 502, 503, and 504" in doctoring
-    assert "temporary DNS (`EAI_AGAIN`)" in doctoring
-    assert "connection-level `urllib.error.URLError` or `OSError` failures" not in doctoring
+    assert "HTTP 408, 425, 429, 500, 502, 503, and 504" in normalized_doctoring
+    assert "temporary DNS (EAI_AGAIN)" in normalized_doctoring
+    assert "connection-level urllib.error.URLError or OSError failures" not in normalized_doctoring
     assert "408, 429, or 5xx" not in changelog
