@@ -31,6 +31,30 @@ def test_json_object_keys_are_redacted_when_the_key_contains_an_assignment() -> 
     assert redactor.REDACTED in redacted
 
 
+@pytest.mark.parametrize(
+    "sensitive_key",
+    [
+        "clientSecret",
+        "databasePassword",
+        "serviceAuthorizationHeader",
+        "privateKeyMaterial",
+        "sessionTokenValue",
+    ],
+)
+def test_concatenated_sensitive_json_keys_redact_their_values(
+    sensitive_key: str,
+) -> None:
+    """CamelCase and concatenated credential keys cannot retain plain values."""
+    secret_value = "plain-secret"
+
+    redacted = redactor.redact_text(
+        json.dumps({sensitive_key: secret_value})
+    )
+
+    assert secret_value not in redacted
+    assert redactor.REDACTED in redacted
+
+
 def test_long_ordinary_identifier_does_not_restart_assignment_scanning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
