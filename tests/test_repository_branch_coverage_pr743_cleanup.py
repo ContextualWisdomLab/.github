@@ -26,6 +26,7 @@ def test_opencode_runtime_git_calls_use_fully_isolated_configuration() -> None:
         + "              GIT_CONFIG_GLOBAL=/dev/null " + chr(92) + "\n"
         + count_key
         + "              GIT_CONFIG_KEY_0=safe.directory " + chr(92) + "\n"
+        + "              GIT_CONFIG_VALUE_0=/work " + chr(92) + "\n"
     )
 
     assert runtime.count(count_key) == 3
