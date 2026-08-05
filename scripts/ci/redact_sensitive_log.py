@@ -21,7 +21,18 @@ SENSITIVE_SEPARATE_OPTION_RE = re.compile(
     r"token)\s+)(?P<value>(?!--?[A-Za-z])(?:\"[^\"]*\"|'[^']*'|[^\s,;}]+))"
 )
 SENSITIVE_ASSIGNMENT_RE = re.compile(
-    r"(?i)(\b[A-Za-z_][A-Za-z0-9_-]*(?:API[_-]?KEY|AUTH|AUTHORIZATION|BEARER|CREDENTIAL|PASSWORD|PASSWD|PRIVATE[_-]?KEY|SECRET|SESSION[_-]?KEY|TOKEN)[A-Za-z0-9_-]*\s*[=:]\s*)([^\s,;]+)"
+    r"(?ix)("
+    r"(?<![A-Za-z0-9_])"
+    r"(?:\"|')?"
+    r"(?=[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?key|auth|authorization|"
+    r"bearer|credential|jwt|password|passwd|private[_-]?key|secret|"
+    r"session[_-]?key|token))"
+    r"[A-Za-z0-9_-]+"
+    r"(?:\"|')?"
+    r"\s*[=:]\s*"
+    r")"
+    r"((?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+|"
+    r"\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;}]+)"
 )
 BEARER_BASIC_RE = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+")
 JWT_RE = re.compile(
