@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import platform
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,18 @@ class _ChunkedResponse:
         return next(self._chunks, b"")
 
 
+def _http_error(status: int) -> urllib.error.HTTPError:
+    """Return one file-like HTTP failure for the fixed trusted archive URL."""
+
+    return urllib.error.HTTPError(
+        materializer.TRUSTED_UV_ARCHIVE_URL,
+        status,
+        "synthetic failure",
+        None,
+        io.BytesIO(b""),
+    )
+
+
 def test_trusted_uv_download_collects_short_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -62,6 +76,105 @@ def test_trusted_uv_download_rejects_oversize_across_short_reads(
 
     with pytest.raises(RuntimeError, match="bounded download size"):
         materializer._download_trusted_uv_archive()
+
+
+def test_trusted_uv_download_retries_transient_http_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient server failure receives one bounded retry before succeeding."""
+
+    outcomes: list[object] = [_http_error(503), _ChunkedResponse([b"archive", b""])]
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        outcome = outcomes[calls]
+        calls += 1
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"archive"
+    assert calls == 2
+    assert sleeps == [1.0]
+
+
+def test_trusted_uv_download_retries_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection-level URLError receives the same bounded retry policy."""
+
+    outcomes: list[object] = [
+        urllib.error.URLError(OSError("temporary network failure")),
+        _ChunkedResponse([b"archive", b""]),
+    ]
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        outcome = outcomes[calls]
+        calls += 1
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"archive"
+    assert calls == 2
+    assert sleeps == [1.0]
+
+
+def test_trusted_uv_download_exhausts_bounded_transient_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persistent transient failures stop after three total network attempts."""
+
+    calls = 0
+    sleeps: list[float] = []
+
+    def fail_urlopen(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise _http_error(503)
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=r"HTTP 503 after 3 attempts"):
+        materializer._download_trusted_uv_archive()
+
+    assert calls == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_trusted_uv_download_does_not_retry_permanent_http_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing immutable archive fails immediately instead of hiding source drift."""
+
+    calls = 0
+    sleeps: list[float] = []
+
+    def fail_urlopen(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise _http_error(404)
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=r"HTTP 404$"):
+        materializer._download_trusted_uv_archive()
+
+    assert calls == 1
+    assert sleeps == []
 
 
 @pytest.mark.parametrize(
