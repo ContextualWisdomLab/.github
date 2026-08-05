@@ -322,12 +322,18 @@ def load_coverage_files(
     """Load summary and final Istanbul files listed by the workflow."""
     summaries: list[tuple[Path, dict[str, Any]]] = []
     finals: list[tuple[Path, dict[str, Any]]] = []
+    repo_resolved = repo_root.resolve(strict=True)
     for raw_path in summary_list.read_text(encoding="utf-8").splitlines():
         if not raw_path.strip():
             continue
         path = Path(raw_path.strip())
         if not path.is_absolute():
             path = repo_root / path
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(repo_resolved)
+        except (ValueError, OSError):
+            continue
         data = json.loads(path.read_text(encoding="utf-8"))
         if path.name == "coverage-final.json":
             finals.append((path, data))

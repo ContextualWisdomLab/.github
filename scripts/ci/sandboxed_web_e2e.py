@@ -14,6 +14,12 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
+import socket
+import ipaddress
+import urllib.parse
+import socket
+import ipaddress
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -122,6 +128,24 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname:
+        if hostname in {"localhost", "localhost.localdomain", "127.0.0.1"} or hostname.endswith(".localhost"):
+            pass
+        else:
+            try:
+                addrinfo = socket.getaddrinfo(hostname, None)
+                for result in addrinfo:
+                    ip_str = result[4][0]
+                    try:
+                        ip = ipaddress.ip_address(ip_str)
+                    except ValueError:
+                        continue
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                        raise ValueError("URL cannot target internal IP addresses except localhost")
+            except socket.gaierror:
+                pass
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
