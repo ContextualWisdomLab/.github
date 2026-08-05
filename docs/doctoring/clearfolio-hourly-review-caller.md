@@ -65,11 +65,16 @@ It does not use `secrets: inherit`. It does not receive
 execution. The NVIDIA credential is bound only inside the separately reviewed
 `PR Review Autofix` workflow's two OpenCode execution steps.
 
-The caller grants the reusable scheduler only the GitHub token permissions the
-called job declares: Actions write, Issues write, and read access to Contents,
-Pull Requests, and Statuses. The repair worker still cannot approve a PR, merge
-a PR, publish a release, lower branch protection, or convert incomplete checks
-into success.
+The workflow-level token is read-only. Actions and Issues write permission is
+granted only on the single `dispatch-review-repair` reusable-workflow job,
+along with read access to Contents, Pull Requests, and Statuses. GitHub supports
+`jobs.<job_id>.permissions` on a job that calls a reusable workflow; omitted
+scopes become `none`. This job-local boundary prevents a future sibling job from
+silently inheriting scheduler mutation authority while retaining the exact
+permissions required by the called scheduler.
+
+The repair worker still cannot approve a PR, merge a PR, publish a release,
+lower branch protection, or convert incomplete checks into success.
 
 ## Failure behavior
 
@@ -97,7 +102,9 @@ Permanent tests require all of the following:
 7. only the two established scheduler secrets cross the caller boundary;
 8. `secrets: inherit`, `COPILOT_GITHUB_TOKEN`, and direct NVIDIA credential
    binding are absent from the caller;
-9. the focused exact-head contract workflow reruns whenever the caller changes.
+9. the focused exact-head contract workflow reruns whenever the caller changes;
+10. workflow scope remains read-only and all required write permissions are
+    confined to the single reusable-scheduler job.
 
 Repository acceptance still requires current-head workflow, security,
 supply-chain, automated-review, independent-review, unresolved-thread, and
@@ -109,7 +116,8 @@ Rollback removes the dedicated caller and its documentation while leaving the
 reusable scheduler and reviewer credentials unchanged. A rollback must not
 restore an ambiguous schedule that defaults to the central repository, add a
 product literal to the shared engine, expose NVIDIA credentials to queue
-inspection, or replace explicit secret mapping with `secrets: inherit`.
+inspection, replace explicit secret mapping with `secrets: inherit`, or move
+job-specific write authority back to workflow scope.
 
 ## References (APA 7th edition)
 
@@ -124,3 +132,7 @@ https://docs.github.com/en/enterprise-cloud@latest/actions/how-tos/reuse-automat
 GitHub, Inc. (n.d.-c). *Workflow syntax for GitHub Actions: Jobs.<job_id>.secrets*.
 GitHub Docs. Retrieved August 5, 2026, from
 https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idsecrets
+
+GitHub, Inc. (n.d.-d). *Workflow syntax for GitHub Actions: Jobs.<job_id>.permissions*.
+GitHub Docs. Retrieved August 5, 2026, from
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idpermissions
