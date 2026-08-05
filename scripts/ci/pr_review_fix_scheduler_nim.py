@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import sys
 
-from scripts.ci import pr_review_fix_scheduler as scheduler
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+from scripts.ci import pr_review_fix_scheduler as scheduler  # noqa: E402
 
 NIM_AUTOFIX_WORKFLOW = "nvidia-nim-pr-review-autofix.yml"
 NIM_AUTOFIX_EVENT_TYPE = "nvidia-nim-pr-review-autofix"
