@@ -70,7 +70,8 @@ fallback provider.
 
 Only the `nvidia-nim` provider is enabled. GitHub Models configuration, model
 identifiers, base URLs, and model-auth fallbacks are absent from the scheduled
-autofix execution path.
+autofix execution path. `COPILOT_GITHUB_TOKEN` is forbidden by the permanent
+workflow contract and is not an accepted scheduler or agent credential.
 
 ## Credential boundary
 
@@ -89,7 +90,8 @@ The workflow passes the key through an environment variable and OpenCode
 substitutes `{env:NVIDIA_API_KEY}` into provider configuration. The key is never
 written to repository files, command arguments, generated prompts, or logs. A
 missing secret is a fatal configuration error; the workflow does not fall back
-to `GITHUB_TOKEN`, a GitHub Models token, or another provider.
+to `GITHUB_TOKEN`, a GitHub Models token, `COPILOT_GITHUB_TOKEN`, or another
+provider.
 
 The ordinary repair step no longer binds a GitHub write token at step scope. The
 conflict-repair shell retains GitHub credentials because the same shell must
@@ -183,8 +185,9 @@ Automated tests must prove all of the following:
    environment substitution.
 5. Exactly two OpenCode execution steps receive `NVIDIA_API_KEY` from
    `secrets.NVIDIA_NIM_API_KEY`.
-6. GitHub Models credentials, providers, model identifiers, base URLs, and
-   `USE_GITHUB_TOKEN` model-auth fallback are absent from the autofix workflow.
+6. GitHub Models credentials, providers, model identifiers, base URLs,
+   `USE_GITHUB_TOKEN`, and `COPILOT_GITHUB_TOKEN` are absent from the autofix
+   workflow.
 7. The trusted autofix checkout is pinned to `${{ github.sha }}`, does not use
    mutable `main`, and does not persist credentials.
 8. Both OpenCode permission maps explicitly deny every non-file interaction
@@ -209,30 +212,31 @@ workflow files are not represented as active organization automation.
 ## Rollback
 
 Rollback is a normal revert of the NVIDIA transport commit. A rollback must not
-reintroduce an implicit GitHub-token model-auth fallback, GitHub or OIDC
-credentials inside the model child process, a mutable trusted source checkout,
-permissive unattended-agent tools, or any change to the independent review-agent
-credential system. If NVIDIA NIM is unavailable, scheduled autofix must fail
-closed while review, checks, and manual maintenance remain available.
+reintroduce an implicit GitHub-token or Copilot-token model-auth fallback,
+GitHub or OIDC credentials inside the model child process, a mutable trusted
+source checkout, permissive unattended-agent tools, or any change to the
+independent review-agent credential system. If NVIDIA NIM is unavailable,
+scheduled autofix must fail closed while review, checks, and manual maintenance
+remain available.
 
 ## References
 
 GitHub, Inc. (n.d.-a). *Events that trigger workflows*. GitHub Docs. Retrieved
-August 4, 2026, from
+August 5, 2026, from
 https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
-GitHub, Inc. (n.d.-b). *Secrets reference*. GitHub Docs. Retrieved August 4,
+GitHub, Inc. (n.d.-b). *Secrets reference*. GitHub Docs. Retrieved August 5,
 2026, from https://docs.github.com/en/actions/reference/security/secrets
 
 NVIDIA Corporation. (n.d.-a). *LLM APIs*. NVIDIA API Catalog. Retrieved August
-4, 2026, from https://docs.api.nvidia.com/nim/reference/llm-apis
+5, 2026, from https://docs.api.nvidia.com/nim/reference/llm-apis
 
 NVIDIA Corporation. (n.d.-b). *Mistralai / mistral-nemotron*. NVIDIA API
-Catalog. Retrieved August 4, 2026, from
+Catalog. Retrieved August 5, 2026, from
 https://docs.api.nvidia.com/nim/reference/mistralai-mistral-nemotron
 
 NVIDIA Corporation. (n.d.-c). *NVIDIA / nemotron-3-nano-30b-a3b*. NVIDIA API
-Catalog. Retrieved August 4, 2026, from
+Catalog. Retrieved August 5, 2026, from
 https://docs.api.nvidia.com/nim/re/reference/nvidia-nemotron-3-nano-30b-a3b
 
 OpenCode. (2026a). *Permissions*. https://opencode.ai/docs/permissions
