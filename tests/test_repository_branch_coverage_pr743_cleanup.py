@@ -14,19 +14,20 @@ TEMPORARY_REPAIR_WORKFLOW_PATHS = (
 
 
 def test_opencode_runtime_git_calls_use_fully_isolated_configuration() -> None:
-    """Every pre-helper Git call must disable ambient system and global config."""
+    """Every pre-helper Git call must use the complete isolated configuration block."""
 
     workflow = REVIEW_WORKFLOW_PATH.read_text(encoding="utf-8")
     runtime = workflow.split("          trusted_git() {", 1)[0]
-    count_key = "              GIT_CONFIG_COUNT=1 " + chr(92)
-    no_system_key = "              GIT_CONFIG_NOSYSTEM=1 " + chr(92)
-    no_global_key = "              GIT_CONFIG_GLOBAL=/dev/null " + chr(92)
+    count_key = "              GIT_CONFIG_COUNT=1 " + chr(92) + "\n"
+    isolated_block = (
+        "              GIT_CONFIG_NOSYSTEM=1 " + chr(92) + "\n"
+        + "              GIT_CONFIG_GLOBAL=/dev/null " + chr(92) + "\n"
+        + count_key
+        + "              GIT_CONFIG_KEY_0=safe.directory " + chr(92) + "\n"
+    )
 
-    runtime_invocations = runtime.count(count_key)
-
-    assert runtime_invocations == 3
-    assert runtime.count(no_system_key) == runtime_invocations
-    assert runtime.count(no_global_key) == runtime_invocations
+    assert runtime.count(count_key) == 3
+    assert runtime.count(isolated_block) == 3
 
 
 def test_pr743_temporary_write_workflows_are_absent() -> None:
