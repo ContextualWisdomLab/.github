@@ -1,0 +1,64 @@
+"""Regression contracts for trusted locks kept in a requirements directory."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path, PurePosixPath
+
+from scripts.ci import materialize_base_python_requirements as materializer
+
+
+def _git(repo: Path, *args: str) -> str:
+    """Run one deterministic Git command in a temporary fixture repository."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def test_requirements_directory_txt_is_a_candidate_lock_path() -> None:
+    """A direct ``requirements/*.txt`` lock is discoverable by its safe path."""
+    assert materializer._is_candidate_lock_path(PurePosixPath("requirements/ci.txt"))
+    assert materializer._is_candidate_lock_path(
+        PurePosixPath("services/scoring_service/requirements/package.txt")
+    )
+    assert not materializer._is_candidate_lock_path(
+        PurePosixPath("requirements/nested/ci.txt")
+    )
+    assert not materializer._is_candidate_lock_path(PurePosixPath("docs/ci.txt"))
+
+
+def test_materializes_hash_pinned_requirements_directory_lock(
+    tmp_path: Path,
+) -> None:
+    """The exact base ``requirements/ci.txt`` closure reaches offline coverage."""
+    repo = tmp_path / "repo"
+    requirements_dir = repo / "requirements"
+    requirements_dir.mkdir(parents=True)
+    _git(repo, "init")
+    _git(repo, "config", "user.name", "Test")
+    _git(repo, "config", "user.email", "test@example.invalid")
+
+    (requirements_dir / "ci.txt").write_text(
+        "numpy==2.5.1 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    (requirements_dir / "ci.in").write_text("numpy>=2\n", encoding="utf-8")
+    (requirements_dir / "notes.txt").write_text(
+        "human-readable notes only\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert manifest == [
+        {"file": "requirements-000.txt", "source": "requirements/ci.txt"}
+    ]
+    assert (output / "requirements-000.txt").read_text(encoding="utf-8").startswith(
+        "numpy==2.5.1"
+    )
