@@ -165,12 +165,16 @@ def test_invocation_key_binds_complete_request_identity() -> None:
 
 
 def test_payloads_carry_exact_agent_invocation_identity() -> None:
-    """Both downstream entrypoints receive the same deterministic request identity."""
+    """Both durable wrappers receive the same deterministic request identity."""
 
     module = load_module()
     mention_request = request(module)
-    noema = module.noema_payload(mention_request)["client_payload"]
-    opencode = module.opencode_payload(mention_request)["client_payload"]
+    noema_body = module.noema_payload(mention_request)
+    opencode_body = module.opencode_payload(mention_request)
+    assert noema_body["event_type"] == "agent-mention-noema"
+    assert opencode_body["event_type"] == "agent-mention-opencode"
+    noema = noema_body["client_payload"]
+    opencode = opencode_body["client_payload"]
 
     assert noema["requested_agent"] == "cwl-noema-review"
     assert noema["agent_invocation_key"] == module.agent_invocation_key(
@@ -232,16 +236,19 @@ def test_partial_failure_retries_only_the_missing_agent() -> None:
     module = load_module()
     mention_request = request(module)
     target = RunAwareClient()
-    first = RunAwareClient(fail_event="merge-scheduler")
+    first = RunAwareClient(fail_event="agent-mention-opencode")
 
-    with pytest.raises(RuntimeError, match="merge-scheduler"):
+    with pytest.raises(RuntimeError, match="agent-mention-opencode"):
         module.dispatch_request(
             mention_request,
             target_client=target,
             dispatch_client=first,
             opencode_allowlist=frozenset({mention_request.repository}),
         )
-    assert dispatch_events(first) == ["noema-review", "merge-scheduler"]
+    assert dispatch_events(first) == [
+        "agent-mention-noema",
+        "agent-mention-opencode",
+    ]
 
     retry = RunAwareClient(
         runs=run_inventory(module, mention_request, "cwl-noema-review")
@@ -252,7 +259,7 @@ def test_partial_failure_retries_only_the_missing_agent() -> None:
         dispatch_client=retry,
         opencode_allowlist=frozenset({mention_request.repository}),
     ) == ("@opencode-agent",)
-    assert dispatch_events(retry) == ["merge-scheduler"]
+    assert dispatch_events(retry) == ["agent-mention-opencode"]
 
 
 def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
@@ -269,7 +276,10 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
             dispatch_client=central,
             opencode_allowlist=frozenset({mention_request.repository}),
         )
-    assert dispatch_events(central) == ["noema-review", "merge-scheduler"]
+    assert dispatch_events(central) == [
+        "agent-mention-noema",
+        "agent-mention-opencode",
+    ]
 
     retry = RunAwareClient(
         runs=run_inventory(
