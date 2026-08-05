@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts" / "ci" / "strix_model_utils.sh"
+DIAGNOSTICS_WORKFLOW = ROOT / ".github" / "workflows" / "opencode-coverage-diagnostics-ci.yml"
 
 
 def run_source(raw_value: str) -> subprocess.CompletedProcess[str]:
@@ -94,3 +95,17 @@ def test_unsafe_punctuation_and_oversized_lists_fail_closed() -> None:
 
     oversized_list = " ".join(f"dir{index}" for index in range(33))
     assert run_source(oversized_list).returncode == 2
+
+
+def test_permanent_diagnostics_runs_for_source_boundary_changes() -> None:
+    """Bind source-directory boundary edits to exact-head executable evidence."""
+
+    workflow = DIAGNOSTICS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert workflow.count('      - "scripts/ci/strix_model_utils.sh"') == 2
+    assert workflow.count('      - "tests/test_strix_model_utils_source_dirs.py"') == 2
+    assert (
+        "            tests/test_strix_model_utils_source_dirs.py " + chr(92)
+        in workflow
+    )
+    assert "            tests/test_strix_model_utils_source_dirs.py" in workflow
