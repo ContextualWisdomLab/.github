@@ -46,3 +46,6 @@
 ## 2026-07-08 - [Log Redaction Performance Optimization]
 **Learning:** O(N^2) complexity in Python string manipulation (character-by-character append) and multiple regex substitute passes significantly degrade performance when processing massive CI logs.
 **Action:** When implementing parsing or string manipulation in tight linear loops, use string slicing to batch-process chunks (`output.append(text[start:cursor])`). When applying multiple unrelated regex replacements to the same string fragment, combine them using the `|` alternation operator into a single compiled pattern to prevent redundant parsing over the text.
+## 2026-08-05 - [Regex Algorithmic Complexity Issue Fix]
+**Learning:** An unbounded while loop processing input characters to match a pattern inside a string parser can lead to O(N^2) complexity if the parser fails after matching a very long invalid string and falls back to check the next index. This can trigger timeouts in CI jobs on adversarial input logs.
+**Action:** Always add an upper bound (e.g., `MAX_KEY_LENGTH`) in linear parsers when scanning for known patterns in untrusted input.

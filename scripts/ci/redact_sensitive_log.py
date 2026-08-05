@@ -9,6 +9,7 @@ import sys
 from typing import Any
 
 REDACTED = "[REDACTED]"
+MAX_KEY_LENGTH = 64
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
@@ -55,7 +56,7 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
     key_start = cursor
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
         return None
-    while cursor < len(text) and text[cursor] in KEY_CHARS:
+    while cursor < len(text) and text[cursor] in KEY_CHARS and (cursor - key_start) < MAX_KEY_LENGTH:
         cursor += 1
     key = text[key_start:cursor]
     if key_quote:
