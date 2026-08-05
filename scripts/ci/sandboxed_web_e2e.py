@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import signal
@@ -17,6 +18,7 @@ import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -125,6 +127,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _cleanup_failed_service_start(
+    process: subprocess.Popen[bytes],
+    stream: BinaryIO,
+) -> None:
+    """Best-effort stop, reap, and close after bounded capture startup fails."""
+
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        bounded_subprocess.kill_process_group(process)
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        process.wait(timeout=10)
+    with contextlib.suppress(OSError):
+        stream.close()
+
+
 def start_service(
     label: str,
     command: str,
@@ -162,9 +178,8 @@ def start_service(
             on_limit=lambda: bounded_subprocess.kill_process_group(process),
             destination=log_path,
         )
-    except BaseException:  # noqa: BLE001 - reap the child before preserving failure
-        bounded_subprocess.kill_process_group(process)
-        process.wait()
+    except BaseException:  # noqa: BLE001 - preserve the capture failure after cleanup
+        _cleanup_failed_service_start(process, process.stdout)
         raise
     return Service(
         label=label,
