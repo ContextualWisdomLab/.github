@@ -1,0 +1,93 @@
+name: One-shot fix NVIDIA NIM conflict staging
+
+on:
+  push:
+    branches: [fix/hourly-nvidia-nim-autofix]
+
+concurrency:
+  group: one-shot-fix-nim-conflict-staging
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/hourly-nvidia-nim-autofix
+          fetch-depth: 0
+
+      - name: Patch conflict staging and path handling
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/nvidia-nim-pr-review-autofix.yml")
+          text = path.read_text(encoding="utf-8")
+          old = '''          if [ "$RESOLVE_CONFLICT" = "true" ]; then
+            [ -z "$(git diff --name-only --diff-filter=U)" ] || {
+              echo "::error::Merge conflicts remain unresolved."; exit 1;
+            }
+            if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' -- $(cat "$ALLOWED_PATHS_FILE"); then
+              echo "::error::Conflict markers remain in repaired files."
+              exit 1
+            fi
+          fi
+'''
+          new = '''          if [ "$RESOLVE_CONFLICT" = "true" ]; then
+            for changed_file in "${changed_files[@]}"; do
+              if [ -f "$changed_file" ] && grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- "$changed_file"; then
+                echo "::error::Conflict markers remain in repaired file ${changed_file}."
+                exit 1
+              fi
+            done
+            git add -- "${changed_files[@]}"
+            [ -z "$(git diff --name-only --diff-filter=U)" ] || {
+              echo "::error::Merge conflicts remain unresolved."; exit 1;
+            }
+          fi
+'''
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one legacy conflict validation block")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          git diff --check
+
+      - name: Run focused static contracts without external test dependencies
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          test_path = Path("tests/test_nvidia_nim_conflict_repair_contract.py")
+          spec = importlib.util.spec_from_file_location("nim_conflict_contract", test_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit("could not load conflict-repair contract tests")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.test_conflict_files_are_checked_without_shell_word_splitting()
+          module.test_resolved_conflicts_are_staged_before_unmerged_index_check()
+          module.test_deleted_conflict_resolution_is_supported()
+          PY
+
+      - name: Publish verified repair and remove this workflow
+        env:
+          BRANCH_NAME: fix/hourly-nvidia-nim-autofix
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/one-shot-fix-nim-conflict-staging.yml
+          git add .github/workflows/nvidia-nim-pr-review-autofix.yml \
+            tests/test_nvidia_nim_conflict_repair_contract.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(ci): stage safe NVIDIA NIM conflict resolutions"
+          git push origin "HEAD:${BRANCH_NAME}"
