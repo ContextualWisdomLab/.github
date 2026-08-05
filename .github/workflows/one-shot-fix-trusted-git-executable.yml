@@ -18,7 +18,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  EXPECTED_PARENT_SHA: 9172672c0a4e51b78219a58b0b629fcd00eeb684
+  EXPECTED_PARENT_SHA: 7dc599f6db73fdec3f764d533bada352e142ae0e
   TARGET_BRANCH: fix/trusted-uv-transient-download-retry
   TEMP_WORKFLOW: .github/workflows/one-shot-fix-trusted-git-executable.yml
   TRIGGER_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -254,7 +254,7 @@ jobs:
             CHANGELOG.md \
             docs/doctoring/trusted-uv-transient-download-retry.md \
             scripts/ci/materialize_base_python_requirements.py \
-            tests/test_trusted_uv_materializer-quality-workflow-contract.py
+            tests/test_trusted_uv_materializer_quality_workflow_contract.py
           git add -u -- "${TEMP_WORKFLOW}"
           staged="$(git diff --cached --name-only | LC_ALL=C sort)"
           expected="$(printf '%s\n' \
