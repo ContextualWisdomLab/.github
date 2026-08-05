@@ -17,7 +17,9 @@ def test_opencode_runtime_git_calls_use_fully_isolated_configuration() -> None:
     """Every pre-helper Git call must use the complete isolated configuration block."""
 
     workflow = REVIEW_WORKFLOW_PATH.read_text(encoding="utf-8")
-    runtime = workflow.split("          trusted_git() {", 1)[0]
+    marker = "          trusted_git() {"
+    assert marker in workflow
+    runtime = workflow.split(marker, 1)[0]
     count_key = "              GIT_CONFIG_COUNT=1 " + chr(92) + "\n"
     isolated_block = (
         "              GIT_CONFIG_NOSYSTEM=1 " + chr(92) + "\n"
