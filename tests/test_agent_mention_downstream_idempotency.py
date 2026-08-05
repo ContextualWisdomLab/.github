@@ -40,14 +40,19 @@ def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> No
 
 
 def test_quality_gate_tracks_every_idempotency_surface() -> None:
-    """The permanent focused gate reruns for downstream workflow contract changes."""
+    """The permanent focused gate reruns and executes all bounded contracts."""
 
     text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
-    for path in (
+    for workflow_path in (
         '.github/workflows/noema-review.yml',
         '.github/workflows/pr-review-merge-scheduler.yml',
+    ):
+        assert f'      - "{workflow_path}"' in text
+
+    test_command = text.split("python -m coverage run -m pytest -q", 1)[1]
+    for test_path in (
         'tests/test_agent_mention_idempotency.py',
         'tests/test_agent_mention_downstream_idempotency.py',
     ):
-        assert f'      - "{path}"' in text
-        assert path in text.split("python -m coverage run -m pytest -q", 1)[1]
+        assert f'      - "{test_path}"' in text
+        assert test_path in test_command
