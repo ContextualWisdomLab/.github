@@ -17,6 +17,7 @@ on:
       - "scripts/ci/sandboxed_verify.py"
       - "scripts/ci/sandboxed_web_e2e.py"
       - "tests/test_agent_mention*.py"
+      - "tests/test_control_plane_coverage_closure.py"
       - "tests/test_control_plane_quality_coverage_gaps.py"
       - "tests/test_control_plane_quality_workflow_contract.py"
       - "tests/test_install_base_python*.py"
@@ -42,6 +43,7 @@ on:
       - "scripts/ci/sandboxed_verify.py"
       - "scripts/ci/sandboxed_web_e2e.py"
       - "tests/test_agent_mention*.py"
+      - "tests/test_control_plane_coverage_closure.py"
       - "tests/test_control_plane_quality_coverage_gaps.py"
       - "tests/test_control_plane_quality_workflow_contract.py"
       - "tests/test_install_base_python*.py"
@@ -146,6 +148,7 @@ jobs:
             tests/test_agent_mention_router.py \
             tests/test_agent_mention_sweep.py \
             tests/test_agent_mention_workflow_contract.py \
+            tests/test_control_plane_coverage_closure.py \
             tests/test_control_plane_quality_coverage_gaps.py \
             tests/test_control_plane_quality_workflow_contract.py \
             tests/test_install_base_python_locks.py \
@@ -186,5 +189,6 @@ jobs:
             scripts/ci/redact_sensitive_log.py \
             scripts/ci/sandboxed_verify.py \
             scripts/ci/sandboxed_web_e2e.py \
+            tests/test_control_plane_coverage_closure.py \
             tests/test_control_plane_quality_coverage_gaps.py \
             tests/test_control_plane_quality_workflow_contract.py
