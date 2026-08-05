@@ -1,0 +1,115 @@
+name: Agent Mention OpenCode Dispatch
+run-name: >-
+  Agent Mention OpenCode ${{ github.event.client_payload.target_repository }}#${{
+  github.event.client_payload.pr_number }} [cwl-agent-invocation:${{
+  github.event.client_payload.agent_invocation_key }}]
+
+on:
+  repository_dispatch:
+    types: [agent-mention-opencode]
+
+concurrency:
+  group: agent-mention-opencode-${{ github.event.client_payload.agent_invocation_key || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  validate-and-forward:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUESTED_AGENT: "opencode-agent"
+      PAYLOAD_AGENT: ${{ github.event.client_payload.requested_agent || '' }}
+      INVOCATION_KEY: ${{ github.event.client_payload.agent_invocation_key || '' }}
+      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number || '' }}
+      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+      BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}
+      REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
+      SOURCE_COMMENT_ID: ${{ github.event.client_payload.source_comment_id || '' }}
+      TRIGGER_REVIEWS: ${{ github.event.client_payload.trigger_reviews }}
+      REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || '' }}
+      ENABLE_AUTO_MERGE: ${{ github.event.client_payload.enable_auto_merge }}
+      UPDATE_BRANCHES: ${{ github.event.client_payload.update_branches }}
+      MERGE_MODE: ${{ github.event.client_payload.merge_mode || '' }}
+    steps:
+      - name: Validate exact review-only invocation and elect one durable leader
+        id: leader
+        run: |
+          set -euo pipefail
+          if [ "$PAYLOAD_AGENT" != "$REQUESTED_AGENT" ] ||
+            ! [[ "$INVOCATION_KEY" =~ ^[0-9a-f]{64}$ ]] ||
+            ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "$BASE_BRANCH" =~ ^(?!-)[A-Za-z0-9._/-]+$ ]] ||
+            ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]+$ ]] ||
+            [ "$TRIGGER_REVIEWS" != "true" ] ||
+            [ "$REVIEW_DISPATCH_LIMIT" != "1" ] ||
+            [ "$ENABLE_AUTO_MERGE" != "false" ] ||
+            [ "$UPDATE_BRANCHES" != "false" ] ||
+            [ "$MERGE_MODE" != "disabled" ]; then
+            echo "::error::Rejected malformed, mismatched, or mutation-capable OpenCode invocation payload."
+            exit 1
+          fi
+
+          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"
+          leader_id="$(
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/agent-mention-opencode-dispatch.yml/runs?event=repository_dispatch&per_page=100" \
+              | jq -r --arg marker "$marker" '
+                  [.[].workflow_runs[]
+                    | select((.display_title // "") | contains($marker))
+                    | .id]
+                  | min // empty
+                '
+          )"
+          if [ -z "$leader_id" ]; then
+            echo "::error::Could not establish the durable OpenCode invocation leader."
+            exit 1
+          fi
+          if [ "$leader_id" != "$GITHUB_RUN_ID" ]; then
+            echo "forward=false" >>"$GITHUB_OUTPUT"
+            echo "Duplicate exact-key invocation suppressed by durable workflow-run identity."
+            exit 0
+          fi
+          echo "forward=true" >>"$GITHUB_OUTPUT"
+
+      - name: Forward once to the authoritative review-only scheduler
+        if: steps.leader.outputs.forward == 'true'
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_head_sha "$PR_HEAD_SHA" \
+            --arg base_branch "$BASE_BRANCH" \
+            --arg requested_agent "$REQUESTED_AGENT" \
+            --arg agent_invocation_key "$INVOCATION_KEY" \
+            --arg requested_by "$REQUESTED_BY" \
+            --argjson source_comment_id "$SOURCE_COMMENT_ID" \
+            '{
+              event_type: "merge-scheduler",
+              client_payload: {
+                target_repository: $target_repository,
+                pr_number: $pr_number,
+                pr_head_sha: $pr_head_sha,
+                base_branch: $base_branch,
+                trigger_reviews: true,
+                review_dispatch_limit: "1",
+                enable_auto_merge: false,
+                update_branches: false,
+                merge_mode: "disabled",
+                requested_agent: $requested_agent,
+                agent_invocation_key: $agent_invocation_key,
+                requested_by: $requested_by,
+                source_comment_id: $source_comment_id
+              }
+            }' \
+            | gh api "repos/${GITHUB_REPOSITORY}/dispatches" -X POST --input -
