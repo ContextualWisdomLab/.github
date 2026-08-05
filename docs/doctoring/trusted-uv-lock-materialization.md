@@ -120,6 +120,23 @@ Regression coverage must prove:
 - `pyproject.toml` enables branch measurement and the changed production module
   retains 100% statement and branch coverage plus 100% production docstrings.
 
+## Exact-head quality evidence
+
+GitHub documents that a workflow triggered by `pull_request` normally receives
+`GITHUB_REF` as `refs/pull/<number>/merge` and `GITHUB_SHA` as the generated
+merge revision. That behavior is useful for integration testing, but it cannot
+support a claim that compatibility, coverage, docstrings, and compilation were
+measured on the contributor's immutable head.
+
+Both jobs in the dedicated trusted-uv quality workflow therefore pass
+`github.event.pull_request.head.sha` explicitly to `actions/checkout`. The
+workflow remains read-only and disables credential persistence. A permanent
+contract requires the exact-head `ref` on both checkout steps, so a future edit
+cannot silently convert exact-head evidence back into merge-preview evidence.
+On a `push` event the pull-request field is absent; the checkout action receives
+its documented empty default and continues to use the ref or SHA that triggered
+the push.
+
 ## Repository-wide branch-coverage prerequisite repair
 
 The exact pull-request merge tree exposed a broader central quality-contract
@@ -166,6 +183,13 @@ Retrieved August 4, 2026, from https://docs.astral.sh/uv/reference/cli/
 Berners-Lee, T., Fielding, R., & Masinter, L. (2005). *Uniform Resource Identifier
 (URI): Generic syntax* (STD 66; RFC 3986). Internet Engineering Task Force.
 https://doi.org/10.17487/RFC3986
+
+GitHub. (n.d.). *actions/checkout*. GitHub. Retrieved August 5, 2026, from
+https://github.com/actions/checkout
+
+GitHub, Inc. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved
+August 5, 2026, from
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
 Supply-chain Levels for Software Artifacts. (2025). *SLSA specification
 (version 1.2)*. https://slsa.dev/spec/v1.2/
