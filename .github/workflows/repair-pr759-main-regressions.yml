@@ -1,0 +1,200 @@
+name: Repair PR 759 main regressions
+run-name: Repair PR 759 regressions at ${{ github.sha }}
+
+on:
+  push:
+    branches:
+      - fix/opencode-coverage-failure-diagnostics
+    paths:
+      - .github/workflows/repair-pr759-main-regressions.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr759-main-regressions
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/fix/opencode-coverage-failure-diagnostics'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact trigger head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 20
+          persist-credentials: false
+
+      - name: Verify bounded repair lineage
+        env:
+          EXPECTED_PARENT: 8593bf8aef0d6937c2b4fe0dae6e646b5b2ce34e
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          mapfile -t changed_paths < <(git diff --name-only "$EXPECTED_PARENT" "$GITHUB_SHA")
+          test "${#changed_paths[@]}" -eq 1
+          test "${changed_paths[0]}" = ".github/workflows/repair-pr759-main-regressions.yml"
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked verification tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Preserve exact RED evidence
+        shell: bash --noprofile --norc {0}
+        run: |
+          set -uo pipefail
+          python -m pytest -q \
+            tests/test_repository_branch_coverage_pr743_cleanup.py \
+            tests/test_strix_nvidia_nim_not_found_fallback.py \
+            >"${RUNNER_TEMP}/pr759-red.log" 2>&1
+          status=$?
+          cat "${RUNNER_TEMP}/pr759-red.log"
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected genuine regression-test failures, observed exit ${status}."
+            exit 1
+          fi
+          grep -F 'test_opencode_runtime_git_calls_use_fully_isolated_configuration' "${RUNNER_TEMP}/pr759-red.log"
+          grep -F 'missing Bash function: is_nvidia_nim_not_found_error' "${RUNNER_TEMP}/pr759-red.log"
+
+      - name: Restore protected-main safety behavior
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: Path, old: str, new: str, expected: int, label: str) -> None:
+              source = path.read_text(encoding="utf-8")
+              count = source.count(old)
+              if count != expected:
+                  raise SystemExit(f"{label}: expected {expected} anchors, found {count}")
+              path.write_text(source.replace(old, new), encoding="utf-8")
+
+          workflow_path = Path(".github/workflows/opencode-review-dispatch.yml")
+          old_git = (
+              "              GIT_CONFIG_COUNT=1 \\\n"
+              "              GIT_CONFIG_KEY_0=safe.directory \\\n"
+              "              GIT_CONFIG_VALUE_0=/work \\\n"
+          )
+          isolated_git = (
+              "              GIT_CONFIG_NOSYSTEM=1 \\\n"
+              "              GIT_CONFIG_GLOBAL=/dev/null \\\n"
+              + old_git
+          )
+          replace_exact(
+              workflow_path,
+              old_git,
+              isolated_git,
+              3,
+              "OpenCode runtime Git isolation",
+          )
+
+          strix_path = Path("scripts/ci/strix_quick_gate.sh")
+          function_anchor = """## Determines whether the last strix failure is a transient error eligible
+## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
+"""
+          nvidia_function = """is_nvidia_nim_not_found_error() {
+	# Classify only one bounded LiteLLM provider-error line that also
+	# carries NVIDIA NIM context and model-catalog not-found evidence.
+	# Cross-line signal assembly and provider-like target source text
+	# remain non-retryable so application output cannot spoof fallback.
+	if grep -Ei 'litellm(\\.exceptions)?\\.NotFoundError' "$STRIX_LOG" |
+		grep -Ei '(Nvidia_nimException|nvidia[_ -]?nim|integrate\\.api\\.nvidia\\.com)' |
+		grep -Eiq '(Error code:[[:space:]]*404|(^|[^0-9])404([^0-9]|$)|model[^[:alnum:]]+not found)'; then
+		return 0
+	fi
+
+	return 1
+}
+
+"""
+          replace_exact(
+              strix_path,
+              function_anchor,
+              nvidia_function + function_anchor,
+              1,
+              "NVIDIA NIM classifier",
+          )
+          replace_exact(
+              strix_path,
+              "LLM_PROVIDER_ONLY_REGEX='(litellm|openai|anthropic|VertexAI|Vertex_ai|vertex\\.ai|google\\.cloud|GitHub Models|models\\.github\\.ai|github_models)'",
+              "LLM_PROVIDER_ONLY_REGEX='(litellm|openai|anthropic|VertexAI|Vertex_ai|vertex\\.ai|google\\.cloud|Nvidia_nimException|nvidia_nim|integrate\\.api\\.nvidia\\.com|GitHub Models|models\\.github\\.ai|github_models)'",
+              1,
+              "NVIDIA provider context",
+          )
+          replace_exact(
+              strix_path,
+              "\n\t# Generic strix non-zero exit with known transport/connection errors\n",
+              "\n\tif is_nvidia_nim_not_found_error; then\n\t\treturn 0\n\tfi\n\n\t# Generic strix non-zero exit with known transport/connection errors\n",
+              1,
+              "infrastructure classifier wiring",
+          )
+          replace_exact(
+              strix_path,
+              "\n\tif is_github_models_api_compatible_model \"$model\" && is_github_models_unavailable_model_error; then\n",
+              "\n\tif is_nvidia_nim_not_found_error; then\n\t\treturn 0\n\tfi\n\n\tif is_github_models_api_compatible_model \"$model\" && is_github_models_unavailable_model_error; then\n",
+              1,
+              "model fallback classifier wiring",
+          )
+          PY
+          rm -f .github/workflows/repair-pr759-main-regressions.yml
+          git diff --check
+
+      - name: Verify focused and complete quality gates
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q \
+            tests/test_repository_branch_coverage_pr743_cleanup.py \
+            tests/test_strix_nvidia_nim_not_found_fallback.py
+          python -m coverage erase
+          python -m coverage run --branch -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci
+          python -m compileall -q scripts tests
+          bash -n scripts/ci/strix_quick_gate.sh
+          git diff --check
+
+      - name: Publish verified workflow-free repair
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          HEAD_BRANCH: ${{ github.ref_name }}
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo "No verified repair generated" >&2; exit 1; }
+          git commit -m "fix(ci): restore main safety regressions"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${HEAD_BRANCH}"
