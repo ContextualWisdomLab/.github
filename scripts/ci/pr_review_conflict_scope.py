@@ -167,8 +167,6 @@ def _load_snapshot(snapshot_path: Path) -> dict[str, Mapping[str, Any]]:
 
     validated: dict[str, Mapping[str, Any]] = {}
     for raw_path, fingerprint in entries.items():
-        if not isinstance(raw_path, str):
-            raise ValueError("snapshot path keys must be strings")
         relative_path = _validated_relative_path(raw_path)
         validated[relative_path] = _validated_fingerprint(fingerprint)
     return validated
