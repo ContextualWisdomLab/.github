@@ -1,0 +1,178 @@
+name: One-shot repair PR 767 coverage command headroom
+
+on:
+  push:
+    branches:
+      - fix/sandboxed-output-resource-bounds
+    paths:
+      - .github/workflows/one-shot-pr767-coverage-timeout.yml
+
+concurrency:
+  group: one-shot-pr767-coverage-timeout
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/fix/sandboxed-output-resource-bounds'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Add failing timeout contract
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_opencode_agent_contract.py")
+          source = path.read_text(encoding="utf-8")
+          anchor = '''def test_opencode_python_coverage_never_resolves_pr_dependency_manifests():
+              """Use only the trusted image toolchain during networkless PR execution."""
+          '''
+          contract = '''def test_opencode_coverage_commands_have_bounded_large_repository_headroom():
+              """Full repository evidence gets 30 minutes without becoming unbounded."""
+              workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
+              measure = workflow.split(
+                  "      - name: Measure test and docstring evidence\\n", 1
+              )[1].split("\\n      - name:", 1)[0]
+
+              assert measure.count("timeout --kill-after=20 1800 setpriv") == 3
+              assert "timeout --kill-after=20 900 setpriv" not in measure
+
+
+          '''
+          if contract in source:
+              raise SystemExit("timeout contract unexpectedly already exists")
+          if source.count(anchor) != 1:
+              raise SystemExit("timeout contract insertion anchor moved")
+          path.write_text(source.replace(anchor, contract + anchor, 1), encoding="utf-8")
+          PY
+          set +e
+          python -m pytest -q \
+            tests/test_opencode_agent_contract.py::test_opencode_coverage_commands_have_bounded_large_repository_headroom \
+            >"${RUNNER_TEMP}/red.log" 2>&1
+          red_status=$?
+          set -e
+          cat "${RUNNER_TEMP}/red.log"
+          test "$red_status" -ne 0
+          grep -F 'assert 0 == 3' "${RUNNER_TEMP}/red.log"
+
+      - name: Apply bounded command headroom and doctoring
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/opencode-review-dispatch.yml")
+          source = workflow.read_text(encoding="utf-8")
+          old = "timeout --kill-after=20 900 setpriv"
+          new = "timeout --kill-after=20 1800 setpriv"
+          if source.count(old) != 3:
+              raise SystemExit("expected exactly three 900-second coverage runners")
+          workflow.write_text(source.replace(old, new), encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          source = changelog.read_text(encoding="utf-8")
+          anchor = "### Changed\n\n"
+          entry = (
+              "- Increase each isolated coverage-evidence command budget from 15 to 30 minutes while retaining a hard GNU `timeout` boundary and a 20-second forced-kill grace period, so complete large-repository suites can finish without converting valid evidence into timeout failures.\n"
+          )
+          if entry not in source:
+              if source.count(anchor) != 1:
+                  raise SystemExit("CHANGELOG Changed anchor moved")
+              source = source.replace(anchor, anchor + entry, 1)
+              changelog.write_text(source, encoding="utf-8")
+
+          doctoring = Path("docs/doctoring/sandboxed-output-resource-bounds.md")
+          source = doctoring.read_text(encoding="utf-8")
+          section = '''
+          ## Coverage-evidence command headroom
+
+          The OpenCode coverage sandbox keeps every repository-selected verification command bounded, but the former 900-second limit was insufficient for the central repository's complete regression suite after realistic model-pool and process-cleanup tests were added. The suite could pass targeted production coverage and docstring checks yet be terminated before complete repository evidence finished.
+
+          Each of the three isolated command runners now receives 1,800 seconds plus a 20-second forced-kill grace period. This is not an unbounded retry or a relaxation of evidence: a timeout still fails closed, descendants remain under the same sandbox identity and process boundary, and the surrounding GitHub Actions job remains explicitly bounded. GitHub permits positive integer step and job timeouts up to 360 minutes, while GNU `timeout --kill-after` sends a final `KILL` only after the initial timeout signal and grace interval. The 30-minute command ceiling therefore remains materially below the workflow job ceiling while allowing the exact current-head full suite to complete.
+
+          A permanent workflow-contract test requires exactly three 1,800-second bounded runners and rejects the former 900-second form. Regressions must be diagnosed by exact-head execution rather than by treating a timeout as passing evidence.
+          '''
+          section = "\n".join(line[10:] if line.startswith("          ") else line for line in section.splitlines())
+          marker = "\n## Limitations\n"
+          if "## Coverage-evidence command headroom" not in source:
+              if source.count(marker) != 1:
+                  raise SystemExit("doctoring limitations anchor moved")
+              source = source.replace(marker, section + marker, 1)
+          references = '''
+
+          GitHub. (n.d.). *Workflow syntax for GitHub Actions*. GitHub Docs. Retrieved August 5, 2026, from https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+          Free Software Foundation. (2026). *timeout: Run a command with a time limit* (GNU Coreutils 9.10 manual). https://www.gnu.org/software/coreutils/timeout
+          '''
+          references = "\n".join(line[10:] if line.startswith("          ") else line for line in references.splitlines())
+          if "GNU Coreutils 9.10 manual" not in source:
+              source = source.rstrip() + references + "\n"
+          doctoring.write_text(source, encoding="utf-8")
+          PY
+
+      - name: Verify repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q \
+            tests/test_opencode_agent_contract.py::test_opencode_coverage_commands_have_bounded_large_repository_headroom \
+            tests/test_opencode_agent_contract.py::test_opencode_privileged_review_security_boundaries_are_fail_closed
+          python -m compileall -q tests/test_opencode_agent_contract.py
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          yaml.safe_load(Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8"))
+          PY
+          git diff --check
+
+      - name: Publish verified repair and remove one-shot workflow
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          remote_head="$(git ls-remote origin refs/heads/fix/sandboxed-output-resource-bounds | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+          rm -f .github/workflows/one-shot-pr767-coverage-timeout.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(opencode): allow bounded large-repository coverage evidence"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push origin HEAD:fix/sandboxed-output-resource-bounds
