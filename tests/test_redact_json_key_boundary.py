@@ -32,7 +32,7 @@ def test_json_object_keys_are_redacted_when_the_key_contains_an_assignment() -> 
 
 
 def test_long_ordinary_identifier_does_not_restart_assignment_scanning(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One long ordinary token must cause only one assignment classification."""
     original = redactor._consume_sensitive_assignment
@@ -46,7 +46,18 @@ def test_long_ordinary_identifier_does_not_restart_assignment_scanning(
     ordinary_identifier = "a" * 100_000
 
     assert redactor.redact_text(ordinary_identifier) == ordinary_identifier
-    assert starts == [0, redactor.MAX_IDENTIFIER_CHARS]
+    assert starts == [0]
+
+
+def test_oversized_assignment_key_is_redacted_conservatively() -> None:
+    """An oversized key cannot evade redaction by exceeding matcher limits."""
+    oversized_key = "ordinary" * (redactor.MAX_IDENTIFIER_CHARS + 1)
+    secret_value = "plain-secret"
+
+    redacted = redactor.redact_text(f"{oversized_key}={secret_value}")
+
+    assert secret_value not in redacted
+    assert redacted.endswith(redactor.REDACTED)
 
 
 def test_json_depth_limit_replaces_the_remaining_subtree() -> None:
