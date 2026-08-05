@@ -7,8 +7,13 @@ from pathlib import Path
 from scripts.ci import pr_review_fix_scheduler_nim as nim_scheduler
 
 
-SCHEDULER_WORKFLOW = Path(".github/workflows/nvidia-nim-pr-maintenance.yml")
-AUTOFIX_WORKFLOW = Path(".github/workflows/nvidia-nim-pr-review-autofix.yml")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SCHEDULER_WORKFLOW = (
+    REPOSITORY_ROOT / ".github/workflows/nvidia-nim-pr-maintenance.yml"
+)
+AUTOFIX_WORKFLOW = (
+    REPOSITORY_ROOT / ".github/workflows/nvidia-nim-pr-review-autofix.yml"
+)
 
 
 def test_wrapper_adds_nim_worker_when_caller_does_not_override() -> None:
@@ -84,6 +89,31 @@ def test_scheduler_declares_only_named_reusable_write_secrets() -> None:
     assert "secrets: inherit" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "NVIDIA_NIM_API_KEY" not in workflow
+
+
+def test_scheduler_token_is_read_only_except_oidc() -> None:
+    """GitHub writes must use an exchanged app token, not broad GITHUB_TOKEN grants."""
+
+    workflow = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "permissions: {}" in workflow
+    for permission in (
+        "actions: read",
+        "contents: read",
+        "id-token: write",
+        "issues: read",
+        "pull-requests: read",
+        "statuses: read",
+    ):
+        assert permission in workflow
+    for permission in (
+        "actions: write",
+        "contents: write",
+        "issues: write",
+        "pull-requests: write",
+        "statuses: write",
+    ):
+        assert permission not in workflow
 
 
 def test_scheduler_materializes_immutable_called_workflow_source() -> None:
