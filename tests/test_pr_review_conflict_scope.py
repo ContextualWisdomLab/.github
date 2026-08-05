@@ -65,7 +65,14 @@ def test_invalid_repository_roots_fail_closed(
 
 @pytest.mark.parametrize(
     "raw_path",
-    ["", "/absolute", "../escape", "nested/../escape"],
+    [
+        "",
+        "/absolute",
+        "../escape",
+        "nested/../escape",
+        "./relative",
+        "a//b",
+    ],
 )
 def test_invalid_repository_relative_paths_fail_closed(raw_path: str) -> None:
     """Empty, absolute, and traversal-bearing path names are rejected."""

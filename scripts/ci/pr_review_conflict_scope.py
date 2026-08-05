@@ -44,7 +44,12 @@ def _validated_relative_path(raw_path: str) -> str:
     if len(os.fsencode(raw_path)) > _MAX_PATH_BYTES:
         raise ValueError("repository path exceeds the byte limit")
     path = Path(raw_path)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+    normalized_path = path.as_posix()
+    if (
+        path.is_absolute()
+        or normalized_path != raw_path
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
         raise ValueError("repository path must be a normalized relative path")
     return raw_path
 
