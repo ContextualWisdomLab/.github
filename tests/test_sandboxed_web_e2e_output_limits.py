@@ -83,7 +83,7 @@ def test_service_log_overflow_returns_resource_limit_before_e2e(
                 "while True:\n"
                 "    os.write(1,chunk)\n"
             ),
-            "--backend-url",
+            "--backend-ready-url",
             "http://127.0.0.1:1/ready",
             "--frontend-cmd",
             _command("import time; time.sleep(30)"),
