@@ -3,14 +3,18 @@
 from pathlib import Path
 
 
-REVIEW_WORKFLOW_PATH = Path(".github/workflows/opencode-review-dispatch.yml")
-TEMPORARY_REPAIR_WORKFLOW_PATH = Path(
-    ".github/workflows/repair-pr743-git-config-red-test.yml"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_DIRECTORY = REPOSITORY_ROOT / ".github" / "workflows"
+REVIEW_WORKFLOW_PATH = WORKFLOW_DIRECTORY / "opencode-review-dispatch.yml"
+TEMPORARY_REPAIR_WORKFLOW_PATHS = (
+    WORKFLOW_DIRECTORY / "repair-pr743-git-config-red-test.yml",
+    WORKFLOW_DIRECTORY / "one-shot-repair-uv-strix-ci.yml",
 )
 
 
 def test_opencode_runtime_git_calls_use_fully_isolated_configuration() -> None:
     """Every pre-helper Git call must disable ambient system and global config."""
+
     workflow = REVIEW_WORKFLOW_PATH.read_text(encoding="utf-8")
     runtime = workflow.split("          trusted_git() {", 1)[0]
     count_key = "              GIT_CONFIG_COUNT=1 " + chr(92)
@@ -24,6 +28,8 @@ def test_opencode_runtime_git_calls_use_fully_isolated_configuration() -> None:
     assert runtime.count(no_global_key) == runtime_invocations
 
 
-def test_pr743_temporary_write_workflow_is_absent() -> None:
-    """A completed one-shot branch writer must not remain in the mergeable tree."""
-    assert not TEMPORARY_REPAIR_WORKFLOW_PATH.exists()
+def test_pr743_temporary_write_workflows_are_absent() -> None:
+    """Completed one-shot branch writers must not remain in the mergeable tree."""
+
+    for temporary_workflow_path in TEMPORARY_REPAIR_WORKFLOW_PATHS:
+        assert not temporary_workflow_path.exists()
