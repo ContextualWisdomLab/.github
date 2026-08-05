@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Reapply the reviewed npm-workspace resolver without regressing LLVM coverage.
+"""Reapply the reviewed npm-workspace resolver to protected current main.
 
 This temporary branch-repair helper derives the six nonconflicting product and
-resolver-test files from one previously reviewed commit, removes only the
-unrelated LLVM-toolchain deletion hunk from the central workflow, and adds a
-current-main-compatible workflow contract test directly. The publishing
-workflow deletes this helper before committing the verified product-policy tree.
+resolver-test files from one previously reviewed commit and adds a
+current-main-compatible workflow contract test directly. It deliberately does
+not import unrelated coverage-toolchain work from another pull request. The
+publishing workflow deletes this helper before committing the verified
+product-policy tree.
 """
 
 from __future__ import annotations
@@ -32,12 +33,6 @@ FINAL_PATHS = PATCH_PATHS + (str(CONTRACT_PATH),)
 TEMPORARY_PATHS = (
     ".github/workflows/rebuild-pr748-current-main.yml",
     "scripts/ci/apply_pr748_current_main.py",
-)
-LLVM_PRESERVATION_TOKENS = (
-    "llvm-19",
-    "LLVM_COV",
-    "LLVM_PROFDATA",
-    "cargo-llvm-cov/releases/download",
 )
 CONTRACT_FUNCTION = "test_opencode_coverage_resolves_validated_npm_workspace_lock_owner"
 CONTRACT_TEST = r'''
@@ -100,8 +95,8 @@ def _section_path(section: str) -> str:
     return match.group(1)
 
 
-def _filter_reviewed_patch(patch: str) -> str:
-    """Keep the six resolver files while preserving current LLVM setup."""
+def _validate_reviewed_patch(patch: str) -> str:
+    """Require the reviewed patch to contain exactly the six expected files."""
 
     sections = [
         part
@@ -111,42 +106,15 @@ def _filter_reviewed_patch(patch: str) -> str:
     if not sections:
         raise SystemExit("reviewed child commit produced no patch")
 
-    seen: set[str] = set()
-    filtered_sections: list[str] = []
-    for section in sections:
-        path = _section_path(section)
-        if path not in PATCH_PATHS:
-            raise SystemExit(f"unexpected path in reviewed patch: {path}")
-        if path in seen:
-            raise SystemExit(f"duplicate path in reviewed patch: {path}")
-        seen.add(path)
-
-        if path != ".github/workflows/opencode-review-dispatch.yml":
-            filtered_sections.append(section)
-            continue
-
-        parts = re.split(r"(?=^@@ )", section, flags=re.MULTILINE)
-        header, hunks = parts[0], parts[1:]
-        kept_hunks = [
-            hunk
-            for hunk in hunks
-            if not any(token in hunk for token in LLVM_PRESERVATION_TOKENS)
-        ]
-        if not kept_hunks:
-            raise SystemExit("filter removed every central workflow hunk")
-        filtered_sections.append(header + "".join(kept_hunks))
-
-    if seen != set(PATCH_PATHS):
-        missing = sorted(set(PATCH_PATHS) - seen)
-        raise SystemExit(f"reviewed patch is missing required paths: {missing}")
-
-    filtered = "".join(filtered_sections)
-    for line in filtered.splitlines():
-        if line.startswith("-") and any(
-            token in line for token in LLVM_PRESERVATION_TOKENS
-        ):
-            raise SystemExit(f"filtered patch still deletes LLVM contract: {line}")
-    return filtered
+    seen = [_section_path(section) for section in sections]
+    if len(seen) != len(set(seen)):
+        raise SystemExit(f"reviewed patch contains duplicate file sections: {seen}")
+    if set(seen) != set(PATCH_PATHS):
+        raise SystemExit(
+            "reviewed patch scope mismatch: "
+            f"expected={sorted(PATCH_PATHS)}, actual={sorted(seen)}"
+        )
+    return patch
 
 
 def _add_current_contract_test() -> None:
@@ -163,19 +131,17 @@ def _add_current_contract_test() -> None:
 
 
 def _verify_applied_tree() -> None:
-    """Verify the staged tree contains the resolver and preserved toolchain."""
+    """Verify the staged tree contains the complete npm workspace contract."""
 
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
         encoding="utf-8"
     )
     required_workflow_fragments = (
-        "llvm-19",
-        "ENV LLVM_COV=/usr/bin/llvm-cov-19",
-        "ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19",
         "resolve_npm_package_root()",
         "resolve_npm_install_root()",
         "npm_workspace_install_root.py",
         '--workspace "$npm_workspace_selector"',
+        "npm workspace-root offline ci, lifecycle hooks disabled",
     )
     for fragment in required_workflow_fragments:
         if fragment not in workflow:
@@ -231,7 +197,7 @@ def main() -> int:
         *PATCH_PATHS,
         capture=True,
     ).stdout
-    PATCH_PATH.write_text(_filter_reviewed_patch(patch), encoding="utf-8")
+    PATCH_PATH.write_text(_validate_reviewed_patch(patch), encoding="utf-8")
     _run("git", "apply", "--3way", "--index", str(PATCH_PATH))
     _add_current_contract_test()
     _run("git", "diff", "--cached", "--check")
