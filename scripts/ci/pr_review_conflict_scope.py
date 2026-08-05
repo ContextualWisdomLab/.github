@@ -1,13 +1,13 @@
 """Enforce the file boundary of OpenCode-assisted merge-conflict repair.
 
 The conflict worker snapshots every tracked and non-ignored untracked worktree
-path after Git has merged the protected base but before the model runs.  After
+path after Git has merged the protected base but before the model runs. After
 OpenCode exits and temporary configuration files are restored, this module
-compares the live worktree with that snapshot.  Only paths that Git reported as
+compares the live worktree with that snapshot. Only paths that Git reported as
 unmerged conflict paths may differ; any other changed, created, deleted, or
 retargeted path fails closed before the workflow stages a commit.
 
-The module never executes pull-request code.  It uses Git only to enumerate path
+The module never executes pull-request code. It uses Git only to enumerate path
 names and hashes regular-file bytes directly with SHA-256.
 """
 
@@ -53,10 +53,7 @@ def _bounded_paths(paths: Sequence[str], *, source_name: str) -> tuple[str, ...]
     """Validate, deduplicate, sort, and bound an untrusted path inventory."""
     if len(paths) > _MAX_PATHS:
         raise ValueError(f"{source_name} exceeds the path limit")
-    normalized = tuple(sorted({_validated_relative_path(path) for path in paths}))
-    if len(normalized) > _MAX_PATHS:
-        raise ValueError(f"{source_name} exceeds the path limit")
-    return normalized
+    return tuple(sorted({_validated_relative_path(path) for path in paths}))
 
 
 def _git_paths(root: Path) -> tuple[str, ...]:
