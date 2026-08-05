@@ -22,6 +22,7 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
         '"scripts/ci/materialize_base_python_requirements.py"',
         '"tests/conftest.py"',
         '"tests/test_materialize*.py"',
+        '"tests/test_trusted_git_executable.py"',
         '"tests/test_trusted_uv*.py"',
         '"tests/test_uv*.py"',
         '"tests/test_repository_branch_coverage_*.py"',
