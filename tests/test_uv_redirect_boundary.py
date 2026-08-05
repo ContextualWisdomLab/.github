@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import urllib.request
+from collections.abc import Iterator
 
 import pytest
 
 from scripts.ci import materialize_base_python_requirements as materializer
+
+
+@pytest.fixture(autouse=True)
+def clear_trusted_uv_opener_cache() -> Iterator[None]:
+    """Clear process-global opener state before and after every boundary test."""
+    materializer._install_trusted_uv_url_opener.cache_clear()
+    yield
+    materializer._install_trusted_uv_url_opener.cache_clear()
 
 
 def test_trusted_uv_redirect_handler_rejects_before_following() -> None:
@@ -29,7 +38,6 @@ def test_trusted_uv_opener_is_cached_and_disables_ambient_proxies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The dedicated process installs one no-proxy, no-redirect opener."""
-    materializer._install_trusted_uv_url_opener.cache_clear()
     captured: dict[str, object] = {"builds": 0, "installs": 0}
     sentinel = object()
 
@@ -57,4 +65,3 @@ def test_trusted_uv_opener_is_cached_and_disables_ambient_proxies(
     assert isinstance(handlers[0], urllib.request.ProxyHandler)
     assert handlers[0].proxies == {}
     assert isinstance(handlers[1], materializer._RejectTrustedUvRedirects)
-    materializer._install_trusted_uv_url_opener.cache_clear()
