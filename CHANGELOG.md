@@ -26,6 +26,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
+- Keep the Clearfolio caller read-only at workflow scope and grant Actions/Issues write access only to the single reusable-scheduler job, preventing future sibling jobs from inheriting mutation authority.
 - Bind `NVIDIA_NIM_API_KEY` only to the two OpenCode model execution steps, fail closed when the secret is absent, and remove GitHub and Actions OIDC credentials from both model subprocesses.
 - Deny unnecessary non-file OpenCode interactions and preserve the independent read-only reviewer workflow and its credential/model-pool contract byte-for-byte.
 - Pin the repository-dispatch autofix helper checkout to the exact workflow-run SHA rather than a moving default branch.
