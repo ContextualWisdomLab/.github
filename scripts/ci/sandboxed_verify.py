@@ -18,6 +18,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.ci import bounded_subprocess
 from scripts.ci.redact_sensitive_log import (
     redact_command_arguments,
     redact_text,
@@ -79,6 +80,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repo-root", default=".", help="Repository root to copy into the sandbox.")
     parser.add_argument("--timeout", type=int, default=300, help="Command timeout in seconds.")
     parser.add_argument(
+        "--output-limit-bytes",
+        type=int,
+        default=bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+        help="Maximum retained stdout and stderr bytes per stream.",
+    )
+    parser.add_argument(
         "--keep-sandbox",
         action="store_true",
         help="Keep the temporary sandbox for debugging and print its path in the result.",
@@ -115,6 +122,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("provide a verification command after --")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    try:
+        args.output_limit_bytes = bounded_subprocess.validate_output_limit(
+            args.output_limit_bytes,
+            "--output-limit-bytes",
+        )
+    except ValueError as error:
+        parser.error(str(error))
     for name in args.allow_env:
         if not ENV_NAME_RE.match(name):
             parser.error(f"--allow-env must be an environment variable name: {name}")
@@ -158,18 +172,21 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     return destination
 
 
-def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run the verification command and capture output for review evidence."""
-    return subprocess.run(
-        list(command),
+def run_command(
+    command: Sequence[str],
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int,
+    output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+) -> bounded_subprocess.BoundedCompletedProcess:
+    """Run one verification command with kernel-enforced bounded output files."""
+
+    return bounded_subprocess.run_bounded_command(
+        command,
         cwd=cwd,
         env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         timeout=timeout,
-        check=False,
-        shell=False,
+        evidence_limit_bytes=output_limit_bytes,
     )
 
 
@@ -193,6 +210,8 @@ def emit_result(
     allowed_env: Sequence[str],
     network: str,
     evidence_note: str,
+    output_limit_bytes: int,
+    output_limited: bool,
 ) -> None:
     """Print a machine-readable execution evidence summary without secrets."""
     payload = {
@@ -203,6 +222,8 @@ def emit_result(
         "evidence_note": redact_text(evidence_note),
         "exit_code": exit_code,
         "network": network,
+        "output_limit_bytes": output_limit_bytes,
+        "output_limited": output_limited,
         "sandbox": str(sandbox_root) if kept else "(removed)",
         "sandboxed": True,
     }
@@ -215,6 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sandbox = Path(tempfile.mkdtemp(prefix="sandboxed-verify-"))
     start = time.monotonic()
     exit_code = 1
+    output_limited = False
     copied_repo = sandbox / "repo"
     try:
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
@@ -227,12 +249,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.network != "default":
             print(f"sandboxed-verify: network={args.network}")
         try:
-            completed = run_command(args.command, copied_repo, env, args.timeout)
+            completed = run_command(
+                args.command,
+                copied_repo,
+                env,
+                args.timeout,
+                args.output_limit_bytes,
+            )
             if completed.stdout:
                 print(redact_text(completed.stdout), end="")
             if completed.stderr:
                 print(redact_text(completed.stderr), end="", file=sys.stderr)
-            exit_code = completed.returncode
+            output_limited = bool(getattr(completed, "output_limited", False))
+            if output_limited:
+                print(
+                    "sandboxed-verify: command output exceeded "
+                    f"{args.output_limit_bytes} bytes",
+                    file=sys.stderr,
+                )
+                exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+            else:
+                exit_code = completed.returncode
+        except bounded_subprocess.OutputLimitUnsupportedError:
+            output_limited = True
+            print(
+                "sandboxed-verify: bounded child output is unavailable on this platform",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
         except subprocess.TimeoutExpired as exc:
             stdout = timeout_output_text(exc.stdout)
             stderr = timeout_output_text(exc.stderr)
@@ -240,6 +284,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
                 print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+            output_limited = bool(getattr(exc, "output_limited", False))
             print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
             exit_code = 124
         return exit_code
@@ -255,6 +300,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             allowed_env=args.allow_env,
             network=args.network,
             evidence_note=args.evidence_note,
+            output_limit_bytes=args.output_limit_bytes,
+            output_limited=output_limited,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
