@@ -153,26 +153,49 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
 
 
 def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path):
-    """Service startup and shell execution keep logs and bash wiring explicit."""
+    """Service startup and shell execution keep argv and bounds wiring explicit."""
     popen_calls = []
     run_calls = []
 
     class FakeProcess:
         pid = 42
+        stdout = object()
 
         def poll(self):
             return 0
+
+    class FakeCapture:
+        output_limited = False
+
+        def join(self, timeout=None):
+            del timeout
 
     def fake_popen(*args, **kwargs):
         popen_calls.append((args, kwargs))
         return FakeProcess()
 
-    def fake_run(*args, **kwargs):
-        run_calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args[0], 7, stdout="out", stderr="err")
+    def fake_run_bounded(arguments, *, cwd, env, timeout, evidence_limit_bytes):
+        run_calls.append((tuple(arguments), cwd, env, timeout, evidence_limit_bytes))
+        return sandboxed_web_e2e.bounded_subprocess.BoundedCompletedProcess(
+            args=tuple(arguments),
+            returncode=7,
+            stdout="out",
+            stderr="err",
+            output_limited=False,
+        )
 
+    monkeypatch.setattr(sandboxed_web_e2e.bounded_subprocess, "require_supported_platform", lambda: None)
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sandboxed_web_e2e.bounded_subprocess,
+        "start_bounded_capture",
+        lambda *args, **kwargs: FakeCapture(),
+    )
+    monkeypatch.setattr(
+        sandboxed_web_e2e.bounded_subprocess,
+        "run_bounded_command",
+        fake_run_bounded,
+    )
 
     service = sandboxed_web_e2e.start_service("backend", "npm run dev", tmp_path, {"PATH": "/bin"}, tmp_path)
     completed = sandboxed_web_e2e.run_shell("npm test", tmp_path, {"PATH": "/bin"}, 5)
@@ -181,14 +204,12 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
     assert popen_calls[0][0] == (["npm", "run", "dev"],)
-    assert "shell" not in popen_calls[0][1]
-    assert "executable" not in popen_calls[0][1]
+    assert popen_calls[0][1]["shell"] is False
     assert popen_calls[0][1]["start_new_session"] is True
     assert completed.returncode == 7
-    assert run_calls[0][0] == (["npm", "test"],)
-    assert run_calls[0][1]["timeout"] == 5
-    assert "shell" not in run_calls[0][1]
-    assert "executable" not in run_calls[0][1]
+    assert run_calls[0][0] == ("npm", "test")
+    assert run_calls[0][3] == 5
+    assert run_calls[0][4] == sandboxed_web_e2e.bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES
 
 
 def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
@@ -273,10 +294,23 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
         def poll(self):
             return 0
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(
+        label,
+        command,
+        cwd,
+        env,
+        logs_dir,
+        log_limit_bytes=sandboxed_web_e2e.bounded_subprocess.DEFAULT_SERVICE_LOG_LIMIT_BYTES,
+    ):
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} ready\n", encoding="utf-8")
-        service = sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+        service = sandboxed_web_e2e.Service(
+            label,
+            command,
+            DoneProcess(),
+            log_path,
+            log_limit_bytes=log_limit_bytes,
+        )
         started.append((label, command, cwd, "SANDBOXED_VERIFY" in env))
         return service
 
@@ -285,7 +319,7 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "run_shell",
-        lambda command, cwd, env, timeout: subprocess.CompletedProcess(
+        lambda command, cwd, env, timeout, output_limit_bytes=sandboxed_web_e2e.bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES: subprocess.CompletedProcess(
             command,
             0,
             stdout="e2e-out\n",
@@ -345,10 +379,23 @@ def test_main_reports_stubbed_readiness_failure(monkeypatch, tmp_path, capsys):
         def poll(self):
             return 0
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(
+        label,
+        command,
+        cwd,
+        env,
+        logs_dir,
+        log_limit_bytes=sandboxed_web_e2e.bounded_subprocess.DEFAULT_SERVICE_LOG_LIMIT_BYTES,
+    ):
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} not ready\n", encoding="utf-8")
-        return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+        return sandboxed_web_e2e.Service(
+            label,
+            command,
+            DoneProcess(),
+            log_path,
+            log_limit_bytes=log_limit_bytes,
+        )
 
     def fake_wait(url, timeout, service):
         return service.label == "frontend"
@@ -393,12 +440,32 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
         def poll(self):
             return 0
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(
+        label,
+        command,
+        cwd,
+        env,
+        logs_dir,
+        log_limit_bytes=sandboxed_web_e2e.bounded_subprocess.DEFAULT_SERVICE_LOG_LIMIT_BYTES,
+    ):
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} tail\n", encoding="utf-8")
-        return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+        return sandboxed_web_e2e.Service(
+            label,
+            command,
+            DoneProcess(),
+            log_path,
+            log_limit_bytes=log_limit_bytes,
+        )
 
-    def fake_run_shell(command, cwd, env, timeout):
+    def fake_run_shell(
+        command,
+        cwd,
+        env,
+        timeout,
+        output_limit_bytes=sandboxed_web_e2e.bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+    ):
+        del cwd, env, output_limit_bytes
         raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out", stderr=b"e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
@@ -469,7 +536,14 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
 
-    def fake_run_shell(command, cwd, env, timeout):
+    def fake_run_shell(
+        command,
+        cwd,
+        env,
+        timeout,
+        output_limit_bytes=sandboxed_web_e2e.bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+    ):
+        del cwd, env, output_limit_bytes
         raise subprocess.TimeoutExpired(command, timeout, output="e2e-out", stderr="e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
