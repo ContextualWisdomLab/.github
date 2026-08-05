@@ -32,6 +32,7 @@ Semantic Versioning where the repository publishes a release.
 ### Changed
 
 - Avoided the expensive R/testthat failure-summary regular expression on marker-absent bounded logs by checking the required terminal marker first, while preserving fail-closed handling for incomplete or malformed failure evidence.
+- Added a bounded PyO3/maturin pytest-failure classifier and exact-head native peer-check verifier so source-only OpenCode sandboxes can distinguish one unchanged-extension collection limitation from product failures without skipping tests, executing pull-request build hooks, or weakening Rust ownership.
 
 ### Fixed
 
