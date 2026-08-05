@@ -399,7 +399,7 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
 
     def fake_run_shell(command, cwd, env, timeout):
-        raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out ghp_123456789012345678901234567890123456", stderr=b"e2e-err")
+        raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out ghp_" + b"1" * 36, stderr=b"e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
     monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
@@ -424,7 +424,7 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
 
     assert exit_code == 124
     assert "e2e-out [REDACTED]" in captured.out
-    assert "ghp_123456789012345678901234567890123456" not in captured.out
+    assert f"ghp_{'1'*36}" not in captured.out
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 3s" in captured.err
 
@@ -471,7 +471,7 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     repo.mkdir()
 
     def fake_run_shell(command, cwd, env, timeout):
-        raise subprocess.TimeoutExpired(command, timeout, output="e2e-out ghp_123456789012345678901234567890123456", stderr="e2e-err")
+        raise subprocess.TimeoutExpired(command, timeout, output=f"e2e-out ghp_{'1'*36}", stderr="e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
 
@@ -493,7 +493,7 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
 
     assert exit_code == 124
     assert "e2e-out [REDACTED]" in captured.out
-    assert "ghp_123456789012345678901234567890123456" not in captured.out
+    assert f"ghp_{'1'*36}" not in captured.out
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 1s" in captured.err
     assert "SANDBOXED_WEB_E2E_RESULT" in captured.out
