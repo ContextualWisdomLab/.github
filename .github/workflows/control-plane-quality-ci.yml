@@ -120,8 +120,14 @@ jobs:
           -r requirements-opencode-review-ci-hashes.txt
 
       - name: Run control-plane tests with complete branch coverage
+        env:
+          GITHUB_EVENT_PATH: ""
         run: |
-          python -m pytest \
+          python -m coverage erase
+          python -m coverage run \
+            --branch \
+            --include="scripts/ci/agent_mention_router.py,scripts/ci/agent_mention_sweep.py,scripts/ci/install_base_python_locks.py,scripts/ci/javascript_coverage_gate.py,scripts/ci/redact_sensitive_log.py,scripts/ci/sandboxed_verify.py,scripts/ci/sandboxed_web_e2e.py" \
+            -m pytest \
             tests/test_agent_mention_router.py \
             tests/test_agent_mention_sweep.py \
             tests/test_agent_mention_workflow_contract.py \
@@ -139,17 +145,8 @@ jobs:
             tests/test_sandboxed_web_e2e.py \
             tests/test_sbom_generation_push_contract.py \
             tests/test_unstructured_separate_option_redaction.py \
-            --cov=scripts.ci.agent_mention_router \
-            --cov=scripts.ci.agent_mention_sweep \
-            --cov=scripts.ci.install_base_python_locks \
-            --cov=scripts.ci.javascript_coverage_gate \
-            --cov=scripts.ci.redact_sensitive_log \
-            --cov=scripts.ci.sandboxed_verify \
-            --cov=scripts.ci.sandboxed_web_e2e \
-            --cov-branch \
-            --cov-fail-under=100 \
-            --cov-report=term-missing \
             -q
+          python -m coverage report --show-missing --fail-under=100
 
       - name: Enforce complete production docstrings
         run: |
