@@ -10,7 +10,7 @@ from typing import Any, Sequence
 
 REDACTED = "[REDACTED]"
 SENSITIVE_KEY_RE = re.compile(
-    r"(?i)(?:^|[_-])(?:api[_-]?key|auth|authorization|bearer|credential|password|passwd|private[_-]?key|secret|session[_-]?key|token)(?:$|[_-])"
+    r"(?i)(?:api[_-]?key|access[_-]?key|auth|authorization|bearer|credential|jwt|password|passwd|private[_-]?key|secret|session[_-]?key|token)"
 )
 SENSITIVE_OPTION_RE = re.compile(
     r"(?i)^--?(?:api[_-]?key|auth|authorization|bearer|credential|password|passwd|private[_-]?key|secret|session[_-]?key|token)$"
@@ -23,7 +23,7 @@ JWT_RE = re.compile(
     r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b"
 )
 PROVIDER_TOKEN_RES = (
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bASIA[0-9A-Z]{16}\b"),
