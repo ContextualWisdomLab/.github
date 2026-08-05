@@ -20,6 +20,7 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
     required_paths = (
         '".github/workflows/trusted-uv-materializer-quality-ci.yml"',
         '"scripts/ci/materialize_base_python_requirements.py"',
+        '"tests/conftest.py"',
         '"tests/test_materialize*.py"',
         '"tests/test_trusted_uv*.py"',
         '"tests/test_uv*.py"',
