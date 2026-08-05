@@ -225,6 +225,35 @@ def test_capture_surfaces_reader_failure_and_join_timeout(
         capture.join(timeout=0)
 
 
+def test_join_captures_applies_finite_timeout_and_joins_every_reader() -> None:
+    """Normal-path capture finalization cannot wait forever on inherited pipe FDs."""
+
+    observed: list[tuple[str, float]] = []
+
+    class Capture:
+        """Record the timeout and optionally expose one stuck-reader failure."""
+
+        def __init__(self, label: str, *, fail: bool = False) -> None:
+            self.label = label
+            self.fail = fail
+
+        def join(self, timeout: float) -> None:
+            """Require a positive finite timeout and retain sibling finalization."""
+
+            observed.append((self.label, timeout))
+            if self.fail:
+                raise RuntimeError("bounded output drain did not finish")
+
+    with pytest.raises(RuntimeError, match="did not finish"):
+        bounded._join_captures(  # noqa: SLF001 - internal safety contract
+            (Capture("first", fail=True), Capture("second"))  # type: ignore[arg-type]
+        )
+
+    assert [label for label, _timeout in observed] == ["first", "second"]
+    assert all(timeout > 0 for _label, timeout in observed)
+    assert len({timeout for _label, timeout in observed}) == 1
+
+
 def test_run_bounded_command_rejects_empty_command_and_timeout(tmp_path: Path) -> None:
     """The reusable runner validates execution controls before creating children."""
 
