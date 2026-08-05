@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import os
 
 import pytest
 
@@ -10,8 +11,10 @@ from scripts.ci import materialize_base_python_requirements as materializer
 
 
 @pytest.fixture(autouse=True)
-def clear_trusted_uv_process_caches() -> Iterator[None]:
-    """Isolate process-global trusted uv caches even when a test fails early."""
+def clear_trusted_uv_process_caches(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Isolate process caches and ambient Git configuration for every test."""
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     materializer._install_trusted_uv.cache_clear()
     materializer._install_trusted_uv_url_opener.cache_clear()
     yield
