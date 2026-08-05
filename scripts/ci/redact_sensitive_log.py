@@ -15,6 +15,11 @@ SENSITIVE_KEY_RE = re.compile(
 SENSITIVE_OPTION_RE = re.compile(
     r"(?i)^--?(?:api[_-]?key|auth|authorization|bearer|credential|password|passwd|private[_-]?key|secret|session[_-]?key|token)$"
 )
+SENSITIVE_SEPARATE_OPTION_RE = re.compile(
+    r"(?i)(?P<prefix>(?<![A-Za-z0-9_-])--?(?:api[_-]?key|auth|authorization|"
+    r"bearer|credential|password|passwd|private[_-]?key|secret|session[_-]?key|"
+    r"token)\s+)(?P<value>(?!--?[A-Za-z])(?:\"[^\"]*\"|'[^']*'|[^\s,;}]+))"
+)
 SENSITIVE_ASSIGNMENT_RE = re.compile(
     r"(?i)(\b[A-Za-z_][A-Za-z0-9_-]*(?:API[_-]?KEY|AUTH|AUTHORIZATION|BEARER|CREDENTIAL|PASSWORD|PASSWD|PRIVATE[_-]?KEY|SECRET|SESSION[_-]?KEY|TOKEN)[A-Za-z0-9_-]*\s*[=:]\s*)([^\s,;]+)"
 )
@@ -38,7 +43,14 @@ MAX_JSON_DEPTH = 64
 
 def _redact_scalar(value: str) -> str:
     """Redact one scalar that may itself be a credential."""
-    redacted = SENSITIVE_ASSIGNMENT_RE.sub(lambda match: match.group(1) + REDACTED, value)
+    redacted = SENSITIVE_SEPARATE_OPTION_RE.sub(
+        lambda match: match.group("prefix") + REDACTED,
+        value,
+    )
+    redacted = SENSITIVE_ASSIGNMENT_RE.sub(
+        lambda match: match.group(1) + REDACTED,
+        redacted,
+    )
     redacted = BEARER_BASIC_RE.sub(lambda match: f"{match.group(1)} {REDACTED}", redacted)
     redacted = JWT_RE.sub(REDACTED, redacted)
     for pattern in PROVIDER_TOKEN_RES:
