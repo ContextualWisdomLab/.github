@@ -17,7 +17,14 @@ if not _CORE_PATH.is_file() or _CORE_PATH.is_symlink():
 try:
     globals()["__name__"] = "scripts.ci.noema_review_gate_core_exec"
     globals()["__file__"] = str(_CORE_PATH)
-    exec(compile(_CORE_PATH.read_bytes(), str(_CORE_PATH), "exec"), globals(), globals())
+    # Noema core is a fixed regular non-symlink sibling from the immutable
+    # trusted workflow checkout. Shared globals are required so existing tests,
+    # monkeypatch seams, and the wrapper's call_llm override keep one namespace.
+    exec(  # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
+        compile(_CORE_PATH.read_bytes(), str(_CORE_PATH), "exec"),
+        globals(),
+        globals(),
+    )
 finally:
     globals()["__name__"] = _WRAPPER_NAME
     globals()["__file__"] = _WRAPPER_FILE
