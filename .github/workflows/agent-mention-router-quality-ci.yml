@@ -11,8 +11,6 @@ on:
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
       - "tests/test_agent_mention_*.py"
-      - "tests/test_agent_mention_idempotency.py"
-      - "tests/test_agent_mention_downstream_idempotency.py"
       - "requirements-opencode-review-ci-hashes.txt"
   push:
     branches: [main]
@@ -24,8 +22,6 @@ on:
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
       - "tests/test_agent_mention_*.py"
-      - "tests/test_agent_mention_idempotency.py"
-      - "tests/test_agent_mention_downstream_idempotency.py"
       - "requirements-opencode-review-ci-hashes.txt"
 
 concurrency:
@@ -82,7 +78,8 @@ jobs:
             tests/test_agent_mention_sweep.py \
             tests/test_agent_mention_workflow_contract.py \
             tests/test_agent_mention_idempotency.py \
-            tests/test_agent_mention_downstream_idempotency.py
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
           python -m coverage report --fail-under=100
           python -m interrogate --fail-under=100 \
             scripts/ci/agent_mention_router.py \
@@ -94,5 +91,6 @@ jobs:
             tests/test_agent_mention_sweep.py \
             tests/test_agent_mention_workflow_contract.py \
             tests/test_agent_mention_idempotency.py \
-            tests/test_agent_mention_downstream_idempotency.py
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
           git diff --check
