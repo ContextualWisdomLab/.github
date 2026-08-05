@@ -166,7 +166,7 @@ def _download_trusted_uv_archive() -> bytes:
         # Keep the audited URL literal at the network sink so static analysis can
         # prove that neither user data nor repository content selects a scheme,
         # host, path, query, fragment, method, or request header.
-        with urllib.request.urlopen(  # nosec B310 -- literal HTTPS URL plus SHA pin
+        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
             "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
             "uv-x86_64-unknown-linux-gnu.tar.gz",
             timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
