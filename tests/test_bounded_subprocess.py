@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import io
 import os
-import signal
 import sys
 from pathlib import Path
 
@@ -37,7 +37,30 @@ def test_read_bounded_suffix_preserves_unicode_and_marks_partial_suffix(
     assert partial.stored_bytes == len(partial_path.read_bytes())
     assert partial.text.startswith(bounded.TRUNCATION_MARKER)
     assert "�" in partial.text
-    assert len(partial.text.removeprefix(bounded.TRUNCATION_MARKER).encode("utf-8")) <= 6
+
+
+def test_bounded_capture_retains_final_suffix_and_writes_bounded_file(
+    tmp_path: Path,
+) -> None:
+    """The stream drainer retains only a bounded final suffix for evidence."""
+
+    destination = tmp_path / "captured.log"
+    limit_calls: list[str] = []
+    capture = bounded.start_bounded_capture(
+        io.BytesIO(b"prefix-" + b"x" * 5000 + b"-final"),
+        evidence_limit_bytes=4096,
+        on_limit=lambda: limit_calls.append("limited"),
+        destination=destination,
+    )
+    capture.join(timeout=5)
+
+    assert capture.output_limited is True
+    assert capture.total_bytes == 5013
+    assert limit_calls == ["limited"]
+    assert capture.text.startswith(bounded.TRUNCATION_MARKER)
+    assert capture.text.endswith("-final")
+    assert destination.stat().st_size <= 4096
+    assert destination.read_text(encoding="utf-8").endswith("-final")
 
 
 def test_run_bounded_command_preserves_ordinary_unicode_output(tmp_path: Path) -> None:
@@ -67,7 +90,7 @@ def test_run_bounded_command_caps_real_stdout_and_stderr(
     tmp_path: Path,
     stream_descriptor: int,
 ) -> None:
-    """A child cannot create a captured stream beyond budget plus one byte."""
+    """A real output flood is killed while the retained stream stays bounded."""
 
     result = bounded.run_bounded_command(
         [
@@ -90,9 +113,7 @@ def test_run_bounded_command_caps_real_stdout_and_stderr(
     selected = result.stdout if stream_descriptor == 1 else result.stderr
     assert result.output_limited is True
     assert selected.startswith(bounded.TRUNCATION_MARKER)
-    assert len(selected.encode("utf-8")) <= 4096 + len(
-        bounded.TRUNCATION_MARKER.encode("utf-8")
-    )
+    assert len(selected.encode("utf-8")) <= 4096
     assert result.returncode != 0
 
 
@@ -145,75 +166,63 @@ def test_validate_output_limit_rejects_unsafe_values() -> None:
             bounded.validate_output_limit(value, "test limit")  # type: ignore[arg-type]
 
 
-def test_preexec_fails_closed_without_posix_resource_support(monkeypatch) -> None:
-    """Unsupported platforms cannot silently fall back to unbounded capture."""
+def test_supported_platform_gate_fails_closed(monkeypatch) -> None:
+    """Unsupported platforms cannot silently fall back to unmanaged children."""
 
     monkeypatch.setattr(bounded.os, "name", "nt")
     with pytest.raises(bounded.OutputLimitUnsupportedError):
-        bounded.bounded_file_preexec(4096)
+        bounded.require_supported_platform()
 
     monkeypatch.setattr(bounded.os, "name", "posix")
-    monkeypatch.setattr(bounded, "_resource", None)
-    with pytest.raises(bounded.OutputLimitUnsupportedError):
-        bounded.bounded_file_preexec(4096)
+    bounded.require_supported_platform()
 
 
-def test_preexec_respects_a_lower_existing_hard_limit(monkeypatch) -> None:
-    """The child limit is lowered but an existing hard limit is never raised."""
-
-    class FakeResource:
-        """Record the limit selected by the child pre-exec closure."""
-
-        RLIMIT_FSIZE = 1
-        RLIM_INFINITY = -1
-
-        def __init__(self, hard_limit: int) -> None:
-            self.hard_limit = hard_limit
-            self.applied: tuple[int, tuple[int, int]] | None = None
-
-        def getrlimit(self, resource_name: int) -> tuple[int, int]:
-            """Return the configured finite hard limit."""
-
-            assert resource_name == self.RLIMIT_FSIZE
-            return (self.hard_limit, self.hard_limit)
-
-        def setrlimit(
-            self,
-            resource_name: int,
-            limits: tuple[int, int],
-        ) -> None:
-            """Record the exact child limits."""
-
-            self.applied = (resource_name, limits)
-
-    finite = FakeResource(2048)
-    monkeypatch.setattr(bounded.os, "name", "posix")
-    monkeypatch.setattr(bounded, "_resource", finite)
-    bounded.bounded_file_preexec(4096)()
-    assert finite.applied == (finite.RLIMIT_FSIZE, (2048, 2048))
-
-    unlimited = FakeResource(FakeResource.RLIM_INFINITY)
-    monkeypatch.setattr(bounded, "_resource", unlimited)
-    bounded.bounded_file_preexec(4096)()
-    assert unlimited.applied == (unlimited.RLIMIT_FSIZE, (4097, 4097))
-
-
-def test_file_limit_classification_uses_size_signal_and_safe_false_path(
-    tmp_path: Path,
+def test_capture_surfaces_reader_failure_and_join_timeout(
+    monkeypatch,
 ) -> None:
-    """Overflow classification remains deterministic across child behaviors."""
+    """Reader failures and stuck drains are explicit rather than silently ignored."""
 
-    output_path = tmp_path / "output.log"
-    output_path.write_bytes(b"x" * 4097)
-    assert bounded.file_limit_reached(output_path, 4096, 0)
+    class FailingStream:
+        """Raise one deterministic error from the background reader."""
 
-    output_path.write_bytes(b"x" * 10)
-    assert bounded.file_limit_reached(
-        output_path,
-        4096,
-        -int(signal.SIGXFSZ),
+        def read(self, size: int) -> bytes:
+            """Reject the read request."""
+
+            del size
+            raise OSError("read failed")
+
+        def close(self) -> None:
+            """Provide the binary-stream close interface."""
+
+    capture = bounded.start_bounded_capture(
+        FailingStream(),  # type: ignore[arg-type]
+        evidence_limit_bytes=4096,
+        on_limit=lambda: None,
     )
-    assert not bounded.file_limit_reached(output_path, 4096, 0)
+    with pytest.raises(OSError, match="read failed"):
+        capture.join(timeout=5)
+
+    class NeverFinishesThread:
+        """Simulate one drain thread that remains alive after join."""
+
+        def join(self, timeout: float | None = None) -> None:
+            """Accept the join call without completing."""
+
+            del timeout
+
+        def is_alive(self) -> bool:
+            """Report a stuck reader."""
+
+            return True
+
+    capture = bounded.BoundedOutputCapture(
+        io.BytesIO(b"safe"),
+        evidence_limit_bytes=4096,
+        on_limit=lambda: None,
+    )
+    monkeypatch.setattr(capture, "_thread", NeverFinishesThread())
+    with pytest.raises(RuntimeError, match="did not finish"):
+        capture.join(timeout=0)
 
 
 def test_run_bounded_command_rejects_empty_command_and_timeout(tmp_path: Path) -> None:
