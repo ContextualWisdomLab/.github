@@ -1,0 +1,246 @@
+name: One-shot PR 759 libclang coverage repair
+
+on:
+  push:
+    branches: [fix/opencode-coverage-failure-diagnostics]
+    paths:
+      - .github/workflows/one-shot-pr759-libclang-repair.yml
+
+concurrency:
+  group: one-shot-pr759-libclang-repair
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/opencode-coverage-failure-diagnostics'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact contributor head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 50
+          persist-credentials: false
+
+      - name: Preserve RED contract before implementation
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+          test_path = Path("tests/test_opencode_agent_contract.py")
+          source = test_path.read_text(encoding="utf-8")
+          contract = '''
+
+          def test_opencode_coverage_image_provisions_bindgen_libclang():
+              """Keep bindgen-backed Rust packages executable in central coverage."""
+              workflow = Path(
+                  ".github/workflows/opencode-review-dispatch.yml"
+              ).read_text(encoding="utf-8")
+
+              assert "              libclang-19-dev " + chr(92) in workflow
+              assert "ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib" in workflow
+              assert "find \"$LIBCLANG_PATH\" -maxdepth 1" in workflow
+              assert "-name 'libclang.so*'" in workflow
+          '''
+          if "def test_opencode_coverage_image_provisions_bindgen_libclang" not in source:
+              test_path.write_text(source.rstrip() + contract + "\n", encoding="utf-8")
+          PY
+
+          set +e
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(
+              ".github/workflows/opencode-review-dispatch.yml"
+          ).read_text(encoding="utf-8")
+          assert "              libclang-19-dev " + chr(92) in workflow
+          assert "ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib" in workflow
+          assert "find \"$LIBCLANG_PATH\" -maxdepth 1" in workflow
+          assert "-name 'libclang.so*'" in workflow
+          PY
+          red_status=$?
+          set -e
+          test "$red_status" -ne 0
+
+      - name: Implement the smallest compatible libclang toolchain repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path(".github/workflows/opencode-review-dispatch.yml")
+          source = workflow_path.read_text(encoding="utf-8")
+
+          package_old = "              llvm-19 " + chr(92) + "\n"
+          package_new = (
+              "              libclang-19-dev " + chr(92) + "\n"
+              + package_old
+          )
+          if package_new not in source:
+              if source.count(package_old) != 1:
+                  raise SystemExit("expected one llvm-19 package declaration")
+              source = source.replace(package_old, package_new, 1)
+
+          env_old = "          ENV LLVM_COV=/usr/bin/llvm-cov-19\n"
+          env_new = (
+              "          ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib\n"
+              + env_old
+          )
+          if env_new not in source:
+              if source.count(env_old) != 1:
+                  raise SystemExit("expected one LLVM_COV environment declaration")
+              source = source.replace(env_old, env_new, 1)
+
+          probe_old = (
+              '          RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"\n'
+          )
+          probe_new = (
+              '          RUN test -d "$LIBCLANG_PATH" \\\n'
+              '            && find "$LIBCLANG_PATH" -maxdepth 1 '
+              "\\( -type f -o -type l \\) -name 'libclang.so*' "
+              '-print -quit | grep -q . \\\n'
+              '            && test -x "$LLVM_COV" \\\n'
+              '            && test -x "$LLVM_PROFDATA"\n'
+          )
+          if probe_new not in source:
+              if source.count(probe_old) != 1:
+                  raise SystemExit("expected one LLVM executable probe")
+              source = source.replace(probe_old, probe_new, 1)
+
+          workflow_path.write_text(source, encoding="utf-8")
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          entry = (
+              "- Central OpenCode Rust coverage now installs the version-aligned "
+              "`libclang-19-dev` C interface and exports `LIBCLANG_PATH`, so "
+              "bindgen-backed crates cannot fail solely because the generic LLVM "
+              "coverage image omitted `libclang`.\n"
+          )
+          if entry not in changelog:
+              marker = "## [Unreleased]\n"
+              if marker in changelog:
+                  changelog = changelog.replace(marker, marker + "\n" + entry, 1)
+              else:
+                  changelog = entry + "\n" + changelog
+              changelog_path.write_text(changelog, encoding="utf-8")
+
+          doctoring_path = Path("docs/doctoring/opencode-llvm-coverage-toolchain.md")
+          doctoring = doctoring_path.read_text(encoding="utf-8")
+          section = '''
+
+          ## Bindgen and libclang compatibility boundary
+
+          `llvm-19` provides the versioned coverage executables, but a Rust crate
+          that generates bindings through `bindgen` also needs the Clang C
+          interface at build time. The central image therefore installs the
+          matching `libclang-19-dev` package, exports
+          `LIBCLANG_PATH=/usr/lib/llvm-19/lib`, and fails the trusted image build
+          unless a regular file or symlink matching `libclang.so*` is present.
+          This is an infrastructure prerequisite only; repository Fuzz and
+          package-specific native-toolchain gates remain independently required.
+
+          Debian Project. (2026). *libclang-19-dev: Clang library—Development
+          package*. Debian Packages. Retrieved August 5, 2026, from
+          https://packages.debian.org/trixie/libclang-19-dev
+
+          Ubuntu. (2026). *libclang-19-dev in noble-updates*. Ubuntu Packages.
+          Retrieved August 5, 2026, from
+          https://packages.ubuntu.com/noble-updates/libclang-19-dev
+          '''
+          section = "\n".join(line[10:] if line.startswith("          ") else line for line in section.splitlines())
+          if "## Bindgen and libclang compatibility boundary" not in doctoring:
+              doctoring_path.write_text(
+                  doctoring.rstrip() + section + "\n",
+                  encoding="utf-8",
+              )
+          PY
+          git diff --check
+
+      - name: Verify GREEN contract and package availability
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(
+              ".github/workflows/opencode-review-dispatch.yml"
+          ).read_text(encoding="utf-8")
+          assert workflow.count("              libclang-19-dev " + chr(92)) == 1
+          assert workflow.count("ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib") == 1
+          assert workflow.count("find \"$LIBCLANG_PATH\" -maxdepth 1") == 1
+          assert workflow.count("-name 'libclang.so*'") == 1
+          compile(
+              Path("tests/test_opencode_agent_contract.py").read_text(encoding="utf-8"),
+              "tests/test_opencode_agent_contract.py",
+              "exec",
+          )
+          PY
+
+          probe_dir="$(mktemp -d)"
+          cat >"$probe_dir/Dockerfile" <<'DOCKERFILE'
+          FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update \
+            && apt-get install --no-install-recommends -y libclang-19-dev llvm-19 \
+            && rm -rf /var/lib/apt/lists/*
+          ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib
+          ENV LLVM_COV=/usr/bin/llvm-cov-19
+          ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
+          RUN test -d "$LIBCLANG_PATH" \
+            && find "$LIBCLANG_PATH" -maxdepth 1 \( -type f -o -type l \) -name 'libclang.so*' -print -quit | grep -q . \
+            && test -x "$LLVM_COV" \
+            && test -x "$LLVM_PROFDATA"
+          DOCKERFILE
+          docker build --pull --no-cache --tag pr759-libclang-probe "$probe_dir"
+          rm -rf "$probe_dir"
+          git diff --check
+
+      - name: Publish verified repair and remove temporary workflows
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          HEAD_BRANCH: fix/opencode-coverage-failure-diagnostics
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          rm -f \
+            .github/workflows/one-shot-pr759-libclang-repair.yml \
+            .github/workflows/one-shot-pr759-merge-diagnostics.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 1
+          git commit -m "fix(coverage): provision libclang for Rust bindgen"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          for attempt in 1 2 3; do
+            git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags origin "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+            git rebase "refs/remotes/origin/${HEAD_BRANCH}"
+            if git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+              push origin "HEAD:refs/heads/${HEAD_BRANCH}"; then
+              exit 0
+            fi
+            sleep "$attempt"
+          done
+          exit 1
