@@ -97,7 +97,12 @@ def git_blob_sha(path: Path) -> str:
             f"vendored path could not be read: {path.name}"
         ) from exc
     header = f"blob {len(data)}\0".encode("ascii")
-    return hashlib.sha1(header + data).hexdigest()  # nosec B324 - Git object ID
+    # Git's object format requires SHA-1 here; this is an identity comparison,
+    # not a cryptographic signature or password/security primitive.
+    return hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1  # nosec B324
+        header + data,
+        usedforsecurity=False,
+    ).hexdigest()
 
 
 def verify_vendored_module() -> None:
