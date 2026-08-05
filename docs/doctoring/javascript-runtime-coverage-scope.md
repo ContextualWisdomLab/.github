@@ -93,6 +93,23 @@ the false positive and proves all of the following:
   124 of 124 production branches, with production docstrings present for every
   module and function.
 
+## Exact-head control-plane repair
+
+The first independent OpenCode evidence run on predecessor head
+`c216f0cb4d680c381c4389d9b04195d42d1be57d` did not fail in the new JavaScript
+classifier. Its merge-tree suite stopped earlier at
+`tests/test_codeql_pr_workflow_contract.py::test_codeql_action_steps_use_one_version_per_workflow`
+because the protected-base `scheduled-security-scan.yml` used different CodeQL
+Action revisions for initialization, analysis, and SARIF upload.
+
+Repair commit `9d43004cbbaa91a8cf477a71e64e1a52176a00ad` aligns all three scheduled phases
+to the immutable CodeQL Action v4.37.5 commit
+`d1ba80a13dd99fba24a470575428917156a28b43`. This is a central gate-consistency
+repair, not an evidence waiver: the runtime classifier, complete changed-code
+coverage threshold, Strix dependency floor, reviewer identities, and branch
+protection remain unchanged. A fresh review must evaluate the new exact head;
+prior-head approval or requested-changes evidence is not transferable.
+
 Repository-wide exact-head CI, security scans, independent review, and branch
 protection remain authoritative before merge. No formal Vitest or NIST
 conformity is claimed.
