@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2026-07-08 - [Log Redaction Performance Optimization]
+**Learning:** O(N^2) complexity in Python string manipulation (character-by-character append) and multiple regex substitute passes significantly degrade performance when processing massive CI logs.
+**Action:** When implementing parsing or string manipulation in tight linear loops, use string slicing to batch-process chunks (`output.append(text[start:cursor])`). When applying multiple unrelated regex replacements to the same string fragment, combine them using the `|` alternation operator into a single compiled pattern to prevent redundant parsing over the text.
