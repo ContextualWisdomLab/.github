@@ -1,0 +1,5 @@
+# Python 3.10 compatibility dependency for the OpenCode coverage diagnostics job.
+# Source: https://pypi.org/project/tomli/2.4.1/
+# The pure-Python wheel is selected explicitly by --only-binary=:all:.
+tomli==2.4.1 \
+    --hash=sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe
