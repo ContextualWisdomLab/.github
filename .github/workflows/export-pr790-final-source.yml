@@ -1,0 +1,60 @@
+name: Export PR 790 final repair source
+
+on:
+  push:
+    branches:
+      - fix/trusted-uv-transient-download-retry
+    paths:
+      - .github/workflows/export-pr790-final-source.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-pr790-final-repair-source
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  export:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/trusted-uv-transient-download-retry'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Package exact repair inputs
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          tar -cf pr790-source.tar \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_trusted_uv_portability_and_streaming.py \
+            docs/doctoring/trusted-uv-transient-download-retry.md \
+            CHANGELOG.md \
+            .github/workflows/repair-pr790-transport-classification.yml
+          sha256sum pr790-source.tar >pr790-source.tar.sha256
+
+      - name: Upload exact source
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr790-final-source-${{ github.sha }}
+          path: |
+            pr790-source.tar
+            pr790-source.tar.sha256
+          retention-days: 1
+          if-no-files-found: error
