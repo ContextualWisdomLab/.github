@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -200,7 +201,7 @@ def test_two_overflow_callbacks_kill_the_process_group_once(
 ) -> None:
     """Simultaneous stdout/stderr limit notifications share one kill transition."""
 
-    callbacks: list[object] = []
+    callbacks: list[Callable[[], None]] = []
 
     class FakePipe:
         """Stand in for one requested subprocess pipe."""
@@ -263,3 +264,81 @@ def test_two_overflow_callbacks_kill_the_process_group_once(
 
     assert result.output_limited
     assert kills == [process]
+
+
+def test_run_joins_both_stream_captures_when_one_join_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A reader failure cannot leave the sibling drain thread unjoined."""
+
+    class FakePipe:
+        """Stand in for one requested subprocess pipe."""
+
+    class FakeProcess:
+        """Complete immediately with both requested pipes present."""
+
+        pid = 14
+        stdout = FakePipe()
+        stderr = FakePipe()
+        returncode = 0
+
+        def poll(self):
+            """Return the completed status."""
+
+            return self.returncode
+
+        def wait(self, timeout=None) -> int:
+            """Complete immediately."""
+
+            del timeout
+            return self.returncode
+
+    joins: list[str] = []
+
+    class FakeCapture:
+        """Record join order and optionally raise one deterministic error."""
+
+        output_limited = False
+        text = ""
+
+        def __init__(self, label: str, error: BaseException | None) -> None:
+            self.label = label
+            self.error = error
+
+        def join(self, timeout=None) -> None:
+            """Record finalization before surfacing the configured error."""
+
+            del timeout
+            joins.append(self.label)
+            if self.error is not None:
+                raise self.error
+
+    captures = iter(
+        [
+            FakeCapture("stdout", OSError("stdout drain failed")),
+            FakeCapture("stderr", None),
+        ]
+    )
+    monkeypatch.setattr(bounded, "require_supported_platform", lambda: None)
+    monkeypatch.setattr(
+        bounded.subprocess,
+        "Popen",
+        lambda *args, **kwargs: FakeProcess(),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "start_bounded_capture",
+        lambda *args, **kwargs: next(captures),
+    )
+
+    with pytest.raises(OSError, match="stdout drain failed"):
+        bounded.run_bounded_command(
+            ["tool"],
+            cwd=tmp_path,
+            env={},
+            timeout=1,
+            evidence_limit_bytes=4096,
+        )
+
+    assert joins == ["stdout", "stderr"]
