@@ -1,0 +1,96 @@
+name: Agent Mention Noema Dispatch
+run-name: >-
+  Agent Mention Noema ${{ github.event.client_payload.target_repository }}#${{
+  github.event.client_payload.pr_number }} [cwl-agent-invocation:${{
+  github.event.client_payload.agent_invocation_key }}]
+
+on:
+  repository_dispatch:
+    types: [agent-mention-noema]
+
+concurrency:
+  group: agent-mention-noema-${{ github.event.client_payload.agent_invocation_key || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  validate-and-forward:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUESTED_AGENT: "cwl-noema-review"
+      PAYLOAD_AGENT: ${{ github.event.client_payload.requested_agent || '' }}
+      INVOCATION_KEY: ${{ github.event.client_payload.agent_invocation_key || '' }}
+      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number || '' }}
+      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+      REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
+      SOURCE_COMMENT_ID: ${{ github.event.client_payload.source_comment_id || '' }}
+    steps:
+      - name: Validate exact invocation and elect one durable leader
+        id: leader
+        run: |
+          set -euo pipefail
+          if [ "$PAYLOAD_AGENT" != "$REQUESTED_AGENT" ] ||
+            ! [[ "$INVOCATION_KEY" =~ ^[0-9a-f]{64}$ ]] ||
+            ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]+$ ]]; then
+            echo "::error::Rejected malformed or mismatched Noema agent invocation payload."
+            exit 1
+          fi
+
+          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"
+          leader_id="$(
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/agent-mention-noema-dispatch.yml/runs?event=repository_dispatch&per_page=100" \
+              | jq -r --arg marker "$marker" '
+                  [.[].workflow_runs[]
+                    | select((.display_title // "") | contains($marker))
+                    | .id]
+                  | min // empty
+                '
+          )"
+          if [ -z "$leader_id" ]; then
+            echo "::error::Could not establish the durable Noema invocation leader."
+            exit 1
+          fi
+          if [ "$leader_id" != "$GITHUB_RUN_ID" ]; then
+            echo "forward=false" >>"$GITHUB_OUTPUT"
+            echo "Duplicate exact-key invocation suppressed by durable workflow-run identity."
+            exit 0
+          fi
+          echo "forward=true" >>"$GITHUB_OUTPUT"
+
+      - name: Forward once to the authoritative Noema workflow
+        if: steps.leader.outputs.forward == 'true'
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_head_sha "$PR_HEAD_SHA" \
+            --arg requested_agent "$REQUESTED_AGENT" \
+            --arg agent_invocation_key "$INVOCATION_KEY" \
+            --arg requested_by "$REQUESTED_BY" \
+            --argjson source_comment_id "$SOURCE_COMMENT_ID" \
+            '{
+              event_type: "noema-review",
+              client_payload: {
+                target_repository: $target_repository,
+                pr_number: $pr_number,
+                pr_head_sha: $pr_head_sha,
+                requested_agent: $requested_agent,
+                agent_invocation_key: $agent_invocation_key,
+                requested_by: $requested_by,
+                source_comment_id: $source_comment_id
+              }
+            }' \
+            | gh api "repos/${GITHUB_REPOSITORY}/dispatches" -X POST --input -
