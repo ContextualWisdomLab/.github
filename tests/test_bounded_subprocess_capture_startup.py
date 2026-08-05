@@ -111,7 +111,7 @@ def test_capture_startup_failure_kills_reaps_finalizes_and_closes(
     assert process.wait_calls == 1
     assert process.stdout.closed
     assert process.stderr.closed
-    assert all(capture.join_calls == 1 for capture in captures)
+    assert all(capture.join_calls == 2 for capture in captures)
 
 
 def test_capture_startup_preserves_original_error_when_cleanup_fails(
@@ -154,6 +154,6 @@ def test_capture_startup_preserves_original_error_when_cleanup_fails(
 
     assert killed == [process]
     assert process.wait_calls == 1
-    assert capture.join_calls == 1
+    assert capture.join_calls == 2
     assert process.stdout.closed
     assert process.stderr.closed

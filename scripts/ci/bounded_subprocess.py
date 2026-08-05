@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import threading
+from contextlib import suppress
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -314,6 +315,28 @@ def _join_captures(captures: Sequence[BoundedOutputCapture]) -> None:
         raise first_error
 
 
+def _cleanup_capture_startup_failure(
+    process: subprocess.Popen[bytes],
+    captures: Sequence[BoundedOutputCapture],
+    streams: Sequence[BinaryIO],
+) -> None:
+    """Best-effort terminate, reap, finalize, and close partial startup state."""
+
+    with suppress(BaseException):
+        kill_process_group(process)
+    with suppress(BaseException):
+        process.wait(timeout=10)
+    for capture in captures:
+        with suppress(BaseException):
+            capture.join(timeout=10)
+    for stream in streams:
+        with suppress(BaseException):
+            stream.close()
+    for capture in captures:
+        with suppress(BaseException):
+            capture.join(timeout=10)
+
+
 def run_bounded_command(
     arguments: Sequence[object],
     *,
@@ -355,16 +378,24 @@ def run_bounded_command(
             limit_triggered.set()
             kill_process_group(process)
 
-    stdout_capture = start_bounded_capture(
-        process.stdout,
-        evidence_limit_bytes=evidence_limit,
-        on_limit=stop_for_limit,
-    )
-    stderr_capture = start_bounded_capture(
-        process.stderr,
-        evidence_limit_bytes=evidence_limit,
-        on_limit=stop_for_limit,
-    )
+    captures: list[BoundedOutputCapture] = []
+    streams = (process.stdout, process.stderr)
+    try:
+        stdout_capture = start_bounded_capture(
+            process.stdout,
+            evidence_limit_bytes=evidence_limit,
+            on_limit=stop_for_limit,
+        )
+        captures.append(stdout_capture)
+        stderr_capture = start_bounded_capture(
+            process.stderr,
+            evidence_limit_bytes=evidence_limit,
+            on_limit=stop_for_limit,
+        )
+        captures.append(stderr_capture)
+    except BaseException:  # noqa: BLE001 - preserve the startup root cause
+        _cleanup_capture_startup_failure(process, captures, streams)
+        raise
     timed_out = False
     try:
         process.wait(timeout=timeout_seconds)
