@@ -73,29 +73,31 @@ def _consume_json_string(text: str, start: int, *, depth: int) -> tuple[str, int
 def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, int]:
     """Inspect one identifier once and redact its assigned scalar when sensitive.
 
-    The returned index always advances beyond the identifier that was already
-    classified. That invariant prevents the historical suffix-by-suffix
-    rescanning behavior from becoming quadratic on a long ordinary token.
+    The returned index advances beyond the complete identifier that was already
+    classified. Identifiers larger than :data:`MAX_IDENTIFIER_CHARS` are never
+    copied into the credential-key matcher; when followed by an assignment they
+    are handled conservatively as sensitive. This preserves linear scanning,
+    bounds classification work, and prevents an oversized key from becoming a
+    redaction bypass.
     """
     if not (text[start].isalpha() or text[start] == "_"):
         return None, start + 1
 
     cursor = start + 1
-    identifier_end = min(len(text), start + MAX_IDENTIFIER_CHARS)
-    while cursor < identifier_end and (text[cursor].isalnum() or text[cursor] in "_-"):
+    while cursor < len(text) and (text[cursor].isalnum() or text[cursor] in "_-"):
         cursor += 1
-    if cursor < len(text) and cursor == identifier_end and (
-        text[cursor].isalnum() or text[cursor] in "_-"
-    ):
-        return None, cursor
 
-    key = text[start:cursor]
     assignment_cursor = cursor
     while assignment_cursor < len(text) and text[assignment_cursor].isspace():
         assignment_cursor += 1
     if assignment_cursor >= len(text) or text[assignment_cursor] not in "=:":
         return None, cursor
-    if not SENSITIVE_KEY_RE.search(key):
+
+    key_length = cursor - start
+    is_sensitive = key_length > MAX_IDENTIFIER_CHARS or bool(
+        SENSITIVE_KEY_RE.search(text[start:cursor])
+    )
+    if not is_sensitive:
         return None, cursor
 
     value_start = assignment_cursor + 1
