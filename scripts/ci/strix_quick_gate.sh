@@ -2641,6 +2641,20 @@ is_llm_service_unavailable_error() {
 	return 1
 }
 
+is_nvidia_nim_not_found_error() {
+	# Classify only one bounded LiteLLM provider-error line that also
+	# carries NVIDIA NIM context and model-catalog not-found evidence.
+	# Cross-line signal assembly and provider-like target source text
+	# remain non-retryable so application output cannot spoof fallback.
+	if grep -Ei 'litellm(\.exceptions)?\.NotFoundError' "$STRIX_LOG" |
+		grep -Ei '(Nvidia_nimException|nvidia[_ -]?nim|integrate\.api\.nvidia\.com)' |
+		grep -Eiq '(Error code:[[:space:]]*404|(^|[^0-9])404([^0-9]|$)|model[^[:alnum:]]+not found)'; then
+		return 0
+	fi
+
+	return 1
+}
+
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
 ## Four error families qualify:
@@ -2909,7 +2923,7 @@ is_midstream_fallback_error() {
 # (httpx, httpcore, requests). Used for generic transport failures where
 # library names alone are insufficient to prove the timeout/connection error
 # originated from an LLM provider rather than the target application.
-LLM_PROVIDER_ONLY_REGEX='(litellm|openai|anthropic|VertexAI|Vertex_ai|vertex\.ai|google\.cloud|GitHub Models|models\.github\.ai|github_models)'
+LLM_PROVIDER_ONLY_REGEX='(litellm|openai|anthropic|VertexAI|Vertex_ai|vertex\.ai|google\.cloud|Nvidia_nimException|nvidia_nim|integrate\.api\.nvidia\.com|GitHub Models|models\.github\.ai|github_models)'
 
 is_llm_token_limit_error() {
 	if grep -Eiq '(tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|(^|[^0-9])413([^0-9]|$))' "$STRIX_LOG" &&
@@ -2950,6 +2964,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
+		return 0
+	fi
+
+	if is_nvidia_nim_not_found_error; then
 		return 0
 	fi
 
@@ -3796,6 +3814,10 @@ is_model_retryable_error() {
 	local model="$1"
 
 	if is_vertex_model "$model" && is_vertex_not_found_error; then
+		return 0
+	fi
+
+	if is_nvidia_nim_not_found_error; then
 		return 0
 	fi
 
