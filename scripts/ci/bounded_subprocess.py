@@ -6,8 +6,8 @@ import os
 import signal
 import subprocess
 import threading
-from contextlib import suppress
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -19,6 +19,7 @@ DEFAULT_SERVICE_LOG_LIMIT_BYTES = 4_194_304
 MAXIMUM_OUTPUT_LIMIT_BYTES = 67_108_864
 MINIMUM_OUTPUT_LIMIT_BYTES = 4_096
 READ_CHUNK_BYTES = 65_536
+READER_JOIN_TIMEOUT_SECONDS = 30.0
 TRUNCATION_MARKER = "...[output truncated]...\n"
 
 
@@ -301,13 +302,16 @@ def kill_process_group(process: subprocess.Popen[bytes]) -> None:
         return
 
 
-def _join_captures(captures: Sequence[BoundedOutputCapture]) -> None:
-    """Finalize every stream reader while preserving the first reported failure."""
+def _join_captures(
+    captures: Sequence[BoundedOutputCapture],
+    timeout: float = READER_JOIN_TIMEOUT_SECONDS,
+) -> None:
+    """Finalize every stream reader within one finite per-reader deadline."""
 
     first_error: BaseException | None = None
     for capture in captures:
         try:
-            capture.join()
+            capture.join(timeout)
         except BaseException as error:  # noqa: BLE001 - re-raised after sibling join
             if first_error is None:
                 first_error = error
