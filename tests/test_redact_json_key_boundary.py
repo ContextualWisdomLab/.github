@@ -47,12 +47,53 @@ def test_concatenated_sensitive_json_keys_redact_their_values(
     """CamelCase and concatenated credential keys cannot retain plain values."""
     secret_value = "plain-secret"
 
-    redacted = redactor.redact_text(
-        json.dumps({sensitive_key: secret_value})
-    )
+    redacted = redactor.redact_text(json.dumps({sensitive_key: secret_value}))
 
     assert secret_value not in redacted
     assert redactor.REDACTED in redacted
+
+
+def test_leading_whitespace_does_not_bypass_structured_json_redaction() -> None:
+    """Indented JSON diagnostics retain indentation but never a sensitive value."""
+    secret_value = "plain-secret"
+
+    redacted = redactor.redact_text(
+        "   " + json.dumps({"clientSecret": secret_value}) + "\n"
+    )
+
+    assert redacted == f'   {{"clientSecret":"{redactor.REDACTED}"}}\n'
+    assert secret_value not in redacted
+
+
+def test_malformed_json_like_diagnostic_fails_closed() -> None:
+    """A JSON-looking line that cannot be parsed is replaced as one safe record."""
+    raw = '  {"clientSecret":"plain-secret"\n'
+
+    assert redactor.redact_text(raw) == f"  {redactor.REDACTED}\n"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "tool --token plain-secret --name safe",
+        'tool --password "plain secret" --name safe',
+        "tool --api-key 'plain secret' --name safe",
+    ],
+)
+def test_echoed_separate_sensitive_options_are_redacted(raw: str) -> None:
+    """Child-process command echoes cannot disclose separate option values."""
+    redacted = redactor.redact_text(raw)
+
+    assert "plain-secret" not in redacted
+    assert "plain secret" not in redacted
+    assert redactor.REDACTED in redacted
+
+
+def test_sensitive_option_without_value_does_not_consume_the_next_option() -> None:
+    """A missing value leaves the following option visible for diagnosis."""
+    raw = "tool --token --name safe"
+
+    assert redactor.redact_text(raw) == raw
 
 
 def test_long_ordinary_identifier_does_not_restart_assignment_scanning(
@@ -108,5 +149,21 @@ def test_json_parser_recursion_failure_redacts_the_entire_line(
 
     assert (
         redactor.redact_text('{"api_key":"plain-secret"}\n')
+        == f"{redactor.REDACTED}\n"
+    )
+
+
+def test_json_encoder_recursion_failure_redacts_the_entire_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An encoder recursion failure follows the same fail-closed line boundary."""
+
+    def raise_recursion(*_args, **_kwargs) -> str:
+        raise RecursionError("synthetic encoder recursion")
+
+    monkeypatch.setattr(redactor.json, "dumps", raise_recursion)
+
+    assert (
+        redactor.redact_text('{"message":"ordinary"}\n')
         == f"{redactor.REDACTED}\n"
     )
