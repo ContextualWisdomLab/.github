@@ -29,6 +29,25 @@ def test_clearfolio_caller_runs_once_each_hour() -> None:
     assert "NVIDIA_NIM_API_KEY" not in text
 
 
+def test_clearfolio_caller_scopes_write_permissions_to_reusable_job() -> None:
+    """Only the reusable scheduler job receives its required write permissions."""
+    text = _read(_CLEARFOLIO_CALLER)
+    workflow_scope, jobs_scope = text.split("\njobs:\n", maxsplit=1)
+
+    assert "actions: write" not in workflow_scope
+    assert "issues: write" not in workflow_scope
+    assert "contents: write" not in workflow_scope
+    assert "pull-requests: write" not in workflow_scope
+    assert "statuses: write" not in workflow_scope
+    assert "\npermissions:\n  contents: read\n" in workflow_scope
+    assert "\n    permissions:\n" in jobs_scope
+    assert "      actions: write\n" in jobs_scope
+    assert "      contents: read\n" in jobs_scope
+    assert "      issues: write\n" in jobs_scope
+    assert "      pull-requests: read\n" in jobs_scope
+    assert "      statuses: read\n" in jobs_scope
+
+
 def test_reusable_scheduler_has_no_product_specific_timer() -> None:
     """The shared scheduler stays modular while the caller owns product cadence."""
     text = _read(_REUSABLE_WORKFLOW)
