@@ -62,52 +62,9 @@ jobs:
           test "$status" -ne 0
           printf '%s\n' "$output" | grep -F 'substring not found'
 
-      - name: Apply permanent workflow, path, documentation, and cleanup changes
+      - name: Apply permanent workflow, documentation, and cleanup changes
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          scope_path = Path("scripts/ci/pr_review_conflict_scope.py")
-          source = scope_path.read_text(encoding="utf-8")
-          old_guard = '''    path = Path(raw_path)
-          if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-              raise ValueError("repository path must be a normalized relative path")
-          return raw_path
-          '''
-          new_guard = '''    path = Path(raw_path)
-          normalized_path = path.as_posix()
-          if (
-              path.is_absolute()
-              or normalized_path != raw_path
-              or any(part in {"", ".", ".."} for part in path.parts)
-          ):
-              raise ValueError("repository path must be a normalized relative path")
-          return raw_path
-          '''
-          if new_guard not in source:
-              if source.count(old_guard) != 1:
-                  raise SystemExit("relative-path validator drifted")
-              scope_path.write_text(source.replace(old_guard, new_guard, 1), encoding="utf-8")
-
-          test_path = Path("tests/test_pr_review_conflict_scope.py")
-          tests = test_path.read_text(encoding="utf-8")
-          old_cases = '''    ["", "/absolute", "../escape", "nested/../escape"],
-          '''
-          new_cases = '''    [
-              "",
-              "/absolute",
-              "../escape",
-              "nested/../escape",
-              "./relative",
-              "a//b",
-          ],
-          '''
-          if new_cases not in tests:
-              if tests.count(old_cases) != 1:
-                  raise SystemExit("invalid-path regression table drifted")
-              test_path.write_text(tests.replace(old_cases, new_cases, 1), encoding="utf-8")
-          PY
           python scripts/ci/repair_pr782_conflict_scope_once.py
           rm -f \
             .github/workflows/apply-pr782-artifact.yml \
