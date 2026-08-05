@@ -6,8 +6,8 @@ on:
     paths:
       - ".github/workflows/agent-mention-router.yml"
       - ".github/workflows/agent-mention-router-quality-ci.yml"
-      - ".github/workflows/noema-review.yml"
-      - ".github/workflows/pr-review-merge-scheduler.yml"
+      - ".github/workflows/agent-mention-noema-dispatch.yml"
+      - ".github/workflows/agent-mention-opencode-dispatch.yml"
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
       - "tests/test_agent_mention_*.py"
@@ -19,8 +19,8 @@ on:
     paths:
       - ".github/workflows/agent-mention-router.yml"
       - ".github/workflows/agent-mention-router-quality-ci.yml"
-      - ".github/workflows/noema-review.yml"
-      - ".github/workflows/pr-review-merge-scheduler.yml"
+      - ".github/workflows/agent-mention-noema-dispatch.yml"
+      - ".github/workflows/agent-mention-opencode-dispatch.yml"
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
       - "tests/test_agent_mention_*.py"
