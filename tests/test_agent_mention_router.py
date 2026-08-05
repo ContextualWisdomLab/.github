@@ -326,6 +326,7 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     ignored_path.write_text(json.dumps(event("nothing")), encoding="utf-8")
     assert module.main(["--event-path", str(ignored_path)]) == 0
     assert "nothing to dispatch" in capsys.readouterr().out
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
     with pytest.raises(SystemExit):
         module.main([])
     valid_path = tmp_path / "valid.json"
