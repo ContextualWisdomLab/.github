@@ -21,7 +21,7 @@ on:
       - "tests/test_uv_redirect_and_coverage_contract.py"
       - "tests/test_uv_redirect_boundary.py"
       - "tests/test_uv_workspace_fail_closed.py"
-      - "tests/test_opencode_libclang_toolchain_contract.py"
+      - "tests/test_opencode_llvm_toolchain_contract.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-python310-ci-hashes.txt"
@@ -50,7 +50,7 @@ on:
       - "tests/test_uv_redirect_and_coverage_contract.py"
       - "tests/test_uv_redirect_boundary.py"
       - "tests/test_uv_workspace_fail_closed.py"
-      - "tests/test_opencode_libclang_toolchain_contract.py"
+      - "tests/test_opencode_llvm_toolchain_contract.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-python310-ci-hashes.txt"
@@ -180,7 +180,7 @@ jobs:
             tests/test_uv_redirect_and_coverage_contract.py \
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
-            tests/test_opencode_libclang_toolchain_contract.py \
+            tests/test_opencode_llvm_toolchain_contract.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py \
             --cov=scripts.ci.coverage_failure_summary \
@@ -217,6 +217,6 @@ jobs:
             tests/test_uv_redirect_and_coverage_contract.py \
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
-            tests/test_opencode_libclang_toolchain_contract.py \
+            tests/test_opencode_llvm_toolchain_contract.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py
