@@ -46,6 +46,9 @@ def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> No
     assert "types: [agent-mention-opencode]" in opencode
     assert 'event_type: "merge-scheduler"' in opencode
     assert 'REQUESTED_AGENT: "opencode-agent"' in opencode
+    assert "^(?!-)" not in opencode
+    assert '[[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]' in opencode
+    assert '[[ "$BASE_BRANCH" == -* ]]' in opencode
 
 
 def test_quality_gate_tracks_every_idempotency_surface() -> None:
