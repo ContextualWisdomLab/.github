@@ -21,7 +21,6 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.actor == 'seonghobae' &&
       github.ref == 'refs/heads/fix/trusted-uv-lock-coverage-clean'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -43,7 +42,7 @@ jobs:
       - name: Verify immutable parent and apply bounded repair
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "c31feb128c2ac42e11e89a9d89a7bc3756c2be45"
+          test "$(git rev-parse HEAD^)" = "0edd9d44197ba2c7893deae29ba06fa6e189a8b2"
           python3 -I - <<'PY'
           from pathlib import Path
 
