@@ -45,6 +45,7 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
         assert fragment in workflow, fragment
 
     forbidden_fragments = (
+        "COPILOT_GITHUB_TOKEN",
         'STRIX_GITHUB_MODELS_TOKEN:',
         'MODEL: github-models/',
         'USE_GITHUB_TOKEN:',
