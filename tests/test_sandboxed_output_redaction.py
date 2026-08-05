@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
-from scripts.ci import sandboxed_verify, sandboxed_web_e2e
+from scripts.ci import bounded_subprocess, sandboxed_verify, sandboxed_web_e2e
 from scripts.ci.redact_sensitive_log import (
     REDACTED,
     redact_command_arguments,
@@ -85,7 +85,14 @@ def test_sandboxed_verify_redacts_completed_output_command_and_note(
     repository = tmp_path / "repository"
     repository.mkdir()
 
-    def fake_run_command(command, cwd, env, timeout):
+    def fake_run_command(
+        command,
+        cwd,
+        env,
+        timeout,
+        output_limit_bytes=bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+    ):
+        del cwd, env, timeout, output_limit_bytes
         return subprocess.CompletedProcess(
             command,
             0,
@@ -139,19 +146,33 @@ def test_sandboxed_web_e2e_redacts_commands_output_and_service_logs(
     repository = tmp_path / "repository"
     repository.mkdir()
 
-    def fake_start_service(label, command, cwd, env, logs_dir):
+    def fake_start_service(
+        label,
+        command,
+        cwd,
+        env,
+        logs_dir,
+        log_limit_bytes=bounded_subprocess.DEFAULT_SERVICE_LOG_LIMIT_BYTES,
+    ):
         del cwd, env
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"secret={token}\n", encoding="utf-8")
         return sandboxed_web_e2e.Service(
             label=label,
             command=command,
-            process=cast(subprocess.Popen[str], _DoneProcess()),
+            process=cast(subprocess.Popen[bytes], _DoneProcess()),
             log_path=log_path,
+            log_limit_bytes=log_limit_bytes,
         )
 
-    def fake_run_shell(command, cwd, env, timeout):
-        del cwd, env, timeout
+    def fake_run_shell(
+        command,
+        cwd,
+        env,
+        timeout,
+        output_limit_bytes=bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+    ):
+        del cwd, env, timeout, output_limit_bytes
         return subprocess.CompletedProcess(
             command,
             0,
