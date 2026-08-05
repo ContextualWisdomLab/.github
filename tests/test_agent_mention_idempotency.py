@@ -230,6 +230,29 @@ def test_existing_workflow_runs_are_per_agent_durable_evidence() -> None:
         module.dispatched_agents(mention_request, malformed)
 
 
+def test_workflow_run_inventory_edge_cases_fail_closed(monkeypatch) -> None:
+    """Empty, malformed, oversized, and unsupported run queries fail safely."""
+
+    module = load_module()
+    mention_request = request(module)
+
+    assert module._workflow_run_records(None) == ()
+    for malformed in ([], ["not-an-object"]):
+        with pytest.raises(ValueError, match="object pages"):
+            module._workflow_run_records(malformed)
+
+    monkeypatch.setattr(module, "MAX_WORKFLOW_RUN_RECORDS", 0)
+    with pytest.raises(ValueError, match="bounded record limit"):
+        module._workflow_run_records({"workflow_runs": [{}]})
+
+    with pytest.raises(ValueError, match="unsupported agent"):
+        module.dispatched_agents(
+            mention_request,
+            RunAwareClient(),
+            agents=("unknown-agent",),
+        )
+
+
 def test_partial_failure_retries_only_the_missing_agent() -> None:
     """A later dispatch failure never repeats an already materialized agent run."""
 
