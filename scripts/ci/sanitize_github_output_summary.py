@@ -53,5 +53,10 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def _entrypoint(module_name: str) -> None:
+    """Run the file-oriented CLI only when executed as a script."""
+    if module_name == "__main__":
+        raise SystemExit(main())
+
+
+_entrypoint(__name__)

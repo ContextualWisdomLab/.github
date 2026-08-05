@@ -626,7 +626,7 @@ is_supported_source_file() {
 
 is_dependency_manifest_path() {
 	case "$1" in
-	pom.xml | */pom.xml | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock)
+	pom.xml | */pom.xml | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock | Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock)
 		return 0
 		;;
 	*)
@@ -1193,6 +1193,7 @@ pull_request_scope_context_files() {
 		# creates an incomplete synthetic application and can turn valid imports in
 		# the real PR-head tree into false missing-module findings.
 		backend/scripts/* | backend/tests/*)
+			:
 			;;
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then

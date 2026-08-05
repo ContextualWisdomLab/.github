@@ -11,9 +11,7 @@ instead of failing coverage evidence.
 from __future__ import annotations
 
 import argparse
-import html
 import json
-import os
 import pathlib
 import re
 import subprocess
@@ -21,6 +19,11 @@ import sys
 import urllib.parse
 from typing import Any
 
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from scripts.ci.coverage_failure_summary import (
+    publish_coverage_failure_summary as _publish_coverage_failure_summary,
+)
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 PNPM_SPEC_RE = re.compile(r"^pnpm@[0-9]+\.[0-9]+\.[0-9]+(?:[+-][A-Za-z0-9._+-]+)?$")
@@ -424,37 +427,6 @@ def materialize(
         encoding="utf-8",
     )
     return manifest
-
-
-def _publish_coverage_failure_summary(
-    stage: str, error: BaseException, remediation: str
-) -> None:
-    """Publish bounded exact setup failure evidence for deterministic reviews."""
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    if not github_output:
-        return
-
-    delimiter = "CWL_COVERAGE_SUMMARY_EOF"
-    safe_stage = html.escape(" ".join(stage.split())[:256], quote=True).replace(
-        delimiter, "CWL_COVERAGE_SUMMARY_END"
-    )
-    safe_reason = html.escape(
-        f"{error.__class__.__name__}: {' '.join(str(error).split())}"[:4096],
-        quote=True,
-    ).replace(delimiter, "CWL_COVERAGE_SUMMARY_END")
-    safe_remediation = html.escape(
-        " ".join(remediation.split())[:1024], quote=True
-    ).replace(delimiter, "CWL_COVERAGE_SUMMARY_END")
-    summary = (
-        "## Coverage Decision\n"
-        "- Result: FAIL\n"
-        f"- Failed stage: {safe_stage}\n"
-        "- Exact failure:\n"
-        f"<pre>{safe_reason}</pre>\n"
-        f"- Next action: {safe_remediation}\n"
-    )
-    with pathlib.Path(github_output).open("a", encoding="utf-8") as output:
-        output.write(f"coverage_summary<<{delimiter}\n{summary}{delimiter}\n")
 
 
 def main(argv: list[str] | None = None) -> int:

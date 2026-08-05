@@ -1,9 +1,8 @@
-import runpy
 import sys
 
 import pytest
 
-from scripts.ci.sanitize_github_output_summary import sanitize_text
+from scripts.ci.sanitize_github_output_summary import _entrypoint, sanitize_text
 
 
 def test_sanitizes_secret_like_coverage_summary_values_without_losing_result():
@@ -68,7 +67,7 @@ def test_cli_writes_sanitized_summary(tmp_path, monkeypatch):
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        runpy.run_path("scripts/ci/sanitize_github_output_summary.py", run_name="__main__")
+        _entrypoint("__main__")
 
     assert excinfo.value.code == 0
     assert destination.read_text(encoding="utf-8") == "DATABASE_URL=<redacted>\n- Result: PASS\n"

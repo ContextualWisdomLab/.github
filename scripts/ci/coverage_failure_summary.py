@@ -5,23 +5,18 @@ from __future__ import annotations
 
 import html
 import os
-import runpy
-from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+
+from scripts.ci.sanitize_github_output_summary import sanitize_text
 
 _COVERAGE_DELIMITER = "CWL_COVERAGE_SUMMARY_EOF"
-_SANITIZER_NAMESPACE = runpy.run_path(
-    str(Path(__file__).with_name("sanitize_github_output_summary.py"))
-)
-_SANITIZE_TEXT = cast(Callable[[str], str], _SANITIZER_NAMESPACE["sanitize_text"])
 
 
 def _safe_field(value: str, maximum_length: int) -> str:
     """Normalize, redact, bound, escape, and delimiter-proof one output field."""
 
     normalized = " ".join(value.split())
-    redacted = _SANITIZE_TEXT(normalized)[:maximum_length]
+    redacted = sanitize_text(normalized)[:maximum_length]
     escaped = html.escape(redacted, quote=True)
     return escaped.replace(
         _COVERAGE_DELIMITER,
