@@ -51,3 +51,18 @@ Fielding, R. T., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 911
 Nottingham, M., & Fielding, R. (2012). *Additional HTTP status codes* (RFC 6585). RFC Editor. https://doi.org/10.17487/RFC6585
 
 Python Software Foundation. (2026). *urllib.error—Exception classes raised by urllib.request*. Python 3.14 documentation. https://docs.python.org/3/library/urllib.error.html
+
+## Closed retry classification
+
+The retryable HTTP set is exactly `408`, `425`, `429`, `500`, `502`, `503`, and
+`504`. Transport retries are limited to temporary DNS (`EAI_AGAIN`), timeout,
+connection reset/refused/aborted, and explicit host or network unavailable
+errors. Certificate verification, other TLS failures, permanent DNS, malformed
+`URLError.reason`, local permission errors, and every unclassified `OSError`
+fail after one attempt.
+
+Each attempt repeats the same literal Astral URL and exact timeout. A failed
+response body is scoped to that attempt, so partial bytes are discarded before
+retry. Diagnostics expose only a bounded HTTP status, transport errno, or
+exception class and never exception text, URL-derived credentials, headers, or
+body content.

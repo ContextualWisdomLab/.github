@@ -182,6 +182,37 @@ def test_trusted_uv_download_retries_temporary_dns_failure(
     assert sleeps == [1.0]
 
 
+def test_trusted_uv_download_retries_timeout_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real timeout receives one bounded retry with the exact request."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen(
+            [TimeoutError(errno.ETIMEDOUT, "timed out"), _ChunkedResponse([b"ok", b""])],
+            calls,
+        ),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"ok"
+    assert calls == [
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        ),
+    ]
+    assert sleeps == [1.0]
+
+
 def test_trusted_uv_download_retries_connection_reset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

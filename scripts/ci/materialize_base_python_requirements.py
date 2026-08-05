@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import errno
 import fnmatch
 import functools
 import hashlib
@@ -15,6 +16,8 @@ import pathlib
 import platform
 import re
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -61,7 +64,19 @@ TRUSTED_UV_ARCHIVE_MEMBER = "uv-x86_64-unknown-linux-gnu/uv"
 TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
 TRUSTED_UV_DOWNLOAD_RETRY_DELAYS_SECONDS = (1.0, 2.0)
 TRUSTED_UV_RETRYABLE_HTTP_STATUS = frozenset(
-    {408, 429, 500, 502, 503, 504}
+    {408, 425, 429, 500, 502, 503, 504}
+)
+TRUSTED_UV_TRANSIENT_ERRNO = frozenset(
+    {
+        errno.ECONNABORTED,
+        errno.ECONNREFUSED,
+        errno.ECONNRESET,
+        errno.EHOSTUNREACH,
+        errno.ENETDOWN,
+        errno.ENETRESET,
+        errno.ENETUNREACH,
+        errno.ETIMEDOUT,
+    }
 )
 TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
@@ -304,6 +319,32 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     return completed.stdout
 
 
+def _transport_failure_root(error: BaseException) -> BaseException:
+    """Return the bounded diagnostic root for one transport exception."""
+    if (
+        isinstance(error, urllib.error.URLError)
+        and isinstance(error.reason, BaseException)
+    ):
+        return error.reason
+    return error
+
+
+def _transient_transport_failure_label(
+    error: BaseException,
+) -> str | None:
+    """Return bounded evidence only for provably transient transport failures."""
+    root = _transport_failure_root(error)
+    if isinstance(root, (ssl.SSLCertVerificationError, ssl.SSLError)):
+        return None
+    if isinstance(root, socket.gaierror):
+        return "temporary DNS" if root.errno == socket.EAI_AGAIN else None
+    if isinstance(root, TimeoutError):
+        return "timeout"
+    if isinstance(root, OSError) and root.errno in TRUSTED_UV_TRANSIENT_ERRNO:
+        return f"transport errno {root.errno}"
+    return None
+
+
 def _download_trusted_uv_archive() -> bytes:
     """Download the fixed archive with bounded transient transport retries."""
     _install_trusted_uv_url_opener()
@@ -342,7 +383,13 @@ def _download_trusted_uv_archive() -> bytes:
             failure_label = f"HTTP {exc.code}"
             failure: BaseException = exc
         except (urllib.error.URLError, OSError) as exc:
-            failure_label = type(exc).__name__
+            failure_label = _transient_transport_failure_label(exc)
+            if failure_label is None:
+                root = _transport_failure_root(exc)
+                raise RuntimeError(
+                    "trusted uv archive download failed: "
+                    f"{type(root).__name__}"
+                ) from exc
             failure = exc
 
         if attempt == attempt_limit:
