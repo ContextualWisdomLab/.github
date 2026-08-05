@@ -75,10 +75,24 @@ class FakeClient:
         self.calls: list[tuple[list[str], dict | None]] = []
 
     def request(self, args, *, input_payload=None):
-        """Record one request and return no response body."""
+        """Record one request and return an empty run inventory for reads."""
 
         self.calls.append((list(args), input_payload))
+        if args[0].endswith("/runs"):
+            return {"workflow_runs": []}
         return None
+
+
+def repository_dispatch_calls(
+    client: FakeClient,
+) -> list[tuple[list[str], dict]]:
+    """Return only mutation calls that enqueue central repository dispatches."""
+
+    return [
+        (args, payload)
+        for args, payload in client.calls
+        if args[0].endswith("/dispatches") and payload is not None
+    ]
 
 
 def test_exact_mentions_and_parse_event() -> None:
@@ -224,13 +238,14 @@ def test_dispatch_uses_central_events_and_acknowledges() -> None:
         opencode_allowlist=frozenset({request.repository}),
     )
     assert result == ("@cwl-noema-review", "@opencode-agent")
-    assert [payload["event_type"] for _, payload in central.calls] == [
+    dispatches = repository_dispatch_calls(central)
+    assert [payload["event_type"] for _, payload in dispatches] == [
         "noema-review",
         "merge-scheduler",
     ]
     assert all(
         args[0] == "repos/ContextualWisdomLab/.github/dispatches"
-        for args, _ in central.calls
+        for args, _ in dispatches
     )
     assert target.calls[0][1] == {"content": "eyes"}
     assert "cwl-agent-mention-receipt:91" in target.calls[1][1]["body"]
@@ -283,7 +298,9 @@ def test_dispatch_noema_only_covers_non_opencode_path() -> None:
         dispatch_client=central,
         opencode_allowlist=frozenset(),
     ) == ("@cwl-noema-review",)
-    assert central.calls[0][1]["event_type"] == "noema-review"
+    dispatches = repository_dispatch_calls(central)
+    assert len(dispatches) == 1
+    assert dispatches[0][1]["event_type"] == "noema-review"
 
 
 def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
