@@ -75,6 +75,11 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python scripts/ci/finalize_pr790_transport.py
+          rm -f \
+            .github/workflows/finalize-pr790-transport.yml \
+            .github/workflows/repair-pr790-closed-classifier.yml \
+            .github/workflows/repair-pr790-transport-classification.yml \
+            scripts/ci/finalize_pr790_transport.py
           git diff --check
 
       - name: Verify focused and complete quality contracts
@@ -101,6 +106,7 @@ jobs:
           rm -f \
             .github/workflows/export-pr790-final-source.yml \
             .github/workflows/finalize-pr790-transport.yml \
+            .github/workflows/repair-pr790-closed-classifier.yml \
             .github/workflows/repair-pr790-transport-classification.yml \
             scripts/ci/finalize_pr790_transport.py
           git config user.name "github-actions[bot]"
