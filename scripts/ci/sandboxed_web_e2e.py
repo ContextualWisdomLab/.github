@@ -155,12 +155,17 @@ def start_service(
         bounded_subprocess.kill_process_group(process)
         process.wait()
         raise RuntimeError("service output pipe was not created")
-    capture = bounded_subprocess.start_bounded_capture(
-        process.stdout,
-        evidence_limit_bytes=log_limit,
-        on_limit=lambda: bounded_subprocess.kill_process_group(process),
-        destination=log_path,
-    )
+    try:
+        capture = bounded_subprocess.start_bounded_capture(
+            process.stdout,
+            evidence_limit_bytes=log_limit,
+            on_limit=lambda: bounded_subprocess.kill_process_group(process),
+            destination=log_path,
+        )
+    except BaseException:  # noqa: BLE001 - reap the child before preserving failure
+        bounded_subprocess.kill_process_group(process)
+        process.wait()
+        raise
     return Service(
         label=label,
         command=command,
@@ -382,7 +387,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                             end="",
                             file=sys.stderr,
                         )
-                    output_limited = completed.output_limited
+                    output_limited = bool(
+                        getattr(completed, "output_limited", False)
+                    )
                     if output_limited:
                         print(
                             "sandboxed-web-e2e: E2E output exceeded "
