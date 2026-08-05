@@ -251,6 +251,8 @@ def agent_invocation_marker(request: MentionRequest, agent: str) -> str:
 def _workflow_run_records(value: Any) -> tuple[dict[str, Any], ...]:
     """Validate and flatten bounded ``gh --paginate --slurp`` workflow runs."""
 
+    if value is None:
+        return ()
     pages = value if isinstance(value, list) else [value]
     if not pages or not all(isinstance(page, dict) for page in pages):
         raise ValueError("workflow-run response must contain object pages")
