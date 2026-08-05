@@ -28,17 +28,19 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     local, sweep = jobs.split("\n  sweep-organization-agent-mentions:\n", 1)
     assert "route-local-agent-mention:" in local
     assert "github.repository == 'ContextualWisdomLab/.github'" in local
-    assert (
-        "permissions:\n"
-        "      contents: write\n"
-        "      issues: write\n"
-        "      pull-requests: read"
-    ) in local
+    for permission in (
+        "actions: read",
+        "contents: write",
+        "issues: write",
+        "pull-requests: read",
+    ):
+        assert f"      {permission}" in local
     assert "ref: ${{ github.event.repository.default_branch }}" in local
     assert "TARGET_REPOSITORY_TOKEN: ${{ github.token }}" in local
-    assert "conversation_comments" in local
+    assert "conversation_comments" not in local
 
-    assert "permissions:\n      contents: write\n      id-token: write" in sweep
+    for permission in ("actions: read", "contents: write", "id-token: write"):
+        assert f"      {permission}" in sweep
     assert "github.repository == 'ContextualWisdomLab/.github'" in sweep
     assert "github.event_name == 'schedule'" in sweep
     assert "github.event_name == 'workflow_dispatch'" in sweep
