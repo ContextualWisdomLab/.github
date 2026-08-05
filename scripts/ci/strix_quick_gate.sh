@@ -609,7 +609,10 @@ copy_pr_head_blob_to_file() {
 
 is_supported_source_file() {
 	case "$1" in
-	*.java | *.kt | *.kts | *.groovy | *.scala | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
+	# Rust is an application security boundary for Tauri and native services. Keep changed Rust
+	# sources in the same PR-head scope as frontend IPC wrappers so findings are not inferred from
+	# an incomplete client-only view.
+	*.java | *.kt | *.kts | *.groovy | *.scala | *.rs | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
 		return 0
 		;;
 	Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile)
@@ -1185,6 +1188,12 @@ pull_request_scope_context_files() {
 	for changed_file in "$@"; do
 		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
 		case "$normalized_changed_file" in
+		# Standalone support tools and their tests are not application runtime
+		# surfaces. Injecting the backend router/service inventory for these files
+		# creates an incomplete synthetic application and can turn valid imports in
+		# the real PR-head tree into false missing-module findings.
+		backend/scripts/* | backend/tests/*)
+			;;
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then
 				needs_backend_python=1
