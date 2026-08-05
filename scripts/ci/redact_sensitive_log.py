@@ -5,15 +5,18 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import sys
 from typing import Any, Sequence
 
 
 REDACTED = "[REDACTED]"
 SENSITIVE_KEY_RE = re.compile(
-    r"(?i)(?:api[_-]?key|access[_-]?key|auth|authorization|bearer|credential|jwt|password|passwd|private[_-]?key|secret|session[_-]?key|token)"
+    r"(?i)(?:api[_-]?key|access[_-]?key|auth|authorization|bearer|credential|"
+    r"jwt|password|passwd|private[_-]?key|secret|session[_-]?key|token)"
 )
 SENSITIVE_OPTION_RE = re.compile(
-    r"(?i)^--?(?:api[_-]?key|auth|authorization|bearer|credential|password|passwd|private[_-]?key|secret|session[_-]?key|token)$"
+    r"(?i)^--?(?:api[_-]?key|auth|authorization|bearer|credential|password|"
+    r"passwd|private[_-]?key|secret|session[_-]?key|token)$"
 )
 SENSITIVE_SEPARATE_OPTION_RE = re.compile(
     r"(?i)(?P<prefix>(?<![A-Za-z0-9_-])--?(?:api[_-]?key|auth|authorization|"
@@ -48,6 +51,9 @@ PROVIDER_TOKEN_RES = (
     re.compile(r"\bnvapi-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
 )
+QUOTED_REDACTED_ASSIGNMENT_RE = re.compile(
+    r"(?P<prefix>[=:]\s*)(?P<quote>[\"'])\[REDACTED\](?P=quote)?$"
+)
 MAX_IDENTIFIER_CHARS = 4096
 MAX_JSON_DEPTH = 64
 
@@ -62,7 +68,9 @@ def _redact_scalar(value: str) -> str:
         lambda match: match.group(1) + REDACTED,
         redacted,
     )
-    redacted = BEARER_BASIC_RE.sub(lambda match: f"{match.group(1)} {REDACTED}", redacted)
+    redacted = BEARER_BASIC_RE.sub(
+        lambda match: f"{match.group(1)} {REDACTED}", redacted
+    )
     redacted = JWT_RE.sub(REDACTED, redacted)
     for pattern in PROVIDER_TOKEN_RES:
         redacted = pattern.sub(REDACTED, redacted)
@@ -107,7 +115,9 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, in
         return None, start + 1
 
     cursor = start + 1
-    while cursor < len(text) and (text[cursor].isalnum() or text[cursor] in "_-"):
+    while cursor < len(text) and (
+        text[cursor].isalnum() or text[cursor] in "_-"
+    ):
         cursor += 1
 
     assignment_cursor = cursor
@@ -145,8 +155,22 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, in
             value_end += 1
         return prefix + quote + REDACTED, len(text)
 
+    if text[value_start] in ",;}":
+        return None, cursor
+
+    scheme_match = BEARER_BASIC_RE.match(text, value_start)
+    if scheme_match is not None:
+        return (
+            prefix + scheme_match.group(1) + " " + REDACTED,
+            scheme_match.end(),
+        )
+
     value_end = value_start
-    while value_end < len(text) and not text[value_end].isspace() and text[value_end] not in ",;}":
+    while (
+        value_end < len(text)
+        and not text[value_end].isspace()
+        and text[value_end] not in ",;}"
+    ):
         value_end += 1
     return prefix + REDACTED, value_end
 
@@ -176,7 +200,12 @@ def _redact_unstructured(text: str, *, depth: int = 0) -> str:
         replacement, next_cursor = _consume_sensitive_assignment(text, cursor)
         if replacement is not None:
             output.append(_redact_scalar(text[plain_start:cursor]))
-            output.append(replacement)
+            output.append(
+                QUOTED_REDACTED_ASSIGNMENT_RE.sub(
+                    lambda match: match.group("prefix") + REDACTED,
+                    replacement,
+                )
+            )
             cursor = next_cursor
             plain_start = cursor
             continue
@@ -256,7 +285,9 @@ def _redact_assignment(argument: str) -> str:
     if "=" not in argument:
         return argument
     key, separator, value = argument.partition("=")
-    if value and (SENSITIVE_KEY_RE.search(key) or SENSITIVE_OPTION_RE.match(key)):
+    if value and (
+        SENSITIVE_KEY_RE.search(key) or SENSITIVE_OPTION_RE.match(key)
+    ):
         return f"{key}{separator}{REDACTED}"
     return argument
 
@@ -283,9 +314,19 @@ def redact_command_arguments(arguments: Sequence[str]) -> list[str]:
 
 
 def redact_shell_command(command: str) -> str:
-    """Return a printable shell command while preserving the command execution."""
+    """Return a printable shell command while preserving command execution."""
     try:
         arguments = shlex.split(command, posix=True)
     except ValueError:
         return _redact_unstructured(command)
     return shlex.join(redact_command_arguments(arguments))
+
+
+def main() -> int:
+    """Redact standard input to standard output for workflow pipelines."""
+    sys.stdout.write(redact_text(sys.stdin.read()))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
