@@ -5,10 +5,7 @@ from __future__ import annotations
 
 import sys
 
-try:
-    import pr_review_fix_scheduler as scheduler
-except ModuleNotFoundError:
-    from scripts.ci import pr_review_fix_scheduler as scheduler
+from scripts.ci import pr_review_fix_scheduler as scheduler
 
 NIM_AUTOFIX_WORKFLOW = "nvidia-nim-pr-review-autofix.yml"
 NIM_AUTOFIX_EVENT_TYPE = "nvidia-nim-pr-review-autofix"
