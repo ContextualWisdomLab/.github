@@ -12,6 +12,7 @@ import io
 import json
 import os
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
@@ -188,7 +189,14 @@ def _download_trusted_uv_archive() -> bytes:
                     "trusted uv archive redirected outside the fixed "
                     "releases.astral.sh HTTPS origin"
                 )
-            payload = response.read(TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1)
+            payload = bytearray()
+            while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
+                chunk = response.read(
+                    TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload)
+                )
+                if not chunk:
+                    break
+                payload.extend(chunk)
     except OSError as exc:
         raise RuntimeError(
             f"trusted uv archive download failed: {type(exc).__name__}"
@@ -196,7 +204,7 @@ def _download_trusted_uv_archive() -> bytes:
 
     if len(payload) > TRUSTED_UV_DOWNLOAD_MAX_BYTES:
         raise RuntimeError("trusted uv archive exceeded the bounded download size")
-    return payload
+    return bytes(payload)
 
 
 def _verified_uv_binary(archive_payload: bytes) -> bytes:
@@ -230,8 +238,11 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
 @functools.cache
 def _install_trusted_uv() -> str:
     """Install and verify the pinned uv exporter once for this process."""
+    if sys.platform != "linux" or platform.machine() != "x86_64":
+        raise RuntimeError(
+            "the pinned trusted uv archive supports only linux x86_64 runners"
+        )
     tool_dir = pathlib.Path(tempfile.mkdtemp(prefix="opencode-trusted-uv-"))
-    tool_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     uv_path = tool_dir / "uv"
     try:
         uv_path.write_bytes(_verified_uv_binary(_download_trusted_uv_archive()))
