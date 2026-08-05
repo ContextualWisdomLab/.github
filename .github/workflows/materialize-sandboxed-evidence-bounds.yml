@@ -1,4 +1,5 @@
 name: Materialize focused sandbox evidence bounds
+run-name: Materialize sandbox evidence bounds at ${{ github.sha }}
 
 on:
   push:
@@ -17,6 +18,7 @@ jobs:
   materialize:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
+      && github.actor == 'seonghobae'
       && github.ref == 'refs/heads/fix/sandboxed-evidence-bounds-main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -45,8 +47,10 @@ jobs:
       - name: Import immutable focused source
         env:
           SOURCE_SHA: 45e4929e1fc473211168b2d6360c9da2516e5341
+          EXPECTED_MAIN: f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
+          test "$(git merge-base "$GITHUB_SHA" main)" = "$EXPECTED_MAIN"
           git cat-file -e "${SOURCE_SHA}^{commit}"
           git checkout "$SOURCE_SHA" -- \
             docs/doctoring/sandboxed-command-log-redaction.md \
