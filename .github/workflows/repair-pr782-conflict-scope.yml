@@ -9,7 +9,7 @@ on:
       - scripts/ci/repair_pr782_conflict_scope_once.py
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: repair-pr782-conflict-scope-${{ github.ref }}
@@ -18,10 +18,13 @@ concurrency:
 jobs:
   repair:
     if: >-
-      github.repository == 'ContextualWisdomLab/.github'
-      && github.ref == 'refs/heads/fix/hourly-nvidia-nim-review-repair-main'
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/hourly-nvidia-nim-review-repair-main'
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -32,24 +35,36 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify exact repair input
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object scripts/ci/repair_pr782_conflict_scope_once.py)" = \
+            "c36039d16ffc47e33a28c64a1101891d70c8c3d0"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
 
       - name: Install hash-locked test tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
 
       - name: Apply the reviewed permanent repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: python scripts/ci/repair_pr782_conflict_scope_once.py
 
       - name: Verify behavior, coverage, docstrings, syntax, and workflow order
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          set -euo pipefail
           python -m pytest -q \
             tests/test_pr_review_conflict_scope.py \
             tests/test_pr_review_fix_hourly_contract.py \
@@ -74,15 +89,17 @@ jobs:
 
       - name: Publish the verified repair commit
         env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: fix/hourly-nvidia-nim-review-repair-main
           GH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
           git commit -m "fix(automation): bound conflict repair writes"
-          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
-          echo "::add-mask::$auth_header"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            push origin "HEAD:${GITHUB_REF_NAME}"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
