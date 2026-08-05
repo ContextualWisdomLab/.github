@@ -12,6 +12,7 @@ from pathlib import Path
 from textwrap import dedent
 
 
+# This branch-only source exists solely to trigger and apply the bounded repair.
 WORKFLOW_PATH = Path(".github/workflows/pr-review-autofix.yml")
 DOCTORING_PATH = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG_PATH = Path("CHANGELOG.md")
