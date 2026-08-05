@@ -407,7 +407,7 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+            "STRIX_MODEL": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
             "STRIX_MODEL_REQUESTED": "",
             "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
             "STRIX_OPENROUTER_API_KEY": "",

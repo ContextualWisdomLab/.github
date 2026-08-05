@@ -1,0 +1,165 @@
+name: Trusted uv Materializer Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
+      - "scripts/ci/materialize_base_python_requirements.py"
+      - "tests/conftest.py"
+      - "tests/test_materialize*.py"
+      - "tests/test_trusted_uv*.py"
+      - "tests/test_uv*.py"
+      - "tests/test_repository_branch_coverage_*.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
+      - "scripts/ci/materialize_base_python_requirements.py"
+      - "tests/conftest.py"
+      - "tests/test_materialize*.py"
+      - "tests/test_trusted_uv*.py"
+      - "tests/test_uv*.py"
+      - "tests/test_repository_branch_coverage_*.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
+
+concurrency:
+  group: trusted-uv-materializer-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  minimum-python-contract:
+    name: Python 3.10 compatibility contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up minimum supported Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Compile production on Python 3.10
+        run: python -m compileall -q scripts/ci/materialize_base_python_requirements.py
+
+      - name: Exercise the conditional tomli import
+        run: |
+          python - <<'PY'
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          stub_root = Path(tempfile.mkdtemp(prefix="trusted-uv-tomli-stub-"))
+          (stub_root / "tomli.py").write_text(
+              "STUB_MARKER = True\n"
+              "class TOMLDecodeError(ValueError):\n"
+              "    pass\n"
+              "def loads(_value):\n"
+              "    return {}\n",
+              encoding="utf-8",
+          )
+          sys.path.insert(0, str(stub_root))
+          from scripts.ci import materialize_base_python_requirements as materializer
+
+          assert materializer.tomllib.STUB_MARKER is True
+          PY
+
+  full-quality-gate:
+    name: Python 3.14 full quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run trusted uv tests with complete branch coverage
+        run: |
+          cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/materialize_base_python_requirements.py
+
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/trusted-uv-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_materialize_uv_export_hash_contract.py \
+            tests/test_trusted_uv_download_contract.py \
+            tests/test_trusted_uv_portability_and_streaming.py \
+            tests/test_uv_export_isolation_contract.py \
+            tests/test_uv_redirect_and_coverage_contract.py \
+            tests/test_uv_redirect_boundary.py \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_trusted_uv_materializer_quality_workflow_contract.py \
+            -q
+          python -m coverage report
+
+      - name: Run complete central test and branch coverage gate
+        run: |
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+
+      - name: Enforce complete production docstrings
+        run: python -m interrogate --fail-under 100 scripts/ci/materialize_base_python_requirements.py
+
+      - name: Compile production and quality contracts
+        run: |
+          python -m compileall -q \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_materialize_uv_export_hash_contract.py \
+            tests/test_trusted_uv_download_contract.py \
+            tests/test_trusted_uv_portability_and_streaming.py \
+            tests/test_uv_export_isolation_contract.py \
+            tests/test_uv_redirect_and_coverage_contract.py \
+            tests/test_uv_redirect_boundary.py \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_trusted_uv_materializer_quality_workflow_contract.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_review_schedulers.py \
+            tests/test_repository_branch_coverage_execution_sandboxes.py \
+            tests/test_repository_branch_coverage_reporting_edges.py
