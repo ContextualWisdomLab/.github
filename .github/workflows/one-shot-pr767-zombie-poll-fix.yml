@@ -1,0 +1,132 @@
+name: One-shot PR 767 completed-process polling fix
+
+on:
+  push:
+    branches: [fix/sandboxed-output-resource-bounds]
+    paths:
+      - .github/workflows/one-shot-pr767-zombie-poll-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-pr767-zombie-poll-fix
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout contributor branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/sandboxed-output-resource-bounds
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact locked quality tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply completed-process polling repair
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          script_path = Path("scripts/ci/run_opencode_review_model_pool.sh")
+          script = script_path.read_text(encoding="utf-8")
+          old_loop = 'while kill -0 "$opencode_pid" 2>/dev/null; do\n'
+          new_loop = 'while jobs -pr | grep -Fxq "$opencode_pid"; do\n'
+          if script.count(old_loop) != 1:
+              raise SystemExit(
+                  f"expected one kill-zero polling loop, found {script.count(old_loop)}"
+              )
+          script_path.write_text(script.replace(old_loop, new_loop, 1), encoding="utf-8")
+
+          test_path = Path("tests/test_opencode_model_pool_runner.py")
+          test_source = test_path.read_text(encoding="utf-8")
+          old_test = '''def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:
+              """Model prose mentioning fatal signatures never kills a healthy streaming run."""
+              result = run_failed_model(
+                  tmp_path,
+                  json_line=(
+                      '{"type":"text","text":"This PR hardens ContextOverflowError and '
+                      'context window handling in the model pool."}'
+                  ),
+                  extra_env={"FAKE_OPENCODE_HANG_SECONDS": "4"},
+              )
+
+              assert result.returncode == 1
+              assert "logged a fatal provider error while still running" not in result.stdout
+          '''.replace("          ", "")
+          new_test = '''def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:
+              """Model prose mentioning fatal signatures never kills or strands a healthy run."""
+              start = time.monotonic()
+              result = run_failed_model(
+                  tmp_path,
+                  json_line=(
+                      '{"type":"text","text":"This PR hardens ContextOverflowError and '
+                      'context window handling in the model pool."}'
+                  ),
+                  extra_env={"FAKE_OPENCODE_HANG_SECONDS": "4"},
+              )
+              elapsed = time.monotonic() - start
+
+              assert result.returncode == 1
+              assert "logged a fatal provider error while still running" not in result.stdout
+              assert elapsed < 15
+          '''.replace("          ", "")
+          if test_source.count(old_test) != 1:
+              raise SystemExit(
+                  f"expected one healthy-stream regression, found {test_source.count(old_test)}"
+              )
+          test_path.write_text(
+              test_source.replace(old_test, new_test, 1), encoding="utf-8"
+          )
+          PY
+
+      - name: Verify focused regression and complete quality contract
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_opencode_model_pool_runner.py::test_fatal_provider_error_kills_hung_opencode_run_early \
+            tests/test_opencode_model_pool_runner.py::test_model_text_quoting_error_signatures_does_not_kill_run \
+            tests/test_opencode_model_pool_runner.py::test_delisted_openrouter_model_error_kills_hung_run_early
+          python -m coverage erase
+          python -m coverage run -m pytest -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci
+          python -m compileall -q scripts tests
+          bash -n scripts/ci/run_opencode_review_model_pool.sh
+          git diff --check
+
+      - name: Publish verified repair and remove one-shot workflow
+        env:
+          BRANCH_NAME: fix/sandboxed-output-resource-bounds
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-pr767-zombie-poll-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            scripts/ci/run_opencode_review_model_pool.sh \
+            tests/test_opencode_model_pool_runner.py \
+            .github/workflows/one-shot-pr767-zombie-poll-fix.yml
+          git diff --cached --quiet && { echo "No completed-process polling repair generated" >&2; exit 1; }
+          git commit -m "fix(opencode): reap completed model attempts"
+          git push origin "HEAD:${BRANCH_NAME}"
