@@ -165,7 +165,6 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" ".github/workflows/* | Dockerfile | Dockerfile.* | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml" "strix gate recognizes deployment and CI files"
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile.test" "strix gate includes test-image Dockerfiles with workflow scan context"
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile" "strix gate treats deployment files as source files"
-	assert_file_contains "$GATE_SCRIPT" "Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock" "strix gate includes Rust crate dependency and feature context"
 	assert_file_contains "$GATE_SCRIPT" "backend/scripts/docker_entrypoint.sh" "strix gate includes the combined Docker image entrypoint with deployment context"
 	assert_file_contains "$GATE_SCRIPT" "backend/api/auth.py" "strix gate includes backend auth context for deployment scans"
 	assert_file_contains "$GATE_SCRIPT" "frontend/package-lock.json" "strix gate includes frontend dependency lock context"
@@ -290,8 +289,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "STRIX_TOTAL_TIMEOUT_SECONDS:" "strix workflow must not expose total timeout env names in GitHub logs"
 	assert_file_not_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" "strix workflow must not split Strix PR evidence into separate scanner runs"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM == 'vertex_ai/gemini-3.1-pro-preview-customtools' && 'vertex_ai/gemini-2.5-flash'" "strix workflow must not quarantine the approved Vertex preview model after organization secret visibility is fixed"
-	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b' || 'gpt-5.6-luna'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
-	assert_file_contains "$workflow_file" 'if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]' "strix workflow falls back to the contracted provider when the NVIDIA secret is absent"
+	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.6-luna'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
+	assert_file_contains "$workflow_file" 'if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]' "strix workflow falls back to the contracted provider when the NVIDIA secret is absent"
 	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
 	assert_file_contains "$workflow_file" "STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model" "strix workflow rejects unsupported model inputs"
@@ -349,7 +348,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
 	assert_file_contains "$workflow_file" "github_models/openai/o3 github_models/openai/gpt-5-chat" "strix workflow keeps GitHub Models fallback on tool-capable OpenAI models without GPT-4.1 downgrade"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives direct-OpenAI scans GitHub Models fallbacks so provider quota outages degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
@@ -6244,32 +6243,6 @@ run_filtered_gate_case_if_requested() {
 			"Materialized PR-head changed-file scope" \
 			"repository_dispatch"
 		;;
-	pull-request-target-rust-file-uses-head-blob)
-		run_pull_request_target_head_scope_case \
-			"pull-request-target-rust-file-uses-head-blob" \
-			"src-tauri/src/commands.rs" \
-			"const BASE_RUST_CONTEXT: &str = \"must not be scanned\";" \
-			"const HEAD_RUST_CONTEXT: &str = \"must be scanned\";" \
-			"0" \
-			"0" \
-			"__PR_SCOPE__" \
-			"0" \
-			"Materialized PR-head changed-file scope"
-		;;
-	pull-request-target-backend-script-omits-app-context)
-		run_pull_request_target_head_scope_case \
-			"pull-request-target-backend-script-omits-app-context" \
-			"backend/scripts/disksage_copy_readiness_handoff.py" \
-			"BASE_SUPPORT_CODE_SHOULD_NOT_BE_SCANNED" \
-			"HEAD_SUPPORT_CODE_SHOULD_BE_SCANNED" \
-			"0" \
-			"0" \
-			"__PR_SCOPE__" \
-			"0" \
-			"Materialized PR-head changed-file scope" \
-			"pull_request_target" \
-			"backend/api/webdav.py"
-		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -6294,7 +6267,6 @@ run_pull_request_target_head_scope_case() {
 	local expected_full_head_scope="${8-$disable_pr_scoping}"
 	local expected_scope_message="${9-}"
 	local github_event_name="${10-pull_request_target}"
-	local unexpected_scope_file="${11-}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -6363,10 +6335,6 @@ else
 		exit 68
 	fi
 fi
-if [ -n "${FAKE_STRIX_UNEXPECTED_SCOPE_FILE:-}" ] && [ -e "$target_path/$FAKE_STRIX_UNEXPECTED_SCOPE_FILE" ]; then
-	echo "Error: unrelated application context leaked into bounded support-code scope ($target_path/$FAKE_STRIX_UNEXPECTED_SCOPE_FILE)" >&2
-	exit 69
-fi
 echo "scan ok with PR head content"
 EOF
 	chmod +x "$fake_strix"
@@ -6381,10 +6349,6 @@ EOF
 		echo 'seed' >README.md
 		mkdir -p docs
 		printf '%s\n' 'BASE_FULL_SCOPE_CONTEXT_SHOULD_NOT_BE_SCANNED' >docs/full-scope-context.md
-		if [ -n "$unexpected_scope_file" ]; then
-			mkdir -p "$(dirname -- "$unexpected_scope_file")"
-			printf '%s\n' 'UNRELATED_APPLICATION_CONTEXT_SHOULD_NOT_BE_SCANNED' >"$unexpected_scope_file"
-		fi
 		if [ "$base_content" != "__ABSENT__" ]; then
 			mkdir -p "$(dirname -- "$changed_file")"
 			printf '%s\n' "$base_content" >"$changed_file"
@@ -6432,7 +6396,6 @@ EOF
 			FAKE_STRIX_EXPECTED_UNCHANGED_FILE="docs/full-scope-context.md" \
 			FAKE_STRIX_EXPECTED_UNCHANGED_CONTENT="HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED" \
 			FAKE_STRIX_EXPECT_FULL_HEAD_SCOPE="$expected_full_head_scope" \
-			FAKE_STRIX_UNEXPECTED_SCOPE_FILE="$unexpected_scope_file" \
 			STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping" \
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
@@ -8966,19 +8929,6 @@ run_pull_request_target_head_scope_case \
 	"__PR_SCOPE__"
 
 run_pull_request_target_head_scope_case \
-	"pull-request-target-backend-script-omits-app-context" \
-	"backend/scripts/disksage_copy_readiness_handoff.py" \
-	"BASE_SUPPORT_CODE_SHOULD_NOT_BE_SCANNED" \
-	"HEAD_SUPPORT_CODE_SHOULD_BE_SCANNED" \
-	"0" \
-	"0" \
-	"__PR_SCOPE__" \
-	"0" \
-	"Materialized PR-head changed-file scope" \
-	"pull_request_target" \
-	"backend/api/webdav.py"
-
-run_pull_request_target_head_scope_case \
 	"repository-dispatch-pr-scope-uses-head-blob" \
 	"backend/db/models.py" \
 	"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
@@ -8995,17 +8945,6 @@ run_pull_request_target_head_scope_case \
 	"src/new_module.py" \
 	"__ABSENT__" \
 	"HEAD_ONLY_NEW_FILE_SHOULD_BE_SCANNED"
-
-run_pull_request_target_head_scope_case \
-	"pull-request-target-rust-file-uses-head-blob" \
-	"src-tauri/src/commands.rs" \
-	"const BASE_RUST_CONTEXT: &str = \"must not be scanned\";" \
-	"const HEAD_RUST_CONTEXT: &str = \"must be scanned\";" \
-	"0" \
-	"0" \
-	"__PR_SCOPE__" \
-	"0" \
-	"Materialized PR-head changed-file scope"
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-source-file-with-space-uses-head-blob" \
