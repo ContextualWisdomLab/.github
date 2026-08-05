@@ -67,6 +67,14 @@ def test_unstructured_patterns_cover_basic_jwt_and_provider_values() -> None:
     assert redactor.redact_text(provider_value) == redactor.REDACTED
 
 
+def test_unstructured_output_redacts_separate_sensitive_option_values() -> None:
+    """A child that echoes a separate secret option must not disclose its value."""
+
+    assert redactor.redact_text(
+        "running tool --api-key ordinary-value --mode safe"
+    ) == "running tool --api-key [REDACTED] --mode safe"
+
+
 def test_command_argument_redaction_preserves_non_sensitive_options() -> None:
     """Only explicit sensitive option values and credential shapes are replaced."""
 
