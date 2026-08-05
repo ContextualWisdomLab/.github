@@ -305,10 +305,19 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
     return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
 
 
+@functools.cache
+def _trusted_git_executable() -> str:
+    """Return Git resolved only from the operating system's default path."""
+    resolved = shutil.which("git", path=os.defpath)
+    if resolved is None or not os.path.isabs(resolved):
+        raise RuntimeError("trusted Git executable could not be resolved absolutely")
+    return resolved
+
+
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     """Run one read-only git command in the materialized repository."""
     completed = subprocess.run(
-        ["git", "-C", str(repo_root), *args],
+        [_trusted_git_executable(), "-C", str(repo_root), *args],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

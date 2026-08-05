@@ -28,6 +28,8 @@ The following conditions are never retried:
 
 A response body belongs to one attempt only. Partial bytes read before a transient failure are discarded before the next attempt. Retry exhaustion reports only a bounded HTTP status, transport errno, or exception class and the attempt count. It never includes exception text, URLs, response bodies, headers, credentials, or URL-derived user information.
 
+The base-commit reader resolves `git` with `shutil.which("git", path=os.defpath)` and accepts only an absolute result. The ambient process `PATH` cannot select the executable; missing or relative resolution fails before any repository command runs.
+
 ## Incident evidence
 
 Central OpenCode coverage run `31002427460` for `ContextualWisdomLab/newsdom-api#524` reached the exact trusted-uv materialization stage and failed with `trusted uv archive download failed: HTTPError`. The source PR changed only `AGENTS.md`; all repository-local checks were successful. A later workflow in the same operating window downloaded the pinned uv release successfully, supporting a bounded transient-retry response rather than weakening the immutable bootstrap or bypassing coverage.
