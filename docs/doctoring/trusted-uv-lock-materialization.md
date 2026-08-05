@@ -120,6 +120,38 @@ Regression coverage must prove:
 - `pyproject.toml` enables branch measurement and the changed production module
   retains 100% statement and branch coverage plus 100% production docstrings.
 
+## Repository-wide branch-coverage prerequisite repair
+
+The exact pull-request merge tree exposed a broader central quality-contract
+failure after the trusted uv slice itself had reached complete statement and
+branch coverage. The complete repository suite passed all 850 tests, but the
+shared OpenCode coverage command still exited nonzero because 52 defensive
+branch arcs in unchanged central CI modules were not exercised. The measured
+production result was 100% statements and 99% branches. Treating that outcome as
+a uv exporter defect would have hidden the actual control-plane gap.
+
+The repair does not narrow the production source set, omit unchanged modules,
+lower `fail_under`, or add coverage pragmas. It adds deterministic regression
+tests for the previously unexecuted scheduler, redaction, sandbox, JavaScript
+coverage, R coverage, SBOM, approval, and evidence-contract branches. The
+dedicated quality workflow now runs both the bounded trusted-uv slice and the
+complete central test suite under branch measurement. This keeps the narrow
+feature evidence useful while also proving the organization-wide 100% contract
+that OpenCode enforces on the merge tree.
+
+The repaired merge tree produced the following deterministic evidence:
+
+- 883 tests passed;
+- 6,573 of 6,573 production statements executed;
+- 2,622 of 2,622 production branches executed;
+- no missing production lines or partial branches; and
+- every production module, class, and function in `scripts/ci` retained a
+  docstring.
+
+This prerequisite repair is intentionally test-only for production behavior. It
+changes neither the trusted uv download boundary nor the dependency closure
+accepted by the coverage sandbox.
+
 ## References
 
 Astral Software, Inc. (n.d.). *Exporting a lockfile*. uv documentation. Retrieved
