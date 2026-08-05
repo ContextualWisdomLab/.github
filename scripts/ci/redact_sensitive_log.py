@@ -145,6 +145,10 @@ def _redact_unstructured(text: str, *, depth: int = 0) -> str:
     if depth > 8:
         return _redact_scalar(text)
 
+    text = SENSITIVE_SEPARATE_OPTION_RE.sub(
+        lambda match: match.group("prefix") + REDACTED,
+        text,
+    )
     output: list[str] = []
     cursor = 0
     plain_start = 0
