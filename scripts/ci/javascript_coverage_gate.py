@@ -23,6 +23,12 @@ EXCLUDED_PARTS = {
     "tests",
 }
 TEST_NAME_RE = re.compile(r"\.(?:spec|test)\.[cm]?[jt]sx?$")
+TOOL_CONFIG_NAME_RE = re.compile(
+    r"^(?:ava|babel|build|cypress|eslint|jest|karma|next|nyc|playwright|"
+    r"prettier|rollup|tsup|vite|vitest|webpack)"
+    r"(?:\.[a-z0-9_-]+)*\.config\.[cm]?[jt]sx?$"
+)
+VERIFICATION_SCRIPT_PREFIXES = ("check-", "verify-")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
@@ -59,6 +65,29 @@ def git(repo_root: Path, *args: str) -> str:
     return completed.stdout.decode("utf-8", errors="surrogateescape")
 
 
+def is_repository_verification_script(path: PurePosixPath) -> bool:
+    """Return whether ``path`` is a non-product check under a scripts directory.
+
+    Package and repository verification commands commonly live in a top-level
+    or module-level ``scripts`` directory. They are executable CI tooling, but
+    they are not application runtime modules and are often validated by a
+    separate command-level test contract rather than imported by Vitest. A
+    ``scripts`` directory nested below ``src`` remains runtime scope so a
+    product module cannot evade changed-line coverage merely by its directory
+    name.
+    """
+    directory_parts = tuple(part.casefold() for part in path.parts[:-1])
+    name = path.name.casefold()
+    for index, part in enumerate(directory_parts):
+        if part != "scripts":
+            continue
+        return (
+            "src" not in directory_parts[:index]
+            and name.startswith(VERIFICATION_SCRIPT_PREFIXES)
+        )
+    return False
+
+
 def is_runtime_source(path: str) -> bool:
     """Return whether a changed path is instrumentable runtime JS/TS source."""
     normalized = PurePosixPath(path)
@@ -70,15 +99,9 @@ def is_runtime_source(path: str) -> bool:
         return False
     if lowered_parts & EXCLUDED_PARTS:
         return False
-    if name in {
-        "eslint.config.js",
-        "next.config.js",
-        "next.config.mjs",
-        "vite.config.js",
-        "vite.config.ts",
-        "vitest.config.js",
-        "vitest.config.ts",
-    }:
+    if TOOL_CONFIG_NAME_RE.fullmatch(name):
+        return False
+    if is_repository_verification_script(normalized):
         return False
     return True
 
