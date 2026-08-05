@@ -1,0 +1,278 @@
+name: Repair requirements-directory lock discovery
+
+on:
+  push:
+    branches:
+      - fix/coverage-materialize-requirements-directory-locks
+    paths:
+      - .github/workflows/repair-requirements-directory-locks.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-requirements-directory-locks
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor != 'github-actions[bot]' &&
+      github.ref == 'refs/heads/fix/coverage-materialize-requirements-directory-locks'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify exact RED parent
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD^)" = "8344a2b2e24d6952fe2442e68b9ee514cb1d7ee8"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Preserve the failing nested-lock contract
+        shell: bash --noprofile --norc {0}
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest -q \
+            tests/test_requirements_directory_lock_materialization.py \
+            >"${RUNNER_TEMP}/requirements-directory-red.log" 2>&1
+          status=$?
+          set -e
+          cat "${RUNNER_TEMP}/requirements-directory-red.log"
+          test "$status" -ne 0
+          grep -F '_is_candidate_lock_path' \
+            "${RUNNER_TEMP}/requirements-directory-red.log"
+
+      - name: Implement the reviewed direct-child discovery boundary
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path("scripts/ci/materialize_base_python_requirements.py")
+          source = source_path.read_text(encoding="utf-8")
+          old_function = '''def _is_candidate_lock_name(name: str) -> bool:
+              """Return whether a file name is a possible pip requirements lock."""
+              return name == "requirements.lock" or (
+                  fnmatch.fnmatch(name, "requirements*.txt")
+                  and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+              )
+          '''.replace("          ", "")
+          new_function = old_function + '''
+
+          def _is_candidate_lock_path(path: pathlib.PurePosixPath) -> bool:
+              """Return whether one safe tracked path can name a pip requirements lock.
+
+              In addition to conventional ``requirements*.txt`` names, repositories
+              commonly keep concrete environment closures as direct children such as
+              ``requirements/ci.txt`` or ``service/requirements/package.txt``.  Only
+              direct ``.txt`` children of a directory named ``requirements`` gain this
+              path-based eligibility; content must still pass the independent complete
+              hash-pin validation before it reaches the trusted image build context.
+              """
+              return _is_candidate_lock_name(path.name) or (
+                  path.suffix == ".txt" and path.parent.name == "requirements"
+              )
+          '''.replace("          ", "")
+          if source.count(old_function) != 1:
+              raise SystemExit("expected one candidate-name function anchor")
+          source = source.replace(old_function, new_function, 1)
+          old_call = "        if _is_candidate_lock_name(candidate.name):\n"
+          new_call = "        if _is_candidate_lock_path(candidate):\n"
+          if source.count(old_call) != 1:
+              raise SystemExit("expected one candidate-path call anchor")
+          source_path.write_text(source.replace(old_call, new_call, 1), encoding="utf-8")
+
+          workflow_path = Path(
+              ".github/workflows/trusted-uv-materializer-quality-ci.yml"
+          )
+          workflow = workflow_path.read_text(encoding="utf-8")
+          path_anchor = '      - "tests/test_materialize*.py"\n'
+          path_replacement = (
+              path_anchor
+              + '      - "tests/test_requirements_directory_lock_materialization.py"\n'
+          )
+          if workflow.count(path_anchor) != 2:
+              raise SystemExit("expected two materializer path-filter anchors")
+          workflow = workflow.replace(path_anchor, path_replacement)
+          pytest_anchor = (
+              "            tests/test_materialize_uv_export_hash_contract.py \\\n"
+          )
+          pytest_replacement = (
+              pytest_anchor
+              + "            tests/test_requirements_directory_lock_materialization.py \\\n"
+          )
+          if workflow.count(pytest_anchor) != 1:
+              raise SystemExit("expected one focused pytest anchor")
+          workflow = workflow.replace(pytest_anchor, pytest_replacement, 1)
+          compile_anchor = (
+              "            tests/test_materialize_uv_export_hash_contract.py \\\n"
+          )
+          compile_replacement = (
+              compile_anchor
+              + "            tests/test_requirements_directory_lock_materialization.py \\\n"
+          )
+          if workflow.count(compile_anchor) != 1:
+              raise SystemExit("expected one compile target anchor after pytest update")
+          workflow_path.write_text(
+              workflow.replace(compile_anchor, compile_replacement, 1),
+              encoding="utf-8",
+          )
+
+          doctoring = Path(
+              "docs/doctoring/trusted-requirements-directory-lock-discovery.md"
+          )
+          doctoring.write_text(
+              """# Trusted requirements-directory lock discovery
+
+## Decision
+
+The central OpenCode coverage image materializes dependency closures only from
+regular files in the authenticated pull-request base commit. In addition to the
+conventional `requirements*.txt` and `requirements.lock` names, it recognizes a
+`.txt` file that is a **direct child** of a directory named `requirements`, such
+as `requirements/ci.txt` or `services/scoring_service/requirements/package.txt`.
+
+The path rule grants candidate status only. The existing content boundary still
+requires nonempty hash-pinned logical requirements, the manifest records the
+exact trusted source path, and the image installer preflights each candidate as
+an independently installable `pip --require-hashes` closure. Unpinned notes,
+input files, nested descendants, symlinks, pull-request-only files, and malformed
+Git tree entries remain excluded.
+
+## Operational reason
+
+Concrete environment locks are frequently organized below a `requirements`
+directory and may use role names such as `ci.txt` or `package.txt`. Ignoring those
+safe base-owned locks leaves the isolated coverage environment without runtime
+dependencies even though the repository already maintains a complete generated
+closure. The result is a misleading collection failure such as a missing NumPy
+import rather than evidence about the changed production code.
+
+## Verification
+
+- A failing contract first proved that `requirements/ci.txt` was undiscoverable.
+- Direct `requirements/*.txt` and nested-service equivalents are accepted.
+- A deeper `requirements/nested/ci.txt` path and unrelated `docs/ci.txt` remain
+  ineligible.
+- Only the hash-pinned candidate is emitted from a realistic temporary Git base;
+  unpinned `.in` and human-readable `.txt` files remain absent.
+- The focused materializer suite, complete central suite, statement/branch
+  coverage, docstring gate, compilation, and exact-head security workflows are
+  required before merge.
+
+## References
+
+Python Packaging Authority. (2026). *Install requires vs requirements files*.
+Python Packaging User Guide.
+https://packaging.python.org/en/latest/discussions/install-requires-vs-requirements/
+
+Python Packaging Authority. (2026). *Repeatable installs*. pip documentation.
+https://pip.pypa.io/en/stable/topics/repeatable-installs/
+
+Python Packaging Authority. (2026). *Requirements file format*. pip
+documentation.
+https://pip.pypa.io/en/stable/reference/requirements-file-format/
+""",
+              encoding="utf-8",
+          )
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          fixed_anchor = "### Fixed\n\n"
+          entry = (
+              "- Materialize complete hash-pinned `requirements/ci.txt` and other "
+              "direct `requirements/*.txt` base-owned closures so isolated "
+              "OpenCode coverage can import repository runtime dependencies "
+              "without trusting pull-request metadata or broadening network access.\n"
+          )
+          if changelog.count(fixed_anchor) != 1:
+              raise SystemExit("expected one Unreleased Fixed anchor")
+          changelog_path.write_text(
+              changelog.replace(fixed_anchor, fixed_anchor + entry, 1),
+              encoding="utf-8",
+          )
+          PY
+          git diff --check
+
+      - name: Run focused and complete quality gates
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/requirements-directory-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/materialize_base_python_requirements.py
+
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/requirements-directory-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest -q \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_materialize_uv_export_hash_contract.py \
+            tests/test_requirements_directory_lock_materialization.py \
+            tests/test_trusted_uv_download_contract.py \
+            tests/test_trusted_uv_portability_and_streaming.py \
+            tests/test_uv_export_isolation_contract.py \
+            tests/test_uv_redirect_and_coverage_contract.py \
+            tests/test_uv_redirect_boundary.py \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_trusted_uv_materializer_quality_workflow_contract.py
+          python -m coverage report
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run --branch -m pytest tests -q
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under 100 \
+            scripts/ci/materialize_base_python_requirements.py
+          python -m compileall -q \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_requirements_directory_lock_materialization.py
+
+      - name: Publish verified product change and remove temporary machinery
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          git rm .github/workflows/repair-requirements-directory-locks.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 1
+          git commit -m "fix(coverage): materialize requirements directory locks"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push origin "HEAD:refs/heads/fix/coverage-materialize-requirements-directory-locks"
