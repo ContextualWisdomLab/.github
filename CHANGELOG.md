@@ -14,8 +14,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Security
 
 - Upgrade the central Strix dependency snapshots to `aiohttp==3.14.3`, `cryptography==50.0.0`, and the compatible `pyOpenSSL==26.4.0` closure so the hard dependency gates contain no known affected releases.
-- Redact credentials from every sandbox evidence publication sink, including completed and timed-out process output, service log tails, commands, reviewer notes, nested JSON values, and JSON object keys.
-- Bound structured-diagnostic traversal and replace over-deep subtrees or parser/encoder recursion failures with fail-closed redacted evidence instead of crashing or retrying through weaker handling.
+- Redact credentials from every sandbox evidence publication sink, including completed and timed-out process output, service log tails, structured and echoed commands, reviewer notes, nested JSON values, and JSON object keys.
+- Redact separate sensitive-option values echoed by child processes, concatenated or CamelCase credential-key values, and conservatively classified oversized assignments.
+- Bound structured-diagnostic traversal and replace malformed JSON-looking records, over-deep subtrees, or parser/encoder recursion failures with fail-closed redacted evidence instead of crashing or retrying through weaker handling.
 - Keep pull-request-controlled code outside the mention-router trust boundary, retain least-privilege workflow permissions, validate reusable workflow sources immutably, and preserve default-branch dependency snapshots for meaningful dependency review.
 
 ### Fixed
