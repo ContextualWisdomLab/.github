@@ -36,6 +36,23 @@ def test_sanitizes_url_credentials_without_secret_key_prefix():
     assert sanitized == "postgresql://<redacted>@db:5432/app\n"
 
 
+def test_sanitizes_mixed_credentials_before_truncating_at_secret_key():
+    """Mixed URL, Authorization, and key-value secrets are all removed."""
+    source = (
+        "failure https://alice:url-secret@example.invalid/a.tgz "
+        "Authorization: Bearer bearer-secret TOKEN=token-secret trailing context\n"
+    )
+
+    sanitized = sanitize_text(source)
+
+    assert "https://<redacted>@example.invalid/a.tgz" in sanitized
+    assert "Authorization: Bearer <redacted>" in sanitized
+    assert "TOKEN=<redacted>" in sanitized
+    assert "url-secret" not in sanitized
+    assert "bearer-secret" not in sanitized
+    assert "token-secret" not in sanitized
+
+
 def test_cli_writes_sanitized_summary(tmp_path, monkeypatch):
     source = tmp_path / "coverage.md"
     destination = tmp_path / "coverage-output.md"
