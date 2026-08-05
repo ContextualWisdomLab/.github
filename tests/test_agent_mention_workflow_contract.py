@@ -4,6 +4,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router.yml"
+QUALITY_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "agent-mention-router-quality-ci.yml"
+)
 CHECKOUT_PIN = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
 
 
@@ -44,3 +47,14 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "TARGET_REPOSITORY_SOURCE" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
     assert "agent_mention_sweep.py" in sweep
+
+
+def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:
+    """Coverage includes the two script paths instead of treating paths as modules."""
+
+    text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+    coverage_config = text.split("[run]\n", 1)[1].split("[report]\n", 1)[0]
+    assert "include =" in coverage_config
+    assert "source =" not in coverage_config
+    assert "scripts/ci/agent_mention_router.py" in coverage_config
+    assert "scripts/ci/agent_mention_sweep.py" in coverage_config
