@@ -22,6 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
+from scripts.ci.redact_sensitive_log import redact_shell_command, redact_text
 
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
@@ -110,6 +111,7 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        shell=False,
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
@@ -136,7 +138,7 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
 
 
 def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run a shell command and capture its output."""
+    """Run a shell-style command without invoking a shell and capture output."""
     return subprocess.run(
         shlex.split(command),
         cwd=cwd,
@@ -146,6 +148,7 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
+        shell=False,
     )
 
 
@@ -165,11 +168,11 @@ def stop_service(service: Service) -> None:
 
 
 def tail_text(path: Path, max_lines: int = 80) -> str:
-    """Return the final lines of a service log."""
+    """Return redacted final lines of a service log."""
     if not path.exists():
         return ""
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(lines[-max_lines:])
+    return redact_text("\n".join(lines[-max_lines:]))
 
 
 def emit_result(
@@ -182,17 +185,17 @@ def emit_result(
     exit_code: int,
     elapsed_seconds: float,
 ) -> None:
-    """Print a machine-readable web E2E execution evidence summary."""
+    """Print machine-readable web E2E evidence without credential values."""
     payload = {
-        "backend_cmd": args.backend_cmd,
+        "backend_cmd": redact_shell_command(args.backend_cmd),
         "backend_ready": backend_ready,
         "allowed_env": sorted(set(args.allow_env)),
         "cwd": str(copied_repo),
-        "e2e_cmd": args.e2e_cmd,
+        "e2e_cmd": redact_shell_command(args.e2e_cmd),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": args.evidence_note,
+        "evidence_note": redact_text(args.evidence_note),
         "exit_code": exit_code,
-        "frontend_cmd": args.frontend_cmd,
+        "frontend_cmd": redact_shell_command(args.frontend_cmd),
         "frontend_ready": frontend_ready,
         "network": args.network,
         "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
@@ -232,9 +235,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
             return exit_code
         except subprocess.TimeoutExpired as exc:
