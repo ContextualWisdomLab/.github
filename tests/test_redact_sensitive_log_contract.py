@@ -81,6 +81,12 @@ def test_command_argument_redaction_preserves_non_sensitive_options() -> None:
     assert redactor.redact_command_arguments(
         ["tool", "--mode=safe", "--token"]
     ) == ["tool", "--mode=safe", "--token"]
+    assert redactor.redact_command_arguments(
+        ["docker", "run", "-e", "TOKEN", "image"]
+    ) == ["docker", "run", "-e", "TOKEN", "image"]
+    assert redactor.redact_command_arguments(
+        ["tool", "--token", "credential-value", "image"]
+    ) == ["tool", "--token", redactor.REDACTED, "image"]
     assert redactor.redact_shell_command("") == ""
 
 
