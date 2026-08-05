@@ -24,20 +24,25 @@ line evidence.
 
 ## Root cause
 
-Vitest produces coverage for files selected by its coverage configuration and
-for modules loaded during the test run. Its current documented defaults exclude
-common test files and tool configuration names, and the resolved configuration
-also excludes the actual configuration file used for the run. A central gate
-that independently reclassifies those files as application runtime creates an
-impossible contract: the repository test runner correctly omits the tool file,
-but the central post-processor interprets the omission as missing product
-instrumentation.
+Inkspan's locked test toolchain uses Vitest 3.2.7. That exact release enables
+coverage for matching source modules while its versioned defaults exclude test
+files, declarations, generated output, dependency trees, and recognized tool
+configuration names. A central gate that independently reclassifies those files
+as application runtime creates an impossible contract: the repository test
+runner correctly omits the tool file, but the central post-processor interprets
+the omission as missing product instrumentation.
 
 The former classifier recognized only a few exact names such as
 `vite.config.ts`. It therefore failed on a valid profile-qualified configuration
 name such as `vite.autosave.config.ts`. It also treated bounded package
 verification commands as shipped product modules even though those commands are
 exercised through separate command-level CI contracts.
+
+Vitest 4 subsequently simplified its generic coverage defaults and emphasizes
+an explicit `coverage.include` boundary. The central classifier therefore does
+not copy either release's mutable glob list wholesale. It preserves a narrow,
+repository-owned product-runtime contract that remains stable across supported
+runner versions.
 
 ## Fail-closed boundary
 
@@ -101,10 +106,10 @@ conformity is claimed.
 
 Vitest's current coverage documentation distinguishes V8 and Istanbul providers,
 describes JSON coverage reporting, and recommends an explicit source inclusion
-boundary. Its versioned configuration reference enumerates default exclusions
-for tests, declarations, build output, dependencies, and recognized tool
-configuration files. The central rule mirrors that semantic boundary without
-copying a mutable glob set wholesale.
+boundary. The exact 3.2.7 source used by Inkspan records the older release's
+resolved exclusions for tests, declarations, build output, dependencies, and
+recognized tool configuration files. The central rule mirrors the product/tool
+semantic boundary without inheriting a mutable third-party glob set.
 
 NIST SSDF 1.1 requires producers to define, maintain, and verify secure software
 development practices and to address root causes so defects do not recur. The
@@ -127,6 +132,6 @@ Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218
 Vitest. (n.d.). *Coverage*. Retrieved August 5, 2026, from
 https://main.vitest.dev/guide/coverage
 
-Vitest. (n.d.). *Coverage configuration defaults* (Version 3.2.4) [Computer
-software documentation]. GitHub. Retrieved August 5, 2026, from
-https://github.com/vitest-dev/vitest/blob/v3.2.4/docs/config/index.md
+Vitest. (2025). *Coverage configuration defaults* (Version 3.2.7) [Computer
+software source code]. GitHub. Retrieved August 5, 2026, from
+https://github.com/vitest-dev/vitest/blob/v3.2.7/packages/vitest/src/defaults.ts
