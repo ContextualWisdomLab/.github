@@ -1,0 +1,349 @@
+name: Repair PR 790 closed transport classifier
+run-name: Repair PR 790 closed classifier at ${{ github.sha }}
+
+on:
+  push:
+    branches:
+      - fix/trusted-uv-transient-download-retry
+    paths:
+      - .github/workflows/repair-pr790-closed-classifier.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr790-closed-classifier
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/trusted-uv-transient-download-retry'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact trigger head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 20
+          persist-credentials: false
+
+      - name: Verify bounded repair lineage
+        env:
+          EXPECTED_PARENT: 5603f0133f20779bc4771bbb163eb7664238004f
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          mapfile -t changed_paths < <(git diff --name-only "$EXPECTED_PARENT" "$GITHUB_SHA")
+          test "${#changed_paths[@]}" -eq 1
+          test "${changed_paths[0]}" = ".github/workflows/repair-pr790-closed-classifier.yml"
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked verification tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Complete test-first transport matrix
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_trusted_uv_portability_and_streaming.py")
+          source = path.read_text(encoding="utf-8")
+          for name in (
+              "test_trusted_uv_download_retries_timeout_failure",
+              "test_trusted_uv_download_rejects_malformed_urlerror_reason",
+              "test_transient_transport_classifier_rejects_unrelated_exception",
+          ):
+              if name in source:
+                  raise SystemExit(f"unexpected existing test: {name}")
+          anchor = '''
+
+          @pytest.mark.parametrize(
+              ("runner_platform", "runner_machine"),
+          '''.replace("          ", "")
+          addition = '''
+
+          def test_trusted_uv_download_retries_timeout_failure(
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              """A real timeout receives one bounded retry with the exact request."""
+              calls: list[tuple[str, int]] = []
+              sleeps: list[float] = []
+              monkeypatch.setattr(
+                  materializer.urllib.request,
+                  "urlopen",
+                  _scripted_urlopen(
+                      [TimeoutError(errno.ETIMEDOUT, "timed out"), _ChunkedResponse([b"ok", b""])],
+                      calls,
+                  ),
+              )
+              monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+              assert materializer._download_trusted_uv_archive() == b"ok"
+              assert calls == [
+                  (
+                      materializer.TRUSTED_UV_ARCHIVE_URL,
+                      materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+                  ),
+                  (
+                      materializer.TRUSTED_UV_ARCHIVE_URL,
+                      materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+                  ),
+              ]
+              assert sleeps == [1.0]
+
+
+          def test_trusted_uv_download_rejects_malformed_urlerror_reason(
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              """A non-exception URLError reason is permanent and never interpreted."""
+              calls: list[tuple[str, int]] = []
+              sleeps: list[float] = []
+              monkeypatch.setattr(
+                  materializer.urllib.request,
+                  "urlopen",
+                  _scripted_urlopen([urllib.error.URLError("malformed reason")], calls),
+              )
+              monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+              with pytest.raises(RuntimeError, match=r"URLError$"):
+                  materializer._download_trusted_uv_archive()
+
+              assert len(calls) == 1
+              assert sleeps == []
+
+
+          def test_transient_transport_classifier_rejects_unrelated_exception() -> None:
+              """An unrelated exception cannot become retryable transport evidence."""
+              assert materializer._transient_transport_failure_label(ValueError()) is None
+          '''.replace("          ", "")
+          if source.count(anchor) != 1:
+              raise SystemExit("test insertion anchor drifted")
+          path.write_text(source.replace(anchor, addition + anchor, 1), encoding="utf-8")
+          PY
+
+          set +e
+          python -m pytest -q tests/test_trusted_uv_portability_and_streaming.py \
+            >"${RUNNER_TEMP}/pr790-red.log" 2>&1
+          red_status=$?
+          set -e
+          cat "${RUNNER_TEMP}/pr790-red.log"
+          test "$red_status" -ne 0
+          grep -F 'retries_only_closed_http_status_set[425]' "${RUNNER_TEMP}/pr790-red.log"
+          grep -F '_transient_transport_failure_label' "${RUNNER_TEMP}/pr790-red.log"
+
+      - name: Implement closed transient classifier
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/materialize_base_python_requirements.py")
+          source = path.read_text(encoding="utf-8")
+          replacements = (
+              (
+                  "import argparse\nimport atexit\n",
+                  "import argparse\nimport atexit\nimport errno\n",
+              ),
+              (
+                  "import shutil\nimport subprocess\nimport sys\n",
+                  "import shutil\nimport socket\nimport ssl\nimport subprocess\nimport sys\n",
+              ),
+              (
+                  "    {408, 429, 500, 502, 503, 504}\n",
+                  "    {408, 425, 429, 500, 502, 503, 504}\n",
+              ),
+          )
+          for old, new in replacements:
+              if source.count(old) != 1:
+                  raise SystemExit(f"production replacement anchor drifted: {old!r}")
+              source = source.replace(old, new, 1)
+
+          constant_anchor = "TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024\n"
+          constant_block = '''TRUSTED_UV_TRANSIENT_ERRNO = frozenset(
+              {
+                  errno.ECONNABORTED,
+                  errno.ECONNREFUSED,
+                  errno.ECONNRESET,
+                  errno.EHOSTUNREACH,
+                  errno.ENETDOWN,
+                  errno.ENETRESET,
+                  errno.ENETUNREACH,
+                  errno.ETIMEDOUT,
+              }
+          )
+          '''.replace("          ", "")
+          if source.count(constant_anchor) != 1:
+              raise SystemExit("transient errno constant anchor drifted")
+          source = source.replace(constant_anchor, constant_block + constant_anchor, 1)
+
+          download_anchor = '''def _download_trusted_uv_archive() -> bytes:
+              """Download the fixed archive with bounded transient transport retries."""
+          '''.replace("          ", "")
+          helpers = '''def _transport_failure_root(error: BaseException) -> BaseException:
+              """Return the bounded diagnostic root for one transport exception."""
+              if (
+                  isinstance(error, urllib.error.URLError)
+                  and isinstance(error.reason, BaseException)
+              ):
+                  return error.reason
+              return error
+
+
+          def _transient_transport_failure_label(
+              error: BaseException,
+          ) -> str | None:
+              """Return bounded evidence only for provably transient transport failures."""
+              root = _transport_failure_root(error)
+              if isinstance(root, (ssl.SSLCertVerificationError, ssl.SSLError)):
+                  return None
+              if isinstance(root, socket.gaierror):
+                  return "temporary DNS" if root.errno == socket.EAI_AGAIN else None
+              if isinstance(root, TimeoutError):
+                  return "timeout"
+              if isinstance(root, OSError) and root.errno in TRUSTED_UV_TRANSIENT_ERRNO:
+                  return f"transport errno {root.errno}"
+              return None
+
+
+          '''.replace("          ", "")
+          if source.count(download_anchor) != 1:
+              raise SystemExit("transport helper insertion anchor drifted")
+          source = source.replace(download_anchor, helpers + download_anchor, 1)
+
+          old_except = '''        except (urllib.error.URLError, OSError) as exc:
+                  failure_label = type(exc).__name__
+                  failure = exc
+          '''.replace("          ", "")
+          new_except = '''        except (urllib.error.URLError, OSError) as exc:
+                  failure_label = _transient_transport_failure_label(exc)
+                  if failure_label is None:
+                      root = _transport_failure_root(exc)
+                      raise RuntimeError(
+                          "trusted uv archive download failed: "
+                          f"{type(root).__name__}"
+                      ) from exc
+                  failure = exc
+          '''.replace("          ", "")
+          if source.count(old_except) != 1:
+              raise SystemExit("transport exception block drifted")
+          path.write_text(source.replace(old_except, new_except, 1), encoding="utf-8")
+          PY
+
+      - name: Update authoritative documentation
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >docs/doctoring/trusted-uv-transient-download-retry.md <<'DOC'
+          # Trusted uv transient download retry boundary
+
+          ## Decision
+
+          The central coverage materializer downloads one checksum-pinned uv archive from one literal Astral HTTPS URL. It performs at most **three total attempts**, separated by deterministic delays of one and two seconds, only for a closed set of availability failures:
+
+          - HTTP 408, 425, 429, 500, 502, 503, and 504;
+          - timeout;
+          - temporary DNS (`EAI_AGAIN`);
+          - connection aborted, refused, or reset; and
+          - explicit host or network down, reset, or unreachable errors.
+
+          Every attempt reuses the same literal URL and exact timeout. Bytes from a failed read are scoped to that attempt and discarded before retry.
+
+          ## Fail-closed exclusions
+
+          Certificate verification and all other TLS failures, permanent DNS failures, malformed `URLError.reason`, local permission failures, unclassified `OSError` values, permanent HTTP responses, redirects, origin drift, oversized payloads, checksum mismatch, malformed archive members, unsupported runners, unexpected uv versions, and offline-export or lock-grammar failures are never retried.
+
+          Diagnostics expose only a bounded HTTP status, transport errno, or exception class and attempt count. They never include URL text, headers, response bodies, credentials, or arbitrary exception messages.
+
+          ## Incident evidence
+
+          Central OpenCode coverage run `31002427460` for `ContextualWisdomLab/newsdom-api#524` reached the exact trusted-uv materialization stage and failed with a bounded HTTP failure. A later run in the same operating window downloaded the same pinned release successfully. This supports a bounded retry without weakening immutable-source, checksum, or coverage gates.
+
+          ## Verification contract
+
+          Permanent tests prove the exact retryable HTTP set, immediate permanent-HTTP failure, temporary and permanent DNS separation, timeout and connection-reset retry, TLS and unclassified-local-error rejection, malformed reason rejection, exact request reuse, retry exhaustion, and disposal of partial bytes. Existing no-proxy, no-redirect, origin, size, SHA-256, archive-member, executable-version, offline export, exact-pin, 100% statement/branch coverage, and 100% production-docstring gates remain mandatory.
+
+          ## MSA and operational boundary
+
+          This behavior belongs to the organization-owned coverage control plane. Leaf repositories must not duplicate the downloader or weaken review gates. Exhaustion leaves current-head review fail-closed and cannot synthesize approval.
+
+          ## Rollback
+
+          Rollback removes the retry classifier, constants, and loop while retaining every immutable-source and integrity control. Increasing the closed status/errno sets, attempt count, or delays requires a separate reviewed change.
+
+          ## References
+
+          Fielding, R. T., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 9110). RFC Editor. https://doi.org/10.17487/RFC9110
+
+          Nottingham, M., & Fielding, R. (2012). *Additional HTTP status codes* (RFC 6585). RFC Editor. https://doi.org/10.17487/RFC6585
+
+          Python Software Foundation. (2026). *urllib.error—Exception classes raised by urllib.request*. Python 3.14 documentation. https://docs.python.org/3/library/urllib.error.html
+          DOC
+          sed -i 's/^          //' docs/doctoring/trusted-uv-transient-download-retry.md
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("CHANGELOG.md")
+          source = path.read_text(encoding="utf-8")
+          old = "- Retried the fixed, checksum-pinned trusted uv archive download at most twice after transient transport, 408, 429, or 5xx availability failures while keeping redirects, permanent 4xx responses, origin drift, size, checksum, archive, and version failures immediately fail-closed."
+          new = "- Retry the fixed, checksum-pinned trusted uv archive only for HTTP 408/425/429/500/502/503/504, timeout, temporary DNS, and explicitly classified connection/host/network errors; TLS, permanent DNS, malformed, local, and unclassified failures remain single-attempt and fail-closed."
+          if source.count(old) != 1:
+              raise SystemExit("CHANGELOG retry entry drifted")
+          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Verify focused and complete quality gates
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci
+          python -m compileall -q scripts tests
+          git diff --check
+
+      - name: Publish verified self-deleting repair
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          HEAD_BRANCH: ${{ github.ref_name }}
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          rm -f .github/workflows/repair-pr790-closed-classifier.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo "No verified repair generated" >&2; exit 1; }
+          git commit -m "fix(coverage): close transient uv retry classification"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${HEAD_BRANCH}"
