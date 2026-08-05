@@ -205,28 +205,28 @@ def redact_text(text: str) -> str:
 
     Valid JSON lines are traversed recursively so a token stored under an
     ordinary key, or used as an object key, cannot bypass line-oriented
-    patterns. Deeply nested JSON that exceeds the parser or encoder recursion
-    boundary is replaced as one redacted line, preserving confidentiality and
-    bounded availability instead of falling back to a weaker parser.
+    patterns. JSON-like lines that cannot be parsed or encoded safely are
+    replaced wholesale, preserving confidentiality and bounded availability
+    instead of falling back to a weaker parser.
     """
     redacted_lines: list[str] = []
     for line in text.splitlines(keepends=True):
         stripped = line.rstrip("\r\n")
         line_ending = line[len(stripped) :]
-        if stripped and stripped[0] in "[{":
+        json_candidate = stripped.lstrip()
+        leading_space = stripped[: len(stripped) - len(json_candidate)]
+        if json_candidate and json_candidate[0] in "[{":
             try:
-                parsed = json.loads(stripped)
+                parsed = json.loads(json_candidate)
                 encoded = json.dumps(
                     _redact_json(parsed),
                     separators=(",", ":"),
                     ensure_ascii=False,
                 )
-            except json.JSONDecodeError:
-                redacted_lines.append(_redact_unstructured(stripped) + line_ending)
-            except RecursionError:
-                redacted_lines.append(REDACTED + line_ending)
+            except (json.JSONDecodeError, RecursionError):
+                redacted_lines.append(leading_space + REDACTED + line_ending)
             else:
-                redacted_lines.append(encoded + line_ending)
+                redacted_lines.append(leading_space + encoded + line_ending)
         else:
             redacted_lines.append(_redact_unstructured(stripped) + line_ending)
     if not text:
