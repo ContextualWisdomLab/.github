@@ -88,6 +88,10 @@ def _consume_sensitive_assignment(
         return None, cursor
 
     value_start = cursor
+    if key.casefold() == "authorization":
+        while cursor < len(text) and text[cursor] not in ",}":
+            cursor += 1
+        return text[start:value_start] + REDACTED, cursor
     if text[cursor] in "\"'":
         value_quote = text[cursor]
         cursor += 1
