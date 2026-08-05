@@ -60,6 +60,7 @@ def test_traversal_absolute_nested_glob_and_empty_values_fail_closed() -> None:
     """Reject every path shape that can escape or broaden the scan root."""
 
     unsafe_values = (
+        "..",
         "../etc",
         "/etc",
         "src/../etc",
