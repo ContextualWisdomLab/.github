@@ -240,7 +240,7 @@ def sweep(
     dry_run: bool = False,
     now: datetime | None = None,
 ) -> int:
-    """Dispatch up to ``max_dispatches`` recent organization mentions."""
+    """Bound source requests that actually queue at least one new agent."""
 
     if max_dispatches < 1 or max_dispatches > 100:
         raise ValueError("max dispatches must be between 1 and 100")
@@ -257,13 +257,15 @@ def sweep(
             issue=issue,
             since=since,
         ):
-            dispatch_request(
+            queued_agents = dispatch_request(
                 request,
                 target_client=target_client,
                 dispatch_client=dispatch_client,
                 opencode_allowlist=opencode_allowlist,
                 dry_run=dry_run,
             )
+            if not queued_agents:
+                continue
             dispatched += 1
             if dispatched >= max_dispatches:
                 print(f"Agent mention sweep reached dispatch limit {max_dispatches}.")
