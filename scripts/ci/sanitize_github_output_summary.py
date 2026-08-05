@@ -15,18 +15,19 @@ SECRET_KEY_RE = re.compile(
     r"API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|ENCRYPTION[_-]?KEY"
     r")[A-Z0-9_.-]*\b)(?P<sep>\s*[:=]\s*)"
 )
-URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@")
+URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s@]+)@")
 AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+")
 
 
 def sanitize_line(line: str) -> str:
     """Redact one log line while preserving the key and evidence context."""
 
-    match = SECRET_KEY_RE.search(line)
+    sanitized = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
+    sanitized = AUTH_HEADER_RE.sub(r"\1\2 <redacted>", sanitized)
+    match = SECRET_KEY_RE.search(sanitized)
     if match:
-        return f"{line[: match.end()]}<redacted>"
-    line = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
-    return AUTH_HEADER_RE.sub(r"\1\2 <redacted>", line)
+        return f"{sanitized[: match.end()]}<redacted>"
+    return sanitized
 
 
 def sanitize_text(text: str) -> str:
@@ -52,5 +53,10 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def _entrypoint(module_name: str) -> None:
+    """Run the file-oriented CLI only when executed as a script."""
+    if module_name == "__main__":
+        raise SystemExit(main())
+
+
+_entrypoint(__name__)

@@ -1,0 +1,176 @@
+name: OpenCode Coverage Diagnostics CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/ci/coverage_failure_summary.py"
+      - "scripts/ci/materialize_base_javascript_packages.py"
+      - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/sanitize_github_output_summary.py"
+      - "tests/test_materialize_base_javascript_packages.py"
+      - "tests/test_materialize_base_python_requirements.py"
+      - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_coverage_native_fuzz_lock_boundary.py"
+      - "tests/test_sanitize_github_output_summary.py"
+      - "tests/test_strix_dependency_security_floor.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-hashes.txt"
+      - "pyproject.toml"
+      - ".github/workflows/opencode-coverage-diagnostics-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/ci/coverage_failure_summary.py"
+      - "scripts/ci/materialize_base_javascript_packages.py"
+      - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/sanitize_github_output_summary.py"
+      - "tests/test_materialize_base_javascript_packages.py"
+      - "tests/test_materialize_base_python_requirements.py"
+      - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_coverage_native_fuzz_lock_boundary.py"
+      - "tests/test_sanitize_github_output_summary.py"
+      - "tests/test_strix_dependency_security_floor.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-hashes.txt"
+      - "pyproject.toml"
+      - ".github/workflows/opencode-coverage-diagnostics-ci.yml"
+
+concurrency:
+  group: opencode-coverage-diagnostics-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  minimum-python-contract:
+    name: Python 3.10 runtime contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up minimum supported Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Compile production modules on Python 3.10
+        run: |
+          python -m compileall -q \
+            scripts/ci/coverage_failure_summary.py \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py
+
+      - name: Exercise exact failure evidence on Python 3.10
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import tempfile
+
+          from scripts.ci import materialize_base_javascript_packages as javascript_materializer
+          from scripts.ci import materialize_base_python_requirements as python_materializer
+
+          with tempfile.TemporaryDirectory() as directory:
+              output = pathlib.Path(directory) / "github-output"
+              os.environ["GITHUB_OUTPUT"] = str(output)
+              exact_reason = (
+                  "current-head npm lock package-lock.json package "
+                  "apps/desktop/node_modules/@types/react-dom must pin a registry "
+                  "tarball and SHA-512 integrity"
+              )
+              javascript_materializer._publish_coverage_failure_summary(
+                  "Base JavaScript package lock materialization",
+                  ValueError(exact_reason),
+                  "Repair the lock and rerun coverage-evidence.",
+              )
+              python_materializer._publish_coverage_failure_summary(
+                  "Base Python lock materialization",
+                  OSError("fixture <unsafe>\nCWL_COVERAGE_SUMMARY_EOF"),
+                  "Repair the trusted lock and rerun coverage-evidence.",
+              )
+              published = output.read_text(encoding="utf-8")
+              assert f"ValueError: {exact_reason}" in published
+              assert "OSError: fixture &lt;unsafe&gt; CWL_COVERAGE_SUMMARY_END" in published
+              assert published.count("coverage_summary<<CWL_COVERAGE_SUMMARY_EOF") == 2
+          PY
+
+  full-quality-gate:
+    name: Python 3.14 full quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run diagnostics and lock contracts with full branch coverage
+        run: |
+          python -m pytest \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_coverage_native_fuzz_lock_boundary.py \
+            tests/test_sanitize_github_output_summary.py \
+            tests/test_strix_dependency_security_floor.py \
+            --cov=scripts.ci.coverage_failure_summary \
+            --cov=scripts.ci.materialize_base_javascript_packages \
+            --cov=scripts.ci.materialize_base_python_requirements \
+            --cov=scripts.ci.sanitize_github_output_summary \
+            --cov-branch \
+            --cov-fail-under=100 \
+            -q
+
+      - name: Enforce complete production docstrings
+        run: |
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/coverage_failure_summary.py \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py
+
+      - name: Compile changed Python surfaces
+        run: |
+          python -m compileall -q \
+            scripts/ci/coverage_failure_summary.py \
+            scripts/ci/materialize_base_javascript_packages.py \
+            scripts/ci/materialize_base_python_requirements.py \
+            scripts/ci/sanitize_github_output_summary.py \
+            tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_coverage_native_fuzz_lock_boundary.py \
+            tests/test_sanitize_github_output_summary.py \
+            tests/test_strix_dependency_security_floor.py

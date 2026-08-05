@@ -165,6 +165,7 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" ".github/workflows/* | Dockerfile | Dockerfile.* | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml" "strix gate recognizes deployment and CI files"
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile.test" "strix gate includes test-image Dockerfiles with workflow scan context"
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile" "strix gate treats deployment files as source files"
+	assert_file_contains "$GATE_SCRIPT" "Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock" "strix gate includes Rust crate dependency and feature context"
 	assert_file_contains "$GATE_SCRIPT" "backend/scripts/docker_entrypoint.sh" "strix gate includes the combined Docker image entrypoint with deployment context"
 	assert_file_contains "$GATE_SCRIPT" "backend/api/auth.py" "strix gate includes backend auth context for deployment scans"
 	assert_file_contains "$GATE_SCRIPT" "frontend/package-lock.json" "strix gate includes frontend dependency lock context"
@@ -192,7 +193,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_equals "1" "$status_token_count" "strix workflow defines GITHUB_STATUS_TOKEN once so GitHub can parse repository_dispatch"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "strix workflow must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "models: read" "strix workflow grants only the GitHub Models read permission needed for Strix"
-	assert_file_contains "$workflow_file" "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6" "strix workflow pins actions/setup-python"
+	assert_file_contains "$workflow_file" "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0" "strix workflow pins actions/setup-python"
 	assert_file_contains "$workflow_file" 'python-version: "3.13"' "strix workflow runs Python steps on Python 3.13"
 	assert_file_contains "$workflow_file" "Resolve trusted Strix source ref" "strix workflow resolves the central trusted Strix source ref"
 	assert_file_contains "$workflow_file" "toJSON(job)" "strix workflow derives the trusted source from the job workflow context"
@@ -6243,6 +6244,32 @@ run_filtered_gate_case_if_requested() {
 			"Materialized PR-head changed-file scope" \
 			"repository_dispatch"
 		;;
+	pull-request-target-rust-file-uses-head-blob)
+		run_pull_request_target_head_scope_case \
+			"pull-request-target-rust-file-uses-head-blob" \
+			"src-tauri/src/commands.rs" \
+			"const BASE_RUST_CONTEXT: &str = \"must not be scanned\";" \
+			"const HEAD_RUST_CONTEXT: &str = \"must be scanned\";" \
+			"0" \
+			"0" \
+			"__PR_SCOPE__" \
+			"0" \
+			"Materialized PR-head changed-file scope"
+		;;
+	pull-request-target-backend-script-omits-app-context)
+		run_pull_request_target_head_scope_case \
+			"pull-request-target-backend-script-omits-app-context" \
+			"backend/scripts/disksage_copy_readiness_handoff.py" \
+			"BASE_SUPPORT_CODE_SHOULD_NOT_BE_SCANNED" \
+			"HEAD_SUPPORT_CODE_SHOULD_BE_SCANNED" \
+			"0" \
+			"0" \
+			"__PR_SCOPE__" \
+			"0" \
+			"Materialized PR-head changed-file scope" \
+			"pull_request_target" \
+			"backend/api/webdav.py"
+		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
 		;;
@@ -6267,6 +6294,7 @@ run_pull_request_target_head_scope_case() {
 	local expected_full_head_scope="${8-$disable_pr_scoping}"
 	local expected_scope_message="${9-}"
 	local github_event_name="${10-pull_request_target}"
+	local unexpected_scope_file="${11-}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -6335,6 +6363,10 @@ else
 		exit 68
 	fi
 fi
+if [ -n "${FAKE_STRIX_UNEXPECTED_SCOPE_FILE:-}" ] && [ -e "$target_path/$FAKE_STRIX_UNEXPECTED_SCOPE_FILE" ]; then
+	echo "Error: unrelated application context leaked into bounded support-code scope ($target_path/$FAKE_STRIX_UNEXPECTED_SCOPE_FILE)" >&2
+	exit 69
+fi
 echo "scan ok with PR head content"
 EOF
 	chmod +x "$fake_strix"
@@ -6349,6 +6381,10 @@ EOF
 		echo 'seed' >README.md
 		mkdir -p docs
 		printf '%s\n' 'BASE_FULL_SCOPE_CONTEXT_SHOULD_NOT_BE_SCANNED' >docs/full-scope-context.md
+		if [ -n "$unexpected_scope_file" ]; then
+			mkdir -p "$(dirname -- "$unexpected_scope_file")"
+			printf '%s\n' 'UNRELATED_APPLICATION_CONTEXT_SHOULD_NOT_BE_SCANNED' >"$unexpected_scope_file"
+		fi
 		if [ "$base_content" != "__ABSENT__" ]; then
 			mkdir -p "$(dirname -- "$changed_file")"
 			printf '%s\n' "$base_content" >"$changed_file"
@@ -6396,6 +6432,7 @@ EOF
 			FAKE_STRIX_EXPECTED_UNCHANGED_FILE="docs/full-scope-context.md" \
 			FAKE_STRIX_EXPECTED_UNCHANGED_CONTENT="HEAD_FULL_SCOPE_CONTEXT_SHOULD_BE_SCANNED" \
 			FAKE_STRIX_EXPECT_FULL_HEAD_SCOPE="$expected_full_head_scope" \
+			FAKE_STRIX_UNEXPECTED_SCOPE_FILE="$unexpected_scope_file" \
 			STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping" \
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
@@ -8929,6 +8966,19 @@ run_pull_request_target_head_scope_case \
 	"__PR_SCOPE__"
 
 run_pull_request_target_head_scope_case \
+	"pull-request-target-backend-script-omits-app-context" \
+	"backend/scripts/disksage_copy_readiness_handoff.py" \
+	"BASE_SUPPORT_CODE_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_SUPPORT_CODE_SHOULD_BE_SCANNED" \
+	"0" \
+	"0" \
+	"__PR_SCOPE__" \
+	"0" \
+	"Materialized PR-head changed-file scope" \
+	"pull_request_target" \
+	"backend/api/webdav.py"
+
+run_pull_request_target_head_scope_case \
 	"repository-dispatch-pr-scope-uses-head-blob" \
 	"backend/db/models.py" \
 	"BASE_DISPATCH_CONTENT_SHOULD_NOT_BE_SCANNED" \
@@ -8945,6 +8995,17 @@ run_pull_request_target_head_scope_case \
 	"src/new_module.py" \
 	"__ABSENT__" \
 	"HEAD_ONLY_NEW_FILE_SHOULD_BE_SCANNED"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-rust-file-uses-head-blob" \
+	"src-tauri/src/commands.rs" \
+	"const BASE_RUST_CONTEXT: &str = \"must not be scanned\";" \
+	"const HEAD_RUST_CONTEXT: &str = \"must be scanned\";" \
+	"0" \
+	"0" \
+	"__PR_SCOPE__" \
+	"0" \
+	"Materialized PR-head changed-file scope"
 
 run_pull_request_target_head_scope_case \
 	"pull-request-target-source-file-with-space-uses-head-blob" \

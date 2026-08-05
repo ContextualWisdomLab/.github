@@ -20,6 +20,11 @@ import urllib.parse
 from typing import Any
 
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from scripts.ci.coverage_failure_summary import (
+    publish_coverage_failure_summary as _publish_coverage_failure_summary,
+)
+
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 PNPM_SPEC_RE = re.compile(r"^pnpm@[0-9]+\.[0-9]+\.[0-9]+(?:[+-][A-Za-z0-9._+-]+)?$")
 PNPM_BASE_INPUT_NAMES = ("package.json", "pnpm-workspace.yaml", ".pnpmfile.cjs")
@@ -444,6 +449,13 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"::error::Could not materialize base JavaScript package locks: {exc}",
             file=sys.stderr,
+        )
+        _publish_coverage_failure_summary(
+            "Base JavaScript package lock materialization",
+            exc,
+            "Repair or regenerate the reported lock entry so every non-link "
+            "package selected for the networked cache is registry- and "
+            "SHA-512-bounded, then rerun the current-head coverage-evidence job.",
         )
         return 1
 

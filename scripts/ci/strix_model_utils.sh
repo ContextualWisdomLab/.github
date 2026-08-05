@@ -12,6 +12,85 @@ trim_whitespace() {
 	printf '%s\n' "$value"
 }
 
+sanitize_strix_source_dirs() {
+	local raw_source_dirs
+	raw_source_dirs="$(trim_whitespace "${1-}")"
+	if [ -z "$raw_source_dirs" ]; then
+		echo "ERROR: STRIX_SOURCE_DIRS must contain at least one safe direct directory name." >&2
+		return 2
+	fi
+
+	python3 -I -S - "$raw_source_dirs" <<'PY'
+from __future__ import annotations
+
+import sys
+import unicodedata
+
+raw_source_dirs = sys.argv[1]
+if len(raw_source_dirs.encode("utf-8")) > 8192 or any(
+    character in "\x00\r\n\t" for character in raw_source_dirs
+):
+    print(
+        "ERROR: STRIX_SOURCE_DIRS must be a bounded space-separated directory list.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+entries = raw_source_dirs.split(" ")
+entries = [entry for entry in entries if entry]
+if not entries or len(entries) > 32:
+    print(
+        "ERROR: STRIX_SOURCE_DIRS must contain between 1 and 32 safe direct directory names.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+allowed_ascii = frozenset("_.@+[]-")
+normalized: list[str] = []
+seen: set[str] = set()
+for entry in entries:
+    if entry == ".":
+        pass
+    elif (
+        entry == ".."
+        or len(entry.encode("utf-8")) > 255
+        or entry.startswith("-")
+        or "/" in entry
+        or "\\" in entry
+        or not all(
+            (character.isascii() and (character.isalnum() or character in allowed_ascii))
+            or (
+                not character.isascii()
+                and unicodedata.category(character)[0] in {"L", "M", "N"}
+            )
+            for character in entry
+        )
+    ):
+        print(
+            "ERROR: STRIX_SOURCE_DIRS accepts only '.' or safe direct directory names.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if entry not in seen:
+        seen.add(entry)
+        normalized.append(entry)
+
+print(" ".join(normalized))
+PY
+}
+
+# STRIX_SOURCE_DIRS is later split by the gate before joining each token to the
+# already-canonical scan root. Freeze a lexical direct-child allowlist at source
+# time so absolute paths, parent traversal, nested symlink chains, shell glob expansion,
+# and option-like path ambiguity can never reach that join.
+STRIX_SOURCE_DIRS_SANITIZED="$(
+	sanitize_strix_source_dirs "${STRIX_SOURCE_DIRS-.}"
+)" || {
+	status=$?
+	return "$status" 2>/dev/null || exit "$status"
+}
+readonly STRIX_SOURCE_DIRS="$STRIX_SOURCE_DIRS_SANITIZED"
+unset STRIX_SOURCE_DIRS_SANITIZED
+
 sanitize_provider_name() {
 	local provider
 	provider="$(trim_whitespace "${1-}")"

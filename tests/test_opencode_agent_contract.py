@@ -2729,3 +2729,15 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
     assert (
         "if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))" not in workflow
     )
+
+
+def test_opencode_coverage_image_provisions_compatible_llvm_tools():
+    """Keep Rust coverage independent of a rustup-managed toolchain."""
+    workflow = Path(
+        ".github/workflows/opencode-review-dispatch.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "              llvm-19 " + chr(92) in workflow
+    assert "ENV LLVM_COV=/usr/bin/llvm-cov-19" in workflow
+    assert "ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19" in workflow
+    assert 'RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"' in workflow
