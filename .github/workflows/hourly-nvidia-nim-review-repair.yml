@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/pr-review-fix-scheduler.yml
       - .github/workflows/pr-review-autofix.yml
+      - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - tests/test_pr_review_fix_hourly_contract.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
@@ -15,6 +16,7 @@ on:
     paths:
       - .github/workflows/pr-review-fix-scheduler.yml
       - .github/workflows/pr-review-autofix.yml
+      - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - tests/test_pr_review_fix_hourly_contract.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
