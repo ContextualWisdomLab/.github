@@ -1,0 +1,36 @@
+name: Export PR759 local transform workspace
+
+on:
+  push:
+    branches:
+      - tmp/pr759-local-transform-20260805
+    paths:
+      - .github/workflows/export-pr759-local-transform.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 9fba1dbc1e1c9a345cdd20ecc8a5e098e88c640e
+          persist-credentials: false
+
+      - name: Remove Git metadata
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: rm -rf .git
+
+      - name: Upload exact read-only source
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: pr759-source-9fba1dbc
+          path: .
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
