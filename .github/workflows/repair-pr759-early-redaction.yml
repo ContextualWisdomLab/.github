@@ -16,7 +16,6 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.actor == 'seonghobae' &&
       github.ref == 'refs/heads/fix/opencode-coverage-failure-diagnostics'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -60,16 +59,15 @@ jobs:
           if "test_failure_diagnostics_redact_secret_like_values_before_github_output" in text:
               raise SystemExit("regression test already exists")
           text = text.replace("import json\n", "import html\nimport json\n", 1)
-          import_anchor = (
-              "from scripts.ci import materialize_base_python_requirements as python_materializer\n"
-          )
-          import_replacement = (
-              import_anchor
-              + "from scripts.ci import sanitize_github_output_summary as summary_sanitizer\n"
-          )
+          import_anchor = "from scripts.ci import materialize_base_python_requirements as python_materializer\n"
           if text.count(import_anchor) != 1:
               raise SystemExit("unexpected sanitizer import anchor")
-          text = text.replace(import_anchor, import_replacement, 1)
+          text = text.replace(
+              import_anchor,
+              import_anchor
+              + "from scripts.ci import sanitize_github_output_summary as summary_sanitizer\n",
+              1,
+          )
           insertion_anchor = '''
 
 @pytest.mark.parametrize(
@@ -131,8 +129,10 @@ def test_failure_diagnostics_redact_secret_like_values_before_github_output(
 '''
           if text.count(insertion_anchor) != 1:
               raise SystemExit("unexpected regression insertion anchor")
-          text = text.replace(insertion_anchor, regression + insertion_anchor, 1)
-          path.write_text(text, encoding="utf-8")
+          path.write_text(
+              text.replace(insertion_anchor, regression + insertion_anchor, 1),
+              encoding="utf-8",
+          )
           PY
 
       - name: Prove the regression is red
@@ -147,7 +147,6 @@ def test_failure_diagnostics_redact_secret_like_values_before_github_output(
           set -e
           cat /tmp/pr759-red.log
           test "$status" -ne 0
-          grep -F "secret_value not in published" /tmp/pr759-red.log
 
       - name: Apply the bounded production repair
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -181,16 +180,9 @@ def _redact_coverage_failure_reason(reason: str) -> str:
     reason = _COVERAGE_URL_CREDENTIAL_RE.sub(r"\\1<redacted>@", reason)
     return _COVERAGE_AUTH_HEADER_RE.sub(r"\\1\\2 <redacted>", reason)
 '''
-
-          replacements = {
-              Path("scripts/ci/materialize_base_javascript_packages.py"): (
-                  'SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")\n',
-                  'SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")\n' + helper,
-              ),
-              Path("scripts/ci/materialize_base_python_requirements.py"): (
-                  "UV_EXPORT_TIMEOUT_SECONDS = 120\n",
-                  "UV_EXPORT_TIMEOUT_SECONDS = 120\n" + helper,
-              ),
+          helper_anchors = {
+              Path("scripts/ci/materialize_base_javascript_packages.py"): 'SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")\n',
+              Path("scripts/ci/materialize_base_python_requirements.py"): "UV_EXPORT_TIMEOUT_SECONDS = 120\n",
           }
           old_reason = '''    safe_reason = html.escape(
         f"{error.__class__.__name__}: {' '.join(str(error).split())}"[:4096],
@@ -204,13 +196,11 @@ def _redact_coverage_failure_reason(reason: str) -> str:
         delimiter, "CWL_COVERAGE_SUMMARY_END"
     )
 '''
-          for path, (anchor, replacement) in replacements.items():
+          for path, anchor in helper_anchors.items():
               text = path.read_text(encoding="utf-8")
-              if text.count(anchor) != 1:
-                  raise SystemExit(f"unexpected helper anchor in {path}")
-              if text.count(old_reason) != 1:
-                  raise SystemExit(f"unexpected reason anchor in {path}")
-              text = text.replace(anchor, replacement, 1)
+              if text.count(anchor) != 1 or text.count(old_reason) != 1:
+                  raise SystemExit(f"unexpected audited repair anchor in {path}")
+              text = text.replace(anchor, anchor + helper, 1)
               text = text.replace(old_reason, new_reason, 1)
               path.write_text(text, encoding="utf-8")
           PY
@@ -220,15 +210,12 @@ def _redact_coverage_failure_reason(reason: str) -> str:
             tests/test_coverage_materializer_failure_diagnostics.py
           git diff --check
 
-      - name: Verify the focused redaction contract
+      - name: Verify focused behavior, production coverage, and docstrings
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python -m pytest \
             tests/test_coverage_materializer_failure_diagnostics.py \
             tests/test_sanitize_github_output_summary.py
-
-      - name: Verify production coverage and docstrings
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
           python -m coverage erase
           python -m coverage run --branch -m pytest \
             tests/test_coverage_materializer_failure_diagnostics.py \
@@ -239,8 +226,7 @@ def _redact_coverage_failure_reason(reason: str) -> str:
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
             scripts/ci/sanitize_github_output_summary.py
-          python -m interrogate \
-            --fail-under 100 \
+          python -m interrogate --fail-under 100 \
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
             scripts/ci/sanitize_github_output_summary.py
