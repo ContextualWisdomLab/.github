@@ -2,9 +2,10 @@
 """Reapply the reviewed npm-workspace resolver to protected current main.
 
 This temporary branch-repair helper derives the six nonconflicting product and
-resolver-test files from one previously reviewed commit and adds a
-current-main-compatible workflow contract test directly. It deliberately does
-not import unrelated coverage-toolchain work from another pull request. The
+resolver-test files from one previously reviewed commit, normalizes one
+human-readable diagnostic so the current protected-main contract remains true,
+and adds a current-main-compatible workflow contract test directly. It does not
+import unrelated coverage-toolchain work from another pull request. The
 publishing workflow deletes this helper before committing the verified
 product-policy tree.
 """
@@ -20,9 +21,10 @@ REVIEWED_BASE = "4d076f636b6de5043e8501e93c06ed0a8c896eb3"
 REVIEWED_CHILD = "b715577b9e946ecad4bd00c9f8afc7b2a219e048"
 EXPECTED_MAIN_PARENT = "f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae"
 PATCH_PATH = Path("/tmp/pr748-current-main.patch")
+WORKFLOW_PATH = Path(".github/workflows/opencode-review-dispatch.yml")
 CONTRACT_PATH = Path("tests/test_opencode_agent_contract.py")
 PATCH_PATHS = (
-    ".github/workflows/opencode-review-dispatch.yml",
+    str(WORKFLOW_PATH),
     "docs/doctoring/npm-workspace-lock-ownership.md",
     "scripts/ci/npm_workspace_install_root.py",
     "tests/npm_workspace_test_support.py",
@@ -35,6 +37,8 @@ TEMPORARY_PATHS = (
     "scripts/ci/apply_pr748_current_main.py",
 )
 CONTRACT_FUNCTION = "test_opencode_coverage_resolves_validated_npm_workspace_lock_owner"
+CURRENT_MAIN_DIAGNOSTIC = "npm offline ci (workspace root), lifecycle hooks disabled"
+REVIEWED_DIAGNOSTIC = "npm workspace-root offline ci, lifecycle hooks disabled"
 CONTRACT_TEST = r'''
 
 
@@ -53,7 +57,7 @@ def test_opencode_coverage_resolves_validated_npm_workspace_lock_owner():
     assert 'trusted_npm_lock_is_materialized "$npm_install_root"' in workflow
     assert 'npm_workspace_args=(--workspace "$npm_workspace_selector")' in workflow
     assert 'install_package_dependencies "$package_runner" "$package_dir"' in workflow
-    assert "npm workspace-root offline ci, lifecycle hooks disabled" in workflow
+    assert "npm offline ci (workspace root), lifecycle hooks disabled" in workflow
     assert "npm ci --offline --ignore-scripts" in workflow
     assert "ContextualWisdomLab/.github:scripts/ci/npm_workspace_install_root.py" in workflow
     assert "ContextualWisdomLab/.github:tests/test_npm_workspace_install_root.py" in workflow
@@ -117,6 +121,24 @@ def _validate_reviewed_patch(patch: str) -> str:
     return patch
 
 
+def _normalize_current_main_diagnostic() -> None:
+    """Retain the existing generic npm diagnostic while naming workspace scope."""
+
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    if text.count(REVIEWED_DIAGNOSTIC) != 1:
+        raise SystemExit(
+            "reviewed npm workspace diagnostic count changed: "
+            f"{text.count(REVIEWED_DIAGNOSTIC)}"
+        )
+    if CURRENT_MAIN_DIAGNOSTIC in text:
+        raise SystemExit("current-main diagnostic unexpectedly already exists")
+    WORKFLOW_PATH.write_text(
+        text.replace(REVIEWED_DIAGNOSTIC, CURRENT_MAIN_DIAGNOSTIC, 1),
+        encoding="utf-8",
+    )
+    _run("git", "add", str(WORKFLOW_PATH))
+
+
 def _add_current_contract_test() -> None:
     """Add a conflict-free workflow contract to the current-main test file."""
 
@@ -133,19 +155,19 @@ def _add_current_contract_test() -> None:
 def _verify_applied_tree() -> None:
     """Verify the staged tree contains the complete npm workspace contract."""
 
-    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     required_workflow_fragments = (
         "resolve_npm_package_root()",
         "resolve_npm_install_root()",
         "npm_workspace_install_root.py",
         '--workspace "$npm_workspace_selector"',
-        "npm workspace-root offline ci, lifecycle hooks disabled",
+        CURRENT_MAIN_DIAGNOSTIC,
     )
     for fragment in required_workflow_fragments:
         if fragment not in workflow:
             raise SystemExit(f"required workflow fragment is absent: {fragment}")
+    if REVIEWED_DIAGNOSTIC in workflow:
+        raise SystemExit("stale workspace-root diagnostic remains")
 
     contract = CONTRACT_PATH.read_text(encoding="utf-8")
     if contract.count(f"def {CONTRACT_FUNCTION}(") != 1:
@@ -199,6 +221,7 @@ def main() -> int:
     ).stdout
     PATCH_PATH.write_text(_validate_reviewed_patch(patch), encoding="utf-8")
     _run("git", "apply", "--3way", "--index", str(PATCH_PATH))
+    _normalize_current_main_diagnostic()
     _add_current_contract_test()
     _run("git", "diff", "--cached", "--check")
     _verify_applied_tree()
