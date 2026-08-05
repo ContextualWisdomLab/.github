@@ -15,7 +15,6 @@ from agent_mention_router import (
     dispatch_request,
     parse_event,
     parse_repository_allowlist,
-    processed_comment_ids,
 )
 
 ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -198,7 +197,7 @@ def build_requests_for_pull_request(
     issue: dict[str, Any],
     since: str,
 ) -> tuple[MentionRequest, ...]:
-    """Build unacknowledged trusted mention requests for one live pull request."""
+    """Build trusted mention requests for one live pull request."""
 
     repository = str(issue.get("repository") or "")
     if not REPOSITORY_RE.fullmatch(repository):
@@ -212,21 +211,16 @@ def build_requests_for_pull_request(
         pull_request_number=number,
         since=since,
     )
-    processed = processed_comment_ids(comments)
     live_pull = client.request([f"repos/{repository}/pulls/{number}"])
     if not isinstance(live_pull, dict) or live_pull.get("state") != "open":
         return ()
     requests: list[MentionRequest] = []
     for comment in comments:
-        comment_id = comment.get("id")
-        if isinstance(comment_id, int) and comment_id in processed:
-            continue
         event = {
             "repository": {"full_name": repository},
             "issue": {"number": number, "pull_request": issue.get("pull_request")},
             "comment": comment,
             "pull_request": live_pull,
-            "conversation_comments": comments,
         }
         request = parse_event(event)
         if request is not None:
@@ -246,7 +240,7 @@ def sweep(
     dry_run: bool = False,
     now: datetime | None = None,
 ) -> int:
-    """Dispatch up to ``max_dispatches`` unacknowledged organization mentions."""
+    """Dispatch up to ``max_dispatches`` recent organization mentions."""
 
     if max_dispatches < 1 or max_dispatches > 100:
         raise ValueError("max dispatches must be between 1 and 100")
