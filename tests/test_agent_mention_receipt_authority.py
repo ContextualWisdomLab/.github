@@ -2,53 +2,21 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts" / "ci"
-sys.path.insert(0, str(SCRIPTS))
+ROUTER_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router.yml"
 
 
-def test_receipt_looking_comments_never_suppress_a_trusted_request() -> None:
-    """Only durable central exact-key workflow runs may suppress redispatch."""
+def test_local_router_does_not_load_target_receipts_as_dispatch_authority() -> None:
+    """The local path routes the source event without prior-comment receipts."""
 
-    router = importlib.reload(importlib.import_module("agent_mention_router"))
-    event = {
-        "repository": {"full_name": "ContextualWisdomLab/inkspan"},
-        "issue": {"number": 64, "pull_request": {"url": "https://example.test"}},
-        "comment": {
-            "id": 101,
-            "body": "@opencode-agent",
-            "author_association": "MEMBER",
-            "user": {"login": "maintainer", "type": "User"},
-        },
-        "pull_request": {
-            "state": "open",
-            "head": {"sha": "a" * 40},
-            "base": {"ref": "main"},
-        },
-        "conversation_comments": [
-            {
-                "body": "<!-- cwl-agent-mention-receipt:101 -->",
-                "user": {"login": "github-actions[bot]", "type": "Bot"},
-            },
-            {
-                "body": "<!-- cwl-agent-mention-receipt:101 -->",
-                "user": {"login": "rotated-installation-bot", "type": "Bot"},
-            },
-            {
-                "body": "<!-- cwl-agent-mention-receipt:101 -->",
-                "user": {"login": "attacker", "type": "User"},
-            },
-        ],
-    }
+    workflow = ROUTER_WORKFLOW.read_text(encoding="utf-8")
+    local = workflow.split("\n  sweep-organization-agent-mentions:\n", 1)[0]
 
-    request = router.parse_event(event)
-    assert request is not None
-    assert request.comment_id == 101
-    assert request.agents == ("opencode-agent",)
+    assert "conversation_comments" not in local
+    assert "/comments?per_page=100" not in local
 
 
 def test_sweep_does_not_use_target_receipts_as_dispatch_authority() -> None:
@@ -58,3 +26,4 @@ def test_sweep_does_not_use_target_receipts_as_dispatch_authority() -> None:
 
     assert "processed_comment_ids" not in source
     assert "comment_id in processed" not in source
+    assert "/comments?per_page=100" not in source
