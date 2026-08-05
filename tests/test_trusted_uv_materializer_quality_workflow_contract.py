@@ -32,7 +32,7 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
 
 
 def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
-    """Quality evidence executes with immutable actions and least privilege."""
+    """Quality evidence executes from the exact PR head with least privilege."""
 
     workflow = _workflow_text()
 
@@ -47,6 +47,7 @@ def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
         "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
     ) == 2
     assert workflow.count("persist-credentials: false") == 2
+    assert workflow.count("ref: ${{ github.event.pull_request.head.sha }}") == 2
 
 
 def test_minimum_python_contract_exercises_the_tomli_fallback() -> None:
