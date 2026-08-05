@@ -1,198 +1,262 @@
-#!/usr/bin/env python3
-"""Redact credentials from CI log text before it becomes review evidence."""
+"""Redact credential-shaped values before publishing subprocess evidence."""
 
 from __future__ import annotations
 
 import json
 import re
 import shlex
-import sys
-from collections.abc import Sequence
-from typing import Any
+from typing import Any, Sequence
+
 
 REDACTED = "[REDACTED]"
-KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 SENSITIVE_KEY_RE = re.compile(
-    r"(?:token|secret|password|passwd|credential|authorization|jwt|"
-    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
-    re.IGNORECASE,
+    r"(?i)(?:^|[_-])(?:api[_-]?key|auth|authorization|bearer|credential|password|passwd|private[_-]?key|secret|session[_-]?key|token)(?:$|[_-])"
 )
 SENSITIVE_OPTION_RE = re.compile(
-    r"(?:token|secret|password|passwd|credential|authorization|jwt|"
-    r"api[-_]?key|private[-_]?key|access[-_]?key|session[-_]?key)",
-    re.IGNORECASE,
+    r"(?i)^--?(?:api[_-]?key|auth|authorization|bearer|credential|password|passwd|private[_-]?key|secret|session[_-]?key|token)$"
 )
+SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)(\b[A-Za-z_][A-Za-z0-9_-]*(?:API[_-]?KEY|AUTH|AUTHORIZATION|BEARER|CREDENTIAL|PASSWORD|PASSWD|PRIVATE[_-]?KEY|SECRET|SESSION[_-]?KEY|TOKEN)[A-Za-z0-9_-]*\s*[=:]\s*)([^\s,;]+)"
+)
+BEARER_BASIC_RE = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+")
 JWT_RE = re.compile(
-    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\."
-    r"[A-Za-z0-9_-]{3,}(?![A-Za-z0-9_-])"
-)
-BEARER_RE = re.compile(
-    r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)"
-    r"[^\s\"'\\]+",
-    re.IGNORECASE,
+    r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b"
 )
 PROVIDER_TOKEN_RES = (
-    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
-    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bASIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bnvapi-[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
 )
+MAX_IDENTIFIER_CHARS = 4096
+MAX_JSON_DEPTH = 64
 
 
-def _redact_json(value: Any) -> Any:
-    """Recursively redact sensitive keys and credential-shaped JSON strings."""
+def _redact_scalar(value: str) -> str:
+    """Redact one scalar that may itself be a credential."""
+    redacted = SENSITIVE_ASSIGNMENT_RE.sub(lambda match: match.group(1) + REDACTED, value)
+    redacted = BEARER_BASIC_RE.sub(lambda match: f"{match.group(1)} {REDACTED}", redacted)
+    redacted = JWT_RE.sub(REDACTED, redacted)
+    for pattern in PROVIDER_TOKEN_RES:
+        redacted = pattern.sub(REDACTED, redacted)
+    return redacted
+
+
+def _consume_json_string(text: str, start: int, *, depth: int) -> tuple[str, int] | None:
+    """Return one decoded/redacted JSON string and the first following index."""
+    cursor = start + 1
+    escaped = False
+    while cursor < len(text):
+        character = text[cursor]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == '"':
+            candidate = text[start : cursor + 1]
+            try:
+                decoded = json.loads(candidate)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(decoded, str):
+                return None
+            redacted = _redact_unstructured(decoded, depth=depth + 1)
+            return json.dumps(redacted, ensure_ascii=False), cursor + 1
+        cursor += 1
+    return None
+
+
+def _consume_sensitive_assignment(text: str, start: int) -> tuple[str | None, int]:
+    """Inspect one identifier once and redact its assigned scalar when sensitive.
+
+    The returned index always advances beyond the identifier that was already
+    classified. That invariant prevents the historical suffix-by-suffix
+    rescanning behavior from becoming quadratic on a long ordinary token.
+    """
+    if not (text[start].isalpha() or text[start] == "_"):
+        return None, start + 1
+
+    cursor = start + 1
+    identifier_end = min(len(text), start + MAX_IDENTIFIER_CHARS)
+    while cursor < identifier_end and (text[cursor].isalnum() or text[cursor] in "_-"):
+        cursor += 1
+    if cursor < len(text) and cursor == identifier_end and (
+        text[cursor].isalnum() or text[cursor] in "_-"
+    ):
+        return None, cursor
+
+    key = text[start:cursor]
+    assignment_cursor = cursor
+    while assignment_cursor < len(text) and text[assignment_cursor].isspace():
+        assignment_cursor += 1
+    if assignment_cursor >= len(text) or text[assignment_cursor] not in "=:":
+        return None, cursor
+    if not SENSITIVE_KEY_RE.search(key):
+        return None, cursor
+
+    value_start = assignment_cursor + 1
+    while value_start < len(text) and text[value_start].isspace():
+        value_start += 1
+    if value_start >= len(text):
+        return None, cursor
+
+    prefix = text[start:value_start]
+    if text[value_start] in {'"', "'"}:
+        quote = text[value_start]
+        value_end = value_start + 1
+        escaped = False
+        while value_end < len(text):
+            character = text[value_end]
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                return prefix + quote + REDACTED + quote, value_end + 1
+            value_end += 1
+        return prefix + quote + REDACTED, len(text)
+
+    value_end = value_start
+    while value_end < len(text) and not text[value_end].isspace() and text[value_end] not in ",;}":
+        value_end += 1
+    return prefix + REDACTED, value_end
+
+
+def _redact_unstructured(text: str, *, depth: int = 0) -> str:
+    """Redact arbitrary diagnostic text without invoking a shell or regex loop."""
+    if depth > 8:
+        return _redact_scalar(text)
+
+    output: list[str] = []
+    cursor = 0
+    plain_start = 0
+    while cursor < len(text):
+        if text[cursor] == '"':
+            parsed = _consume_json_string(text, cursor, depth=depth)
+            if parsed is not None:
+                replacement, next_cursor = parsed
+                output.append(_redact_scalar(text[plain_start:cursor]))
+                output.append(replacement)
+                cursor = next_cursor
+                plain_start = cursor
+                continue
+        replacement, next_cursor = _consume_sensitive_assignment(text, cursor)
+        if replacement is not None:
+            output.append(_redact_scalar(text[plain_start:cursor]))
+            output.append(replacement)
+            cursor = next_cursor
+            plain_start = cursor
+            continue
+        cursor = max(cursor + 1, next_cursor)
+
+    output.append(_redact_scalar(text[plain_start:]))
+    return "".join(output)
+
+
+def _redact_json(value: Any, *, depth: int = 0) -> Any:
+    """Return a recursively redacted JSON-compatible value with bounded depth.
+
+    A subtree at or beyond :data:`MAX_JSON_DEPTH` is replaced wholesale rather
+    than recursed into. This keeps untrusted structured diagnostics from using
+    extreme nesting to exhaust the publication boundary or to bypass secret
+    handling through a recursion failure.
+    """
+    if depth >= MAX_JSON_DEPTH:
+        return REDACTED
     if isinstance(value, dict):
-        return {
-            _redact_unstructured(str(key)): (
-                REDACTED if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(item)
-            )
-            for key, item in value.items()
-        }
+        redacted_mapping: dict[str, Any] = {}
+        for key, nested in value.items():
+            redacted_key = _redact_unstructured(str(key))
+            if SENSITIVE_KEY_RE.search(str(key)):
+                redacted_mapping[redacted_key] = REDACTED
+            else:
+                redacted_mapping[redacted_key] = _redact_json(
+                    nested,
+                    depth=depth + 1,
+                )
+        return redacted_mapping
     if isinstance(value, list):
-        return [_redact_json(item) for item in value]
+        return [_redact_json(item, depth=depth + 1) for item in value]
     if isinstance(value, str):
         return _redact_unstructured(value)
     return value
 
 
-def _consume_sensitive_assignment(
-    text: str,
-    start: int,
-) -> tuple[str | None, int]:
-    """Parse one possible assignment and return replacement plus next cursor."""
-    cursor = start
-    key_quote = ""
-    if cursor < len(text) and text[cursor] in "\"'":
-        key_quote = text[cursor]
-        cursor += 1
-    key_start = cursor
-    if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
-        return None, start + 1
-    while cursor < len(text) and text[cursor] in KEY_CHARS:
-        cursor += 1
-    key = text[key_start:cursor]
-    if key_quote:
-        if cursor >= len(text) or text[cursor] != key_quote:
-            return None, start + 1
-        cursor += 1
-    if not SENSITIVE_KEY_RE.search(key):
-        return None, cursor
-    while cursor < len(text) and text[cursor].isspace():
-        cursor += 1
-    if cursor >= len(text) or text[cursor] not in ":=":
-        return None, cursor
-    cursor += 1
-    while cursor < len(text) and text[cursor].isspace():
-        cursor += 1
-    if cursor >= len(text):
-        return None, cursor
-
-    value_start = cursor
-    if text[cursor] in "\"'":
-        value_quote = text[cursor]
-        cursor += 1
-        escaped = False
-        while cursor < len(text):
-            char = text[cursor]
-            cursor += 1
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == value_quote:
-                break
-    else:
-        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
-            cursor += 1
-    if cursor == value_start:
-        return None, cursor
-    return text[start:value_start] + REDACTED, cursor
-
-
-def _redact_assignments(text: str) -> str:
-    """Redact sensitive key/value assignments in one bounded forward scan."""
-    output: list[str] = []
-    cursor = 0
-    while cursor < len(text):
-        replacement, next_cursor = _consume_sensitive_assignment(text, cursor)
-        if replacement is None:
-            output.append(text[cursor:next_cursor])
-        else:
-            output.append(replacement)
-        cursor = next_cursor
-    return "".join(output)
-
-
-def _redact_unstructured(text: str) -> str:
-    """Redact credential-shaped values from non-JSON diagnostic text."""
-    cleaned = _redact_assignments(text)
-    cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
-    cleaned = JWT_RE.sub(REDACTED, cleaned)
-    for pattern in PROVIDER_TOKEN_RES:
-        cleaned = pattern.sub(REDACTED, cleaned)
-    return cleaned
-
-
-def _redact_line(line: str) -> str:
-    """Redact one log line, preferring recursive JSON handling when valid."""
-    try:
-        value = json.loads(line)
-    except json.JSONDecodeError:
-        return _redact_unstructured(line)
-    return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
-
-
 def redact_text(text: str) -> str:
-    """Return redacted log text while preserving line boundaries."""
+    """Return text with recognized credential forms removed.
+
+    Valid JSON lines are traversed recursively so a token stored under an
+    ordinary key, or used as an object key, cannot bypass line-oriented
+    patterns. Deeply nested JSON that exceeds the parser or encoder recursion
+    boundary is replaced as one redacted line, preserving confidentiality and
+    bounded availability instead of falling back to a weaker parser.
+    """
+    redacted_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.rstrip("\r\n")
+        line_ending = line[len(stripped) :]
+        if stripped and stripped[0] in "[{":
+            try:
+                parsed = json.loads(stripped)
+                encoded = json.dumps(
+                    _redact_json(parsed),
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+            except json.JSONDecodeError:
+                redacted_lines.append(_redact_unstructured(stripped) + line_ending)
+            except RecursionError:
+                redacted_lines.append(REDACTED + line_ending)
+            else:
+                redacted_lines.append(encoded + line_ending)
+        else:
+            redacted_lines.append(_redact_unstructured(stripped) + line_ending)
     if not text:
-        return text
-    output: list[str] = []
-    for raw_line in text.splitlines(keepends=True):
-        line = raw_line.rstrip("\r\n")
-        ending = raw_line[len(line) :]
-        output.append(_redact_line(line) + ending)
-    return "".join(output)
+        return ""
+    if not redacted_lines:
+        return _redact_unstructured(text)
+    return "".join(redacted_lines)
+
+
+def _redact_assignment(argument: str) -> str:
+    """Redact a sensitive ``KEY=value`` or ``--option=value`` argument."""
+    if "=" not in argument:
+        return argument
+    key, separator, value = argument.partition("=")
+    if value and (SENSITIVE_KEY_RE.search(key) or SENSITIVE_OPTION_RE.match(key)):
+        return f"{key}{separator}{REDACTED}"
+    return argument
 
 
 def redact_command_arguments(arguments: Sequence[str]) -> list[str]:
-    """Return command arguments with sensitive option values redacted."""
+    """Return a printable argument vector with sensitive values removed."""
     redacted: list[str] = []
     redact_next = False
-    for raw_argument in arguments:
-        argument = str(raw_argument)
+    for argument in arguments:
         if redact_next:
             redacted.append(REDACTED)
             redact_next = False
             continue
-
-        option = argument.lstrip("-")
-        if "=" in option:
-            key, _value = option.split("=", 1)
-            if SENSITIVE_OPTION_RE.fullmatch(key):
-                separator_index = argument.find("=")
-                redacted.append(f"{argument[: separator_index + 1]}{REDACTED}")
-                continue
-
-        redacted.append(redact_text(argument))
-        if SENSITIVE_OPTION_RE.fullmatch(option):
+        assigned = _redact_assignment(str(argument))
+        if assigned != argument:
+            redacted.append(assigned)
+            continue
+        if SENSITIVE_OPTION_RE.match(str(argument)):
+            redacted.append(str(argument))
             redact_next = True
+            continue
+        redacted.append(_redact_unstructured(str(argument)))
     return redacted
 
 
 def redact_shell_command(command: str) -> str:
-    """Return a shell command safe for logs without executing or expanding it."""
+    """Return a printable shell command while preserving the command execution."""
     try:
-        arguments = shlex.split(command)
+        arguments = shlex.split(command, posix=True)
     except ValueError:
-        return redact_text(command)
+        return _redact_unstructured(command)
     return shlex.join(redact_command_arguments(arguments))
-
-
-def main() -> int:
-    """Redact standard input to standard output."""
-    sys.stdout.write(redact_text(sys.stdin.read()))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
