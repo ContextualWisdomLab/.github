@@ -35,6 +35,14 @@ def test_sanitizes_url_credentials_without_secret_key_prefix():
     assert sanitized == "postgresql://<redacted>@db:5432/app\n"
 
 
+def test_sanitizes_url_userinfo_without_password():
+    """A username-only URL authority cannot leak through coverage evidence."""
+    sanitized = sanitize_text("https://alice@example.invalid/artifact\n")
+
+    assert sanitized == "https://<redacted>@example.invalid/artifact\n"
+    assert "alice" not in sanitized
+
+
 def test_sanitizes_mixed_credentials_before_truncating_at_secret_key():
     """Mixed URL, Authorization, and key-value secrets are all removed."""
     source = (
