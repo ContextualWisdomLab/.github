@@ -24,11 +24,17 @@ def _normalized_argv(argv: list[str]) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    """Apply NVIDIA NIM dispatch constants and run the shared scheduler."""
+    """Run the shared scheduler with temporary NVIDIA NIM dispatch constants."""
 
-    scheduler.DEFAULT_AUTOFIX_WORKFLOW = NIM_AUTOFIX_WORKFLOW
-    scheduler.AUTOFIX_REPOSITORY_DISPATCH_TYPE = NIM_AUTOFIX_EVENT_TYPE
-    return scheduler.main(_normalized_argv(argv))
+    original_workflow = scheduler.DEFAULT_AUTOFIX_WORKFLOW
+    original_event_type = scheduler.AUTOFIX_REPOSITORY_DISPATCH_TYPE
+    try:
+        scheduler.DEFAULT_AUTOFIX_WORKFLOW = NIM_AUTOFIX_WORKFLOW
+        scheduler.AUTOFIX_REPOSITORY_DISPATCH_TYPE = NIM_AUTOFIX_EVENT_TYPE
+        return scheduler.main(_normalized_argv(argv))
+    finally:
+        scheduler.DEFAULT_AUTOFIX_WORKFLOW = original_workflow
+        scheduler.AUTOFIX_REPOSITORY_DISPATCH_TYPE = original_event_type
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through the workflow
