@@ -48,6 +48,10 @@ This preserves the central MSA boundary without copying privileged workflow code
 
 The permanent quality workflow runs the deterministic router, sweep, and workflow-contract suites under Python 3.14 and requires 100% production statement coverage, branch coverage, and public docstring coverage. It also compiles the Python files and checks the final diff for whitespace errors.
 
+### Activation gate
+
+The router is inactive until its workflow and helper code are merged into the protected default branch. A materialization, predecessor, cancelled, queued, or stale-head run is not activation evidence. Production activation requires the exact final head to pass the permanent quality workflow, security and supply-chain checks, current-head automated review, an independent approval, unresolved-thread policy, and branch protection without bypass.
+
 Rollback is deletion of the two mention-router workflows, the two Python helpers, and their focused tests. Existing Noema and OpenCode review workflows remain independently invocable and authoritative; the router does not own reviewer identity, credentials, verdict acceptance, approval, merge, or release.
 
 ## References
