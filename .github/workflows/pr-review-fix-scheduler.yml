@@ -26,7 +26,7 @@ on:
       retry_hours:
         description: Minimum hours before redispatching autofix for the same head
         required: false
-        default: "24"
+        default: "1"
         type: string
       autofix_workflow:
         description: Autofix workflow file to dispatch
@@ -44,14 +44,16 @@ on:
         default: ""
         type: string
       canonical_ref:
-        description: Ref of ContextualWisdomLab/.github to use for scheduler code
+        description: Deprecated compatibility input; accepted and ignored because privileged source is bound to the called workflow SHA
         required: false
-        default: "main"
+        default: ""
         type: string
   repository_dispatch:
     types: [pr-review-fix-scheduler]
   schedule:
-    - cron: "23 */2 * * *"
+    # Run away from minute zero, where scheduled GitHub Actions are more likely
+    # to be delayed, while preserving a bounded one-dispatch-per-run repair loop.
+    - cron: "23 * * * *"
 
 concurrency:
   group: central-pr-review-fix-scheduler-${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
@@ -80,18 +82,86 @@ jobs:
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '50' }}
       MAX_DISPATCHES: ${{ github.event.client_payload.max_dispatches || inputs.max_dispatches || '1' }}
-      RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
+      RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '1' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
-      CANONICAL_REF: main
     steps:
-      - name: Checkout canonical scheduler
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Resolve immutable called-workflow source
+        id: trusted_source
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          expected_repository="ContextualWisdomLab/.github"
+          expected_file=".github/workflows/pr-review-fix-scheduler.yml"
+
+          if [ "$WORKFLOW_REPOSITORY" != "$expected_repository" ]; then
+            printf '::error::Called workflow repository resolved to %s, expected %s.\n' \
+              "${WORKFLOW_REPOSITORY:-<empty>}" "$expected_repository"
+            exit 1
+          fi
+          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '::error::Called workflow SHA is missing or malformed: %s.\n' \
+              "${WORKFLOW_SHA:-<empty>}"
+            exit 1
+          fi
+          if [ "$WORKFLOW_FILE_PATH" != "$expected_file" ]; then
+            printf '::error::Called workflow file resolved to %s, expected %s.\n' \
+              "${WORKFLOW_FILE_PATH:-<empty>}" "$expected_file"
+            exit 1
+          fi
+          expected_ref_prefix="${WORKFLOW_REPOSITORY}/${WORKFLOW_FILE_PATH}@"
+          case "$WORKFLOW_REF" in
+            "$expected_ref_prefix"*) ;;
+            *)
+              printf '::error::Called workflow ref is missing or inconsistent: %s.\n' \
+                "${WORKFLOW_REF:-<empty>}"
+              exit 1
+              ;;
+          esac
+
+          {
+            printf 'repository=%s\n' "$WORKFLOW_REPOSITORY"
+            printf 'sha=%s\n' "$WORKFLOW_SHA"
+            printf 'workflow_ref=%s\n' "$WORKFLOW_REF"
+            printf 'workflow_file_path=%s\n' "$WORKFLOW_FILE_PATH"
+          } >>"$GITHUB_OUTPUT"
+          printf 'Resolved immutable called-workflow source repository=%s file=%s sha=%s ref=%s.\n' \
+            "$WORKFLOW_REPOSITORY" "$WORKFLOW_FILE_PATH" "$WORKFLOW_SHA" "$WORKFLOW_REF"
+
+      - name: Checkout immutable called-workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ env.CANONICAL_REF }}
+          # GitHub documents job.workflow_repository and job.workflow_sha as
+          # the called workflow identity. The preceding step validates every
+          # field before checkout so an absent property cannot select defaults.
+          repository: ${{ steps.trusted_source.outputs.repository }}
+          ref: ${{ steps.trusted_source.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Verify immutable called-workflow checkout
+        env:
+          EXPECTED_SHA: ${{ steps.trusted_source.outputs.sha }}
+          EXPECTED_FILE: ${{ steps.trusted_source.outputs.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            printf '::error::Checked-out scheduler SHA %s does not match called-workflow SHA %s.\n' \
+              "$actual_sha" "$EXPECTED_SHA"
+            exit 1
+          fi
+          if [ ! -f "$EXPECTED_FILE" ] || [ -L "$EXPECTED_FILE" ]; then
+            printf '::error::Called workflow source file is missing or symlinked: %s.\n' \
+              "$EXPECTED_FILE"
+            exit 1
+          fi
+          printf 'Verified immutable scheduler checkout at %s (%s).\n' \
+            "$actual_sha" "$EXPECTED_FILE"
 
       - name: Self-test fix scheduler contract
         run: python3 scripts/ci/pr_review_fix_scheduler.py --self-test
