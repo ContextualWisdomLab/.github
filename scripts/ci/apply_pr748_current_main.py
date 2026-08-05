@@ -28,6 +28,10 @@ ALLOWED_PATHS = (
     "tests/test_npm_workspace_install_root_hardening.py",
     "tests/test_opencode_agent_contract.py",
 )
+TEMPORARY_PATHS = (
+    ".github/workflows/rebuild-pr748-current-main.yml",
+    "scripts/ci/apply_pr748_current_main.py",
+)
 LLVM_PRESERVATION_TOKENS = (
     "llvm-19",
     "LLVM_COV",
@@ -145,20 +149,36 @@ def _verify_applied_tree() -> None:
         )
 
 
+def _verify_trigger_scope() -> None:
+    """Require the trigger branch to contain only the two temporary files."""
+
+    _run(
+        "git",
+        "merge-base",
+        "--is-ancestor",
+        EXPECTED_MAIN_PARENT,
+        "HEAD",
+    )
+    temporary_diff = set(
+        _run(
+            "git",
+            "diff",
+            "--name-only",
+            f"{EXPECTED_MAIN_PARENT}...HEAD",
+            capture=True,
+        ).stdout.splitlines()
+    )
+    if temporary_diff != set(TEMPORARY_PATHS):
+        raise SystemExit(
+            "repair trigger scope mismatch: "
+            f"expected={sorted(TEMPORARY_PATHS)}, actual={sorted(temporary_diff)}"
+        )
+
+
 def main() -> int:
     """Apply the reviewed resolver patch to the exact protected-main parent."""
 
-    current = _run("git", "rev-parse", "HEAD", capture=True).stdout.strip()
-    if current == EXPECTED_MAIN_PARENT:
-        pass
-    else:
-        parent = _run("git", "rev-parse", "HEAD^", capture=True).stdout.strip()
-        if parent != EXPECTED_MAIN_PARENT:
-            raise SystemExit(
-                "repair trigger is not based on the reviewed protected-main parent: "
-                f"current={current}, parent={parent}"
-            )
-
+    _verify_trigger_scope()
     patch = _run(
         "git",
         "diff",
