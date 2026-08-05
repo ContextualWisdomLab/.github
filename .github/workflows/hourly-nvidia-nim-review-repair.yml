@@ -11,6 +11,7 @@ on:
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_nvidia_nim_contract.py
       - docs/automation/hourly-review-repair.md
+      - docs/doctoring/clearfolio-hourly-review-caller.md
       - docs/doctoring/hourly-nvidia-nim-autofix.md
   push:
     paths:
@@ -22,6 +23,7 @@ on:
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_nvidia_nim_contract.py
       - docs/automation/hourly-review-repair.md
+      - docs/doctoring/clearfolio-hourly-review-caller.md
       - docs/doctoring/hourly-nvidia-nim-autofix.md
 
 permissions:
