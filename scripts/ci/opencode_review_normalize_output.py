@@ -888,7 +888,9 @@ def label_section(text: str, label: str) -> str:
         starts = []
         pattern = APPROVAL_VERIFICATION_PATTERNS.get(candidate)
         if pattern is None:
+            # ⚡ Bolt: Cache regex compilation to avoid redundant work in deep label-scanning loops
             pattern = re.compile(re.escape(candidate))
+            APPROVAL_VERIFICATION_PATTERNS[candidate] = pattern
         for match in pattern.finditer(text):
             index = match.start()
             if (

@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2024-11-23 - Dynamic Regex Compilation Caching
+**Learning:** In `scripts/ci/opencode_review_normalize_output.py`, `label_starts` dynamically compiled regular expressions (`re.compile`) when the label key wasn't in `APPROVAL_VERIFICATION_PATTERNS`. Because this occurred within a deep string search loop, the un-cached result resulted in redundant parsing and significant overhead.
+**Action:** When a cache dictionary is present for compiled regex objects, always ensure dynamic insertions cache the compiled object back into the dictionary (e.g., `APPROVAL_VERIFICATION_PATTERNS[candidate] = pattern`) to optimize subsequent loop iterations.
