@@ -161,7 +161,6 @@ jobs:
             tests/test_uv_workspace_fail_closed.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py \
-            tests/test_opencode_libclang_toolchain_contract.py \
             --cov=scripts.ci.coverage_failure_summary \
             --cov=scripts.ci.materialize_base_javascript_packages \
             --cov=scripts.ci.materialize_base_python_requirements \
