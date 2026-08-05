@@ -143,8 +143,7 @@ def test_noema_nonblocking_status_small_diff_and_empty_context_branches(
         },
     }
     rendered_context = noema.review_thread_context(pr)
-    assert "- Thread open at src/runtime.py:" in rendered_context
-    assert "src/runtime.py:None" not in rendered_context
+    assert rendered_context == "- Thread open at src/runtime.py:\n  - reviewer: note"
 
     monkeypatch.setattr(noema, "load_codegraph_context", lambda: "")
     monkeypatch.setattr(noema, "review_thread_context", lambda _pr: "")
