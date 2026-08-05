@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: one-shot-pr759-libclang-finalization-v5
+  group: one-shot-pr759-libclang-finalization-v6
   cancel-in-progress: false
 
 env:
@@ -42,7 +42,7 @@ jobs:
 
       - name: Bind execution to the reviewed staging parent
         env:
-          EXPECTED_PARENT_SHA: bf7b9fa7c95430f707a4f5292e475762c3fac3b8
+          EXPECTED_PARENT_SHA: f3029c4e0ac5c3ccbe2e891f801ea9fe19efd957
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
@@ -62,7 +62,7 @@ jobs:
           -r requirements-opencode-review-ci-hashes.txt
 
       - name: Apply the deterministic reviewed source repair
-        run: python -I scripts/ci/apply_pr759_libclang_final.py
+        run: python -I scripts/ci/apply_pr759_libclang_runtime_only.py
 
       - name: Verify permanent diagnostics and complete quality contracts
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -132,6 +132,7 @@ jobs:
         run: |
           test "$(git ls-remote origin refs/heads/${HEAD_BRANCH} | cut -f1)" = "$GITHUB_SHA"
           rm scripts/ci/apply_pr759_libclang_final.py
+          rm scripts/ci/apply_pr759_libclang_runtime_only.py
           rm .github/workflows/one-shot-pr759-libclang-final.yml
           rm .github/workflows/one-shot-pr759-apply-libclang.yml
           rm -rf .github/pr759-final-patch
