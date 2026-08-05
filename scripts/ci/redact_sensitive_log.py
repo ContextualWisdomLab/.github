@@ -40,7 +40,7 @@ PROVIDER_TOKEN_RES = (
 
 
 def _redact_json(value: Any) -> Any:
-    """Recursively replace values whose JSON keys identify credentials."""
+    """Recursively redact sensitive keys and credential-shaped JSON strings."""
     if isinstance(value, dict):
         return {
             key: REDACTED if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(item)
@@ -48,6 +48,8 @@ def _redact_json(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_json(item) for item in value]
+    if isinstance(value, str):
+        return _redact_unstructured(value)
     return value
 
 
