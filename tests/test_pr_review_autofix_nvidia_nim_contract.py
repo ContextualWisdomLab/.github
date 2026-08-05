@@ -6,6 +6,9 @@ import subprocess
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
+HOURLY_CALLER_WORKFLOW = Path(
+    ".github/workflows/clearfolio-hourly-review-repair.yml"
+)
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 REVIEW_DISPATCH_BLOB_SHA = "83f6830d5c21a324b4dbcd4e5c21a07968994b81"
 
@@ -15,11 +18,12 @@ def _workflow_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_review_fix_scheduler_runs_once_each_hour() -> None:
-    """Keep the actionable-review repair loop on the approved hourly cadence."""
-    scheduler = _workflow_text(FIX_SCHEDULER_WORKFLOW)
-    assert 'cron: "23 * * * *"' in scheduler
-    assert 'cron: "23 */2 * * *"' not in scheduler
+def test_review_fix_caller_runs_once_each_hour() -> None:
+    """Keep the actionable-review repair caller on the approved hourly cadence."""
+    caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
+    assert 'cron: "23 * * * *"' in caller
+    assert 'cron: "23 */2 * * *"' not in caller
+    assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 
 def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
