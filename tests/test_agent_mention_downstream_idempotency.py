@@ -7,9 +7,11 @@ ROUTER_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router.yml"
 QUALITY_WORKFLOW = (
     ROOT / ".github" / "workflows" / "agent-mention-router-quality-ci.yml"
 )
-NOEMA_WORKFLOW = ROOT / ".github" / "workflows" / "noema-review.yml"
+NOEMA_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "agent-mention-noema-dispatch.yml"
+)
 OPENCODE_WORKFLOW = (
-    ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
+    ROOT / ".github" / "workflows" / "agent-mention-opencode-dispatch.yml"
 )
 
 
@@ -25,7 +27,7 @@ def test_router_can_read_durable_central_workflow_runs() -> None:
 
 
 def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> None:
-    """Noema and OpenCode entrypoints serialize an exact agent invocation key."""
+    """Agent wrappers serialize and validate one exact invocation key."""
 
     noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
     opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
@@ -33,10 +35,17 @@ def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> No
         assert "github.event.client_payload.agent_invocation_key" in text
         assert "cwl-agent-invocation:" in text
         assert "source_comment_id" in text
-    assert "requested_agent" in noema
-    assert "requested_agent" in opencode
-    assert "cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}" in noema
-    assert "cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}" in opencode
+        assert "requested_agent" in text
+        assert "cancel-in-progress: false" in text
+        assert "^[0-9a-f]{64}$" in text
+        assert "^[1-9][0-9]*$" in text
+        assert "repos/${GITHUB_REPOSITORY}/dispatches" in text
+    assert "types: [agent-mention-noema]" in noema
+    assert 'event_type: "noema-review"' in noema
+    assert 'REQUESTED_AGENT: "cwl-noema-review"' in noema
+    assert "types: [agent-mention-opencode]" in opencode
+    assert 'event_type: "merge-scheduler"' in opencode
+    assert 'REQUESTED_AGENT: "opencode-agent"' in opencode
 
 
 def test_quality_gate_tracks_every_idempotency_surface() -> None:
@@ -44,8 +53,8 @@ def test_quality_gate_tracks_every_idempotency_surface() -> None:
 
     text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
     for workflow_path in (
-        '.github/workflows/noema-review.yml',
-        '.github/workflows/pr-review-merge-scheduler.yml',
+        '.github/workflows/agent-mention-noema-dispatch.yml',
+        '.github/workflows/agent-mention-opencode-dispatch.yml',
     ):
         assert f'      - "{workflow_path}"' in text
 
