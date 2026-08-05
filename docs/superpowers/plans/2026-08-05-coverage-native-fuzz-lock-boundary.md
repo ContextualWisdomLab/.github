@@ -72,7 +72,7 @@ Return true only for exact members of the immutable set.
 
 - [ ] **Step 3: Exclude the native toolchain before ordinary candidate matching**
 
-Keep every existing candidate and content check unchanged for other files.
+Keep every existing candidate and content check unchanged for other files, including the shared bounded and credential-redacting failure-summary publisher.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -87,7 +87,7 @@ Run the repository's full Python test, branch-coverage, compile, formatting, sta
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/ci/materialize_base_python_requirements.py tests/test_coverage_native_fuzz_lock_boundary.py
+git add scripts/ci/materialize_base_python_requirements.py tests/test_coverage_native_fuzz_lock_boundary.py .github/workflows/opencode-coverage-diagnostics-ci.yml
 git commit -m "fix(coverage): skip native fuzz engine locks"
 ```
 
@@ -124,6 +124,6 @@ git commit -m "docs(coverage): record native fuzz lock boundary"
 - [ ] **Step 1: Open a focused PR closing #762**
 - [ ] **Step 2: Resolve every automated and human review finding**
 - [ ] **Step 3: Re-run all exact-head central checks and independent review**
-- [ ] **Step 4: Merge without administrative bypass**
-- [ ] **Step 5: Re-dispatch coverage review for contextual-orchestrator #96 and merge it when green**
-- [ ] **Step 6: Rebase/revalidate contextual-orchestrator #76, then continue its dependency-ordered PR queue**
+- [ ] **Step 4: Merge prerequisite #759 without administrative bypass**
+- [ ] **Step 5: Retarget this PR to integrated `main`, rerun exact-head gates, and merge without bypass**
+- [ ] **Step 6: Re-dispatch coverage review for contextual-orchestrator #96, merge it when green, then continue its dependency-ordered PR queue**
