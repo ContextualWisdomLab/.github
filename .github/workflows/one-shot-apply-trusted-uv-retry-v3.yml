@@ -1,0 +1,99 @@
+name: One-shot apply trusted uv retry v3
+
+on:
+  push:
+    branches:
+      - fix/trusted-uv-transient-download-retry
+
+concurrency:
+  group: one-shot-apply-trusted-uv-retry-v3
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/trusted-uv-transient-download-retry
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Confirm retry regressions are red
+        run: |
+          set -euo pipefail
+          if python -m pytest tests/test_trusted_uv_portability_and_streaming.py -k 'retries_transient or retries_transport or exhausts_bounded or does_not_retry_permanent' -q; then
+            echo "::error::Retry regressions unexpectedly passed before implementation."
+            exit 1
+          fi
+
+      - name: Apply exact reviewed patch
+        run: |
+          set -euo pipefail
+          python scripts/ci/apply_trusted_uv_retry_once.py
+          git diff --check
+
+      - name: Run focused trusted uv coverage gate
+        run: |
+          set -euo pipefail
+          cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/materialize_base_python_requirements.py
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/trusted-uv-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest tests/test_materialize_base_python_requirements.py tests/test_materialize_uv_export_hash_contract.py tests/test_trusted_uv_download_contract.py tests/test_trusted_uv_portability_and_streaming.py tests/test_uv_export_isolation_contract.py tests/test_uv_redirect_and_coverage_contract.py tests/test_uv_redirect_boundary.py tests/test_uv_workspace_fail_closed.py tests/test_trusted_uv_materializer_quality_workflow_contract.py -q
+          python -m coverage report
+
+      - name: Run full central quality gate
+        run: |
+          set -euo pipefail
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+          python -m interrogate --fail-under 100 scripts/ci/materialize_base_python_requirements.py
+          python -m compileall -q scripts/ci/materialize_base_python_requirements.py tests/test_trusted_uv_portability_and_streaming.py
+
+      - name: Publish verified repair and remove temporary files
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BRANCH_NAME: fix/trusted-uv-transient-download-retry
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/one-shot-apply-trusted-uv-retry.yml
+          git rm .github/workflows/one-shot-apply-trusted-uv-retry-v2.yml
+          git rm .github/workflows/one-shot-apply-trusted-uv-retry-v3.yml
+          git rm scripts/ci/apply_trusted_uv_retry_once.py
+          git add CHANGELOG.md docs/doctoring/trusted-uv-transient-download-retry.md scripts/ci/materialize_base_python_requirements.py tests/test_trusted_uv_portability_and_streaming.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(coverage): retry transient trusted uv downloads"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${BRANCH_NAME}"
