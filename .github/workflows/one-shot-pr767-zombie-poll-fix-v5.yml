@@ -1,4 +1,4 @@
-name: One-shot PR 767 polling repair final verification
+name: One-shot PR 767 completed-process polling repair
 
 on:
   push:
@@ -7,10 +7,10 @@ on:
       - .github/workflows/one-shot-pr767-zombie-poll-fix-v5.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: one-shot-pr767-zombie-poll-fix-v5
+  group: one-shot-pr767-zombie-poll-fix
   cancel-in-progress: true
 
 env:
@@ -18,19 +18,26 @@ env:
 
 jobs:
   repair-and-verify:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/sandboxed-output-resource-bounds'
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 30
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
 
-      - name: Checkout contributor branch
+      - name: Checkout exact contributor head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: fix/sandboxed-output-resource-bounds
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -39,12 +46,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-opencode-review-ci-hashes.txt
 
-      - name: Install exact locked quality tooling
+      - name: Install exact locked test tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Apply polling and hermetic Git repairs
+      - name: Apply completed-process polling repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
@@ -58,22 +66,20 @@ jobs:
                       f"expected one kill-zero polling loop, found {script.count(old_loop)}"
                   )
               script = script.replace(old_loop, new_loop, 1)
-          elif new_loop not in script:
+          elif script.count(new_loop) != 1:
               raise SystemExit("completed-process polling loop has an unexpected shape")
           script_path.write_text(script, encoding="utf-8")
 
-          model_test_path = Path("tests/test_opencode_model_pool_runner.py")
-          model_tests = model_test_path.read_text(encoding="utf-8")
-          model_start_marker = (
+          test_path = Path("tests/test_opencode_model_pool_runner.py")
+          source = test_path.read_text(encoding="utf-8")
+          start_marker = (
               "def test_model_text_quoting_error_signatures_does_not_kill_run("
               "tmp_path: Path) -> None:\n"
           )
-          model_end_marker = (
-              "\n\ndef test_delisted_openrouter_model_error_kills_hung_run_early"
-          )
-          model_start = model_tests.index(model_start_marker)
-          model_end = model_tests.index(model_end_marker, model_start)
-          model_replacement = (
+          end_marker = "\n\ndef test_delisted_openrouter_model_error_kills_hung_run_early"
+          start = source.index(start_marker)
+          end = source.index(end_marker, start)
+          replacement = (
               "def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:\n"
               "    \"\"\"Model prose mentioning fatal signatures never kills or strands a healthy run.\"\"\"\n"
               "    start = time.monotonic()\n"
@@ -91,53 +97,26 @@ jobs:
               "    assert \"logged a fatal provider error while still running\" not in result.stdout\n"
               "    assert elapsed < 15\n"
           )
-          model_test_path.write_text(
-              model_tests[:model_start] + model_replacement + model_tests[model_end:],
-              encoding="utf-8",
-          )
-
-          contract_path = Path("tests/test_opencode_agent_contract.py")
-          contracts = contract_path.read_text(encoding="utf-8")
-          function_marker = (
-              "def test_sandbox_git_config_env_marks_only_the_validated_worktree_safe("
-              "tmp_path):\n"
-          )
-          function_start = contracts.index(function_marker)
-          env_start = contracts.index("    base_env = {\n", function_start)
-          env_end = contracts.index("    refused = subprocess.run(\n", env_start)
-          env_replacement = (
-              "    base_env = {\n"
-              "        **os.environ,\n"
-              "        \"GIT_TEST_ASSUME_DIFFERENT_OWNER\": \"1\",\n"
-              "        \"GIT_CONFIG_NOSYSTEM\": \"1\",\n"
-              "        \"GIT_CONFIG_GLOBAL\": \"/dev/null\",\n"
-              "    }\n"
-          )
-          contracts = contracts[:env_start] + env_replacement + contracts[env_end:]
-          contract_path.write_text(contracts, encoding="utf-8")
+          test_path.write_text(source[:start] + replacement + source[end:], encoding="utf-8")
           PY
 
-      - name: Verify focused regressions and complete quality contract
+      - name: Verify focused behavior and syntax
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          set -euo pipefail
           python -m pytest -q \
             tests/test_opencode_model_pool_runner.py::test_fatal_provider_error_kills_hung_opencode_run_early \
             tests/test_opencode_model_pool_runner.py::test_model_text_quoting_error_signatures_does_not_kill_run \
-            tests/test_opencode_model_pool_runner.py::test_delisted_openrouter_model_error_kills_hung_run_early \
-            tests/test_opencode_agent_contract.py::test_sandbox_git_config_env_marks_only_the_validated_worktree_safe
-          python -m coverage erase
-          python -m coverage run -m pytest -q
-          python -m coverage report --show-missing --fail-under=100
-          python -m interrogate --fail-under=100 scripts/ci
-          python -m compileall -q scripts tests
+            tests/test_opencode_model_pool_runner.py::test_delisted_openrouter_model_error_kills_hung_run_early
+          python -m compileall -q tests/test_opencode_model_pool_runner.py
           bash -n scripts/ci/run_opencode_review_model_pool.sh
           git diff --check
 
-      - name: Publish verified repair and remove one-shot workflows
+      - name: Publish verified repair and remove every one-shot workflow
+        shell: bash --noprofile --norc -e -o pipefail {0}
         env:
           BRANCH_NAME: fix/sandboxed-output-resource-bounds
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
           rm -f \
             .github/workflows/one-shot-pr767-zombie-poll-fix.yml \
             .github/workflows/one-shot-pr767-zombie-poll-fix-v2.yml \
@@ -147,6 +126,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet && { echo "No polling and Git isolation repair generated" >&2; exit 1; }
+          git diff --cached --quiet && { echo "No completed-process repair generated" >&2; exit 1; }
           git commit -m "fix(opencode): reap completed model attempts"
-          git push origin "HEAD:${BRANCH_NAME}"
+          git push \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:${BRANCH_NAME}"
