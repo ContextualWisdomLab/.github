@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -167,7 +168,7 @@ def test_web_readiness_retries_5xx_and_timeout_without_streams(
             assert timeout == 2
             return Response()
 
-    ticks = iter([0.0, 0.0, 2.0])
+    ticks = itertools.chain([0.0, 0.0], itertools.repeat(2.0))
     monkeypatch.setattr(
         sandboxed_web_e2e.urllib.request, "build_opener", lambda *_args: Opener()
     )
