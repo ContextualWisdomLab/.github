@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from scripts.ci import materialize_base_python_requirements as materializer
+from tests.conftest import FakeHttpResponse
 
 
 def git(repo: Path, *args: str) -> str:
@@ -21,6 +22,12 @@ def git(repo: Path, *args: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _created_tool_directory(path: Path) -> str:
+    """Create the directory normally returned by ``tempfile.mkdtemp``."""
+    path.mkdir(mode=0o700)
+    return str(path)
 
 
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
@@ -416,6 +423,7 @@ def test_uv_lock_skipped_when_pyproject_is_absent(
 ) -> None:
     """A uv.lock without a sibling pyproject.toml at base (in a subdir) cannot be exported."""
     repo, base_sha = _uv_repo(tmp_path, with_pyproject=False, lock_dir="service")
+
     def unexpected_install() -> str:
         raise AssertionError("orphan uv.lock must not bootstrap uv")
 
@@ -473,30 +481,6 @@ def test_uv_lock_with_empty_dependency_closure_materializes_nothing(
     assert materializer.materialize(repo, base_sha, tmp_path / "output") == []
 
 
-class _FakeResponse:
-    """Minimal context-managed HTTP response used by trusted uv download tests."""
-
-    def __init__(self, payload: bytes, final_url: str) -> None:
-        """Store deterministic response bytes and the observed final URL."""
-        self._payload = payload
-        self._final_url = final_url
-
-    def __enter__(self) -> "_FakeResponse":
-        """Return this response from a context manager."""
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        """Close the fake response without suppressing exceptions."""
-
-    def geturl(self) -> str:
-        """Return the final URL after redirects."""
-        return self._final_url
-
-    def read(self, size: int) -> bytes:
-        """Return at most ``size`` bytes like an HTTP response."""
-        return self._payload[:size]
-
-
 def _trusted_uv_archive(
     binary: bytes = b"verified-uv",
     *,
@@ -521,7 +505,7 @@ def test_download_trusted_uv_archive_accepts_fixed_https_origin(
 ) -> None:
     """The downloader returns bounded bytes from the fixed Astral HTTPS origin."""
     payload = b"archive"
-    response = _FakeResponse(payload, materializer.TRUSTED_UV_ARCHIVE_URL)
+    response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, payload)
     monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
 
     assert materializer._download_trusted_uv_archive() == payload
@@ -531,7 +515,7 @@ def test_download_trusted_uv_archive_rejects_unsafe_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A redirect away from the fixed HTTPS release host fails closed."""
-    response = _FakeResponse(b"archive", "https://example.invalid/uv.tar.gz")
+    response = FakeHttpResponse("https://example.invalid/uv.tar.gz")
     monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
 
     with pytest.raises(RuntimeError, match="redirected outside"):
@@ -550,7 +534,7 @@ def test_download_trusted_uv_archive_rejects_network_and_size_failures(
     with pytest.raises(RuntimeError, match="download failed"):
         materializer._download_trusted_uv_archive()
 
-    response = _FakeResponse(b"12345", materializer.TRUSTED_UV_ARCHIVE_URL)
+    response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, b"12345")
     monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
     monkeypatch.setattr(materializer, "TRUSTED_UV_DOWNLOAD_MAX_BYTES", 4)
     with pytest.raises(RuntimeError, match="bounded download size"):
@@ -660,12 +644,20 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
-    materializer._install_trusted_uv.cache_clear()
-    monkeypatch.setattr(materializer.tempfile, "mkdtemp", lambda **_k: str(tmp_path / "uv"))
+    tool_dir = tmp_path / "uv"
+    monkeypatch.setattr(
+        materializer.tempfile,
+        "mkdtemp",
+        lambda **_kwargs: _created_tool_directory(tool_dir),
+    )
     monkeypatch.setattr(materializer, "_download_trusted_uv_archive", lambda: b"archive")
     monkeypatch.setattr(materializer, "_verified_uv_binary", lambda _payload: b"binary")
     registered: list[tuple[object, ...]] = []
-    monkeypatch.setattr(materializer.atexit, "register", lambda *args, **_kwargs: registered.append(args))
+    monkeypatch.setattr(
+        materializer.atexit,
+        "register",
+        lambda *args, **_kwargs: registered.append(args),
+    )
     calls = 0
 
     def verify(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -678,12 +670,11 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     first = materializer._install_trusted_uv()
     second = materializer._install_trusted_uv()
 
-    assert first == second == str(tmp_path / "uv" / "uv")
+    assert first == second == str(tool_dir / "uv")
     assert Path(first).read_bytes() == b"binary"
     assert Path(first).stat().st_mode & 0o111
     assert calls == 1
     assert registered
-    materializer._install_trusted_uv.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -699,9 +690,12 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
-    materializer._install_trusted_uv.cache_clear()
     tool_dir = tmp_path / "uv"
-    monkeypatch.setattr(materializer.tempfile, "mkdtemp", lambda **_k: str(tool_dir))
+    monkeypatch.setattr(
+        materializer.tempfile,
+        "mkdtemp",
+        lambda **_kwargs: _created_tool_directory(tool_dir),
+    )
     monkeypatch.setattr(materializer, "_download_trusted_uv_archive", lambda: b"archive")
     monkeypatch.setattr(materializer, "_verified_uv_binary", lambda _payload: b"binary")
 
@@ -712,29 +706,38 @@ def test_install_trusted_uv_rejects_version_process_failures(
     with pytest.raises(RuntimeError, match="executable verification failed"):
         materializer._install_trusted_uv()
     assert not tool_dir.exists()
-    materializer._install_trusted_uv.cache_clear()
 
 
-def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Unexpected version output or a nonzero status cannot satisfy the pin."""
-    for completed in (
+@pytest.mark.parametrize(
+    "completed",
+    [
         subprocess.CompletedProcess([], 0, b"uv 0.12.0\n", b""),
         subprocess.CompletedProcess([], 1, b"uv 0.12.1\n", b"failed"),
-    ):
-        materializer._install_trusted_uv.cache_clear()
-        tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
-        monkeypatch.setattr(
-            materializer.tempfile, "mkdtemp", lambda **_k: str(tool_dir)
-        )
-        monkeypatch.setattr(materializer, "_download_trusted_uv_archive", lambda: b"archive")
-        monkeypatch.setattr(materializer, "_verified_uv_binary", lambda _payload: b"binary")
-        monkeypatch.setattr(materializer.subprocess, "run", lambda *_a, **_k: completed)
-        with pytest.raises(RuntimeError, match="unexpected version or exit status"):
-            materializer._install_trusted_uv()
-        assert not tool_dir.exists()
-    materializer._install_trusted_uv.cache_clear()
+    ],
+)
+def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed: subprocess.CompletedProcess[bytes],
+) -> None:
+    """Unexpected version output or a nonzero status cannot satisfy the pin."""
+    tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
+    monkeypatch.setattr(
+        materializer.tempfile,
+        "mkdtemp",
+        lambda **_kwargs: _created_tool_directory(tool_dir),
+    )
+    monkeypatch.setattr(materializer, "_download_trusted_uv_archive", lambda: b"archive")
+    monkeypatch.setattr(materializer, "_verified_uv_binary", lambda _payload: b"binary")
+    monkeypatch.setattr(
+        materializer.subprocess,
+        "run",
+        lambda *_args, **_kwargs: completed,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected version or exit status"):
+        materializer._install_trusted_uv()
+    assert not tool_dir.exists()
 
 
 def test_run_uv_export_invokes_uv_with_frozen_offline_flags(
