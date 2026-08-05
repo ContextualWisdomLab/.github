@@ -51,7 +51,8 @@ for entry in entries:
     if entry == ".":
         pass
     elif (
-        len(entry.encode("utf-8")) > 255
+        entry == ".."
+        or len(entry.encode("utf-8")) > 255
         or entry.startswith("-")
         or "/" in entry
         or "\\" in entry
