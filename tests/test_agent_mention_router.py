@@ -213,10 +213,10 @@ def test_eligible_agents_and_payloads() -> None:
         opencode_allowlist=frozenset(),
     ) == (("cwl-noema-review",), ("opencode-agent",))
     noema = module.noema_payload(request)
-    assert noema["event_type"] == "noema-review"
+    assert noema["event_type"] == "agent-mention-noema"
     assert noema["client_payload"]["pr_head_sha"] == "a" * 40
     opencode = module.opencode_payload(request)
-    assert opencode["event_type"] == "merge-scheduler"
+    assert opencode["event_type"] == "agent-mention-opencode"
     assert opencode["client_payload"]["base_branch"] == "develop"
     assert opencode["client_payload"]["merge_mode"] == "disabled"
     assert opencode["client_payload"]["enable_auto_merge"] is False
@@ -240,8 +240,8 @@ def test_dispatch_uses_central_events_and_acknowledges() -> None:
     assert result == ("@cwl-noema-review", "@opencode-agent")
     dispatches = repository_dispatch_calls(central)
     assert [payload["event_type"] for _, payload in dispatches] == [
-        "noema-review",
-        "merge-scheduler",
+        "agent-mention-noema",
+        "agent-mention-opencode",
     ]
     assert all(
         args[0] == "repos/ContextualWisdomLab/.github/dispatches"
@@ -300,7 +300,7 @@ def test_dispatch_noema_only_covers_non_opencode_path() -> None:
     ) == ("@cwl-noema-review",)
     dispatches = repository_dispatch_calls(central)
     assert len(dispatches) == 1
-    assert dispatches[0][1]["event_type"] == "noema-review"
+    assert dispatches[0][1]["event_type"] == "agent-mention-noema"
 
 
 def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
