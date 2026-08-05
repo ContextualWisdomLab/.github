@@ -32,6 +32,8 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
 
     assert "permissions:\n      contents: write\n      id-token: write" in sweep
     assert "github.repository == 'ContextualWisdomLab/.github'" in sweep
+    assert "github.event_name == 'schedule'" in sweep
+    assert "github.event_name == 'workflow_dispatch'" in sweep
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in sweep
     assert "secrets.OPENCODE_APPROVE_TOKEN" in sweep
     assert "TARGET_REPOSITORY_SOURCE" in sweep
