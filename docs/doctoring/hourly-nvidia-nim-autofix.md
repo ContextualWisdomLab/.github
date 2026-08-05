@@ -143,6 +143,38 @@ permissions are not implicitly denied. The worker must not load a broader skill,
 pause for interactive approval, or repeat an identical tool action beyond the
 bounded workflow contract.
 
+
+## Conflict-resolution model write boundary
+
+A merge-conflict repair begins by merging the exact validated base SHA into
+the exact PR head. Immediately after Git records the unresolved paths, the
+worker writes two immutable local inputs before OpenCode receives the task:
+
+1. a NUL-delimited allowlist produced by `git diff --name-only -z
+   --diff-filter=U`; and
+2. a deterministic snapshot of every tracked and non-ignored untracked
+   worktree path after the base merge.
+
+The snapshot fingerprints regular-file content with SHA-256 and records file
+size, mode, symbolic-link target, deletion, and other entry types. This timing
+is deliberate: legitimate non-conflict changes introduced by the base merge
+are part of the pre-model baseline, while changes made later by the model are
+not.
+
+After OpenCode exits, the workflow restores the repository's prior OpenCode
+configuration and compares the current worktree to that pre-model snapshot.
+Only paths in Git's NUL-delimited conflict allowlist may differ. A created,
+deleted, modified, mode-changed, or retargeted path outside that set fails the
+job before `git add -A`, commit, or push. Path inventories and path byte
+lengths are bounded, malformed snapshot data fails closed, and diagnostic
+output JSON-escapes path names rather than emitting them as workflow commands.
+
+Ignored build caches are outside the comparison because `git add -A` does not
+publish them. Git metadata is outside the model's file-edit surface; the
+model process has no shell, GitHub token, or Actions OIDC credential. The
+later live-head, unresolved-marker, merge-tree, syntax, and push checks remain
+independent defenses.
+
 ## GitHub write boundary
 
 The model transport change does not expand GitHub permissions. GitHub repository
