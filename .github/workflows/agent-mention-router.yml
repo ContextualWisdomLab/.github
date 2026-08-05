@@ -5,23 +5,6 @@ on:
     types: [created]
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch:
-    inputs:
-      lookback_hours:
-        description: Recent-comment lookback window (1-720 hours)
-        required: false
-        default: "168"
-        type: string
-      max_dispatches:
-        description: Maximum invocation comments processed in one sweep (1-100)
-        required: false
-        default: "20"
-        type: string
-      dry_run:
-        description: Discover invocations without reactions, comments, or dispatches
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: review-agent-mention-router-${{ github.repository }}
@@ -94,7 +77,7 @@ jobs:
   sweep-organization-agent-mentions:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
-      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -103,9 +86,9 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
-      LOOKBACK_HOURS: ${{ inputs.lookback_hours || vars.AGENT_MENTION_LOOKBACK_HOURS || '168' }}
-      MAX_DISPATCHES: ${{ inputs.max_dispatches || vars.AGENT_MENTION_MAX_DISPATCHES || '20' }}
-      DRY_RUN: ${{ inputs.dry_run == true }}
+      LOOKBACK_HOURS: ${{ vars.AGENT_MENTION_LOOKBACK_HOURS || '168' }}
+      MAX_DISPATCHES: ${{ vars.AGENT_MENTION_MAX_DISPATCHES || '20' }}
+      DRY_RUN: "false"
     steps:
       - name: Exchange OpenCode app token for sibling-repository comments
         id: sweep_app_token
