@@ -23,6 +23,7 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
         '"tests/test_materialize*.py"',
         '"tests/test_trusted_uv*.py"',
         '"tests/test_uv*.py"',
+        '"tests/test_repository_branch_coverage_*.py"',
         '"requirements-opencode-review-ci-hashes.txt"',
         '"pyproject.toml"',
     )
@@ -73,6 +74,8 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     assert "scripts/ci/materialize_base_python_requirements.py" in workflow
     assert "fail_under = 100" in workflow
     assert "python -m coverage report" in workflow
+    assert "python -m coverage run -m pytest tests -q" in workflow
+    assert "unset COVERAGE_RCFILE" in workflow
     assert "python -m interrogate --fail-under 100" in workflow
     assert "python -m compileall -q" in workflow
 
@@ -86,6 +89,10 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
         "tests/test_uv_redirect_boundary.py",
         "tests/test_uv_workspace_fail_closed.py",
         "tests/test_trusted_uv_materializer_quality_workflow_contract.py",
+        "tests/test_repository_branch_coverage_javascript_and_noema.py",
+        "tests/test_repository_branch_coverage_review_schedulers.py",
+        "tests/test_repository_branch_coverage_execution_sandboxes.py",
+        "tests/test_repository_branch_coverage_reporting_edges.py",
     )
     for test_path in required_tests:
         assert test_path in workflow
