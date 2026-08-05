@@ -52,6 +52,23 @@ def _run(*args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _ensure_reviewed_commit(commit_sha: str) -> None:
+    """Fetch one exact reviewed commit when branch rewrites made it unreachable."""
+
+    try:
+        _run("git", "cat-file", "-e", f"{commit_sha}^{{commit}}")
+    except subprocess.CalledProcessError:
+        _run(
+            "git",
+            "fetch",
+            "--no-tags",
+            "--depth=1",
+            "origin",
+            commit_sha,
+        )
+        _run("git", "cat-file", "-e", f"{commit_sha}^{{commit}}")
+
+
 def _section_path(section: str) -> str:
     """Return the repository path named by one unified-diff file section."""
 
@@ -179,6 +196,8 @@ def main() -> int:
     """Apply the reviewed resolver patch to the exact protected-main parent."""
 
     _verify_trigger_scope()
+    _ensure_reviewed_commit(REVIEWED_BASE)
+    _ensure_reviewed_commit(REVIEWED_CHILD)
     patch = _run(
         "git",
         "diff",
