@@ -41,14 +41,13 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-          test "$(git rev-parse HEAD^)" = "18cfd57ea1b1e2438fe8328f3ddbe4d8014b6275"
+          test "$(git rev-parse HEAD^)" = "1587f60ef35d5880af8e5f08e7b16b60dd6c38c4"
           git merge-base --is-ancestor "$RED_CONTRACT_SHA" HEAD
           mapfile -t changed_paths < <(git diff --name-only "$RED_CONTRACT_SHA" HEAD | sort)
           expected_paths=(
             ".github/workflows/reopen-requirements-directory-locks.yml"
             ".github/workflows/repair-requirements-directory-locks.yml"
             "scripts/ci/apply_requirements_directory_lock_repair.py"
-            "tests/test_requirements_directory_lock_materialization.py"
           )
           test "${#changed_paths[@]}" -eq "${#expected_paths[@]}"
           for index in "${!expected_paths[@]}"; do
