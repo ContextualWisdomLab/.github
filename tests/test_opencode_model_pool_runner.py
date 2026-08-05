@@ -584,7 +584,8 @@ def test_fatal_provider_error_kills_hung_opencode_run_early(
 
 
 def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:
-    """Model prose mentioning fatal signatures never kills a healthy streaming run."""
+    """Model prose mentioning fatal signatures never kills or strands a healthy run."""
+    start = time.monotonic()
     result = run_failed_model(
         tmp_path,
         json_line=(
@@ -593,9 +594,11 @@ def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -
         ),
         extra_env={"FAKE_OPENCODE_HANG_SECONDS": "4"},
     )
+    elapsed = time.monotonic() - start
 
     assert result.returncode == 1
     assert "logged a fatal provider error while still running" not in result.stdout
+    assert elapsed < 15
 
 
 def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) -> None:

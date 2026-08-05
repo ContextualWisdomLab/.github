@@ -480,7 +480,7 @@ run_one_model_attempt() {
 	# then hang instead of exiting, burning the whole run timeout. Watch the JSON
 	# log while opencode runs and kill the process early so the pool falls
 	# through to the next candidate within seconds instead of minutes.
-	while kill -0 "$opencode_pid" 2>/dev/null; do
+	while jobs -pr | grep -Fxq "$opencode_pid"; do
 		if has_fatal_provider_error_event "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
