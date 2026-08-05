@@ -1,3 +1,4 @@
+# Exact-head repair trigger; the job deletes this temporary workflow after success.
 name: Repair PR 782 conflict scope
 
 on:
