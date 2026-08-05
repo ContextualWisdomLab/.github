@@ -61,36 +61,23 @@ jobs:
           from pathlib import Path
 
 
-          def replace_or_verify(
-              path: Path,
-              old: str,
-              new: str,
-              *,
-              expected: int = 1,
-          ) -> None:
-              """Apply one exact replacement or verify its completed state."""
-
-              content = path.read_text(encoding="utf-8")
-              old_count = content.count(old)
-              new_count = content.count(new)
-              if old_count == expected and new_count == 0:
-                  path.write_text(content.replace(old, new), encoding="utf-8")
-                  return
-              if old_count == 0 and new_count == expected:
-                  return
-              raise SystemExit(
-                  f"{path}: invalid repair state old={old_count} new={new_count}"
-              )
-
-
           source_path = Path("scripts/ci/bounded_subprocess.py")
-          replace_or_verify(
-              source_path,
-              "import threading\nfrom collections.abc import Callable, Mapping, Sequence\n",
-              "import threading\nfrom contextlib import suppress\n"
-              "from collections.abc import Callable, Mapping, Sequence\n",
-          )
+          source = source_path.read_text(encoding="utf-8")
 
+          suppress_import = "from contextlib import suppress\n"
+          if suppress_import not in source:
+              import_anchor = "import threading\n"
+              if source.count(import_anchor) != 1:
+                  raise SystemExit(f"{source_path}: invalid threading import anchor")
+              source = source.replace(
+                  import_anchor,
+                  import_anchor + suppress_import,
+                  1,
+              )
+          elif source.count(suppress_import) != 1:
+              raise SystemExit(f"{source_path}: duplicate suppress import")
+
+          helper_marker = "def _cleanup_capture_startup_failure("
           helper = '''def _cleanup_capture_startup_failure(
               process: subprocess.Popen[bytes],
               captures: Sequence[BoundedOutputCapture],
@@ -114,33 +101,27 @@ jobs:
 
 
           '''
-          source = source_path.read_text(encoding="utf-8")
-          helper_marker = "def _cleanup_capture_startup_failure("
           if helper_marker not in source:
-              anchor = "def run_bounded_command(\n"
-              if source.count(anchor) != 1:
-                  raise SystemExit(
-                      f"{source_path}: expected one run_bounded_command anchor"
-                  )
-              source_path.write_text(
-                  source.replace(anchor, helper + anchor, 1),
-                  encoding="utf-8",
-              )
+              function_anchor = "def run_bounded_command(\n"
+              if source.count(function_anchor) != 1:
+                  raise SystemExit(f"{source_path}: invalid command-function anchor")
+              function_offset = source.index(function_anchor)
+              source = source[:function_offset] + helper + source[function_offset:]
           elif source.count(helper_marker) != 1:
               raise SystemExit(f"{source_path}: duplicate cleanup helper")
 
-          old_startup = '''    stdout_capture = start_bounded_capture(
-              process.stdout,
-              evidence_limit_bytes=evidence_limit,
-              on_limit=stop_for_limit,
-          )
-              stderr_capture = start_bounded_capture(
-              process.stderr,
-              evidence_limit_bytes=evidence_limit,
-              on_limit=stop_for_limit,
-          )
-          '''
-          new_startup = '''    captures: list[BoundedOutputCapture] = []
+          startup_marker = "    captures: list[BoundedOutputCapture] = []\n"
+          if startup_marker not in source:
+              function_offset = source.index("def run_bounded_command(\n")
+              startup_offset = source.index(
+                  "    stdout_capture = start_bounded_capture(\n",
+                  function_offset,
+              )
+              timed_out_offset = source.index(
+                  "    timed_out = False\n",
+                  startup_offset,
+              )
+              startup = '''    captures: list[BoundedOutputCapture] = []
               streams = (process.stdout, process.stderr)
               try:
                   stdout_capture = start_bounded_capture(
@@ -159,19 +140,31 @@ jobs:
                   _cleanup_capture_startup_failure(process, captures, streams)
                   raise
           '''
-          replace_or_verify(source_path, old_startup, new_startup)
+              source = source[:startup_offset] + startup + source[timed_out_offset:]
+          elif source.count(startup_marker) != 1:
+              raise SystemExit(f"{source_path}: duplicate startup cleanup block")
+
+          source_path.write_text(source, encoding="utf-8")
 
           test_path = Path("tests/test_bounded_subprocess_capture_startup.py")
-          replace_or_verify(
-              test_path,
-              "assert all(capture.join_calls == 1 for capture in captures)",
-              "assert all(capture.join_calls == 2 for capture in captures)",
+          test_source = test_path.read_text(encoding="utf-8")
+          replacements = (
+              (
+                  "assert all(capture.join_calls == 1 for capture in captures)",
+                  "assert all(capture.join_calls == 2 for capture in captures)",
+              ),
+              ("assert capture.join_calls == 1", "assert capture.join_calls == 2"),
           )
-          replace_or_verify(
-              test_path,
-              "assert capture.join_calls == 1",
-              "assert capture.join_calls == 2",
-          )
+          for old, new in replacements:
+              old_count = test_source.count(old)
+              new_count = test_source.count(new)
+              if old_count == 1 and new_count == 0:
+                  test_source = test_source.replace(old, new, 1)
+              elif old_count != 0 or new_count != 1:
+                  raise SystemExit(
+                      f"{test_path}: invalid assertion state old={old_count} new={new_count}"
+                  )
+          test_path.write_text(test_source, encoding="utf-8")
 
           Path(".github/workflows/bounded-capture-startup-ci.yml").unlink()
           Path(".github/workflows/one-shot-pr767-capture-startup-fix.yml").unlink()
