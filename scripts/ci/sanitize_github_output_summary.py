@@ -15,7 +15,7 @@ SECRET_KEY_RE = re.compile(
     r"API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|ENCRYPTION[_-]?KEY"
     r")[A-Z0-9_.-]*\b)(?P<sep>\s*[:=]\s*)"
 )
-URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@")
+URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s@]+)@")
 AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+")
 
 
