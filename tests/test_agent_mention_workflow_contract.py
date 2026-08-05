@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router.yml"
+CHECKOUT_PIN = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
 
 
 def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() -> None:
@@ -16,6 +17,10 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "workflow_dispatch:" in header
     assert "permissions:\n  contents: read" in header
     assert "contents: write" not in header
+    assert text.count("runs-on: ubuntu-24.04") == 2
+    assert text.count(CHECKOUT_PIN) == 2
+    assert "ubuntu-latest" not in text
+    assert "actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8" not in text
 
     local, sweep = jobs.split("\n  sweep-organization-agent-mentions:\n", 1)
     assert "route-local-agent-mention:" in local
