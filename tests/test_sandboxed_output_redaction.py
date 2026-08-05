@@ -11,12 +11,33 @@ from scripts.ci.redact_sensitive_log import (
     REDACTED,
     redact_command_arguments,
     redact_shell_command,
+    redact_text,
 )
 
 
 def _provider_token() -> str:
     """Build a credential-shaped fixture without committing a scanner secret."""
     return "gh" + "p_" + ("A" * 36)
+
+
+def test_json_string_values_are_redacted_recursively() -> None:
+    """Valid JSON cannot bypass token redaction through non-sensitive value keys."""
+    token = _provider_token()
+    raw = (
+        '{"message":"provider '
+        + token
+        + '","nested":{"notes":["Bearer '
+        + token
+        + '","safe"]}}\n'
+    )
+
+    redacted = redact_text(raw)
+
+    assert token not in redacted
+    assert redacted == (
+        '{"message":"provider [REDACTED]",'
+        '"nested":{"notes":["Bearer [REDACTED]","safe"]}}\n'
+    )
 
 
 def test_redact_command_arguments_covers_separate_equals_and_direct_tokens() -> None:
