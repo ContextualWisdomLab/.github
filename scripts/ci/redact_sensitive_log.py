@@ -43,7 +43,9 @@ def _redact_json(value: Any) -> Any:
     """Recursively redact sensitive keys and credential-shaped JSON strings."""
     if isinstance(value, dict):
         return {
-            key: REDACTED if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(item)
+            _redact_unstructured(str(key)): (
+                REDACTED if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(item)
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
