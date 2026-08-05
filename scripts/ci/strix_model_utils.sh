@@ -44,7 +44,7 @@ if not entries or len(entries) > 32:
     )
     raise SystemExit(2)
 
-allowed_ascii = frozenset("_.@+[]-")
+allowed_ascii = frozenset("_.@+-")
 normalized: list[str] = []
 seen: set[str] = set()
 for entry in entries:
