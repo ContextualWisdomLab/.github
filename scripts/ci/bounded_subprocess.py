@@ -300,6 +300,20 @@ def kill_process_group(process: subprocess.Popen[bytes]) -> None:
         return
 
 
+def _join_captures(captures: Sequence[BoundedOutputCapture]) -> None:
+    """Finalize every stream reader while preserving the first reported failure."""
+
+    first_error: BaseException | None = None
+    for capture in captures:
+        try:
+            capture.join()
+        except BaseException as error:  # noqa: BLE001 - re-raised after sibling join
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise first_error
+
+
 def run_bounded_command(
     arguments: Sequence[object],
     *,
@@ -359,8 +373,7 @@ def run_bounded_command(
         kill_process_group(process)
         process.wait()
 
-    stdout_capture.join()
-    stderr_capture.join()
+    _join_captures((stdout_capture, stderr_capture))
     output_limited = (
         stdout_capture.output_limited or stderr_capture.output_limited
     )
