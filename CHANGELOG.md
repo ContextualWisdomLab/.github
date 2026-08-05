@@ -18,6 +18,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Apply a finite 30-second bound to every normal-path output-reader join, finalize sibling captures before re-raising the first failure, and surface a stuck inherited pipe descriptor as `bounded output drain did not finish` instead of waiting until the outer CI timeout.
+- Require a dash prefix before a sensitive command-line option consumes the following argument, while preserving redaction for `TOKEN=value`, `--token=value`, separate dashed credential options, and provider-shaped values.
+- Prove with a sentinel-file regression that a service-log overflow is detected during readiness and prevents the E2E command from executing.
 - Replace quadratic sensitive-assignment rescanning with a bounded forward scan so one long ordinary diagnostic token cannot cause disproportionate log-processing work.
 - Avoid process-wide file-size limits that would incorrectly constrain coverage databases, compiled assets, archives, and other legitimate repository artifacts unrelated to stdout/stderr evidence.
 
