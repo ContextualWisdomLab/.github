@@ -14,20 +14,26 @@ import sys
 import tempfile
 
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-from scripts.ci.coverage_failure_summary import (
-    publish_coverage_failure_summary as _publish_coverage_failure_summary,
-)
-
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 UV_EXPORT_TIMEOUT_SECONDS = 120
+NATIVE_FUZZ_ENGINE_LOCK_NAMES = frozenset({"requirements-atheris.txt"})
+
+
+def _is_native_fuzz_engine_lock_name(name: str) -> bool:
+    """Return whether a lock installs a native engine used only by fuzz jobs."""
+
+    return name in NATIVE_FUZZ_ENGINE_LOCK_NAMES
 
 
 def _is_candidate_lock_name(name: str) -> bool:
-    """Return whether a file name is a possible pip requirements lock."""
-    return name == "requirements.lock" or (
-        fnmatch.fnmatch(name, "requirements*.txt")
-        and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+    """Return whether a file name is a possible coverage dependency lock."""
+
+    return not _is_native_fuzz_engine_lock_name(name) and (
+        name == "requirements.lock"
+        or (
+            fnmatch.fnmatch(name, "requirements*.txt")
+            and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+        )
     )
 
 
@@ -245,12 +251,6 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError) as exc:
         print(
             f"::error::Could not materialize base Python locks: {exc}", file=sys.stderr
-        )
-        _publish_coverage_failure_summary(
-            "Base Python lock materialization",
-            exc,
-            "Repair the reported trusted lock or Git metadata boundary, then "
-            "rerun the current-head coverage-evidence job.",
         )
         return 1
 
