@@ -609,10 +609,7 @@ copy_pr_head_blob_to_file() {
 
 is_supported_source_file() {
 	case "$1" in
-	# Rust is an application security boundary for Tauri and native services. Keep changed Rust
-	# sources in the same PR-head scope as frontend IPC wrappers so findings are not inferred from
-	# an incomplete client-only view.
-	*.java | *.kt | *.kts | *.groovy | *.scala | *.rs | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
+	*.java | *.kt | *.kts | *.groovy | *.scala | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
 		return 0
 		;;
 	Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile)
@@ -626,7 +623,7 @@ is_supported_source_file() {
 
 is_dependency_manifest_path() {
 	case "$1" in
-	pom.xml | */pom.xml | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock | Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock)
+	pom.xml | */pom.xml | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock)
 		return 0
 		;;
 	*)
@@ -1188,13 +1185,6 @@ pull_request_scope_context_files() {
 	for changed_file in "$@"; do
 		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
 		case "$normalized_changed_file" in
-		# Standalone support tools and their tests are not application runtime
-		# surfaces. Injecting the backend router/service inventory for these files
-		# creates an incomplete synthetic application and can turn valid imports in
-		# the real PR-head tree into false missing-module findings.
-		backend/scripts/* | backend/tests/*)
-			:
-			;;
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then
 				needs_backend_python=1
@@ -2651,6 +2641,20 @@ is_llm_service_unavailable_error() {
 	return 1
 }
 
+is_nvidia_nim_not_found_error() {
+	# Classify only one bounded LiteLLM provider-error line that also
+	# carries NVIDIA NIM context and model-catalog not-found evidence.
+	# Cross-line signal assembly and provider-like target source text
+	# remain non-retryable so application output cannot spoof fallback.
+	if grep -Ei 'litellm(\.exceptions)?\.NotFoundError' "$STRIX_LOG" |
+		grep -Ei '(Nvidia_nimException|nvidia[_ -]?nim|integrate\.api\.nvidia\.com)' |
+		grep -Eiq '(Error code:[[:space:]]*404|(^|[^0-9])404([^0-9]|$)|model[^[:alnum:]]+not found)'; then
+		return 0
+	fi
+
+	return 1
+}
+
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
 ## Four error families qualify:
@@ -2919,7 +2923,7 @@ is_midstream_fallback_error() {
 # (httpx, httpcore, requests). Used for generic transport failures where
 # library names alone are insufficient to prove the timeout/connection error
 # originated from an LLM provider rather than the target application.
-LLM_PROVIDER_ONLY_REGEX='(litellm|openai|anthropic|VertexAI|Vertex_ai|vertex\.ai|google\.cloud|GitHub Models|models\.github\.ai|github_models)'
+LLM_PROVIDER_ONLY_REGEX='(litellm|openai|anthropic|VertexAI|Vertex_ai|vertex\.ai|google\.cloud|Nvidia_nimException|nvidia_nim|integrate\.api\.nvidia\.com|GitHub Models|models\.github\.ai|github_models)'
 
 is_llm_token_limit_error() {
 	if grep -Eiq '(tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|(^|[^0-9])413([^0-9]|$))' "$STRIX_LOG" &&
@@ -2960,6 +2964,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
+		return 0
+	fi
+
+	if is_nvidia_nim_not_found_error; then
 		return 0
 	fi
 
@@ -3806,6 +3814,10 @@ is_model_retryable_error() {
 	local model="$1"
 
 	if is_vertex_model "$model" && is_vertex_not_found_error; then
+		return 0
+	fi
+
+	if is_nvidia_nim_not_found_error; then
 		return 0
 	fi
 

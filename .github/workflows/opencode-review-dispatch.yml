@@ -652,15 +652,11 @@ jobs:
               r-base \
               r-cran-covr \
               r-cran-testthat \
-              llvm-19 \
               rustc \
               util-linux \
               vulkan-tools \
               xz-utils \
             && rm -rf /var/lib/apt/lists/*
-          ENV LLVM_COV=/usr/bin/llvm-cov-19
-          ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
-          RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \
               https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
             && echo '55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742  /tmp/node-linux-x64.tar.xz' | sha256sum -c - \
@@ -877,6 +873,8 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
               GIT_CONFIG_COUNT=1 \
               GIT_CONFIG_KEY_0=safe.directory \
               GIT_CONFIG_VALUE_0=/work \
@@ -936,6 +934,8 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
               GIT_CONFIG_COUNT=1 \
               GIT_CONFIG_KEY_0=safe.directory \
               GIT_CONFIG_VALUE_0=/work \
@@ -995,6 +995,8 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
               GIT_CONFIG_COUNT=1 \
               GIT_CONFIG_KEY_0=safe.directory \
               GIT_CONFIG_VALUE_0=/work \
