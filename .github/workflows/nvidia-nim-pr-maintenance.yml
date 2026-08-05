@@ -67,7 +67,6 @@ jobs:
       statuses: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
       TARGET_REPOSITORY: >-
         ${{ github.event.client_payload.target_repository || inputs.target_repository ||
         vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
@@ -129,10 +128,51 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Exchange OpenCode app token for scheduler writes
+        id: scheduler_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+          oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )" || { mark_unavailable; exit 0; }
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          [ -n "$oidc_token" ] || { mark_unavailable; exit 0; }
+          token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )" || { mark_unavailable; exit 0; }
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          [ -n "$app_token" ] || { mark_unavailable; exit 0; }
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Self-test NVIDIA NIM scheduler contract
         run: python3 scripts/ci/pr_review_fix_scheduler_nim.py --self-test
 
       - name: Dispatch bounded NVIDIA NIM review repair
+        env:
+          GH_TOKEN: >-
+            ${{ steps.scheduler_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN ||
+            secrets.OPENCODE_APPROVE_TOKEN || github.token }}
         run: |
           set -euo pipefail
           args=(
