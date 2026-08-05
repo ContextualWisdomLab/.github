@@ -21,19 +21,18 @@ def test_review_fix_scheduler_runs_once_each_hour() -> None:
     assert 'cron: "23 */2 * * *"' not in text
 
 
-def test_scheduled_scheduler_targets_clearfolio_without_external_configuration() -> None:
-    """The central heartbeat must repair Clearfolio even when no variable is set."""
+def test_scheduled_scheduler_uses_configured_or_caller_repository() -> None:
+    """The central heartbeat stays reusable and never hard-codes one product."""
     text = _workflow_text()
-    scheduled_default = (
-        "(github.event_name == 'schedule' && "
-        "'ContextualWisdomLab/clearfolio')"
+    target_expression = (
+        "github.event.client_payload.target_repository || "
+        "inputs.target_repository || "
+        "vars.PR_REVIEW_FIX_TARGET_REPOSITORY || "
+        "github.repository"
     )
 
-    assert text.count(scheduled_default) == 2
-    assert (
-        "vars.PR_REVIEW_FIX_TARGET_REPOSITORY || " + scheduled_default
-        in text
-    )
+    assert text.count(target_expression) == 2
+    assert "ContextualWisdomLab/clearfolio" not in text
 
 
 def test_review_fix_scheduler_retries_same_head_after_one_hour() -> None:
