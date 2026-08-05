@@ -210,8 +210,8 @@ def emit_result(
     allowed_env: Sequence[str],
     network: str,
     evidence_note: str,
-    output_limit_bytes: int,
-    output_limited: bool,
+    output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+    output_limited: bool = False,
 ) -> None:
     """Print a machine-readable execution evidence summary without secrets."""
     payload = {
