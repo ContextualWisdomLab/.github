@@ -71,6 +71,7 @@ def test_service_log_overflow_returns_resource_limit_before_e2e(
 ) -> None:
     """Readiness cannot convert a backend log flood into an ordinary E2E run."""
 
+    sentinel = tmp_path / "e2e-ran"
     exit_code = sandboxed_web_e2e.main(
         [
             "--repo-root",
@@ -82,10 +83,14 @@ def test_service_log_overflow_returns_resource_limit_before_e2e(
                 "while True:\n"
                 "    os.write(1,chunk)\n"
             ),
+            "--backend-url",
+            "http://127.0.0.1:1/ready",
             "--frontend-cmd",
             _command("import time; time.sleep(30)"),
             "--e2e-cmd",
-            _command("raise SystemExit('must not run')"),
+            _command(
+                f"from pathlib import Path; Path({str(sentinel)!r}).touch()"
+            ),
             "--service-log-limit-bytes",
             "4096",
         ]
@@ -97,6 +102,7 @@ def test_service_log_overflow_returns_resource_limit_before_e2e(
     assert "service output exceeded 4096 bytes" in captured.err
     assert payload["output_limited"] is True
     assert payload["service_log_limit_bytes"] == 4096
+    assert not sentinel.exists()
 
 
 def test_e2e_output_overflow_is_bounded_and_returns_123(
