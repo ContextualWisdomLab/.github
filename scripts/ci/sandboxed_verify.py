@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -14,9 +15,14 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.ci.redact_sensitive_log import redact_text
+from scripts.ci.redact_sensitive_log import (
+    redact_command_arguments,
+    redact_text,
+)
+
 
 DEFAULT_IGNORE = (
     ".git",
@@ -168,7 +174,7 @@ def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout:
 
 
 def timeout_output_text(value: str | bytes | None) -> str:
-    """Return timeout output as text, regardless of subprocess internals."""
+    """Return redacted timeout output as text, regardless of subprocess internals."""
     if value is None:
         return ""
     if isinstance(value, bytes):
@@ -188,13 +194,13 @@ def emit_result(
     network: str,
     evidence_note: str,
 ) -> None:
-    """Print a machine-readable execution evidence summary."""
+    """Print a machine-readable execution evidence summary without secrets."""
     payload = {
         "allowed_env": sorted(set(allowed_env)),
-        "command": list(command),
+        "command": redact_command_arguments(command),
         "cwd": str(copied_repo),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": evidence_note,
+        "evidence_note": redact_text(evidence_note),
         "exit_code": exit_code,
         "network": network,
         "sandbox": str(sandbox_root) if kept else "(removed)",
@@ -214,7 +220,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
-        print(f"sandboxed-verify: command={' '.join(args.command)}")
+        safe_command = shlex.join(redact_command_arguments(args.command))
+        print(f"sandboxed-verify: command={safe_command}")
         if args.allow_env:
             print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
         if args.network != "default":
