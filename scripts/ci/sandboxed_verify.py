@@ -179,7 +179,7 @@ def run_command(
     timeout: int,
     output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
 ) -> bounded_subprocess.BoundedCompletedProcess:
-    """Run one verification command with kernel-enforced bounded output files."""
+    """Run one verification command with continuously drained bounded output."""
 
     return bounded_subprocess.run_bounded_command(
         command,
@@ -227,6 +227,7 @@ def emit_result(
         "sandbox": str(sandbox_root) if kept else "(removed)",
         "sandboxed": True,
     }
+    print()
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
 
 
