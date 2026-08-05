@@ -45,7 +45,7 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.head_ref }}
-          PUSH_TOKEN: ${{ github.token }}
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 -I - <<'PY'
