@@ -21,6 +21,21 @@ def test_review_fix_scheduler_runs_once_each_hour() -> None:
     assert 'cron: "23 */2 * * *"' not in text
 
 
+def test_scheduled_scheduler_targets_clearfolio_without_external_configuration() -> None:
+    """The central heartbeat must repair Clearfolio even when no variable is set."""
+    text = _workflow_text()
+    scheduled_default = (
+        "(github.event_name == 'schedule' && "
+        "'ContextualWisdomLab/clearfolio')"
+    )
+
+    assert text.count(scheduled_default) == 2
+    assert (
+        "vars.PR_REVIEW_FIX_TARGET_REPOSITORY || " + scheduled_default
+        in text
+    )
+
+
 def test_review_fix_scheduler_retries_same_head_after_one_hour() -> None:
     """A blocked head can be retried on the next hourly cycle, not a day later."""
     text = _workflow_text()
