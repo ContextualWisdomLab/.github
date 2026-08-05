@@ -47,7 +47,8 @@ jobs:
             ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-            ! [[ "$BASE_BRANCH" =~ ^(?!-)[A-Za-z0-9._/-]+$ ]] ||
+            ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+            [[ "$BASE_BRANCH" == -* ]] ||
             ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]+$ ]] ||
             [ "$TRIGGER_REVIEWS" != "true" ] ||
