@@ -7,6 +7,8 @@ on:
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
+      - scripts/ci/pr_review_conflict_scope.py
+      - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_fix_hourly_contract.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_nvidia_nim_contract.py
@@ -19,6 +21,8 @@ on:
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
+      - scripts/ci/pr_review_conflict_scope.py
+      - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_fix_hourly_contract.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_nvidia_nim_contract.py
@@ -35,7 +39,7 @@ concurrency:
 
 jobs:
   contract:
-    name: Hourly cadence, immutable source, and NIM credential boundary
+    name: Hourly cadence, immutable source, NIM credential, and conflict scope
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -60,10 +64,19 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest -q \
+            tests/test_pr_review_conflict_scope.py \
             tests/test_pr_review_fix_hourly_contract.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
-            tests/test_pr_review_autofix_nvidia_nim_contract.py
+            tests/test_pr_review_autofix_nvidia_nim_contract.py \
+            --cov=scripts.ci.pr_review_conflict_scope \
+            --cov-branch \
+            --cov-fail-under=100
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/pr_review_conflict_scope.py
           python -m compileall -q \
+            scripts/ci/pr_review_conflict_scope.py \
+            tests/test_pr_review_conflict_scope.py \
             tests/test_pr_review_fix_hourly_contract.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
             tests/test_pr_review_autofix_nvidia_nim_contract.py
