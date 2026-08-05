@@ -45,17 +45,21 @@ def test_quality_workflow_proves_supported_python_and_locked_tooling() -> None:
     assert "requirements-opencode-review-ci-hashes.txt" in text
     assert "--require-hashes" in text
     assert "python -m compileall -q" in text
-    assert 'GITHUB_EVENT_PATH: ""' in text
+    assert "env -u GITHUB_EVENT_PATH" in text
 
 
 def test_quality_workflow_enforces_complete_coverage_and_docstrings() -> None:
     """Require every changed production module to reach complete branch evidence."""
     text = workflow_text()
 
+    assert "COVERAGE_RCFILE" in text
+    assert "[run]" in text
+    assert "branch = True" in text
+    assert "include =" in text
     assert "python -m coverage run" in text
-    assert "--branch" in text
-    assert "--include=" in text
-    assert "python -m coverage report --show-missing --fail-under=100" in text
+    assert "python -m coverage report" in text
+    assert "fail_under = 100" in text
+    assert "show_missing = True" in text
     assert "python -m interrogate" in text
     assert "--fail-under 100" in text
     assert "--cov=" not in text
