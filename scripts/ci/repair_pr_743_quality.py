@@ -37,33 +37,40 @@ def insert_once(path: str, marker: str, addition: str) -> None:
     target.write_text(text.replace(marker, addition + marker, 1), encoding="utf-8")
 
 
-def repair_git_ownership_test() -> None:
-    """Isolate protected Git configuration in the ownership-boundary test."""
-    replace_once(
-        "tests/test_opencode_agent_contract.py",
-        '''    base_env = {
-        **os.environ,
-        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
-    }
-''',
-        '''    isolated_home = tmp_path / "git-config-home"
-    isolated_home.mkdir()
-    base_env = {
-        **os.environ,
-        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "HOME": str(isolated_home),
-        "XDG_CONFIG_HOME": str(isolated_home / "xdg"),
-    }
-''',
+def verify_git_ownership_repair() -> None:
+    """Require the concurrent hermetic Git ownership repair on current head."""
+    text = (ROOT / "tests/test_opencode_agent_contract.py").read_text(
+        encoding="utf-8"
     )
+    required = (
+        "def test_sandbox_git_config_env_trusts_only_the_validated_worktree",
+        '"GIT_CONFIG_NOSYSTEM": "1"',
+        '"GIT_CONFIG_GLOBAL": "/dev/null"',
+        '"GIT_CONFIG_KEY_0": "safe.directory"',
+        '"GIT_CONFIG_VALUE_0": str(worktree)',
+        'assert configured.stdout.splitlines() == [str(worktree)]',
+        'assert "*" not in configured.stdout',
+    )
+    missing = [needle for needle in required if needle not in text]
+    if missing:
+        raise SystemExit(
+            "tests/test_opencode_agent_contract.py: current hermetic ownership "
+            f"repair is incomplete; missing {missing!r}"
+        )
 
 
 def repair_strix_legacy_default() -> None:
     """Migrate only the retired implicit NIM default before fallback gating."""
+    path = ".github/workflows/strix.yml"
+    current_marker = (
+        'if [ "$strix_model" = '
+        '"nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b" ]; then'
+    )
+    text = (ROOT / path).read_text(encoding="utf-8")
+    if current_marker in text:
+        return
     replace_once(
-        ".github/workflows/strix.yml",
+        path,
         '''          if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
             strix_model="gpt-5.6-luna"
           fi
@@ -85,10 +92,9 @@ def update_changelog() -> None:
     path = ROOT / "CHANGELOG.md"
     text = path.read_text(encoding="utf-8")
     addition = (
-        "- Isolated Git system and global protected configuration in the sandbox "
-        "`safe.directory` regression so hosted-runner trust defaults cannot mask "
-        "an unrelated repository, while preserving the exact validated worktree "
-        "allowlist contract.\n"
+        "- Isolated Git protected configuration in the sandbox `safe.directory` "
+        "regression so hosted-runner trust defaults cannot mask the exact validated "
+        "worktree allowlist contract.\n"
         "- Normalized the retired implicit NVIDIA NIM Strix default to the current "
         "Nemotron 3 Super model before credential fallback selection, without "
         "accepting an explicitly requested retired model.\n"
@@ -105,20 +111,14 @@ def update_doctoring() -> None:
     """Document the Git and Strix decisions with APA 7th references."""
     git_section = '''## Hermetic Git ownership-boundary verification
 
-The full-suite regression for the OpenCode coverage sandbox deliberately asks Git
-to treat two temporary repositories as differently owned. Git reads
-`safe.directory` only from protected configuration scopes. A hosted runner may
-therefore carry a system or global trust entry that makes both repositories look
-safe and turns the negative control into a false pass.
-
-The test supplies an isolated `HOME` and `XDG_CONFIG_HOME`, disables system
-configuration with `GIT_CONFIG_NOSYSTEM`, and points global configuration at the
-null device before adding one command-scope `safe.directory` entry. The selected
-worktree must succeed, while a sibling repository must still fail with dubious
-ownership. This measures the production boundary rather than the runner image's
-ambient policy. Git 2.54.0 retains the test-only different-owner switch and
-resolves `safe.directory` through protected configuration, so the isolation is
-both current and version-explicit.
+The full-suite regression for the OpenCode coverage sandbox asks Git to expose
+only one command-scope `safe.directory` value for the validated worktree. A
+hosted runner may carry system or global trust entries, so the test disables
+system configuration and points global configuration at the null device before
+asserting the exact configured value, absence of the sibling repository, and
+absence of the wildcard `*`. This measures the production boundary rather than
+the runner image's ambient policy. Git 2.54.0 resolves `safe.directory` through
+protected configuration, so the isolation is current and version-explicit.
 
 '''
     insert_once(
@@ -164,8 +164,8 @@ surface.
 
 
 def main() -> None:
-    """Apply all bounded repairs to the checked-out exact trigger commit."""
-    repair_git_ownership_test()
+    """Apply or verify all bounded repairs on the exact trigger commit."""
+    verify_git_ownership_repair()
     repair_strix_legacy_default()
     update_changelog()
     update_doctoring()
