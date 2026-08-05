@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` invocations, with bounded organization-wide sweeping, immutable current-head dispatch payloads, idempotent receipts, and fail-closed author/repository validation.
 - Add hourly bounded review-repair scheduling that preserves the existing reviewer identities and credential chain while continuing non-conflicting maintenance during pending checks or reviews.
 - Add a read-only exact-head Python quality workflow that compiles the changed central control-plane modules on Python 3.10 and runs their deterministic Python 3.14 tests with hash-locked tooling, 100% production statement and branch coverage, and 100% production docstrings.
+- Run the write-capable scheduled OpenCode review-autofix worker through the scoped `NVIDIA_NIM_API_KEY` credential while preserving the independent read-only reviewer workflow and its key contract.
 
 ### Security
 
@@ -19,6 +20,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Redact separate sensitive-option values echoed by child processes, concatenated or CamelCase credential-key values, and conservatively classified oversized assignments.
 - Bound structured-diagnostic traversal and replace malformed JSON-looking records, over-deep subtrees, or parser/encoder recursion failures with fail-closed redacted evidence instead of crashing or retrying through weaker handling.
 - Keep pull-request-controlled code outside the mention-router trust boundary, retain least-privilege workflow permissions, validate reusable workflow sources immutably, and preserve default-branch dependency snapshots for meaningful dependency review.
+- Remove GitHub and OIDC credentials from both OpenCode model subprocesses and fail closed before execution when the NVIDIA NIM credential is unavailable.
 
 ### Fixed
 
@@ -30,3 +32,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Documentation
 
 - Add APA 7 doctoring records for trusted review-agent invocation, hourly repair, central security baselines, JavaScript runtime coverage classification, and sandbox command/output redaction boundaries, including verification evidence, modular behavior, limitations, and rollback requirements.
+- Add APA 7 doctoring for the hourly NVIDIA NIM autofix provider, credential, subprocess-isolation, source-integrity, modularity, and rollback boundaries.
