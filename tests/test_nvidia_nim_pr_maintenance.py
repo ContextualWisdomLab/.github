@@ -28,10 +28,12 @@ def test_wrapper_preserves_explicit_worker_argument() -> None:
     assert nim_scheduler._normalized_argv(argv) == argv
 
 
-def test_wrapper_applies_nim_dispatch_contract(monkeypatch) -> None:
-    """The shared scheduler must receive the NIM workflow and dispatch event names."""
+def test_wrapper_applies_nim_dispatch_contract_and_restores_globals(monkeypatch) -> None:
+    """The wrapper must apply NIM routing only for the duration of one invocation."""
 
     captured: dict[str, object] = {}
+    original_workflow = nim_scheduler.scheduler.DEFAULT_AUTOFIX_WORKFLOW
+    original_event = nim_scheduler.scheduler.AUTOFIX_REPOSITORY_DISPATCH_TYPE
 
     def fake_main(argv: list[str]) -> int:
         captured["argv"] = argv
@@ -51,6 +53,8 @@ def test_wrapper_applies_nim_dispatch_contract(monkeypatch) -> None:
         "workflow": "nvidia-nim-pr-review-autofix.yml",
         "event": "nvidia-nim-pr-review-autofix",
     }
+    assert nim_scheduler.scheduler.DEFAULT_AUTOFIX_WORKFLOW == original_workflow
+    assert nim_scheduler.scheduler.AUTOFIX_REPOSITORY_DISPATCH_TYPE == original_event
 
 
 def test_scheduler_runs_hourly_and_dispatches_one_bounded_repair() -> None:
@@ -59,12 +63,27 @@ def test_scheduler_runs_hourly_and_dispatches_one_bounded_repair() -> None:
     workflow = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'cron: "23 * * * *"' in workflow
-    assert 'default: "1"\n        type: string' in workflow
+    assert "max_dispatches:" in workflow
+    assert "retry_hours:" in workflow
+    assert workflow.count('default: "1"') >= 2
     assert "MAX_DISPATCHES" in workflow
     assert "cancel-in-progress: true" in workflow
     assert "nvidia-nim-pr-review-autofix.yml" in workflow
     assert "pr_review_fix_scheduler_nim.py --self-test" in workflow
     assert "--retry-hours \"$RETRY_HOURS\"" in workflow
+
+
+def test_scheduler_declares_only_named_reusable_write_secrets() -> None:
+    """Leaf callers need explicit GitHub write-token inputs, never blanket inheritance."""
+
+    workflow = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "PR_REVIEW_MERGE_TOKEN:" in workflow
+    assert "OPENCODE_APPROVE_TOKEN:" in workflow
+    assert workflow.count("required: false") >= 8
+    assert "secrets: inherit" not in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+    assert "NVIDIA_NIM_API_KEY" not in workflow
 
 
 def test_scheduler_materializes_immutable_called_workflow_source() -> None:
