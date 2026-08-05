@@ -3,12 +3,12 @@
 ## Decision
 
 The organization-level `.github` repository owns reusable review, security,
-dependency-snapshot, and bounded repair workflows. Product repositories remain
-independently operable and consume those controls as modules; they retain their
-own application tests, authorization, deployment, release, and data-governance
-responsibilities.
+dependency-snapshot, bounded repair, and exact-head quality workflows. Product
+repositories remain independently operable and consume those controls as
+modules; they retain their own application tests, authorization, deployment,
+release, and data-governance responsibilities.
 
-The baseline repair makes five controls atomic because they participate in the
+The baseline repair makes six controls atomic because they participate in the
 same protected-branch decision:
 
 1. CodeQL initialization, analysis, and SARIF upload use one immutable action
@@ -27,6 +27,10 @@ same protected-branch decision:
 5. Review repair runs once per hour, dispatches at most one bounded repair job,
    and resolves privileged code from the reusable workflow's immutable source
    identity rather than caller data or mutable `main`.
+6. A repository-owned exact-head quality workflow compiles the changed central
+   Python modules on the minimum supported Python 3.10 runtime and executes their
+   deterministic tests on Python 3.14 with fully hash-locked tooling, 100%
+   production statement and branch coverage, and 100% production docstrings.
 
 ## Standards and current-platform rationale
 
@@ -72,6 +76,15 @@ misses. Snapshotting default-branch pushes supplies the base-side evidence that
 pull-request dependency review needs and prevents the entire existing graph from
 appearing newly introduced.
 
+The direct security workflows intentionally do not stand in for functional
+quality evidence. `pip-audit`, Bandit, CodeQL, Semgrep, secret scanning, OSV,
+Scorecard, SBOM, and filesystem scanners answer different questions from unit,
+branch, and docstring completeness. The dedicated quality workflow therefore
+runs on the same immutable pull-request head and is itself guarded by a static
+contract test that pins least privilege, action revisions, supported Python
+versions, the hash-locked toolchain, all measured production modules, and the
+100% thresholds.
+
 ## Verification contract
 
 The exact pull-request head must prove:
@@ -85,15 +98,25 @@ The exact pull-request head must prove:
 - blank, `none`, arbitrary prose, mixed version/prose lists, duplicate malformed
   lines, single-sided or mismatched resolver evidence, integrity, retry,
   transport, mixed-unknown, and unclassified installer failures remain fatal;
-- the changed installer has 100% statement and branch coverage and 100%
-  production docstrings;
+- the changed trusted-lock installer has 100% statement and branch coverage and
+  100% production docstrings;
+- `agent_mention_router.py`, `agent_mention_sweep.py`,
+  `install_base_python_locks.py`, `javascript_coverage_gate.py`,
+  `redact_sensitive_log.py`, `sandboxed_verify.py`, and
+  `sandboxed_web_e2e.py` compile on Python 3.10 and reach 100% statement,
+  branch, and production-docstring coverage on Python 3.14;
+- the quality workflow installs only the reviewed
+  `requirements-opencode-review-ci-hashes.txt` closure with
+  `--require-hashes`, uses immutable action revisions, has read-only contents
+  permission, contains no scheduler or Copilot behavior, and runs its own static
+  workflow contract;
 - default-branch snapshot triggers, commit-SHA concurrency, and job-scoped write
   permissions remain pinned by tests;
 - hourly cadence, one-hour retry, single dispatch, least-privilege permissions,
   pre-checkout validation of every `job.workflow_*` identity field, and
   post-checkout SHA/file verification remain pinned by tests; and
-- every current-head security, review, unresolved-thread, and branch-protection
-  gate succeeds before merge.
+- every current-head security, quality, review, unresolved-thread, and
+  branch-protection gate succeeds before merge.
 
 ## References
 
