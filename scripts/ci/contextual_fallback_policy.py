@@ -25,7 +25,7 @@ VENDOR_PACKAGE_ROOT = VENDOR_ROOT / "contextual_orchestrator"
 VENDOR_RECEIPT_PATH = VENDOR_ROOT / "VENDOR_RECEIPT.json"
 POLICY_MANIFEST_PATH = REPOSITORY_ROOT / "config" / "llm-fallback-policy.json"
 SOURCE_REPOSITORY = "ContextualWisdomLab/contextual-orchestrator"
-SOURCE_COMMIT = "82ea37ee2673111b0a2f25642d637a305473f642"
+SOURCE_COMMIT = "40c6a4b419cdf8fa90c422acb5443a0e1cca5d16"
 MAX_JSON_BYTES = 262_144
 EXPECTED_SOURCE_BLOBS = {
     "contextual_orchestrator/_fallback_manifest.py": "60458fbdffb180e089cf6da378c560a476635557",
