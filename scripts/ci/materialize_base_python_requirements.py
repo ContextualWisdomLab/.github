@@ -19,6 +19,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -57,6 +59,10 @@ TRUSTED_UV_ARCHIVE_SHA256 = (
 )
 TRUSTED_UV_ARCHIVE_MEMBER = "uv-x86_64-unknown-linux-gnu/uv"
 TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
+TRUSTED_UV_DOWNLOAD_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+TRUSTED_UV_RETRYABLE_HTTP_STATUS = frozenset(
+    {408, 429, 500, 502, 503, 504}
+)
 TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
@@ -299,35 +305,54 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
 
 
 def _download_trusted_uv_archive() -> bytes:
-    """Download the fixed uv release archive through one HTTPS trust boundary."""
+    """Download the fixed archive with bounded transient transport retries."""
     _install_trusted_uv_url_opener()
-    try:
-        # Keep the audited URL literal at the network sink so static analysis can
-        # prove that neither user data nor repository content selects a scheme,
-        # host, path, query, fragment, method, or request header.
-        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-            "https://github.com/astral-sh/uv/releases/download/0.12.1/"
-            "uv-x86_64-unknown-linux-gnu.tar.gz",
-            timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
-        ) as response:
-            if not _is_trusted_uv_final_origin(response.geturl()):
-                raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
-            payload = bytearray()
-            while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
-                chunk = response.read(
-                    TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload)
-                )
-                if not chunk:
-                    break
-                payload.extend(chunk)
-    except OSError as exc:
-        raise RuntimeError(
-            f"trusted uv archive download failed: {type(exc).__name__}"
-        ) from exc
+    attempt_limit = len(TRUSTED_UV_DOWNLOAD_RETRY_DELAYS_SECONDS) + 1
+    for attempt in range(1, attempt_limit + 1):
+        try:
+            # Keep the audited URL literal at the network sink so static analysis can
+            # prove that neither user data nor repository content selects a scheme,
+            # host, path, query, fragment, method, or request header.
+            with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+                "https://github.com/astral-sh/uv/releases/download/0.12.1/"
+                "uv-x86_64-unknown-linux-gnu.tar.gz",
+                timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+            ) as response:
+                if not _is_trusted_uv_final_origin(response.geturl()):
+                    raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
+                payload = bytearray()
+                while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
+                    chunk = response.read(
+                        TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload)
+                    )
+                    if not chunk:
+                        break
+                    payload.extend(chunk)
 
-    if len(payload) > TRUSTED_UV_DOWNLOAD_MAX_BYTES:
-        raise RuntimeError("trusted uv archive exceeded the bounded download size")
-    return bytes(payload)
+            if len(payload) > TRUSTED_UV_DOWNLOAD_MAX_BYTES:
+                raise RuntimeError(
+                    "trusted uv archive exceeded the bounded download size"
+                )
+            return bytes(payload)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in TRUSTED_UV_RETRYABLE_HTTP_STATUS:
+                raise RuntimeError(
+                    f"trusted uv archive download failed: HTTP {exc.code}"
+                ) from exc
+            failure_label = f"HTTP {exc.code}"
+            failure: BaseException = exc
+        except (urllib.error.URLError, OSError) as exc:
+            failure_label = type(exc).__name__
+            failure = exc
+
+        if attempt == attempt_limit:
+            raise RuntimeError(
+                "trusted uv archive download failed: "
+                f"{failure_label} after {attempt} attempts"
+            ) from failure
+        time.sleep(TRUSTED_UV_DOWNLOAD_RETRY_DELAYS_SECONDS[attempt - 1])
+
+    raise AssertionError("trusted uv retry loop must return or raise")  # pragma: no cover
 
 
 def _verified_uv_binary(archive_payload: bytes) -> bytes:
