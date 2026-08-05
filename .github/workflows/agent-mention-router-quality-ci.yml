@@ -60,7 +60,7 @@ jobs:
           cat >"${RUNNER_TEMP}/agent-mention-coveragerc" <<'EOF'
           [run]
           branch = True
-          source =
+          include =
               scripts/ci/agent_mention_router.py
               scripts/ci/agent_mention_sweep.py
           [report]
