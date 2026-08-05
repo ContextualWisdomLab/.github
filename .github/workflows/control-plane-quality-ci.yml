@@ -16,12 +16,14 @@ on:
       - "scripts/ci/redact_sensitive_log.py"
       - "scripts/ci/sandboxed_verify.py"
       - "scripts/ci/sandboxed_web_e2e.py"
+      - "tests/conftest.py"
       - "tests/test_agent_mention*.py"
       - "tests/test_control_plane_coverage_closure.py"
       - "tests/test_control_plane_quality_coverage_gaps.py"
       - "tests/test_control_plane_quality_workflow_contract.py"
       - "tests/test_install_base_python*.py"
       - "tests/test_javascript_coverage*.py"
+      - "tests/test_opencode_security_boundaries.py"
       - "tests/test_pr_review_fix*.py"
       - "tests/test_redact*.py"
       - "tests/test_sandboxed*.py"
@@ -42,12 +44,14 @@ on:
       - "scripts/ci/redact_sensitive_log.py"
       - "scripts/ci/sandboxed_verify.py"
       - "scripts/ci/sandboxed_web_e2e.py"
+      - "tests/conftest.py"
       - "tests/test_agent_mention*.py"
       - "tests/test_control_plane_coverage_closure.py"
       - "tests/test_control_plane_quality_coverage_gaps.py"
       - "tests/test_control_plane_quality_workflow_contract.py"
       - "tests/test_install_base_python*.py"
       - "tests/test_javascript_coverage*.py"
+      - "tests/test_opencode_security_boundaries.py"
       - "tests/test_pr_review_fix*.py"
       - "tests/test_redact*.py"
       - "tests/test_sandboxed*.py"
@@ -79,6 +83,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up minimum supported Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -110,6 +115,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -156,7 +162,9 @@ jobs:
             tests/test_install_base_python_locks_atomic.py \
             tests/test_javascript_coverage_gate.py \
             tests/test_javascript_coverage_scope.py \
+            tests/test_opencode_security_boundaries.py \
             tests/test_pr_review_fix_hourly_contract.py \
+            tests/test_pr_review_fix_scheduler_import_fallback.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
             tests/test_redact_json_key_boundary.py \
             tests/test_sandboxed_output_redaction.py \
@@ -189,6 +197,9 @@ jobs:
             scripts/ci/redact_sensitive_log.py \
             scripts/ci/sandboxed_verify.py \
             scripts/ci/sandboxed_web_e2e.py \
+            tests/conftest.py \
             tests/test_control_plane_coverage_closure.py \
             tests/test_control_plane_quality_coverage_gaps.py \
-            tests/test_control_plane_quality_workflow_contract.py
+            tests/test_control_plane_quality_workflow_contract.py \
+            tests/test_opencode_security_boundaries.py \
+            tests/test_pr_review_fix_scheduler_import_fallback.py
