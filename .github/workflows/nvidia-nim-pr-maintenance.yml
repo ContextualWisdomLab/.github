@@ -33,6 +33,13 @@ on:
         required: false
         default: "1"
         type: string
+    secrets:
+      PR_REVIEW_MERGE_TOKEN:
+        description: Optional cross-repository GitHub write token
+        required: false
+      OPENCODE_APPROVE_TOKEN:
+        description: Optional existing OpenCode GitHub write token fallback
+        required: false
   repository_dispatch:
     types: [nvidia-nim-pr-maintenance]
   schedule:
