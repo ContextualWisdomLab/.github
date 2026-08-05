@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
+          fetch-depth: 50
           persist-credentials: false
 
       - name: Apply, verify, and publish bounded repair
@@ -51,15 +51,24 @@ jobs:
           python3 -I - <<'PY'
           from pathlib import Path
 
-          def replace_exact(path: Path, old: str, new: str, expected: int) -> None:
-              """Replace an exact bounded occurrence count or fail without writing."""
+          def ensure_exact_replacement(
+              path: Path,
+              old: str,
+              new: str,
+              expected: int,
+          ) -> None:
+              """Apply or verify one exact bounded repair without partial states."""
               content = path.read_text(encoding="utf-8")
-              occurrences = content.count(old)
-              if occurrences != expected:
-                  raise SystemExit(
-                      f"{path}: expected {expected} repair targets, found {occurrences}"
-                  )
-              path.write_text(content.replace(old, new), encoding="utf-8")
+              old_count = content.count(old)
+              new_count = content.count(new)
+              if old_count == expected and new_count == 0:
+                  path.write_text(content.replace(old, new), encoding="utf-8")
+                  return
+              if old_count == 0 and new_count == expected:
+                  return
+              raise SystemExit(
+                  f"{path}: invalid repair state old={old_count} new={new_count}"
+              )
 
           review_workflow = Path(".github/workflows/opencode-review-dispatch.yml")
           unisolated_git = (
@@ -71,10 +80,15 @@ jobs:
               "              GIT_CONFIG_GLOBAL=/dev/null \\\n"
               + unisolated_git
           )
-          replace_exact(review_workflow, unisolated_git, isolated_git, 3)
+          ensure_exact_replacement(
+              review_workflow,
+              unisolated_git,
+              isolated_git,
+              3,
+          )
 
           strix_test = Path("scripts/ci/test_strix_quick_gate.sh")
-          replace_exact(
+          ensure_exact_replacement(
               strix_test,
               "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6",
               "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
@@ -121,8 +135,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git diff --cached --quiet && exit 1
           git commit -m "fix(ci): complete bounded PR 743 review repairs"
           auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
-          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            push origin "HEAD:refs/heads/${HEAD_BRANCH}"
+          for attempt in 1 2 3; do
+            git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags origin "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+            git rebase "refs/remotes/origin/${HEAD_BRANCH}"
+            if git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+              push origin "HEAD:refs/heads/${HEAD_BRANCH}"; then
+              exit 0
+            fi
+            sleep "$attempt"
+          done
+          exit 1
