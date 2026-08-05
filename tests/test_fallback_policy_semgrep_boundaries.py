@@ -1,4 +1,4 @@
-"""Contracts for narrowly justified fallback-policy Semgrep suppressions."""
+"""Contracts for narrowly justified fallback-policy scanner suppressions."""
 
 from __future__ import annotations
 
@@ -38,4 +38,5 @@ def test_noema_core_exec_has_exact_rule_scoped_trust_comment() -> None:
 
     assert "Noema core is a fixed regular non-symlink sibling" in source
     assert f"nosemgrep: {_EXEC_RULE}" in source
+    assert "nosec B102" in source
     assert "compile(_CORE_PATH.read_bytes()" in source
