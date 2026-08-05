@@ -1,4 +1,5 @@
 name: One-shot PR759 exact merge head
+# Retrigger the fail-closed reviewed patch after a concurrent helper commit restored transient files.
 
 on:
   push:
