@@ -11,6 +11,7 @@ on:
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_coverage_native_fuzz_lock_boundary.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-review-ci-hashes.txt"
@@ -28,6 +29,7 @@ on:
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_coverage_materializer_failure_diagnostics.py"
+      - "tests/test_coverage_native_fuzz_lock_boundary.py"
       - "tests/test_sanitize_github_output_summary.py"
       - "tests/test_strix_dependency_security_floor.py"
       - "requirements-opencode-review-ci-hashes.txt"
@@ -141,6 +143,7 @@ jobs:
             tests/test_materialize_base_javascript_packages.py \
             tests/test_materialize_base_python_requirements.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_coverage_native_fuzz_lock_boundary.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py \
             --cov=scripts.ci.coverage_failure_summary \
@@ -168,5 +171,6 @@ jobs:
             scripts/ci/materialize_base_python_requirements.py \
             scripts/ci/sanitize_github_output_summary.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
+            tests/test_coverage_native_fuzz_lock_boundary.py \
             tests/test_sanitize_github_output_summary.py \
             tests/test_strix_dependency_security_floor.py
