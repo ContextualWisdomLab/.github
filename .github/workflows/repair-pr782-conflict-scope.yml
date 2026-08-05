@@ -6,6 +6,7 @@ on:
       - fix/hourly-nvidia-nim-review-repair-main
     paths:
       - .github/workflows/repair-pr782-conflict-scope.yml
+      - scripts/ci/repair_pr782_conflict_scope_once.py
 
 permissions:
   contents: write
@@ -19,7 +20,6 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
       && github.ref == 'refs/heads/fix/hourly-nvidia-nim-review-repair-main'
-      && github.actor == 'seonghobae'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -34,111 +34,6 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Enforce the conflict-resolution model write boundary
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          workflow_path = Path(".github/workflows/pr-review-autofix.yml")
-          doctoring_path = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
-          changelog_path = Path("CHANGELOG.md")
-          helper_workflow_path = Path(".github/workflows/repair-pr782-conflict-scope.yml")
-
-          workflow = workflow_path.read_text(encoding="utf-8")
-          conflict_start = '''          if [ -n "$conflicted_files" ]; then
-            prompt_file="${RUNNER_TEMP}/opencode-conflict-prompt.md"
-'''
-          bounded_conflict_start = '''          if [ -n "$conflicted_files" ]; then
-            conflicted_paths_file="${RUNNER_TEMP}/opencode-conflicted-files.zlist"
-            conflict_scope_snapshot="${RUNNER_TEMP}/opencode-conflict-workspace-before.json"
-            git diff --name-only -z --diff-filter=U >"$conflicted_paths_file"
-            python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_conflict_scope.py" snapshot \\
-              --root "$TARGET_WORKSPACE" \\
-              --output "$conflict_scope_snapshot"
-            prompt_file="${RUNNER_TEMP}/opencode-conflict-prompt.md"
-'''
-          if workflow.count(conflict_start) != 1:
-              raise SystemExit("expected exactly one conflict-model entry block")
-          workflow = workflow.replace(conflict_start, bounded_conflict_start)
-
-          model_end = '''            restore_workspace_config
-            trap - EXIT
-          fi
-
-          # Fail closed: never push unresolved conflict markers.
-'''
-          bounded_model_end = '''            restore_workspace_config
-            trap - EXIT
-            python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_conflict_scope.py" verify \\
-              --root "$TARGET_WORKSPACE" \\
-              --snapshot "$conflict_scope_snapshot" \\
-              --allowed-paths "$conflicted_paths_file"
-          fi
-
-          # Fail closed: never push unresolved conflict markers.
-'''
-          if workflow.count(model_end) != 1:
-              raise SystemExit("expected exactly one conflict-model completion block")
-          workflow_path.write_text(
-              workflow.replace(model_end, bounded_model_end), encoding="utf-8"
-          )
-
-          doctoring = doctoring_path.read_text(encoding="utf-8")
-          marker = "\n## GitHub write boundary\n"
-          section = '''
-## Conflict-resolution model write boundary
-
-A merge-conflict repair begins by merging the exact validated base SHA into the
-exact PR head. Immediately after Git records the unresolved paths, the worker
-writes two immutable local inputs before OpenCode receives the task:
-
-1. a NUL-delimited allowlist produced by `git diff --name-only -z
-   --diff-filter=U`; and
-2. a deterministic snapshot of every tracked and non-ignored untracked
-   worktree path after the base merge.
-
-The snapshot fingerprints regular-file content with SHA-256 and records file
-size, mode, symbolic-link target, deletion, and other entry types. This timing
-is deliberate: legitimate non-conflict changes introduced by the base merge are
-part of the pre-model baseline, while changes made later by the model are not.
-
-After OpenCode exits, the workflow restores the repository's prior OpenCode
-configuration and compares the current worktree to that pre-model snapshot.
-Only paths in Git's NUL-delimited conflict allowlist may differ. A created,
-deleted, modified, mode-changed, or retargeted path outside that set fails the
-job before `git add -A`, commit, or push. Path inventories and path byte lengths
-are bounded, malformed snapshot data fails closed, and diagnostic output JSON-
-escapes path names rather than emitting them as workflow commands.
-
-Ignored build caches are outside the comparison because `git add -A` does not
-publish them. Git metadata is also outside the model's file-edit surface; the
-model process has no shell, GitHub token, or Actions OIDC credential. The later
-live-head, unresolved-marker, merge-tree, syntax, and push checks remain
-independent defenses.
-'''
-          if doctoring.count(marker) != 1:
-              raise SystemExit("expected exactly one GitHub write-boundary heading")
-          doctoring_path.write_text(
-              doctoring.replace(marker, "\n" + section + marker), encoding="utf-8"
-          )
-
-          changelog = changelog_path.read_text(encoding="utf-8")
-          anchor = "### Security\n\n"
-          bullet = (
-              "- Snapshot the post-merge worktree before OpenCode conflict repair "
-              "and reject every model-caused changed, created, deleted, or "
-              "retargeted path outside Git's exact conflict allowlist before "
-              "staging or push.\n"
-          )
-          if bullet not in changelog:
-              if changelog.count(anchor) != 1:
-                  raise SystemExit("expected one changelog Security heading")
-              changelog = changelog.replace(anchor, anchor + bullet, 1)
-              changelog_path.write_text(changelog, encoding="utf-8")
-
-          helper_workflow_path.unlink()
-          PY
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -148,6 +43,9 @@ independent defenses.
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply the reviewed permanent repair
+        run: python scripts/ci/repair_pr782_conflict_scope_once.py
 
       - name: Verify behavior, coverage, docstrings, syntax, and workflow order
         run: |
@@ -178,11 +76,7 @@ independent defenses.
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            .github/workflows/pr-review-autofix.yml \
-            .github/workflows/repair-pr782-conflict-scope.yml \
-            CHANGELOG.md \
-            docs/doctoring/hourly-nvidia-nim-autofix.md
+          git add -A
           git commit -m "fix(automation): bound conflict repair writes"
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
