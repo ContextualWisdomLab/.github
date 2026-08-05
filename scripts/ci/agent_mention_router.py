@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -23,10 +24,21 @@ MENTION_PATTERNS = {
         re.IGNORECASE,
     ),
 }
+AGENT_WORKFLOW_RUN_ENDPOINTS = {
+    "cwl-noema-review": (
+        f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/workflows/"
+        "noema-review.yml/runs"
+    ),
+    "opencode-agent": (
+        f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/workflows/"
+        "pr-review-merge-scheduler.yml/runs"
+    ),
+}
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
+MAX_WORKFLOW_RUN_RECORDS = 10_000
 
 
 @dataclass(frozen=True)
@@ -86,7 +98,7 @@ def exact_mentions(body: str) -> tuple[str, ...]:
 
 
 def receipt_marker(comment_id: int) -> str:
-    """Return the hidden idempotency marker for one invocation comment."""
+    """Return the hidden target-comment acknowledgement marker."""
 
     if comment_id < 1:
         raise ValueError("comment id must be positive")
@@ -94,7 +106,13 @@ def receipt_marker(comment_id: int) -> str:
 
 
 def processed_comment_ids(comments: Sequence[dict[str, Any]]) -> frozenset[int]:
-    """Extract receipt IDs authored by the trusted GitHub Actions bot only."""
+    """Extract local receipts authored by the trusted GitHub Actions bot only.
+
+    These target-repository comments are a local optimization and user-facing
+    acknowledgement. Central exact-key workflow-run records remain authoritative
+    for cross-repository dispatch idempotency because PAT and installation-token
+    identities can rotate and target-repository actors can be spoofed.
+    """
 
     processed: set[int] = set()
     for comment in comments:
@@ -197,15 +215,116 @@ def eligible_agents(
     return tuple(dispatchable), tuple(rejected)
 
 
+def agent_invocation_key(request: MentionRequest, agent: str) -> str:
+    """Return a deterministic opaque key for one exact agent invocation.
+
+    The key binds repository, pull request, exact head, base branch, requested
+    agent, source comment, and requesting actor. It contains no credential or
+    provider response and is safe to place in workflow run names.
+    """
+
+    if agent not in AGENT_WORKFLOW_RUN_ENDPOINTS:
+        raise ValueError(f"unsupported agent: {agent}")
+    canonical = json.dumps(
+        {
+            "actor": request.actor,
+            "agent": agent,
+            "base_branch": request.pull_request_base_branch,
+            "comment_id": request.comment_id,
+            "head_sha": request.pull_request_head_sha,
+            "pr_number": request.pull_request_number,
+            "repository": request.repository,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def agent_invocation_marker(request: MentionRequest, agent: str) -> str:
+    """Return the exact workflow-run marker for one agent invocation."""
+
+    return f"[cwl-agent-invocation:{agent_invocation_key(request, agent)}]"
+
+
+def _workflow_run_records(value: Any) -> tuple[dict[str, Any], ...]:
+    """Validate and flatten bounded ``gh --paginate --slurp`` workflow runs."""
+
+    pages = value if isinstance(value, list) else [value]
+    if not pages or not all(isinstance(page, dict) for page in pages):
+        raise ValueError("workflow-run response must contain object pages")
+    records: list[dict[str, Any]] = []
+    for page in pages:
+        page_records = page.get("workflow_runs")
+        if not isinstance(page_records, list) or not all(
+            isinstance(record, dict) for record in page_records
+        ):
+            raise ValueError("workflow-run response contains invalid records")
+        records.extend(page_records)
+        if len(records) > MAX_WORKFLOW_RUN_RECORDS:
+            raise ValueError("workflow-run response exceeds the bounded record limit")
+    return tuple(records)
+
+
+def dispatched_agents(
+    request: MentionRequest,
+    dispatch_client: GitHubClient,
+    agents: Sequence[str] | None = None,
+) -> frozenset[str]:
+    """Return agents with a durable central run for this exact invocation.
+
+    A run record proves GitHub accepted the repository dispatch even when its
+    conclusion is failure. Repeating a failed invocation requires a new trusted
+    source comment, which produces a different key and preserves auditable
+    at-most-once behavior for each request.
+    """
+
+    candidates = tuple(request.agents if agents is None else agents)
+    observed: set[str] = set()
+    for agent in candidates:
+        endpoint = AGENT_WORKFLOW_RUN_ENDPOINTS.get(agent)
+        if endpoint is None:
+            raise ValueError(f"unsupported agent: {agent}")
+        response = dispatch_client.request(
+            [
+                endpoint,
+                "-X",
+                "GET",
+                "-f",
+                "event=repository_dispatch",
+                "-f",
+                "per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        marker = agent_invocation_marker(request, agent)
+        for run in _workflow_run_records(response):
+            run_id = run.get("id")
+            if (
+                isinstance(run_id, int)
+                and run_id > 0
+                and run.get("event") == "repository_dispatch"
+                and marker in str(run.get("display_title") or "")
+            ):
+                observed.add(agent)
+                break
+    return frozenset(observed)
+
+
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
     """Return the central Noema repository-dispatch request body."""
 
+    agent = "cwl-noema-review"
     return {
         "event_type": "noema-review",
         "client_payload": {
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
             "pr_head_sha": request.pull_request_head_sha,
+            "requested_agent": agent,
+            "agent_invocation_key": agent_invocation_key(request, agent),
             "requested_by": request.actor,
             "source_comment_id": request.comment_id,
         },
@@ -215,6 +334,7 @@ def noema_payload(request: MentionRequest) -> dict[str, Any]:
 def opencode_payload(request: MentionRequest) -> dict[str, Any]:
     """Return the review-only central OpenCode scheduler dispatch body."""
 
+    agent = "opencode-agent"
     return {
         "event_type": "merge-scheduler",
         "client_payload": {
@@ -227,7 +347,8 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
             "enable_auto_merge": False,
             "update_branches": False,
             "merge_mode": "disabled",
-            "requested_agent": "opencode-agent",
+            "requested_agent": agent,
+            "agent_invocation_key": agent_invocation_key(request, agent),
             "requested_by": request.actor,
             "source_comment_id": request.comment_id,
         },
@@ -242,14 +363,14 @@ def dispatch_request(
     opencode_allowlist: frozenset[str],
     dry_run: bool = False,
 ) -> tuple[str, ...]:
-    """Dispatch requested agents and acknowledge the invocation on its PR."""
+    """Dispatch only missing agents and acknowledge new work on the target PR."""
 
     dispatchable, rejected = eligible_agents(
         request,
         opencode_allowlist=opencode_allowlist,
     )
-    handles = tuple(f"@{agent}" for agent in dispatchable)
     if dry_run:
+        handles = tuple(f"@{agent}" for agent in dispatchable)
         print(
             "DRY-RUN agent mention "
             f"repo={request.repository} pr={request.pull_request_number} "
@@ -258,17 +379,25 @@ def dispatch_request(
             f"reject={','.join(rejected) or 'none'}"
         )
         return handles
+
+    existing = dispatched_agents(request, dispatch_client, dispatchable)
+    missing = tuple(agent for agent in dispatchable if agent not in existing)
+    handles = tuple(f"@{agent}" for agent in missing)
+    if not missing and not rejected:
+        return ()
+
     dispatch_endpoint = f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/dispatches"
-    if "cwl-noema-review" in dispatchable:
+    if "cwl-noema-review" in missing:
         dispatch_client.request(
             [dispatch_endpoint, "-X", "POST"],
             input_payload=noema_payload(request),
         )
-    if "opencode-agent" in dispatchable:
+    if "opencode-agent" in missing:
         dispatch_client.request(
             [dispatch_endpoint, "-X", "POST"],
             input_payload=opencode_payload(request),
         )
+
     target_api = f"repos/{request.repository}"
     target_client.request(
         [f"{target_api}/issues/comments/{request.comment_id}/reactions", "-X", "POST"],
@@ -277,6 +406,13 @@ def dispatch_request(
     status_parts: list[str] = []
     if handles:
         status_parts.append(f"Queued {' and '.join(handles)}")
+    existing_handles = tuple(
+        f"@{agent}" for agent in dispatchable if agent in existing
+    )
+    if existing_handles:
+        status_parts.append(
+            f"Already queued {' and '.join(existing_handles)} on this exact request"
+        )
     if rejected:
         rejected_handles = " and ".join(f"@{agent}" for agent in rejected)
         status_parts.append(
@@ -286,7 +422,8 @@ def dispatch_request(
     acknowledgement = (
         f"{receipt_marker(request.comment_id)}\n"
         f"{' ; '.join(status_parts)} for PR #{request.pull_request_number} at head "
-        f"`{request.pull_request_head_sha}`. Existing review workflows remain "
+        f"`{request.pull_request_head_sha}`. Central exact-key workflow runs are "
+        "the durable dispatch ledger; existing review workflows remain "
         "authoritative for the final verdict and failure evidence."
     )
     target_client.request(
