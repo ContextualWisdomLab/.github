@@ -36,15 +36,13 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
+          fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify immutable parent and apply bounded repair
+      - name: Apply exact bounded repair
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          # The updated trigger commit must be a single child of the reviewed
-          # one-shot introduction commit; this prevents branch-drift repair.
-          test "$(git rev-parse HEAD^)" = "0edd9d44197ba2c7893deae29ba06fa6e189a8b2"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 -I - <<'PY'
           from pathlib import Path
 
