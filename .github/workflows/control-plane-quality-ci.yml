@@ -1,0 +1,176 @@
+name: Central Control Plane Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/agent-mention-router.yml"
+      - ".github/workflows/control-plane-quality-ci.yml"
+      - ".github/workflows/pr-review-fix-scheduler.yml"
+      - ".github/workflows/sbom-generation.yml"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/agent_mention_router.py"
+      - "scripts/ci/agent_mention_sweep.py"
+      - "scripts/ci/install_base_python_locks.py"
+      - "scripts/ci/javascript_coverage_gate.py"
+      - "scripts/ci/redact_sensitive_log.py"
+      - "scripts/ci/sandboxed_verify.py"
+      - "scripts/ci/sandboxed_web_e2e.py"
+      - "tests/test_agent_mention*.py"
+      - "tests/test_control_plane_quality_workflow_contract.py"
+      - "tests/test_install_base_python*.py"
+      - "tests/test_javascript_coverage*.py"
+      - "tests/test_pr_review_fix*.py"
+      - "tests/test_redact*.py"
+      - "tests/test_sandboxed*.py"
+      - "tests/test_sbom_generation_push_contract.py"
+      - "tests/test_unstructured_separate_option_redaction.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/agent-mention-router.yml"
+      - ".github/workflows/control-plane-quality-ci.yml"
+      - ".github/workflows/pr-review-fix-scheduler.yml"
+      - ".github/workflows/sbom-generation.yml"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "scripts/ci/agent_mention_router.py"
+      - "scripts/ci/agent_mention_sweep.py"
+      - "scripts/ci/install_base_python_locks.py"
+      - "scripts/ci/javascript_coverage_gate.py"
+      - "scripts/ci/redact_sensitive_log.py"
+      - "scripts/ci/sandboxed_verify.py"
+      - "scripts/ci/sandboxed_web_e2e.py"
+      - "tests/test_agent_mention*.py"
+      - "tests/test_control_plane_quality_workflow_contract.py"
+      - "tests/test_install_base_python*.py"
+      - "tests/test_javascript_coverage*.py"
+      - "tests/test_pr_review_fix*.py"
+      - "tests/test_redact*.py"
+      - "tests/test_sandboxed*.py"
+      - "tests/test_sbom_generation_push_contract.py"
+      - "tests/test_unstructured_separate_option_redaction.py"
+
+concurrency:
+  group: control-plane-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  minimum-python-contract:
+    name: Python 3.10 runtime contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up minimum supported Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Compile central production modules
+        run: |
+          python -m compileall -q \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py \
+            scripts/ci/install_base_python_locks.py \
+            scripts/ci/javascript_coverage_gate.py \
+            scripts/ci/redact_sensitive_log.py \
+            scripts/ci/sandboxed_verify.py \
+            scripts/ci/sandboxed_web_e2e.py
+
+  full-quality-gate:
+    name: Python 3.14 full quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run control-plane tests with complete branch coverage
+        run: |
+          python -m pytest \
+            tests/test_agent_mention_router.py \
+            tests/test_agent_mention_sweep.py \
+            tests/test_agent_mention_workflow_contract.py \
+            tests/test_control_plane_quality_workflow_contract.py \
+            tests/test_install_base_python_locks.py \
+            tests/test_install_base_python_lock_missing_pin.py \
+            tests/test_install_base_python_locks_atomic.py \
+            tests/test_javascript_coverage_gate.py \
+            tests/test_javascript_coverage_scope.py \
+            tests/test_pr_review_fix_hourly_contract.py \
+            tests/test_pr_review_fix_scheduler_source_pin.py \
+            tests/test_redact_json_key_boundary.py \
+            tests/test_sandboxed_output_redaction.py \
+            tests/test_sandboxed_verify.py \
+            tests/test_sandboxed_web_e2e.py \
+            tests/test_sbom_generation_push_contract.py \
+            tests/test_unstructured_separate_option_redaction.py \
+            --cov=scripts.ci.agent_mention_router \
+            --cov=scripts.ci.agent_mention_sweep \
+            --cov=scripts.ci.install_base_python_locks \
+            --cov=scripts.ci.javascript_coverage_gate \
+            --cov=scripts.ci.redact_sensitive_log \
+            --cov=scripts.ci.sandboxed_verify \
+            --cov=scripts.ci.sandboxed_web_e2e \
+            --cov-branch \
+            --cov-fail-under=100 \
+            --cov-report=term-missing \
+            -q
+
+      - name: Enforce complete production docstrings
+        run: |
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py \
+            scripts/ci/install_base_python_locks.py \
+            scripts/ci/javascript_coverage_gate.py \
+            scripts/ci/redact_sensitive_log.py \
+            scripts/ci/sandboxed_verify.py \
+            scripts/ci/sandboxed_web_e2e.py
+
+      - name: Compile quality-gate surfaces
+        run: |
+          python -m compileall -q \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py \
+            scripts/ci/install_base_python_locks.py \
+            scripts/ci/javascript_coverage_gate.py \
+            scripts/ci/redact_sensitive_log.py \
+            scripts/ci/sandboxed_verify.py \
+            scripts/ci/sandboxed_web_e2e.py \
+            tests/test_control_plane_quality_workflow_contract.py
