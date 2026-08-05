@@ -145,6 +145,7 @@ def test_wait_for_url_handles_empty_invalid_exited_limited_and_success(
         1,
         running,
     )
+    running.log_path.unlink()
 
     class Response:
         """Context-managed readiness response."""
