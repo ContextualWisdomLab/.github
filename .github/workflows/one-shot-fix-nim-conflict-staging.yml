@@ -1,4 +1,5 @@
 name: One-shot fix NVIDIA NIM conflict staging
+# Temporary self-deleting verifier for the current PR branch.
 
 on:
   push:
