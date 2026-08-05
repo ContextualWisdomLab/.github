@@ -20,7 +20,7 @@ try:
     # Noema core is a fixed regular non-symlink sibling from the immutable
     # trusted workflow checkout. Shared globals are required so existing tests,
     # monkeypatch seams, and the wrapper's call_llm override keep one namespace.
-    exec(  # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
+    exec(  # nosec B102  # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
         compile(_CORE_PATH.read_bytes(), str(_CORE_PATH), "exec"),
         globals(),
         globals(),
