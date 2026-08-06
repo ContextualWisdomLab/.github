@@ -18,7 +18,6 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.actor == 'seonghobae' &&
       github.ref == 'refs/heads/fix/opencode-llvm-coverage-current-main'
     permissions:
       contents: write
