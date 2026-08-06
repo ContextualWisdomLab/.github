@@ -4,11 +4,11 @@
 
 Coverage setup failures are security-relevant review evidence, but exception text is untrusted and may contain registry URL userinfo, authorization headers, API tokens, database connection strings, passwords, or encryption keys. JavaScript and Python trusted-lock materializers therefore delegate multiline `GITHUB_OUTPUT` publication to one shared helper. The helper normalizes whitespace, applies the central credential sanitizer, bounds each field, HTML-escapes Markdown-embedded evidence, and replaces the fixed multiline delimiter before publication.
 
-The sanitizer applies URL-userinfo and authorization-header redaction before key-value truncation so mixed single-line failures cannot preserve an earlier credential. The final output retains the failure class, stage, bounded non-secret context, and remediation without exposing raw credentials. Local CLI status remains nonzero when publication is unavailable.
+The sanitizer applies URL-userinfo and complete authorization-header-value redaction before key-value truncation so mixed single-line failures cannot preserve an earlier credential. It deliberately does not enumerate authentication schemes: `Bearer`, `Basic`, `Token`, `Digest`, AWS signing schemes, custom provider schemes, and scheme-less values are all untrusted and replaced in full after the `Authorization` field separator. The final output retains the failure class, stage, bounded non-secret context, and remediation without exposing raw credentials. Local CLI status remains nonzero when publication is unavailable.
 
 ## Verification contract
 
-The exact-head gate requires Python 3.10 compilation, Python 3.14 tests, 100% production statement and branch coverage, 100% production docstrings, and direct execution of the shared sanitizer CLI contract. Regression cases cover mixed URL, bearer, and token secrets; delimiter injection; oversized errors; missing `GITHUB_OUTPUT`; and both materializer call paths. Temporary write-capable repair workflows are removed from the final tree.
+The exact-head gate requires Python 3.10 compilation, Python 3.14 tests, 100% production statement and branch coverage, 100% production docstrings, and direct execution of the shared sanitizer CLI contract. Regression cases cover mixed URL, arbitrary Authorization schemes, scheme-less Authorization values, token secrets, delimiter injection, oversized errors, missing `GITHUB_OUTPUT`, and both materializer call paths. Temporary write-capable repair workflows are removed from the final tree.
 
 ## Standards and guidance
 
