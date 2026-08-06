@@ -11,6 +11,7 @@ on:
 concurrency:
   group: agent-mention-opencode-${{ github.event.client_payload.agent_invocation_key || github.run_id }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -40,7 +41,7 @@ jobs:
       UPDATE_BRANCHES: ${{ github.event.client_payload.update_branches }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || '' }}
     steps:
-      - name: Validate exact review-only invocation and elect one durable leader
+      - name: Validate exact invocation and elect one durable leader
         id: leader
         run: |
           set -euo pipefail
@@ -52,13 +53,13 @@ jobs:
             ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] ||
             [[ "$BASE_BRANCH" == -* ]] ||
             ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]+$ ]] ||
             [ "$TRIGGER_REVIEWS" != "true" ] ||
             [ "$REVIEW_DISPATCH_LIMIT" != "1" ] ||
             [ "$ENABLE_AUTO_MERGE" != "false" ] ||
             [ "$UPDATE_BRANCHES" != "false" ] ||
-            [ "$MERGE_MODE" != "disabled" ]; then
-            echo "::error::Rejected malformed, mismatched, or mutation-capable OpenCode invocation payload."
+            [ "$MERGE_MODE" != "disabled" ] ||
+            ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]+$ ]]; then
+            echo "::error::Rejected malformed or mismatched OpenCode agent invocation payload."
             exit 1
           fi
 
@@ -88,25 +89,40 @@ jobs:
           PYTHON
 
           marker="[cwl-agent-invocation:${INVOCATION_KEY}]"
-          leader_id="$(
+          matching_run_ids() {
             gh api --paginate --slurp \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/agent-mention-opencode-dispatch.yml/runs?event=repository_dispatch&per_page=100" \
               | jq -r --arg marker "$marker" '
                   [.[].workflow_runs[]
                     | select((.display_title // "") | contains($marker))
                     | .id]
-                  | min // empty
+                  | unique
+                  | sort
+                  | .[]
                 '
-          )"
-          if [ -z "$leader_id" ]; then
-            echo "::error::Could not establish the durable OpenCode invocation leader."
-            exit 1
-          fi
-          if [ "$leader_id" != "$GITHUB_RUN_ID" ]; then
-            echo "forward=false" >>"$GITHUB_OUTPUT"
-            echo "Duplicate exact-key invocation suppressed by durable workflow-run identity."
-            exit 0
-          fi
+          }
+
+          for attempt in 1 2 3; do
+            run_ids="$(matching_run_ids)"
+            lower_id="$(
+              awk -v current="$GITHUB_RUN_ID" '$1 < current { print $1; exit }' \
+                <<<"$run_ids"
+            )"
+            if [ -n "$lower_id" ]; then
+              echo "forward=false" >>"$GITHUB_OUTPUT"
+              echo "Duplicate exact-key invocation suppressed by lower durable run $lower_id."
+              exit 0
+            fi
+            if grep -Fxq "$GITHUB_RUN_ID" <<<"$run_ids"; then
+              echo "forward=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep "$((attempt * 2))"
+            fi
+          done
+
+          echo "::notice::Current run remained absent from the eventually consistent workflow-run list after retries; self-electing because no lower durable run was observed."
           echo "forward=true" >>"$GITHUB_OUTPUT"
 
       - name: Forward once to the authoritative review-only scheduler
