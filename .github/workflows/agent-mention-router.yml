@@ -5,7 +5,6 @@ on:
     types: [created]
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch:
 
 concurrency:
   group: review-agent-mention-router-${{ github.repository }}
@@ -70,10 +69,7 @@ jobs:
   sweep-organization-agent-mentions:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
-      && (
-        github.event_name == 'schedule'
-        || github.event_name == 'workflow_dispatch'
-      )
+      && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -106,7 +102,7 @@ jobs:
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
             mark_unavailable
-            exit 0
+            exit 1
           fi
           request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
           separator="&"
@@ -121,13 +117,13 @@ jobs:
           )"; then
             echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
             mark_unavailable
-            exit 0
+            exit 1
           fi
           oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
           if [ -z "$oidc_token" ]; then
             echo "OpenCode app token exchange unavailable: OIDC token response was empty."
             mark_unavailable
-            exit 0
+            exit 1
           fi
           if ! token_response="$(
             curl -fsS \
@@ -137,13 +133,13 @@ jobs:
           )"; then
             echo "OpenCode app token exchange unavailable: app token request did not complete."
             mark_unavailable
-            exit 0
+            exit 1
           fi
           app_token="$(jq -r '.token // empty' <<<"$token_response")"
           if [ -z "$app_token" ]; then
             echo "OpenCode app token exchange unavailable: app token response was empty."
             mark_unavailable
-            exit 0
+            exit 1
           fi
           echo "::add-mask::$app_token"
           {
