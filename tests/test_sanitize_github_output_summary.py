@@ -22,7 +22,7 @@ regular evidence line stays intact
     assert "DATABASE_URL: <redacted>" in sanitized
     assert "AUTH_SESSION_HMAC_SECRET: <redacted>" in sanitized
     assert "ENCRYPTION_KEY=<redacted>" in sanitized
-    assert "Authorization: Bearer <redacted>" in sanitized
+    assert "Authorization: <redacted>" in sanitized
     assert "secret@db" not in sanitized
     assert "super-secret" not in sanitized
     assert "token-value" not in sanitized
@@ -53,11 +53,36 @@ def test_sanitizes_mixed_credentials_before_truncating_at_secret_key():
     sanitized = sanitize_text(source)
 
     assert "https://<redacted>@example.invalid/a.tgz" in sanitized
-    assert "Authorization: Bearer <redacted>" in sanitized
-    assert "TOKEN=<redacted>" in sanitized
+    assert "Authorization: <redacted>" in sanitized
+    assert "TOKEN=" not in sanitized
     assert "url-secret" not in sanitized
     assert "bearer-secret" not in sanitized
     assert "token-secret" not in sanitized
+
+
+def test_sanitizes_every_authorization_scheme_and_scheme_less_value():
+    """No Authorization value survives because schemes are provider-extensible."""
+    source = (
+        "Authorization: Token token-secret\n"
+        "Authorization=Digest digest-secret\n"
+        "Authorization: AWS4-HMAC-SHA256 Credential=alice/signature-secret\n"
+        "Authorization: scheme-less-secret\n"
+    )
+
+    sanitized = sanitize_text(source)
+
+    assert sanitized == "Authorization: <redacted>\n" * 4
+    for secret_value in (
+        "Token",
+        "token-secret",
+        "Digest",
+        "digest-secret",
+        "AWS4-HMAC-SHA256",
+        "Credential",
+        "signature-secret",
+        "scheme-less-secret",
+    ):
+        assert secret_value not in sanitized
 
 
 def test_cli_writes_sanitized_summary(tmp_path, monkeypatch):
