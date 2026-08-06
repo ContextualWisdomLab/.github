@@ -1,0 +1,579 @@
+name: Materialize nested npm metadata lock validation
+
+on:
+  push:
+    branches: [fix/npm-nested-metadata-lock-validation]
+    paths:
+      - .github/workflows/materialize-npm-nested-metadata-validation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: materialize-npm-nested-metadata-validation
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONWARNINGS: error
+
+jobs:
+  test-repair-verify:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/npm-nested-metadata-lock-validation'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact test-first head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked quality tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Add npm-v3 nested metadata regressions
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          path = Path('tests/test_materialize_base_javascript_packages.py')
+          source = path.read_text(encoding='utf-8')
+          marker = 'def test_accepts_nested_metadata_only_npm_package_with_canonical_pin('
+          if marker in source:
+              raise SystemExit('nested npm metadata tests already exist unexpectedly')
+          tests = dedent(
+              r'''
+
+
+              def _validate_changed_npm_packages(packages: dict[str, object]) -> None:
+                  """Validate one synthetic npm v3 packages map through the public boundary."""
+
+                  materializer.validate_head_npm_lock(
+                      "package-lock.json",
+                      (
+                          json.dumps({"lockfileVersion": 3, "packages": packages}) + "\n"
+                      ).encode(),
+                  )
+
+
+              def _registry_metadata(
+                  *,
+                  version: str = "19.2.3",
+                  package_name: str = "@types/react-dom",
+                  integrity_character: str = "A",
+              ) -> dict[str, str]:
+                  """Return one exact npm-registry tarball and SHA-512 metadata record."""
+
+                  tarball_name = package_name.rsplit("/", 1)[-1]
+                  return {
+                      "version": version,
+                      "resolved": (
+                          f"https://registry.npmjs.org/{package_name}/-/"
+                          f"{tarball_name}-{version}.tgz"
+                      ),
+                      "integrity": "sha512-" + (integrity_character * 86) + "==",
+                  }
+
+
+              def test_accepts_nested_metadata_only_npm_package_with_canonical_pin() -> None:
+                  """A BandScope-shaped peer entry inherits one exact canonical registry pin."""
+
+                  _validate_changed_npm_packages(
+                      {
+                          "node_modules/@types/react-dom": _registry_metadata(),
+                          "apps/desktop/node_modules/@types/react-dom": {
+                              "version": "19.2.3",
+                              "dev": True,
+                              "peer": True,
+                          },
+                      }
+                  )
+
+
+              @pytest.mark.parametrize(
+                  ("packages", "message"),
+                  [
+                      (
+                          {
+                              "apps/desktop/node_modules/@types/react-dom": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              }
+                          },
+                          "must match one canonical registry package",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": _registry_metadata(
+                                  version="19.2.4"
+                              ),
+                              "apps/desktop/node_modules/@types/react-dom": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              },
+                          },
+                          "must match canonical package version",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": {
+                                  **_registry_metadata(),
+                                  "resolved": "https://example.invalid/react-dom.tgz",
+                              },
+                              "apps/desktop/node_modules/@types/react-dom": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              },
+                          },
+                          "must resolve from https://registry.npmjs.org/",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": {
+                                  **_registry_metadata(),
+                                  "integrity": "sha256-unsafe",
+                              },
+                              "apps/desktop/node_modules/@types/react-dom": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              },
+                          },
+                          "must use one SHA-512 integrity value",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": _registry_metadata(),
+                              "vendor/node_modules/@types/react-dom": _registry_metadata(
+                                  integrity_character="B"
+                              ),
+                              "apps/desktop/node_modules/@types/react-dom": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              },
+                          },
+                          "must resolve to one unambiguous canonical registry package",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": _registry_metadata(),
+                              "apps/desktop/node_modules/@types/react-dom": {
+                                  "peer": True,
+                              },
+                          },
+                          "must declare one exact version",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": _registry_metadata(),
+                              "apps/desktop/node_modules/@types/react-dom": {
+                                  "version": "19.2.3",
+                                  "resolved": (
+                                      "https://registry.npmjs.org/@types/react-dom/-/"
+                                      "react-dom-19.2.3.tgz"
+                                  ),
+                              },
+                          },
+                          "must pin a registry tarball and SHA-512 integrity",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": _registry_metadata(),
+                              "apps/desktop/node_modules/@types": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              },
+                          },
+                          "has a malformed node_modules identity",
+                      ),
+                      (
+                          {
+                              "node_modules": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              }
+                          },
+                          "has a malformed node_modules identity",
+                      ),
+                      (
+                          {
+                              "node_modules/@types/react-dom": {
+                                  "version": "19.2.3",
+                                  "peer": True,
+                              }
+                          },
+                          "must pin a registry tarball and SHA-512 integrity",
+                      ),
+                  ],
+              )
+              def test_rejects_unbounded_nested_metadata_only_npm_package(
+                  packages: dict[str, object],
+                  message: str,
+              ) -> None:
+                  """Nested metadata cannot weaken canonical identity, version, URL, or hash proof."""
+
+                  with pytest.raises(ValueError, match=message):
+                      _validate_changed_npm_packages(packages)
+              '''
+          )
+          path.write_text(source.rstrip() + tests + "\n", encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Prove the compatibility regression is red
+        shell: bash --noprofile --norc {0}
+        run: |
+          set +e
+          python -m pytest -q \
+            tests/test_materialize_base_javascript_packages.py::test_accepts_nested_metadata_only_npm_package_with_canonical_pin
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo '::error::The nested metadata regression passed before production repair.'
+            exit 1
+          fi
+          printf 'Observed expected pre-fix failure (exit %s).\n' "$status"
+
+      - name: Apply fail-closed canonical-pin validation
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          path = Path('scripts/ci/materialize_base_javascript_packages.py')
+          source = path.read_text(encoding='utf-8')
+          start = source.index('def validate_head_npm_lock(')
+          end = source.index('\n\ndef materialize(', start)
+          replacement = dedent(
+              r'''
+              def _npm_package_identity(lock_path: str, package_path: str) -> str:
+                  """Return the package identity after the final node_modules segment."""
+
+                  parts = pathlib.PurePosixPath(package_path).parts
+                  node_module_indexes = [
+                      index for index, part in enumerate(parts) if part == "node_modules"
+                  ]
+                  suffix = parts[node_module_indexes[-1] + 1 :]
+                  if not suffix or (suffix[0].startswith("@") and len(suffix) < 2):
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} package {package_path} "
+                          "has a malformed node_modules identity"
+                      )
+                  if suffix[0].startswith("@"):
+                      return f"{suffix[0]}/{suffix[1]}"
+                  return suffix[0]
+
+
+              def _validated_npm_registry_pin(
+                  lock_path: str,
+                  package_path: str,
+                  metadata: dict[str, Any],
+              ) -> tuple[str, str] | None:
+                  """Return one validated registry pin or ``None`` for metadata-only input."""
+
+                  has_resolved = "resolved" in metadata
+                  has_integrity = "integrity" in metadata
+                  if not has_resolved and not has_integrity:
+                      return None
+
+                  resolved = metadata.get("resolved")
+                  integrity = metadata.get("integrity")
+                  if (
+                      not has_resolved
+                      or not has_integrity
+                      or not isinstance(resolved, str)
+                      or not isinstance(integrity, str)
+                  ):
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} package {package_path} "
+                          "must pin a registry tarball and SHA-512 integrity"
+                      )
+                  parsed = urllib.parse.urlsplit(resolved)
+                  try:
+                      parsed_port = parsed.port
+                  except ValueError as exc:
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} package {package_path} "
+                          "has an invalid registry URL"
+                      ) from exc
+                  if (
+                      parsed.scheme != "https"
+                      or parsed.hostname != NPM_REGISTRY_HOST
+                      or parsed.username is not None
+                      or parsed.password is not None
+                      or parsed_port is not None
+                      or parsed.query
+                      or parsed.fragment
+                      or not parsed.path.startswith("/")
+                      or not parsed.path.endswith(".tgz")
+                  ):
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} package {package_path} "
+                          f"must resolve from https://{NPM_REGISTRY_HOST}/"
+                      )
+                  if not SHA512_SRI_RE.fullmatch(integrity):
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} package {package_path} "
+                          "must use one SHA-512 integrity value"
+                      )
+                  return resolved, integrity
+
+
+              def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
+                  """Fail closed unless a changed HEAD npm lock is registry- and hash-bounded."""
+
+                  try:
+                      lock_data: Any = json.loads(lock_content.decode("utf-8"))
+                  except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} is invalid JSON: {exc}"
+                      ) from exc
+                  if not isinstance(lock_data, dict):
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} must be a JSON object"
+                      )
+                  lockfile_version = lock_data.get("lockfileVersion")
+                  if (
+                      not isinstance(lockfile_version, int)
+                      or isinstance(lockfile_version, bool)
+                      or lockfile_version not in (2, 3)
+                  ):
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} must use "
+                          "lockfileVersion 2 or 3"
+                      )
+                  packages = lock_data.get("packages")
+                  if not isinstance(packages, dict):
+                      raise ValueError(
+                          f"current-head npm lock {lock_path} must contain an "
+                          "object-valued packages map"
+                      )
+
+                  registry_pins: dict[tuple[str, str], set[tuple[str, str]]] = {}
+                  metadata_only_entries: list[tuple[str, str, str]] = []
+                  for package_path, metadata in sorted(packages.items()):
+                      if not isinstance(package_path, str) or not isinstance(metadata, dict):
+                          raise ValueError(
+                              f"current-head npm lock {lock_path} contains malformed "
+                              "package metadata"
+                          )
+                      if "\\" in package_path:
+                          raise ValueError(
+                              f"current-head npm lock {lock_path} contains unsafe "
+                              f"package path {package_path!r}"
+                          )
+                      candidate = pathlib.PurePosixPath(package_path)
+                      if candidate.is_absolute() or ".." in candidate.parts:
+                          raise ValueError(
+                              f"current-head npm lock {lock_path} contains unsafe "
+                              f"package path {package_path!r}"
+                          )
+                      if not package_path or "node_modules" not in candidate.parts:
+                          continue
+
+                      resolved = metadata.get("resolved")
+                      if metadata.get("link") is True:
+                          if (
+                              not isinstance(resolved, str)
+                              or not resolved
+                              or "\\" in resolved
+                          ):
+                              raise ValueError(
+                                  f"current-head npm lock {lock_path} contains an "
+                                  f"unsafe workspace link for {package_path}"
+                              )
+                          link_target = pathlib.PurePosixPath(resolved)
+                          if (
+                              link_target.is_absolute()
+                              or ".." in link_target.parts
+                              or "node_modules" in link_target.parts
+                          ):
+                              raise ValueError(
+                                  f"current-head npm lock {lock_path} contains an "
+                                  f"unsafe workspace link for {package_path}"
+                              )
+                          continue
+
+                      package_identity = _npm_package_identity(lock_path, package_path)
+                      registry_pin = _validated_npm_registry_pin(
+                          lock_path, package_path, metadata
+                      )
+                      version = metadata.get("version")
+                      if registry_pin is None:
+                          if package_path == f"node_modules/{package_identity}":
+                              raise ValueError(
+                                  f"current-head npm lock {lock_path} package "
+                                  f"{package_path} must pin a registry tarball and "
+                                  "SHA-512 integrity"
+                              )
+                          if not isinstance(version, str) or not version:
+                              raise ValueError(
+                                  f"current-head npm lock {lock_path} package "
+                                  f"{package_path} must declare one exact version"
+                              )
+                          metadata_only_entries.append(
+                              (package_path, package_identity, version)
+                          )
+                          continue
+
+                      if isinstance(version, str) and version:
+                          registry_pins.setdefault(
+                              (package_identity, version), set()
+                          ).add(registry_pin)
+
+                  for package_path, package_identity, version in metadata_only_entries:
+                      canonical_path = f"node_modules/{package_identity}"
+                      canonical_metadata = packages.get(canonical_path)
+                      if not isinstance(canonical_metadata, dict):
+                          raise ValueError(
+                              f"current-head npm lock {lock_path} package {package_path} "
+                              "must match one canonical registry package"
+                          )
+                      if canonical_metadata.get("version") != version:
+                          raise ValueError(
+                              f"current-head npm lock {lock_path} package {package_path} "
+                              "must match canonical package version"
+                          )
+                      canonical_pin = _validated_npm_registry_pin(
+                          lock_path, canonical_path, canonical_metadata
+                      )
+                      if canonical_pin is None:
+                          raise ValueError(
+                              f"current-head npm lock {lock_path} package {package_path} "
+                              "must match one canonical registry package"
+                          )
+                      if registry_pins.get((package_identity, version), set()) != {
+                          canonical_pin
+                      }:
+                          raise ValueError(
+                              f"current-head npm lock {lock_path} package {package_path} "
+                              "must resolve to one unambiguous canonical registry package"
+                          )
+              '''
+          ).lstrip()
+          path.write_text(source[:start] + replacement + source[end:], encoding='utf-8')
+          PY
+
+          cat > docs/doctoring/npm-nested-package-metadata.md <<'EOF'
+          # npm nested package metadata validation
+
+          ## Decision
+
+          Changed npm lockfiles remain fail-closed: every fetched artifact must still be
+          represented by one HTTPS `registry.npmjs.org` tarball and one SHA-512 SRI value.
+          npm v3 may additionally serialize a nested workspace or peer location with only
+          version and classification metadata. Such an entry is accepted only when it
+          points by exact package identity and version to one unambiguous canonical root
+          package entry carrying the complete validated registry pin.
+
+          The validator rejects missing canonical entries, version drift, partial pin
+          fields, unsafe paths, invalid registry URLs or ports, invalid integrity values,
+          and conflicting complete pins for the same identity and version. It consumes the
+          lock unchanged after validation; it neither repairs nor invents dependency data.
+
+          ## Modular boundary
+
+          This rule belongs to the organization dependency-materialization control plane.
+          BandScope and other npm-workspace repositories keep one canonical root lock and
+          do not need repository-specific exceptions or duplicate nested lockfiles.
+
+          ## Verification
+
+          Permanent tests include the BandScope `@types/react-dom` shape and negative
+          missing-canonical, version-mismatch, ambiguous-pin, URL, integrity, partial-pin,
+          malformed-identity, and root-metadata cases. The central suite requires 100%
+          production statement and branch coverage plus complete production docstrings.
+
+          ## References
+
+          npm, Inc. (2026). *package-lock.json* (npm CLI version 11). npm Docs.
+          https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/
+
+          npm, Inc. (2026). *npm ci* (npm CLI version 11). npm Docs.
+          https://docs.npmjs.com/cli/v11/commands/npm-ci/
+          EOF
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('CHANGELOG.md')
+          source = path.read_text(encoding='utf-8')
+          marker = '### Fixed\n\n'
+          addition = (
+              '- Accept npm-v3 nested workspace and peer metadata only when one exact '
+              'canonical package entry proves the same identity and version with a '
+              'validated registry tarball and SHA-512 integrity, while rejecting missing '
+              'or ambiguous provenance.\n'
+          )
+          if addition not in source:
+              if source.count(marker) != 1:
+                  raise SystemExit('Unreleased Fixed marker is not unique')
+              source = source.replace(marker, marker + addition, 1)
+              path.write_text(source, encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Verify focused and complete central quality contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q tests/test_materialize_base_javascript_packages.py
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci
+          python -m compileall -q scripts tests
+          python -m ruff check \
+            scripts/ci/materialize_base_javascript_packages.py \
+            tests/test_materialize_base_javascript_packages.py
+          git diff --check
+
+      - name: Publish verified focused commit and remove materializer
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          BRANCH_NAME: fix/npm-nested-metadata-lock-validation
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          remote_head="$(git ls-remote "$remote_url" "refs/heads/$BRANCH_NAME" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          rm .github/workflows/materialize-npm-nested-metadata-validation.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          actual="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' \
+            CHANGELOG.md \
+            docs/doctoring/npm-nested-package-metadata.md \
+            scripts/ci/materialize_base_javascript_packages.py \
+            tests/test_materialize_base_javascript_packages.py | sort)"
+          test "$actual" = "$expected"
+          git commit -m 'fix(coverage): validate nested npm metadata through canonical pins'
+          git push \
+            --force-with-lease="refs/heads/${BRANCH_NAME}:${EXPECTED_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/$BRANCH_NAME"
