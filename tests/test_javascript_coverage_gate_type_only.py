@@ -64,6 +64,7 @@ def test_missing_type_only_source_does_not_require_istanbul_instrumentation(
         "export interface EditorSnapshot {\n"
         "  readonly document: JSONContent;\n"
         "  readonly value: string;\n"
+        "  /** Destination-free reading-order projection. */\n"
         "  readonly plainText: string;\n"
         "}\n"
         "\n"
