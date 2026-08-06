@@ -69,6 +69,40 @@ NEW_REPLACE_BETWEEN = '''def replace_between(path: str, start: str, end: str, re
     write(path, content[:start_index] + replacement.rstrip() + "\\n\\n" + content[end_index + 1 :])
 '''
 
+OLD_OUTPUT_REPLACEMENT = '''    if old_output not in content:
+        raise RuntimeError("agent-mention-router.yml: token output block changed")
+    content = content.replace(old_output, new_output, 1)
+'''
+
+NEW_OUTPUT_REPLACEMENT = '''    output_matches = [
+        (_indented(old_output, width), _indented(new_output, width))
+        for width in range(0, 21)
+        if content.count(_indented(old_output, width)) == 1
+    ]
+    if len(output_matches) != 1:
+        raise RuntimeError(
+            "agent-mention-router.yml: token output block changed or ambiguous"
+        )
+    content = content.replace(*output_matches[0], 1)
+'''
+
+OLD_STEP_REPLACEMENT = '''    if old_step not in content:
+        raise RuntimeError("agent-mention-router.yml: sweep step changed")
+    write(path, content.replace(old_step, new_step, 1))
+'''
+
+NEW_STEP_REPLACEMENT = '''    step_matches = [
+        (_indented(old_step, width), _indented(new_step, width))
+        for width in range(0, 21)
+        if content.count(_indented(old_step, width)) == 1
+    ]
+    if len(step_matches) != 1:
+        raise RuntimeError(
+            "agent-mention-router.yml: sweep step changed or ambiguous"
+        )
+    write(path, content.replace(*step_matches[0], 1))
+'''
+
 
 def main() -> int:
     """Patch matching and nested regex escaping deterministically."""
@@ -84,6 +118,16 @@ def main() -> int:
             OLD_REPLACE_BETWEEN,
             NEW_REPLACE_BETWEEN,
             "transient replace_between source no longer matches its contract",
+        ),
+        (
+            OLD_OUTPUT_REPLACEMENT,
+            NEW_OUTPUT_REPLACEMENT,
+            "transient output replacement source no longer matches its contract",
+        ),
+        (
+            OLD_STEP_REPLACEMENT,
+            NEW_STEP_REPLACEMENT,
+            "transient step replacement source no longer matches its contract",
         ),
     )
     for old, new, error in replacements:
