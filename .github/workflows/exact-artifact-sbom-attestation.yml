@@ -1,0 +1,256 @@
+name: Exact Artifact SBOM Attestation
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      evidence_artifact_id:
+        required: true
+        type: string
+      evidence_artifact_name:
+        required: true
+        type: string
+      evidence_artifact_digest:
+        required: true
+        type: string
+      wheel_filename:
+        required: true
+        type: string
+      wheel_sha256:
+        required: true
+        type: string
+      wheel_sbom_filename:
+        required: true
+        type: string
+      wheel_sbom_sha256:
+        required: true
+        type: string
+      sdist_filename:
+        required: true
+        type: string
+      sdist_sha256:
+        required: true
+        type: string
+      sdist_sbom_filename:
+        required: true
+        type: string
+      sdist_sbom_sha256:
+        required: true
+        type: string
+      source_identity_sha256:
+        required: true
+        type: string
+      checksum_sha256:
+        required: true
+        type: string
+      predicate_type:
+        required: true
+        type: string
+      cyclonedx_schema:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  verify-evidence-artifact:
+    name: Verify inert sealed evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Materialize immutable trusted verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: trusted-intake
+          persist-credentials: false
+          sparse-checkout: scripts/ci/verify_exact_artifact_sbom_handoff.py
+          sparse-checkout-cone-mode: false
+
+      - name: Verify immutable same-run artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$SOURCE_SHA" = "$GITHUB_SHA"
+          artifact_json="$(gh api "/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg name "$ARTIFACT_NAME" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            '.name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false' \
+            <<<"$artifact_json" >/dev/null
+
+      - name: Download exact same-run evidence by immutable artifact ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v6.0.0
+        with:
+          artifact-ids: ${{ inputs.evidence_artifact_id }}
+          path: sealed-evidence
+
+      - name: Verify sealed evidence as inert bounded data
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-intake/scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            --source-repository '${{ inputs.source_repository }}' \
+            --source-sha '${{ inputs.source_sha }}' \
+            --evidence-artifact-name '${{ inputs.evidence_artifact_name }}' \
+            --evidence-artifact-digest '${{ inputs.evidence_artifact_digest }}' \
+            --evidence-root sealed-evidence \
+            --wheel-filename '${{ inputs.wheel_filename }}' \
+            --wheel-sha256 '${{ inputs.wheel_sha256 }}' \
+            --wheel-sbom-filename '${{ inputs.wheel_sbom_filename }}' \
+            --wheel-sbom-sha256 '${{ inputs.wheel_sbom_sha256 }}' \
+            --sdist-filename '${{ inputs.sdist_filename }}' \
+            --sdist-sha256 '${{ inputs.sdist_sha256 }}' \
+            --sdist-sbom-filename '${{ inputs.sdist_sbom_filename }}' \
+            --sdist-sbom-sha256 '${{ inputs.sdist_sbom_sha256 }}' \
+            --source-identity-sha256 '${{ inputs.source_identity_sha256 }}' \
+            --checksum-sha256 '${{ inputs.checksum_sha256 }}' \
+            --predicate-type '${{ inputs.predicate_type }}' \
+            --cyclonedx-schema '${{ inputs.cyclonedx_schema }}' \
+            --output-manifest "${RUNNER_TEMP}/verified-intake.json"
+
+  attest-exact-artifacts:
+    name: Attest exact wheel and sdist SBOMs
+    needs: verify-evidence-artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Materialize immutable trusted verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: trusted-signer
+          persist-credentials: false
+          sparse-checkout: scripts/ci/verify_exact_artifact_sbom_handoff.py
+          sparse-checkout-cone-mode: false
+
+      - name: Download exact sealed evidence without executing it
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v6.0.0
+        with:
+          artifact-ids: ${{ inputs.evidence_artifact_id }}
+          path: sealed-evidence
+
+      - name: Reverify evidence inside the credentialed boundary
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-signer/scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            --source-repository '${{ inputs.source_repository }}' \
+            --source-sha '${{ inputs.source_sha }}' \
+            --evidence-artifact-name '${{ inputs.evidence_artifact_name }}' \
+            --evidence-artifact-digest '${{ inputs.evidence_artifact_digest }}' \
+            --evidence-root sealed-evidence \
+            --wheel-filename '${{ inputs.wheel_filename }}' \
+            --wheel-sha256 '${{ inputs.wheel_sha256 }}' \
+            --wheel-sbom-filename '${{ inputs.wheel_sbom_filename }}' \
+            --wheel-sbom-sha256 '${{ inputs.wheel_sbom_sha256 }}' \
+            --sdist-filename '${{ inputs.sdist_filename }}' \
+            --sdist-sha256 '${{ inputs.sdist_sha256 }}' \
+            --sdist-sbom-filename '${{ inputs.sdist_sbom_filename }}' \
+            --sdist-sbom-sha256 '${{ inputs.sdist_sbom_sha256 }}' \
+            --source-identity-sha256 '${{ inputs.source_identity_sha256 }}' \
+            --checksum-sha256 '${{ inputs.checksum_sha256 }}' \
+            --predicate-type '${{ inputs.predicate_type }}' \
+            --cyclonedx-schema '${{ inputs.cyclonedx_schema }}' \
+            --output-manifest "${RUNNER_TEMP}/verified-signer.json"
+
+      - name: Attest exact wheel with its CycloneDX SBOM
+        id: attest-wheel
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-name: ${{ inputs.wheel_filename }}
+          subject-digest: sha256:${{ inputs.wheel_sha256 }}
+          sbom-path: sealed-evidence/${{ inputs.wheel_sbom_filename }}
+
+      - name: Attest exact source distribution with its CycloneDX SBOM
+        id: attest-sdist
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-name: ${{ inputs.sdist_filename }}
+          subject-digest: sha256:${{ inputs.sdist_sha256 }}
+          sbom-path: sealed-evidence/${{ inputs.sdist_sbom_filename }}
+
+      - name: Verify online and prepare offline bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNER_REPOSITORY: ${{ job.workflow_repository }}
+          PREDICATE_TYPE: ${{ inputs.predicate_type }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          WHEEL_BUNDLE: ${{ steps.attest-wheel.outputs.bundle-path }}
+          SDIST_BUNDLE: ${{ steps.attest-sdist.outputs.bundle-path }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          signer_workflow="${SIGNER_REPOSITORY}/.github/workflows/exact-artifact-sbom-attestation.yml"
+          mkdir -p offline-attestation-evidence
+          install -m 0444 "$WHEEL_BUNDLE" offline-attestation-evidence/wheel-sbom-attestation.json
+          install -m 0444 "$SDIST_BUNDLE" offline-attestation-evidence/sdist-sbom-attestation.json
+          gh attestation trusted-root > offline-attestation-evidence/trusted_root.jsonl
+          for artifact in '${{ inputs.wheel_filename }}' '${{ inputs.sdist_filename }}'; do
+            gh attestation verify "sealed-evidence/${artifact}" \
+              --repo "$SOURCE_REPOSITORY" \
+              --signer-repo "$SIGNER_REPOSITORY" \
+              --signer-workflow "$signer_workflow" \
+              --source-digest "$SOURCE_SHA" \
+              --predicate-type "$PREDICATE_TYPE"
+          done
+          gh attestation verify 'sealed-evidence/${{ inputs.wheel_filename }}' \
+            --repo "$SOURCE_REPOSITORY" \
+            --bundle offline-attestation-evidence/wheel-sbom-attestation.json \
+            --custom-trusted-root offline-attestation-evidence/trusted_root.jsonl \
+            --signer-repo "$SIGNER_REPOSITORY" \
+            --signer-workflow "$signer_workflow" \
+            --source-digest "$SOURCE_SHA" \
+            --predicate-type "$PREDICATE_TYPE"
+          gh attestation verify 'sealed-evidence/${{ inputs.sdist_filename }}' \
+            --repo "$SOURCE_REPOSITORY" \
+            --bundle offline-attestation-evidence/sdist-sbom-attestation.json \
+            --custom-trusted-root offline-attestation-evidence/trusted_root.jsonl \
+            --signer-repo "$SIGNER_REPOSITORY" \
+            --signer-workflow "$signer_workflow" \
+            --source-digest "$SOURCE_SHA" \
+            --predicate-type "$PREDICATE_TYPE"
+          cp "${RUNNER_TEMP}/verified-signer.json" offline-attestation-evidence/verified-handoff.json
+
+      - name: Export beginner-readable offline verification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: exact-artifact-sbom-offline-verification
+          path: offline-attestation-evidence
+          if-no-files-found: error
+          retention-days: 90
