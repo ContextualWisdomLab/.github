@@ -1,15 +1,14 @@
 name: Finalize PR 787 Review Findings
 
 on:
-  push:
-    branches:
-      - feat/review-agent-mention-router-main
+  pull_request:
+    branches: [main]
     paths:
       - ".github/workflows/finalize-pr787-review-findings.yml"
       - "scripts/ci/finalize_pr787_review_findings.py"
 
 concurrency:
-  group: finalize-pr787-review-findings
+  group: finalize-pr787-review-findings-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -20,13 +19,16 @@ env:
 
 jobs:
   finalize:
-    if: github.repository == 'ContextualWisdomLab/.github'
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
     env:
       PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+      TARGET_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -35,7 +37,7 @@ jobs:
       - name: Checkout exact staging head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.TARGET_HEAD_SHA }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python
@@ -51,6 +53,7 @@ jobs:
       - name: Apply deterministic repairs and remove transient writer
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD_SHA"
           python3 scripts/ci/finalize_pr787_review_findings.py
           rm -f \
             .github/workflows/finalize-pr787-review-findings.yml \
