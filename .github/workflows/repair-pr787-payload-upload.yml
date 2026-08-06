@@ -1,4 +1,5 @@
-name: Repair PR 787 payload-bound upload
+name: Materialize verified PR 787 payload binding
+run-name: Materialize PR 787 payload binding at ${{ github.sha }}
 
 on:
   push:
@@ -11,22 +12,23 @@ permissions:
   contents: read
 
 concurrency:
-  group: repair-pr787-payload-upload
+  group: materialize-pr787-payload-binding
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  upload-candidate:
+  materialize:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       github.ref == 'refs/heads/feat/review-agent-mention-router-main'
     permissions:
       contents: write
       issues: write
+      pull-requests: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -37,7 +39,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python 3.14
@@ -53,10 +55,50 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Apply and verify reviewed payload-binding repair
+      - name: Apply reviewed payload binding and remove every transient repair artifact
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          python scripts/ci/repair_pr787_payload_bound_once.py
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python scripts/ci/apply_pr787_payload_binding.py
+          rm -f \
+            .github/pr787-payload-repair.trigger \
+            .github/workflows/repair-pr787-export-reviewed-files.yml \
+            .github/workflows/repair-pr787-payload-binding-push.yml \
+            .github/workflows/repair-pr787-payload-bound-invocation.yml \
+            .github/workflows/repair-pr787-payload-bound-v2.yml \
+            .github/workflows/repair-pr787-payload-candidate.yml \
+            .github/workflows/repair-pr787-payload-upload.yml \
+            scripts/ci/apply_pr787_payload_binding.py \
+            scripts/ci/repair_pr787_payload_bound_once.py
+          git diff --check
+          mapfile -t actual_paths < <(git diff --name-only HEAD | sort)
+          expected_paths=(
+            ".github/pr787-payload-repair.trigger"
+            ".github/workflows/agent-mention-noema-dispatch.yml"
+            ".github/workflows/agent-mention-opencode-dispatch.yml"
+            ".github/workflows/repair-pr787-export-reviewed-files.yml"
+            ".github/workflows/repair-pr787-payload-binding-push.yml"
+            ".github/workflows/repair-pr787-payload-bound-invocation.yml"
+            ".github/workflows/repair-pr787-payload-bound-v2.yml"
+            ".github/workflows/repair-pr787-payload-candidate.yml"
+            ".github/workflows/repair-pr787-payload-upload.yml"
+            "CHANGELOG.md"
+            "docs/automation/review-agent-comment-invocation.md"
+            "scripts/ci/agent_mention_router.py"
+            "scripts/ci/apply_pr787_payload_binding.py"
+            "scripts/ci/repair_pr787_payload_bound_once.py"
+            "tests/test_agent_mention_idempotency.py"
+          )
+          test "${#actual_paths[@]}" -eq "${#expected_paths[@]}"
+          for index in "${!expected_paths[@]}"; do
+            test "${actual_paths[$index]}" = "${expected_paths[$index]}"
+          done
+
+      - name: Verify focused and complete exact-head quality contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
           cat >"${RUNNER_TEMP}/agent-mention-coveragerc" <<'EOF'
           [run]
           branch = True
@@ -77,45 +119,121 @@ jobs:
             tests/test_agent_mention_downstream_idempotency.py \
             tests/test_agent_mention_receipt_authority.py
           python -m coverage report --fail-under=100
-          python -m interrogate --fail-under=100 scripts/ci/agent_mention_router.py scripts/ci/agent_mention_sweep.py
-          python -m compileall -q scripts/ci/agent_mention_router.py scripts/ci/agent_mention_sweep.py tests
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run --branch -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate --fail-under=100 \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py
+          python -m compileall -q scripts tests
           test "$(grep -c 'hmac.compare_digest' .github/workflows/agent-mention-noema-dispatch.yml)" -eq 1
           test "$(grep -c 'hmac.compare_digest' .github/workflows/agent-mention-opencode-dispatch.yml)" -eq 1
+          test ! -e .github/workflows/repair-pr787-payload-upload.yml
+          test ! -e scripts/ci/apply_pr787_payload_binding.py
           git diff --check
 
-      - name: Commit exact verified tree, publish SHA receipt, and upload objects
+      - name: Build immutable verified product commit object
         env:
-          GH_TOKEN: ${{ github.token }}
+          API_TOKEN: ${{ github.token }}
           EXPECTED_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: feat/review-agent-mention-router-main
-          PUSH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           remote_head="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | cut -f1)"
           test "$remote_head" = "$EXPECTED_HEAD"
-          rm -f \
-            .github/pr787-payload-repair.trigger \
-            .github/workflows/repair-pr787-payload-bound-invocation.yml \
-            .github/workflows/repair-pr787-payload-bound-v2.yml \
-            .github/workflows/repair-pr787-payload-candidate.yml \
-            .github/workflows/repair-pr787-payload-upload.yml \
-            scripts/ci/repair_pr787_payload_bound_once.py
-          git add -A
-          git diff --cached --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix(automation): bind invocation keys to complete payloads"
-          candidate_sha="$(git rev-parse HEAD)"
-          gh api -X POST "repos/ContextualWisdomLab/.github/issues/787/comments" \
-            -f body="<!-- pr787-uploaded-payload-candidate -->
-          Verified local candidate: \`${candidate_sha}\`
+          python3 - <<'PY' | tee "${RUNNER_TEMP}/pr787-materialization-receipt.txt"
+          import base64
+          import json
+          import os
+          import subprocess
+          import urllib.request
+          from pathlib import Path
 
-          Parent head: \`${EXPECTED_HEAD}\`
+          repository = 'ContextualWisdomLab/.github'
+          parent_sha = os.environ['EXPECTED_HEAD']
+          token = os.environ['API_TOKEN']
+          api_root = f'https://api.github.com/repos/{repository}'
 
-          The candidate passed 44 focused tests, 100% statement/branch coverage, 100% public docstrings, compilation, payload-digest checks, and removes every one-shot repair artifact. The following push intentionally uploads the exact Git objects; branch publication remains a separate expected-head operation."
-          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
-          echo "::add-mask::$auth_header"
-          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
-            origin "HEAD:refs/heads/${SOURCE_BRANCH}"
+          def request(method, endpoint, payload=None):
+              data = None if payload is None else json.dumps(payload).encode('utf-8')
+              req = urllib.request.Request(
+                  api_root + endpoint,
+                  data=data,
+                  method=method,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'cwl-pr787-materializer',
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+
+          raw = subprocess.check_output(['git', 'diff', '--name-status', '-z', 'HEAD'])
+          parts = raw.decode('utf-8').split('\0')
+          changes = []
+          index = 0
+          while index < len(parts) - 1:
+              status = parts[index]
+              path = parts[index + 1]
+              index += 2
+              if status.startswith(('R', 'C')):
+                  raise SystemExit(f'rename/copy status is outside reviewed scope: {status} {path}')
+              changes.append((status, path))
+
+          parent = request('GET', f'/git/commits/{parent_sha}')
+          tree_entries = []
+          for status, path in changes:
+              if status == 'D':
+                  tree_entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': None})
+                  continue
+              encoded = base64.b64encode(Path(path).read_bytes()).decode('ascii')
+              blob = request('POST', '/git/blobs', {'content': encoded, 'encoding': 'base64'})
+              mode = '100755' if os.access(path, os.X_OK) else '100644'
+              tree_entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': blob['sha']})
+              print(f"BLOB {blob['sha']} {path}")
+
+          tree = request(
+              'POST',
+              '/git/trees',
+              {'base_tree': parent['tree']['sha'], 'tree': tree_entries},
+          )
+          commit = request(
+              'POST',
+              '/git/commits',
+              {
+                  'message': 'fix(automation): bind invocation keys to complete payloads',
+                  'tree': tree['sha'],
+                  'parents': [parent_sha],
+              },
+          )
+          print(f"PR787_MATERIALIZATION_PARENT_SHA={parent_sha}")
+          print(f"PR787_MATERIALIZATION_TREE_SHA={tree['sha']}")
+          print(f"PR787_MATERIALIZATION_COMMIT_SHA={commit['sha']}")
+          PY
+
+      - name: Publish exact-head materialization pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          commit_sha="$(sed -n 's/^PR787_MATERIALIZATION_COMMIT_SHA=//p' "${RUNNER_TEMP}/pr787-materialization-receipt.txt")"
+          test "${#commit_sha}" -eq 40
+          case "$commit_sha" in (*[!0-9a-f]*) exit 1;; esac
+          body="PR787_MATERIALIZATION_PARENT_SHA=${EXPECTED_HEAD}%0APR787_MATERIALIZATION_COMMIT_SHA=${commit_sha}"
+          gh api \
+            --method POST \
+            repos/ContextualWisdomLab/.github/issues/787/comments \
+            -f "body=${body}"
+
+      - name: Upload exact-head materialization receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: pr787-exact-head-materialization
+          path: ${{ runner.temp }}/pr787-materialization-receipt.txt
+          if-no-files-found: error
+          retention-days: 5
