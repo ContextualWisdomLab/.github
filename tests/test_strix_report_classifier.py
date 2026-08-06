@@ -133,7 +133,10 @@ def test_semantic_nonfinding_rejects_missing_or_duplicate_required_sections():
     assert is_semantic_nonfinding_report(duplicate) is False
 
 
-def test_classifier_cli_reports_semantic_result(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+def test_classifier_cli_reports_semantic_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     """The CLI uses stable exit codes without echoing provider-controlled report text."""
     report = tmp_path / "report.md"
     report.write_text(SEMANTIC_NONFINDING, encoding="utf-8")
@@ -169,3 +172,23 @@ def test_classifier_cli_rejects_unsafe_inputs(
     invalid.write_bytes(b"\xff")
     assert main([str(invalid)]) == 2
     assert "valid UTF-8" in capsys.readouterr().err
+
+
+def test_gate_classifies_semantic_nonfinding_before_severity_threshold():
+    """A fake HIGH label is neutralized before ordinary threshold handling."""
+    gate = Path("scripts/ci/strix_quick_gate.sh").read_text(encoding="utf-8")
+    function_start = gate.index(
+        "vulnerability_file_is_retryable_model_inconsistency() {"
+    )
+    function_end = gate.index("\n}\n", function_start)
+    function_body = gate[function_start:function_end]
+
+    classifier_position = function_body.index(
+        'python3 "$SCRIPT_DIR/strix_report_classifier.py" "$vuln_file"'
+    )
+    threshold_position = function_body.index(
+        'vulnerability_file_is_below_threshold "$vuln_file"'
+    )
+    assert classifier_position < threshold_position
+    assert 'case "$semantic_nonfinding_rc" in' in function_body
+    assert "Invalid semantic non-finding classifier input" in function_body
