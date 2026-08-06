@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Distinguish conservatively proven type-only TypeScript changes from executable code when `coverage-final.json` omits the changed file, permitting only multiline `import type`, balanced `interface`, comment, and delimiter lines while preserving fail-closed missing-instrumentation errors for mixed or runtime-looking changes.
 - Bound both trusted-uv quality jobs to `github.event.pull_request.head.sha` and added a permanent two-checkout regression contract so exact-head compatibility, coverage, docstring, and compilation claims cannot silently measure GitHub's generated pull-request merge revision.
 - Made Strix treat only a single LiteLLM provider-error line containing NVIDIA NIM context and model-catalog 404 evidence as cross-model fallback evidence, rejecting cross-line signal assembly and provider-like target source literals; moved the public default to Nemotron 3 Super 120B and added a second NVIDIA hosted candidate before GitHub Models without neutralizing reported vulnerabilities.
 - Keep the native Atheris fuzz-engine lock in dedicated repository fuzz workflows instead of installing it in the generic OpenCode coverage image; immutable hash-pinned property and regression test locks remain eligible for central coverage materialization.
@@ -21,4 +22,5 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Extend the coverage diagnostics doctoring record with the type-erasure trust boundary, Inkspan reproduction, RED/GREEN exact-head evidence, fail-closed limitations, and APA 7 references to official TypeScript documentation.
 - Add APA 7 doctoring records for coverage diagnostics, the generic coverage/native fuzz-engine dependency boundary, the trusted-uv materializer, and the Strix NVIDIA fallback and source-directory boundary, including exact-base trust models, verification fixtures, limitations, and rollback requirements.
