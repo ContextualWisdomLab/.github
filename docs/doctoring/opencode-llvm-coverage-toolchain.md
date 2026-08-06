@@ -29,6 +29,7 @@ The earlier LLVM repair had been merged into an intermediate feature branch rath
 - The coverage image definition remains default-branch controlled and is built from immutable workflow source.
 - `LLVM_COV` and `LLVM_PROFDATA` are set together; partial configuration is rejected.
 - Missing executables fail the image build before any pull-request coverage measurement starts.
+- Every low-privilege coverage wrapper disables ambient system and global Git configuration before applying the single bounded `/work` safe-directory overlay.
 - The image digest, workflow commit SHA, pull-request head SHA, and coverage artifacts remain independently addressable evidence.
 - CPU coverage is a correctness gate. GPU execution and parity tests remain separate domain-specific gates and are not represented by LLVM host coverage alone.
 
@@ -42,7 +43,8 @@ The central workflow contract test must continue to prove that:
 2. `LLVM_COV` names `/usr/bin/llvm-cov-19`;
 3. `LLVM_PROFDATA` names `/usr/bin/llvm-profdata-19`;
 4. the image build checks both paths before installing or invoking `cargo-llvm-cov`; and
-5. the OpenCode approval path remains fail-closed when Rust coverage cannot run.
+5. the OpenCode approval path remains fail-closed when Rust coverage cannot run; and
+6. all three low-privilege wrapper processes isolate system and global Git configuration before the safe-directory overlay.
 
 ## References
 

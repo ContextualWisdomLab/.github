@@ -877,6 +877,8 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
               GIT_CONFIG_COUNT=1 \
               GIT_CONFIG_KEY_0=safe.directory \
               GIT_CONFIG_VALUE_0=/work \
@@ -936,6 +938,8 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
               GIT_CONFIG_COUNT=1 \
               GIT_CONFIG_KEY_0=safe.directory \
               GIT_CONFIG_VALUE_0=/work \
@@ -995,6 +999,8 @@ jobs:
               GITHUB_STEP_SUMMARY=/dev/null \
               BASH_ENV=/dev/null \
               UV_NO_BUILD=1 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
               GIT_CONFIG_COUNT=1 \
               GIT_CONFIG_KEY_0=safe.directory \
               GIT_CONFIG_VALUE_0=/work \
