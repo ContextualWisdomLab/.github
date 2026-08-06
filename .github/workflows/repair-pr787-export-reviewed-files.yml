@@ -1,0 +1,111 @@
+name: Repair PR 787 export reviewed files
+
+on:
+  push:
+    branches:
+      - feat/review-agent-mention-router-main
+    paths:
+      - .github/workflows/repair-pr787-export-reviewed-files.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr787-export-reviewed-files
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  export:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/feat/review-agent-mention-router-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked quality tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply and verify reviewed payload-binding repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python scripts/ci/repair_pr787_payload_bound_once.py
+          cat >"${RUNNER_TEMP}/agent-mention-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/agent_mention_router.py
+              scripts/ci/agent_mention_sweep.py
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/agent-mention-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest -q \
+            tests/test_agent_mention_router.py \
+            tests/test_agent_mention_sweep.py \
+            tests/test_agent_mention_workflow_contract.py \
+            tests/test_agent_mention_idempotency.py \
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci/agent_mention_router.py scripts/ci/agent_mention_sweep.py
+          python -m compileall -q scripts/ci/agent_mention_router.py scripts/ci/agent_mention_sweep.py tests
+          test "$(grep -c 'hmac.compare_digest' .github/workflows/agent-mention-noema-dispatch.yml)" -eq 1
+          test "$(grep -c 'hmac.compare_digest' .github/workflows/agent-mention-opencode-dispatch.yml)" -eq 1
+          git diff --check
+
+      - name: Materialize immutable reviewed-file bundle
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          bundle="$RUNNER_TEMP/pr787-reviewed-files"
+          mkdir -p \
+            "$bundle/scripts/ci" \
+            "$bundle/.github/workflows" \
+            "$bundle/tests" \
+            "$bundle/docs/automation"
+          cp scripts/ci/agent_mention_router.py "$bundle/scripts/ci/agent_mention_router.py"
+          cp .github/workflows/agent-mention-noema-dispatch.yml "$bundle/.github/workflows/agent-mention-noema-dispatch.yml"
+          cp .github/workflows/agent-mention-opencode-dispatch.yml "$bundle/.github/workflows/agent-mention-opencode-dispatch.yml"
+          cp tests/test_agent_mention_idempotency.py "$bundle/tests/test_agent_mention_idempotency.py"
+          cp docs/automation/review-agent-comment-invocation.md "$bundle/docs/automation/review-agent-comment-invocation.md"
+          cp CHANGELOG.md "$bundle/CHANGELOG.md"
+          {
+            printf 'source_head=%s\n' "$GITHUB_SHA"
+            find "$bundle" -type f ! -name MANIFEST.sha256 -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          } >"$bundle/MANIFEST.sha256"
+
+      - name: Upload reviewed-file bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr787-reviewed-files-${{ github.sha }}
+          path: ${{ runner.temp }}/pr787-reviewed-files
+          if-no-files-found: error
+          retention-days: 1
