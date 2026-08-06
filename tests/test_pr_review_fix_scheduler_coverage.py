@@ -1,4 +1,32 @@
+import builtins
+import runpy
+
 import scripts.ci.pr_review_fix_scheduler as fix
+
+
+def test_import_falls_back_to_package_module(monkeypatch):
+    """The scheduler remains importable when only the package path is available."""
+    real_import = builtins.__import__
+
+    def import_without_script_directory(
+        name,
+        globals=None,
+        locals=None,
+        fromlist=(),
+        level=0,
+    ):
+        if name == "pr_review_merge_scheduler":
+            raise ModuleNotFoundError(name)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_script_directory)
+    namespace = runpy.run_path(
+        "scripts/ci/pr_review_fix_scheduler.py",
+        run_name="pr_review_fix_scheduler_package_fallback_test",
+    )
+
+    assert namespace["fetch_open_prs"] is fix.fetch_open_prs
+
 
 def test_coverage_process_queue_skips_draft_and_wrong_base_and_external_repo(monkeypatch):
     def make_pr(number=1, **kwargs):
@@ -23,6 +51,7 @@ def test_coverage_process_queue_skips_draft_and_wrong_base_and_external_repo(mon
     monkeypatch.setattr(fix, "inspect_pr", lambda repo, pr, args, **kwargs: ("skip", ("skip reason",)))
 
     assert fix.process_queue(args) == 0
+
 
 def test_coverage_process_queue_exception_handling(monkeypatch):
     def make_pr(number=1, **kwargs):
