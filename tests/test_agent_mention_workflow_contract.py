@@ -11,13 +11,13 @@ CHECKOUT_PIN = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0
 
 
 def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() -> None:
-    """The router is central-only, organization-wide, and least-privileged."""
+    """The router is central-only, scheduled, and least-privileged."""
 
     text = WORKFLOW.read_text(encoding="utf-8")
     header, jobs = text.split("\njobs:\n", 1)
     assert "issue_comment:" in header
     assert 'cron: "*/5 * * * *"' in header
-    assert "workflow_dispatch:" in header
+    assert "workflow_dispatch:" not in header
     assert "permissions:\n  contents: read" in header
     assert "contents: write" not in header
     assert text.count("runs-on: ubuntu-24.04") == 2
@@ -43,7 +43,7 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
         assert f"      {permission}" in sweep
     assert "github.repository == 'ContextualWisdomLab/.github'" in sweep
     assert "github.event_name == 'schedule'" in sweep
-    assert "github.event_name == 'workflow_dispatch'" in sweep
+    assert "github.event_name == 'workflow_dispatch'" not in sweep
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in sweep
     assert "secrets.OPENCODE_APPROVE_TOKEN" in sweep
     assert "TARGET_REPOSITORY_SOURCE" in sweep
