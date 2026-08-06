@@ -1,0 +1,117 @@
+name: Repair PR 797 exact handoff contracts
+
+on:
+  push:
+    branches:
+      - release/exact-artifact-sbom-attestation
+    paths:
+      - .github/workflows/repair-pr797-exact-handoff.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr797-exact-handoff
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/release/exact-artifact-sbom-attestation'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact repair trigger
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply two reviewed test-contract repairs
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path('tests/test_exact_artifact_sbom_attestation_contract.py'): (
+                  '    assert "${{ github.run_id }}" in intake\n',
+                  '    assert "GITHUB_RUN_ID" in intake\n',
+              ),
+              Path('tests/test_verify_exact_artifact_sbom_handoff.py'): (
+                  '    root.mkdir()\n',
+                  '    root.mkdir(parents=True)\n',
+              ),
+          }
+          for path, (old, new) in replacements.items():
+              source = path.read_text(encoding='utf-8')
+              if source.count(old) != 1:
+                  raise SystemExit(f'{path}: expected exactly one repair anchor')
+              path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/repair-pr797-exact-handoff.yml
+          git diff --check
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked quality tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify exact contract and complete verifier coverage
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q \
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py
+          python -m coverage report \
+            --include=scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            --show-missing \
+            --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci/verify_exact_artifact_sbom_handoff.py
+          python -m compileall -q \
+            scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py
+          test ! -e .github/workflows/repair-pr797-exact-handoff.yml
+          git diff --check
+
+      - name: Publish verified workflow-free repair
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          HEAD_BRANCH: release/exact-artifact-sbom-attestation
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git diff --cached --check
+          git diff --cached --quiet && { echo "No verified repair generated" >&2; exit 1; }
+          git commit -m "test: repair exact artifact handoff contracts"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${HEAD_BRANCH}"
