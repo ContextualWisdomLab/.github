@@ -69,6 +69,7 @@ jobs:
           producer_artifact_id = action_expression(
               "needs.coverage-source-tree.outputs.coverage_source_artifact_id"
           )
+          shell_run_attempt = "$" + "{GITHUB_RUN_ATTEMPT}"
 
           replacements = [
               (
@@ -130,7 +131,7 @@ jobs:
                     GITHUB_RUN_ATTEMPT: {run_attempt}
                   run: |
                     set -euo pipefail
-                    echo "::error::Coverage source evidence is unavailable for workflow run attempt ${{GITHUB_RUN_ATTEMPT}}; a failed-jobs-only rerun cannot safely reconstruct or reuse source evidence from another attempt."
+                    echo "::error::Coverage source evidence is unavailable for workflow run attempt {shell_run_attempt}; a failed-jobs-only rerun cannot safely reconstruct or reuse source evidence from another attempt."
                     echo "::error::Use a full rerun or a fresh repository dispatch so coverage-source-tree uploads exact current-attempt evidence."
                     exit 1
           
