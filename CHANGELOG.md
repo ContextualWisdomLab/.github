@@ -12,5 +12,6 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Restored the default-branch OpenCode Rust coverage image's Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, and a permanent ordering regression contract after DiskSage exact-head coverage exposed the missing system-toolchain boundary.
 - Bound both trusted-uv quality jobs to `github.event.pull_request.head.sha` and added a permanent two-checkout regression contract so exact-head compatibility, coverage, docstring, and compilation claims cannot silently measure GitHub's generated pull-request merge revision.
 - Made Strix treat only a single LiteLLM provider-error line containing NVIDIA NIM context and model-catalog 404 evidence as cross-model fallback evidence, rejecting cross-line signal assembly and provider-like target source literals; moved the public default to Nemotron 3 Super 120B and added a second NVIDIA hosted candidate before GitHub Models without neutralizing reported vulnerabilities.
