@@ -120,7 +120,7 @@ jobs:
           python3 -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
           git diff --check
 
-      - name: Create an exact-parent candidate commit through Git data APIs
+      - name: Commit the exact-parent repair and delete this one-shot workflow
         env:
           API_TOKEN: ${{ github.token }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
@@ -134,11 +134,13 @@ jobs:
           import base64
           import json
           import os
+          import urllib.parse
           import urllib.request
           from pathlib import Path
 
           repository = 'ContextualWisdomLab/.github'
           expected_head = os.environ['EXPECTED_HEAD']
+          source_branch = os.environ['SOURCE_BRANCH']
           token = os.environ['API_TOKEN']
           api_root = f'https://api.github.com/repos/{repository}'
 
@@ -183,6 +185,21 @@ jobs:
               'tree': tree['sha'],
               'parents': [expected_head],
           })
-          print(f"CANDIDATE_COMMIT_SHA={commit['sha']}")
-          print(f"CANDIDATE_PARENT_SHA={expected_head}")
+
+          encoded_branch = urllib.parse.quote(source_branch, safe='/')
+          live_ref = request('GET', f'/git/ref/heads/{encoded_branch}')
+          live_sha = live_ref.get('object', {}).get('sha')
+          if live_sha != expected_head:
+              raise SystemExit(
+                  f'stale exact-head repair refused: expected {expected_head}, found {live_sha}'
+              )
+          updated_ref = request(
+              'PATCH',
+              f'/git/refs/heads/{encoded_branch}',
+              {'sha': commit['sha'], 'force': False},
+          )
+          if updated_ref.get('object', {}).get('sha') != commit['sha']:
+              raise SystemExit('branch ref update did not bind to the candidate commit')
+          print(f"UPDATED_HEAD_SHA={commit['sha']}")
+          print(f"UPDATED_PARENT_SHA={expected_head}")
           PY
