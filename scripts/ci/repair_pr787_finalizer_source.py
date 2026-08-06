@@ -103,6 +103,72 @@ NEW_STEP_REPLACEMENT = '''    step_matches = [
     write(path, content.replace(*step_matches[0], 1))
 '''
 
+OLD_HANDLE_STATUS = '''                status_parts: list[str] = []
+                if handles:
+                    status_parts.append(f"Queued {' and '.join(handles)}")
+                existing_handles = tuple(
+'''
+
+NEW_HANDLE_STATUS = '''                status_parts = [f"Queued {' and '.join(handles)}"]
+                existing_handles = tuple(
+'''
+
+OLD_RUN_INVENTORY = '''                            "workflow_runs": [
+                                {
+                                    "id": 1,
+                                    "event": "repository_dispatch",
+                                    "display_title": f"run {noema_marker}",
+                                }
+                            ]
+'''
+
+NEW_RUN_INVENTORY = '''                            "workflow_runs": [
+                                {
+                                    "id": 0,
+                                    "event": "repository_dispatch",
+                                    "display_title": f"ignored {noema_marker}",
+                                },
+                                {
+                                    "id": 1,
+                                    "event": "repository_dispatch",
+                                    "display_title": f"run {noema_marker}",
+                                },
+                            ]
+'''
+
+OLD_SWEEP_TEST_ANCHOR = '''                assert sweep.flatten_pages([{"number": 1}]) == [{"number": 1}]
+
+
+            def test_repository_failure_is_isolated_and_later_repository_runs() -> None:
+'''
+
+NEW_SWEEP_TEST_ANCHOR = '''                assert sweep.flatten_pages([{"number": 1}]) == [{"number": 1}]
+
+
+            def test_invalid_pull_number_fails_closed_without_error_sink() -> None:
+                """Malformed pull metadata raises when no isolation sink is supplied."""
+
+                sweep = module()
+                client = PagingClient(
+                    {
+                        ("orgs/ContextualWisdomLab/repos", 1): [[repository("example")]],
+                        ("repos/ContextualWisdomLab/example/pulls", 1): [pull(0)],
+                    }
+                )
+                with pytest.raises(ValueError, match="invalid pull request number"):
+                    list(
+                        sweep.list_recent_pull_requests(
+                            client,
+                            organization="ContextualWisdomLab",
+                            repository_source="organization",
+                            since="2026-08-05T00:00:00Z",
+                        )
+                    )
+
+
+            def test_repository_failure_is_isolated_and_later_repository_runs() -> None:
+'''
+
 RAW_TEST_HEADINGS = (
     '"""Coverage-only regressions for the review-fix scheduler."""',
     '"""Static contracts for downstream review-agent invocation idempotency."""',
@@ -139,6 +205,21 @@ def main() -> int:
             OLD_STEP_REPLACEMENT,
             NEW_STEP_REPLACEMENT,
             "transient step replacement source no longer matches its contract",
+        ),
+        (
+            OLD_HANDLE_STATUS,
+            NEW_HANDLE_STATUS,
+            "generated status block no longer matches its contract",
+        ),
+        (
+            OLD_RUN_INVENTORY,
+            NEW_RUN_INVENTORY,
+            "generated workflow-run test inventory no longer matches",
+        ),
+        (
+            OLD_SWEEP_TEST_ANCHOR,
+            NEW_SWEEP_TEST_ANCHOR,
+            "generated sweep coverage anchor no longer matches",
         ),
     )
     for old, new, error in replacements:
