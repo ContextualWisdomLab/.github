@@ -1,18 +1,18 @@
 name: Repair PR 797 exact handoff contracts
 
 on:
-  push:
+  pull_request:
     branches:
-      - release/exact-artifact-sbom-attestation
-    paths:
-      - .github/workflows/repair-pr797-exact-handoff.yml
+      - main
+    types:
+      - synchronize
 
 permissions:
   contents: read
 
 concurrency:
   group: repair-pr797-exact-handoff
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,8 +21,8 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.actor == 'seonghobae' &&
-      github.ref == 'refs/heads/release/exact-artifact-sbom-attestation'
+      github.event.pull_request.number == 797 &&
+      github.event.pull_request.head.ref == 'release/exact-artifact-sbom-attestation'
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -33,17 +33,19 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Check out exact repair trigger
+      - name: Check out exact pull-request head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Apply two reviewed test-contract repairs
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 - <<'PY'
           from pathlib import Path
 
@@ -95,11 +97,12 @@ jobs:
 
       - name: Publish verified test-only repair
         env:
-          EXPECTED_HEAD: ${{ github.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: release/exact-artifact-sbom-attestation
           PUSH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
           test "$remote_head" = "$EXPECTED_HEAD"
           git config user.name "github-actions[bot]"
