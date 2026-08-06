@@ -50,7 +50,6 @@ jobs:
           git merge-base --is-ancestor "$RED_CONTRACT_SHA" "$GITHUB_SHA"
           mapfile -t changed_paths < <(git diff --name-only "$RED_CONTRACT_SHA" "$GITHUB_SHA" | sort)
           expected_paths=(
-            ".github/workflows/reopen-requirements-directory-locks.yml"
             ".github/workflows/repair-requirements-directory-locks.yml"
             "scripts/ci/apply_requirements_directory_lock_repair.py"
           )
