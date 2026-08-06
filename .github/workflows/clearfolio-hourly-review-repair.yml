@@ -4,7 +4,6 @@ on:
   schedule:
     # Offset the heartbeat from minute zero to reduce shared-runner congestion.
     - cron: "23 * * * *"
-  workflow_dispatch:
 
 concurrency:
   group: clearfolio-hourly-review-repair
