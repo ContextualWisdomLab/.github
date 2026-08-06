@@ -142,4 +142,4 @@ jobs:
           git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
             push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
 
-# The second push activates this workflow after it exists on the branch.
+# Activation push for the bounded self-deleting repair.
