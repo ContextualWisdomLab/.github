@@ -206,6 +206,7 @@ def list_recent_pull_requests(
                 raise
             on_error(repository, exc)
 
+
 def list_recent_comments(
     client: GitHubClient,
     *,
@@ -287,7 +288,7 @@ def sweep(
         raise ValueError("max dispatches must be between 1 and 100")
     since = cutoff_timestamp(lookback_hours, now=now)
     counters = metrics if metrics is not None else SweepMetrics()
-    run_marker_cache: dict[str, set[str]] = {}
+    ledger_artifact_cache: dict[str, bool] = {}
     dispatched = 0
 
     def record_failure(scope: str, error: Exception) -> None:
@@ -323,8 +324,7 @@ def sweep(
                     dispatch_client=dispatch_client,
                     opencode_allowlist=opencode_allowlist,
                     dry_run=dry_run,
-                    workflow_run_since=since,
-                    run_marker_cache=run_marker_cache,
+                    ledger_artifact_cache=ledger_artifact_cache,
                 )
             except Exception as exc:
                 record_failure(request_scope, exc)
@@ -343,6 +343,7 @@ def sweep(
         f"{dispatched} dispatch(es) and {counters.failures} isolated failure(s)."
     )
     return dispatched
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the scheduled organization mention sweep."""
