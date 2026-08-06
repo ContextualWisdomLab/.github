@@ -283,6 +283,31 @@ def test_trusted_uv_download_does_not_retry_non_temporary_dns_failure(
     assert sleeps == []
 
 
+def test_trusted_uv_download_does_not_retry_malformed_urlerror_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-exception URL reason fails once without leaking arbitrary text."""
+
+    calls: list[tuple[str, int]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "urlopen",
+        _scripted_urlopen([urllib.error.URLError("malformed")], calls),
+    )
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"trusted uv archive download failed: URLError$",
+    ) as raised:
+        materializer._download_trusted_uv_archive()
+
+    assert "malformed" not in str(raised.value)
+    assert len(calls) == 1
+    assert sleeps == []
+
+
 def test_trusted_uv_download_does_not_retry_unclassified_os_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
