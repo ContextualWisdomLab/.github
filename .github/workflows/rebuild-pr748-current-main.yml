@@ -1,5 +1,6 @@
 name: Rebuild PR 748 on current main
 run-name: Rebuild PR 748 at ${{ github.sha }}
+# Re-run after replacing the hard-coded patch path with a private temporary directory.
 
 on:
   push:
