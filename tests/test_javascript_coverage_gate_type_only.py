@@ -116,6 +116,31 @@ def test_missing_type_only_source_does_not_require_istanbul_instrumentation(
     assert "Result: PASS" in report
 
 
+def test_type_only_classifier_accepts_balanced_type_aliases(tmp_path: Path) -> None:
+    """Recognize complete semicolon-terminated aliases without runtime tails."""
+    source = tmp_path / "src" / "type_aliases.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "export type InlineAlias = string;\n"
+        "export type UnionAlias =\n"
+        "  | 'left'\n"
+        "  | 'right';\n"
+        "export type ObjectAlias = {\n"
+        "  readonly value: string;\n"
+        "  readonly nested: {\n"
+        "    readonly count: number;\n"
+        "  };\n"
+        "};\n",
+        encoding="utf-8",
+    )
+
+    assert gate.likely_runtime_lines(
+        tmp_path,
+        "src/type_aliases.ts",
+        set(range(1, 11)),
+    ) == []
+
+
 def test_type_only_classifier_rejects_mixed_runtime_tails(tmp_path: Path) -> None:
     """Do not let declaration prefixes or comment braces hide runtime code."""
     source = tmp_path / "src" / "mixed_types.ts"
@@ -138,19 +163,23 @@ def test_type_only_classifier_rejects_mixed_runtime_tails(tmp_path: Path) -> Non
         "import type {\n"
         "  MultilineShape,\n"
         "} from './shape.js'\n"
-        "runAfterMultilineSemicolonlessImport();\n",
+        "runAfterMultilineSemicolonlessImport();\n"
+        "export type InlineAlias = string; runAfterTypeAlias();\n"
+        "export type MultilineAlias =\n"
+        "  | 'left'\n"
+        "  | 'right'; runAfterMultilineType();\n",
         encoding="utf-8",
     )
 
     assert gate.likely_runtime_lines(
         tmp_path,
         "src/mixed_types.ts",
-        set(range(1, 19)),
-    ) == [1, 2, 5, 8, 12, 14, 18]
+        set(range(1, 23)),
+    ) == [1, 2, 5, 8, 12, 14, 18, 19, 22]
 
 
 def test_type_only_classifier_fails_closed_on_lexical_edges(tmp_path: Path) -> None:
-    """Reject malformed literals, stray closers, and runtime comment tails."""
+    """Reject malformed literals, stray closers, and unfinished declarations."""
     source = tmp_path / "src" / "lexical_edges.ts"
     source.parent.mkdir(parents=True)
     source.write_text(
@@ -171,12 +200,14 @@ def test_type_only_classifier_fails_closed_on_lexical_edges(tmp_path: Path) -> N
         "runAfterOpenComment();\n"
         "interface CloseTail {\n"
         "  /* comment\n"
-        "  */ } runAfterCommentClose();\n",
+        "  */ } runAfterCommentClose();\n"
+        "export type UnterminatedAlias =\n"
+        "  | 'left'\n",
         encoding="utf-8",
     )
 
     assert gate.likely_runtime_lines(
         tmp_path,
         "src/lexical_edges.ts",
-        set(range(1, 19)),
-    ) == [3, 5, 7, 9, 15, 18]
+        set(range(1, 21)),
+    ) == [3, 5, 7, 9, 15, 18, 19, 20]
