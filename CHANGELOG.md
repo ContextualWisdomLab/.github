@@ -9,6 +9,7 @@ Semantic Versioning where the repository publishes a release.
 ### Added
 
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
+- Added a dependency-free exact-head OpenCode coverage-toolchain quality workflow that refuses generated merge revisions, preserves no checkout credentials, and executes every repository-owned LLVM and Git-isolation regression contract.
 
 ### Fixed
 

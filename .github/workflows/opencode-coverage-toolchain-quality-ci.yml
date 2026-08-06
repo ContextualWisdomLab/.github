@@ -1,0 +1,77 @@
+name: OpenCode Coverage Toolchain Quality
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - ".github/workflows/opencode-coverage-toolchain-quality-ci.yml"
+      - "tests/test_opencode_llvm_coverage_current_main.py"
+      - "docs/doctoring/opencode-llvm-coverage-toolchain.md"
+      - "CHANGELOG.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-coverage-toolchain-quality-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  exact-head-contract:
+    name: Exact-head toolchain contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Refuse stale or merge-tree evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --short)"
+
+      - name: Execute dependency-free coverage-toolchain contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          test_path = Path("tests/test_opencode_llvm_coverage_current_main.py")
+          spec = importlib.util.spec_from_file_location("opencode_toolchain_contract", test_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit("unable to load the OpenCode toolchain contract module")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          tests = sorted(
+              name
+              for name in vars(module)
+              if name.startswith("test_") and callable(getattr(module, name))
+          )
+          if not tests:
+              raise SystemExit("no OpenCode toolchain contract tests were discovered")
+          for test_name in tests:
+              getattr(module, test_name)()
+              print(f"PASS {test_name}")
+          PY
+          python3 -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
+          git diff --check
+          test -z "$(git status --short)"
