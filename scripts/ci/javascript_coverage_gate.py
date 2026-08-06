@@ -32,9 +32,14 @@ INTERFACE_RE = re.compile(
     rf"^(?:export\s+)?(?:declare\s+)?interface\s+"
     rf"{TYPE_IDENTIFIER_PATTERN}\s*\{{"
 )
+TYPE_ALIAS_START_RE = re.compile(
+    rf"^(?:export\s+)?(?:declare\s+)?type\s+{TYPE_IDENTIFIER_PATTERN}"
+    rf"(?:\s*<[^<>]*>)?\s*=\s*"
+)
 STRING_LITERAL_RE = re.compile(
     r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`"
 )
+TYPE_RUNTIME_CALL_RE = re.compile(rf"\b{TYPE_IDENTIFIER_PATTERN}\s*\(")
 TYPE_IMPORT_SINGLE_RE = re.compile(
     rf"^import\s+type\s+(?:{TYPE_IDENTIFIER_PATTERN}|\{{[^{{}}]*\}})"
     rf"\s+from\s+{TYPE_MODULE_LITERAL_PATTERN}\s*;?$"
@@ -380,16 +385,84 @@ def _advance_interface_state(
     return depth, None
 
 
+def _advance_type_alias_state(
+    structural: str,
+    depths: tuple[int, int, int],
+) -> tuple[tuple[int, int, int], str | None, bool]:
+    """Advance alias delimiters and locate a top-level terminating semicolon.
+
+    The returned boolean is false for an unmatched closing delimiter. ``None``
+    as the tail means no top-level semicolon has completed the declaration yet.
+    Braces, brackets, and parentheses are tracked so member semicolons inside
+    object, tuple, or function types cannot terminate the outer alias early.
+    """
+    round_depth, square_depth, brace_depth = depths
+    for index, character in enumerate(structural):
+        if character == "(":
+            round_depth += 1
+        elif character == ")":
+            if round_depth == 0:
+                return (round_depth, square_depth, brace_depth), None, False
+            round_depth -= 1
+        elif character == "[":
+            square_depth += 1
+        elif character == "]":
+            if square_depth == 0:
+                return (round_depth, square_depth, brace_depth), None, False
+            square_depth -= 1
+        elif character == "{":
+            brace_depth += 1
+        elif character == "}":
+            if brace_depth == 0:
+                return (round_depth, square_depth, brace_depth), None, False
+            brace_depth -= 1
+        elif (
+            character == ";"
+            and round_depth == 0
+            and square_depth == 0
+            and brace_depth == 0
+        ):
+            return (
+                (round_depth, square_depth, brace_depth),
+                structural[index + 1 :].strip(),
+                True,
+            )
+    return (round_depth, square_depth, brace_depth), None, True
+
+
+def _type_alias_can_continue(
+    structural: str,
+    depths: tuple[int, int, int],
+    *,
+    initial: bool,
+) -> bool:
+    """Return whether an unterminated line is unambiguously type continuation.
+
+    Open delimiters are sufficient. At top level, an empty initializer line is
+    accepted only at the declaration start, while later continuation lines must
+    begin with a union, intersection, conditional-true, or conditional-false
+    marker. This deliberately rejects semicolonless aliases followed by a value
+    call, because treating that call as the alias terminator would fail open.
+    """
+    if any(depths):
+        return True
+    text = structural.strip()
+    if not text:
+        return initial
+    return text.startswith(("|", "&", "?", ":"))
+
+
 def likely_runtime_lines(
     repo_root: Path, path: str, changed_lines: set[int]
 ) -> list[int]:
     """Return changed lines that look executable when Istanbul maps no units.
 
-    Only a narrow grammar of complete ``import type`` declarations and balanced
-    simple TypeScript interfaces is accepted as syntax-erased. Runtime tails,
-    malformed literals or comments, unsupported declaration forms, and
-    unterminated lexical or declaration state remain runtime-looking so omitted
-    instrumentation fails closed.
+    Only a narrow grammar of complete ``import type`` declarations, balanced
+    simple interfaces, and semicolon-terminated type aliases is accepted as
+    syntax-erased. Runtime tails, malformed literals or comments, unsupported
+    declaration forms, semicolonless aliases, and unterminated lexical or
+    declaration state remain runtime-looking so omitted instrumentation fails
+    closed.
     """
     source_lines = (repo_root / path).read_text(
         encoding="utf-8", errors="replace"
@@ -402,6 +475,9 @@ def likely_runtime_lines(
     in_interface = False
     interface_changed_lines: list[int] = []
     interface_depth = 0
+    in_type_alias = False
+    type_alias_changed_lines: list[int] = []
+    type_alias_depths = (0, 0, 0)
 
     for line_number, raw_line in enumerate(source_lines, start=1):
         stripped = raw_line.strip()
@@ -459,6 +535,33 @@ def likely_runtime_lines(
                     in_interface = False
                     interface_changed_lines.clear()
                     type_only = interface_depth == 0 and tail in {"", ";"}
+            elif in_type_alias:
+                structural = STRING_LITERAL_RE.sub("", code).strip()
+                type_alias_depths, tail, valid = _advance_type_alias_state(
+                    structural,
+                    type_alias_depths,
+                )
+                if (
+                    valid
+                    and tail is None
+                    and _type_alias_can_continue(
+                        structural,
+                        type_alias_depths,
+                        initial=False,
+                    )
+                ):
+                    type_only = True
+                elif (
+                    valid
+                    and tail == ""
+                    and not TYPE_RUNTIME_CALL_RE.search(structural)
+                ):
+                    type_only = True
+                    in_type_alias = False
+                    type_alias_changed_lines.clear()
+                else:
+                    in_type_alias = False
+                    type_alias_changed_lines.clear()
             elif TYPE_IMPORT_SINGLE_RE.fullmatch(code):
                 type_only = True
             elif TYPE_IMPORT_START_RE.fullmatch(code):
@@ -472,11 +575,41 @@ def likely_runtime_lines(
                     type_only = in_interface
                 else:
                     type_only = interface_depth == 0 and tail in {"", ";"}
+            else:
+                alias_match = TYPE_ALIAS_START_RE.match(code)
+                if alias_match:
+                    structural = STRING_LITERAL_RE.sub(
+                        "",
+                        code[alias_match.end() :],
+                    ).strip()
+                    type_alias_depths, tail, valid = _advance_type_alias_state(
+                        structural,
+                        (0, 0, 0),
+                    )
+                    if (
+                        valid
+                        and tail == ""
+                        and not TYPE_RUNTIME_CALL_RE.search(structural)
+                    ):
+                        type_only = True
+                    elif (
+                        valid
+                        and tail is None
+                        and _type_alias_can_continue(
+                            structural,
+                            type_alias_depths,
+                            initial=True,
+                        )
+                    ):
+                        type_only = True
+                        in_type_alias = True
 
         if in_type_import and line_number in changed_lines:
             type_import_changed_lines.append(line_number)
         if in_interface and line_number in changed_lines:
             interface_changed_lines.append(line_number)
+        if in_type_alias and line_number in changed_lines:
+            type_alias_changed_lines.append(line_number)
 
         non_runtime = (
             not stripped
@@ -492,6 +625,8 @@ def likely_runtime_lines(
         runtime_lines.extend(type_import_changed_lines)
     if in_interface:
         runtime_lines.extend(interface_changed_lines)
+    if in_type_alias:
+        runtime_lines.extend(type_alias_changed_lines)
     if in_block_comment:
         runtime_lines.extend(block_comment_changed_lines)
     return sorted(set(runtime_lines))
