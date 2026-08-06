@@ -30,7 +30,7 @@ def test_trusted_rust_coverage_image_supplies_matching_llvm_binaries() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding='utf-8')
     dockerfile = _coverage_dockerfile(workflow)
 
-    assert 'llvm-19 \\\n' in dockerfile
+    assert '              llvm-19' in dockerfile
     assert 'ENV LLVM_COV=/usr/bin/llvm-cov-19' in dockerfile
     assert 'ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19' in dockerfile
     assert 'test -x "$LLVM_COV"' in dockerfile
