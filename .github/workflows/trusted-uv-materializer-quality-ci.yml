@@ -8,6 +8,7 @@ on:
       - "scripts/ci/materialize_base_python_requirements.py"
       - "tests/conftest.py"
       - "tests/test_materialize*.py"
+      - "tests/test_requirements_directory_lock_materialization.py"
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
@@ -20,6 +21,7 @@ on:
       - "scripts/ci/materialize_base_python_requirements.py"
       - "tests/conftest.py"
       - "tests/test_materialize*.py"
+      - "tests/test_requirements_directory_lock_materialization.py"
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
@@ -126,6 +128,7 @@ jobs:
           python -m coverage run -m pytest \
             tests/test_materialize_base_python_requirements.py \
             tests/test_materialize_uv_export_hash_contract.py \
+            tests/test_requirements_directory_lock_materialization.py \
             tests/test_trusted_uv_download_contract.py \
             tests/test_trusted_uv_portability_and_streaming.py \
             tests/test_uv_export_isolation_contract.py \
@@ -153,6 +156,7 @@ jobs:
             scripts/ci/materialize_base_python_requirements.py \
             tests/test_materialize_base_python_requirements.py \
             tests/test_materialize_uv_export_hash_contract.py \
+            tests/test_requirements_directory_lock_materialization.py \
             tests/test_trusted_uv_download_contract.py \
             tests/test_trusted_uv_portability_and_streaming.py \
             tests/test_uv_export_isolation_contract.py \

@@ -200,8 +200,6 @@ def _is_bounded_requirement_include(line: str) -> bool:
         and ".." not in include_path.parts
         and _is_candidate_lock_path(include_path)
     )
-
-
 def _requirement_lines(content: bytes) -> list[str]:
     """Return logical requirement lines, joining backslash line-continuations.
 
