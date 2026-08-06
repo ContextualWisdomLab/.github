@@ -48,6 +48,30 @@ and representative shell punctuation. The dedicated workflow runs the complete
 repository test suite through coverage.py and pytest whenever code or either
 authoritative contract document changes.
 
+## Workflow dependency integrity
+
+The exact-head policy workflow downloads its Python test runner from PyPI, so
+version pins alone are insufficient: a compromised index response or replaced
+artifact could otherwise change executable CI code without a repository diff.
+The workflow therefore uses pip hash-checking mode (`--require-hashes`) together
+with `--only-binary=:all:` and the exact SHA-256 digest of every wheel selected
+on the fixed `ubuntu-24.04` x86-64 / CPython 3.14 runner:
+
+- coverage 7.15.2: `b9a6367e4aff723e8ee8190836836124284e8fcd4265e307c844010cfa074f3f`;
+- iniconfig 2.1.0: `9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760`;
+- packaging 26.2: `5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e`;
+- pluggy 1.6.0: `e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746`;
+- Pygments 2.20.0: `81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176`;
+- pytest 9.1.1: `37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c`.
+
+`tests/test_strix_workflow_dependency_hashes.py` was committed before the
+workflow implementation and fails against the preceding exact head because
+hash-checking mode and its trigger path are absent. It is now part of the
+workflow's own path filter and verifies every requirement/digest pair. Any
+package or runner-platform change must update the package version, PyPI wheel
+digest, regression contract, and this record together. A digest mismatch must
+fail closed; do not disable hash checking to restore availability.
+
 ## Rollback and incident response
 
 Roll back the allowlist and regression together only if a downstream call is
@@ -55,17 +79,38 @@ proven to evaluate normalized paths as shell source. Until that defect is fixed,
 fail Strix closed and retain the offending path, workflow run, and commit SHA as
 incident evidence. Do not bypass the required security check.
 
+If an exact dependency wheel becomes unavailable, first verify the release and
+artifact digest against PyPI's file record and provenance. A rollback may select
+the last known-good fully versioned wheel only when its exact hash is recorded in
+the workflow, regression contract, and this document. Never replace
+`--require-hashes` with an unhashed install.
+
 ## References
+
+Batchelder, N., & contributors. (2026). *coverage.py 7.15.2* [Computer
+software]. Python Package Index. https://pypi.org/project/coverage/7.15.2/
 
 Git Project. (2026). *Git index format*. https://git-scm.com/docs/index-format
 
 Git Project. (2026). *git-ls-tree documentation*. https://git-scm.com/docs/git-ls-tree
 
+Python Packaging Authority. (2026). *Secure installs*. pip documentation.
+https://pip.pypa.io/en/stable/topics/secure-installs/
+
 Python Software Foundation. (2026). *pathlib—Object-oriented filesystem paths
 (Python 3.14.6 documentation)*. https://docs.python.org/3.14/library/pathlib.html
 
-Batchelder, N., & contributors. (2026). *coverage.py 7.15.2* [Computer
-software]. Python Package Index. https://pypi.org/project/coverage/7.15.2/
+pytest development team. (2025). *iniconfig 2.1.0* [Computer software]. Python
+Package Index. https://pypi.org/project/iniconfig/2.1.0/
+
+pytest development team. (2025). *pluggy 1.6.0* [Computer software]. Python
+Package Index. https://pypi.org/project/pluggy/1.6.0/
 
 pytest development team. (2026). *pytest 9.1.1* [Computer software]. Python
 Package Index. https://pypi.org/project/pytest/9.1.1/
+
+Python Packaging Authority. (2026). *packaging 26.2* [Computer software].
+Python Package Index. https://pypi.org/project/packaging/26.2/
+
+Pygments contributors. (2026). *Pygments 2.20.0* [Computer software]. Python
+Package Index. https://pypi.org/project/Pygments/2.20.0/
