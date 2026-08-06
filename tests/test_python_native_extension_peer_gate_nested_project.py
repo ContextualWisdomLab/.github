@@ -111,6 +111,14 @@ def test_repo_root_must_contain_the_pyproject(tmp_path: Path) -> None:
         repo_root_path=outside_root,
     ) is None
 
+    missing_root = tmp_path / "missing_root"
+    assert gate.classify_pytest_inputs(
+        log_path=log_path,
+        pyproject_path=pyproject_path,
+        changed_files_path=changed_files_path,
+        repo_root_path=missing_root,
+    ) is None
+
     root_link = tmp_path / "repository_link"
     root_link.symlink_to(repository_root, target_is_directory=True)
     assert gate.classify_pytest_inputs(
@@ -119,3 +127,44 @@ def test_repo_root_must_contain_the_pyproject(tmp_path: Path) -> None:
         changed_files_path=changed_files_path,
         repo_root_path=root_link,
     ) is None
+
+
+def test_classifier_requires_the_canonical_pyproject_filename(tmp_path: Path) -> None:
+    """A differently named TOML file cannot define repository trust paths."""
+
+    repository_root, log_path, pyproject_path, changed_files_path = _nested_inputs(
+        tmp_path,
+        "services/nested_project/python/nested_package/reporting.py\n",
+    )
+    renamed = pyproject_path.with_name("project.toml")
+    pyproject_path.rename(renamed)
+
+    assert gate.classify_pytest_inputs(
+        log_path=log_path,
+        pyproject_path=renamed,
+        changed_files_path=changed_files_path,
+        repo_root_path=repository_root,
+    ) is None
+
+
+def test_root_project_default_python_source_is_repo_relative(tmp_path: Path) -> None:
+    """The maturin default source directory remains rooted at the repository."""
+
+    repository_root = tmp_path / "repository_root"
+    pyproject = _PYPROJECT.replace('python-source = "python"\n', "").replace(
+        'manifest-path = "crates/native_bridge/Cargo.toml"',
+        'manifest-path = "Cargo.toml"',
+    )
+    log_path = _write(repository_root / "pytest.log", _PYTEST_LOG)
+    pyproject_path = _write(repository_root / "pyproject.toml", pyproject)
+    changed_files_path = _write(
+        repository_root / "changed-files.txt",
+        "nested_package/reporting.py\n",
+    )
+
+    assert gate.classify_pytest_inputs(
+        log_path=log_path,
+        pyproject_path=pyproject_path,
+        changed_files_path=changed_files_path,
+        repo_root_path=repository_root,
+    ) == "nested_package._core"
