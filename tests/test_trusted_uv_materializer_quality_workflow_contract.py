@@ -4,12 +4,21 @@ from pathlib import Path
 
 
 WORKFLOW_PATH = Path(".github/workflows/trusted-uv-materializer-quality-ci.yml")
+OPENCODE_WORKFLOW_PATH = Path(
+    ".github/workflows/opencode-coverage-diagnostics-ci.yml"
+)
 
 
 def _workflow_text() -> str:
     """Return the trusted uv materializer quality workflow as UTF-8 text."""
 
     return WORKFLOW_PATH.read_text(encoding="utf-8")
+
+
+def _opencode_workflow_text() -> str:
+    """Return the focused OpenCode coverage workflow as UTF-8 text."""
+
+    return OPENCODE_WORKFLOW_PATH.read_text(encoding="utf-8")
 
 
 def test_quality_workflow_runs_for_every_materializer_surface() -> None:
@@ -98,3 +107,21 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     )
     for test_path in required_tests:
         assert test_path in workflow
+
+
+def test_opencode_diagnostics_workflow_directly_validates_javascript_gate() -> None:
+    """The focused exact-head workflow owns the gate source and regressions."""
+
+    workflow = _opencode_workflow_text()
+    trigger_paths = (
+        '"scripts/ci/javascript_coverage_gate.py"',
+        '"tests/test_javascript_coverage_gate.py"',
+        '"tests/test_javascript_coverage_gate_type_only.py"',
+    )
+    for trigger_path in trigger_paths:
+        assert workflow.count(trigger_path) == 2
+
+    assert "tests/test_javascript_coverage_gate.py" in workflow
+    assert "tests/test_javascript_coverage_gate_type_only.py" in workflow
+    assert "--cov=scripts.ci.javascript_coverage_gate" in workflow
+    assert "scripts/ci/javascript_coverage_gate.py" in workflow
