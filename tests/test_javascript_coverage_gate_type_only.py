@@ -78,7 +78,10 @@ def test_missing_type_only_source_does_not_require_istanbul_instrumentation(
 
     coverage_dir = repo / "coverage"
     coverage_dir.mkdir()
-    (coverage_dir / "coverage-final.json").write_text("{}\n", encoding="utf-8")
+    (coverage_dir / "coverage-final.json").write_text(
+        json.dumps({"unrelated.ts": {"s": {}, "f": {}, "b": {}}}),
+        encoding="utf-8",
+    )
     (coverage_dir / "coverage-summary.json").write_text(
         json.dumps(
             {
@@ -213,3 +216,140 @@ def test_type_only_classifier_fails_closed_on_lexical_edges(tmp_path: Path) -> N
         "src/lexical_edges.ts",
         set(range(1, 21)),
     ) == [3, 5, 7, 9, 15, 18, 19, 20]
+
+
+def test_changed_runtime_lines_ignores_deletion_only_hunks(tmp_path: Path) -> None:
+    """Do not invent changed executable lines for a deletion-only hunk."""
+    repo = tmp_path / "repo"
+    source = repo / "src" / "runtime.ts"
+    source.parent.mkdir(parents=True)
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.name", "Coverage Test")
+    git(repo, "config", "user.email", "coverage@example.invalid")
+    source.write_text(
+        "export const retained = 1;\nexport const removed = 2;\n",
+        encoding="utf-8",
+    )
+    base_sha = commit(repo, "base runtime")
+    source.write_text("export const retained = 1;\n", encoding="utf-8")
+    head_sha = commit(repo, "remove runtime line")
+
+    assert gate.changed_runtime_lines(repo, base_sha, head_sha) == {}
+
+
+def test_summary_and_path_helpers_cover_fallthrough_cases(tmp_path: Path) -> None:
+    """Exercise invalid line metadata and nonmatching normalized paths."""
+    metrics = gate.summarize_final(
+        {
+            "invalid.ts": {
+                "s": {"0": 1},
+                "f": {},
+                "b": {},
+                "statementMap": {"0": {"start": {"line": "invalid"}}},
+            }
+        }
+    )
+    assert metrics == {
+        "statements": 100.0,
+        "branches": 100.0,
+        "functions": 100.0,
+        "lines": 100.0,
+    }
+
+    changed_paths = {"src/runtime.ts"}
+    assert (
+        gate.normalize_coverage_path(
+            str(tmp_path / "other.ts"), tmp_path, changed_paths
+        )
+        is None
+    )
+    assert (
+        gate.normalize_coverage_path("./other.ts", tmp_path, changed_paths)
+        is None
+    )
+
+
+def test_delimiter_state_helpers_reject_unmatched_closers() -> None:
+    """Cover balanced nesting and every fail-closed unmatched closer."""
+    assert gate._advance_interface_state("{{} nested", 0) == (1, None)
+    assert gate._advance_type_alias_state("()[]{}", (0, 0, 0)) == (
+        (0, 0, 0),
+        None,
+        True,
+    )
+    assert gate._advance_type_alias_state(")", (0, 0, 0)) == (
+        (0, 0, 0),
+        None,
+        False,
+    )
+    assert gate._advance_type_alias_state("]", (0, 0, 0)) == (
+        (0, 0, 0),
+        None,
+        False,
+    )
+    assert gate._advance_type_alias_state("}", (0, 0, 0)) == (
+        (0, 0, 0),
+        None,
+        False,
+    )
+
+
+def test_classifier_fails_closed_on_unfinished_state(tmp_path: Path) -> None:
+    """Retain changed evidence for every unfinished lexical or type state."""
+    cases = {
+        "unfinished_import.ts": "import type {\n  Missing,\n",
+        "unfinished_interface.ts": "interface Missing {\n  value: string;\n",
+        "unfinished_alias.ts": "export type Missing =\n  | 'left'\n",
+        "unfinished_comment.ts": "/* open comment\nstill open\n",
+    }
+    for name, content in cases.items():
+        source = tmp_path / "src" / name
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(content, encoding="utf-8")
+        assert gate.likely_runtime_lines(
+            tmp_path,
+            f"src/{name}",
+            {1, 2},
+        ) == [1, 2]
+
+
+def test_classifier_rejects_malformed_tail_after_comment_close(
+    tmp_path: Path,
+) -> None:
+    """Do not repair malformed code after a multiline comment closes."""
+    source = tmp_path / "src" / "malformed_comment_tail.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "interface Broken {\n"
+        "  /* comment\n"
+        "  */ 'unterminated\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    assert gate.likely_runtime_lines(
+        tmp_path,
+        "src/malformed_comment_tail.ts",
+        {1, 2, 3, 4},
+    ) == [3]
+
+
+def test_load_coverage_files_accepts_absolute_and_ignores_unknown_names(
+    tmp_path: Path,
+) -> None:
+    """Load named evidence from mixed paths and skip unrelated JSON files."""
+    summary = tmp_path / "coverage-summary.json"
+    final = tmp_path / "coverage-final.json"
+    ignored = tmp_path / "ignored.json"
+    summary.write_text("{}\n", encoding="utf-8")
+    final.write_text("{}\n", encoding="utf-8")
+    ignored.write_text("{}\n", encoding="utf-8")
+    summary_list = tmp_path / "coverage-files.txt"
+    summary_list.write_text(
+        f"\n{summary}\ncoverage-final.json\nignored.json\n",
+        encoding="utf-8",
+    )
+
+    summaries, finals = gate.load_coverage_files(tmp_path, summary_list)
+    assert summaries == [(summary, {})]
+    assert finals == [(final, {})]
