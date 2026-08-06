@@ -24,6 +24,10 @@ EXCLUDED_PARTS = {
 }
 TEST_NAME_RE = re.compile(r"\.(?:spec|test)\.[cm]?[jt]sx?$")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+INTERFACE_RE = re.compile(r"^(?:export\s+)?(?:declare\s+)?interface\b")
+STRING_LITERAL_RE = re.compile(
+    r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`"
+)
 
 
 def git_command(repo_root: Path, *args: str) -> list[str]:
@@ -244,7 +248,11 @@ def changed_metric_counts(
             counts = branches.get(branch_id) or []
             locations = branch_data.get("locations") or []
             for index, count in enumerate(counts):
-                location = locations[index] if index < len(locations) else branch_data.get("loc")
+                location = (
+                    locations[index]
+                    if index < len(locations)
+                    else branch_data.get("loc")
+                )
                 line_range = location_range(location)
                 if line_range is None:
                     continue
@@ -289,23 +297,57 @@ def normalize_coverage_path(
     return suffix_matches[0] if len(suffix_matches) == 1 else None
 
 
-def likely_runtime_lines(repo_root: Path, path: str, changed_lines: set[int]) -> list[int]:
-    """Return changed lines that look executable when Istanbul maps no units."""
+def likely_runtime_lines(
+    repo_root: Path, path: str, changed_lines: set[int]
+) -> list[int]:
+    """Return changed lines that look executable when Istanbul maps no units.
+
+    Multiline ``import type`` statements and balanced TypeScript interface
+    bodies are treated as syntax-erased declarations. Recognition is narrow and
+    all unsupported syntax remains runtime-looking so the gate fails closed.
+    """
     source_lines = (repo_root / path).read_text(
         encoding="utf-8", errors="replace"
     ).splitlines()
     runtime_lines: list[int] = []
     in_block_comment = False
+    in_type_import = False
+    in_interface = False
+    interface_depth = 0
+
     for line_number, raw_line in enumerate(source_lines, start=1):
         stripped = raw_line.strip()
         if stripped.startswith("/*"):
             in_block_comment = True
+
+        type_only = False
+        if in_type_import:
+            type_only = True
+            if ";" in stripped and not in_block_comment:
+                in_type_import = False
+        elif in_interface:
+            type_only = True
+            if not in_block_comment:
+                structural = STRING_LITERAL_RE.sub("", stripped).split("//", 1)[0]
+                interface_depth += structural.count("{") - structural.count("}")
+                if interface_depth <= 0:
+                    in_interface = False
+        elif stripped.startswith("import type "):
+            type_only = True
+            in_type_import = ";" not in stripped
+        elif INTERFACE_RE.match(stripped) and "{" in stripped:
+            type_only = True
+            structural = STRING_LITERAL_RE.sub("", stripped).split("//", 1)[0]
+            interface_depth = structural.count("{") - structural.count("}")
+            in_interface = interface_depth > 0
+
         non_runtime = (
             not stripped
             or in_block_comment
             or stripped.startswith("//")
             or stripped in {"{", "}", "};", ");", "]", "],"}
             or stripped.startswith(("interface ", "type ", "export type ", "import type "))
+            or type_only
         )
         if line_number in changed_lines and not non_runtime:
             runtime_lines.append(line_number)
@@ -371,17 +413,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"- {path.relative_to(repo_root)} (derived)")
         for metric in METRICS:
             print(f"  {metric}: {metrics[metric]}%")
-    print("- Decision: advisory only; pre-existing global debt is visible but does not mask changed-code evidence.")
+    print(
+        "- Decision: advisory only; pre-existing global debt is visible but "
+        "does not mask changed-code evidence."
+    )
 
     if not changed:
         print("\n## Changed-source coverage")
-        print("- No changed JavaScript/TypeScript runtime source files; coverage is not applicable.")
+        print(
+            "- No changed JavaScript/TypeScript runtime source files; "
+            "coverage is not applicable."
+        )
         print("- Result: PASS")
         return 0
     if not finals:
         print("\n## Changed-source coverage")
         print("- Result: FAIL")
-        print("- Reason: coverage-final.json is required for changed-line evidence but was not produced.")
+        print(
+            "- Reason: coverage-final.json is required for changed-line "
+            "evidence but was not produced."
+        )
         return 1
 
     changed_paths = set(changed)
@@ -396,8 +447,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("\n## Changed-source coverage")
     for path, changed_lines in sorted(changed.items()):
         if not records[path]:
-            print(f"- {path}: missing instrumentation")
-            failures.append(f"{path} is absent from coverage-final.json")
+            runtime_lines = likely_runtime_lines(repo_root, path, changed_lines)
+            if runtime_lines:
+                print(f"- {path}: missing instrumentation")
+                failures.append(f"{path} is absent from coverage-final.json")
+            else:
+                print(f"- {path}: no executable changed units")
+                print(
+                    "  changed lines are comments, delimiters, or type-only "
+                    "declarations; no executable units apply"
+                )
             continue
         counts = changed_metric_counts(records[path], changed_lines)
         metric_text = ", ".join(
@@ -410,10 +469,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             runtime_lines = likely_runtime_lines(repo_root, path, changed_lines)
             if runtime_lines:
                 failures.append(
-                    f"{path} changed runtime-looking lines {runtime_lines} but Istanbul mapped no execution units"
+                    f"{path} changed runtime-looking lines {runtime_lines} "
+                    "but Istanbul mapped no execution units"
                 )
             else:
-                print("  changed lines are comments, delimiters, or type-only declarations; no executable units apply")
+                print(
+                    "  changed lines are comments, delimiters, or type-only "
+                    "declarations; no executable units apply"
+                )
             continue
         for metric, (covered, total) in counts.items():
             if total and covered != total:
@@ -429,7 +492,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     print("\n- Result: PASS")
-    print("- Reason: every instrumented execution unit intersecting changed runtime lines is covered.")
+    print(
+        "- Reason: every instrumented execution unit intersecting changed "
+        "runtime lines is covered."
+    )
     return 0
 
 
