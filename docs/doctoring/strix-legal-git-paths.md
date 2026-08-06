@@ -17,8 +17,10 @@ evidence.
 The normalizer now admits comma and ASCII parentheses. No other punctuation is
 broadened. Existing fail-closed controls remain authoritative:
 
-- empty, dot, absolute, traversal, leading/trailing-whitespace, NUL, CR, LF,
-  and backslash forms are rejected;
+- empty, dot, absolute, leading/trailing-whitespace, NUL, CR, LF, and
+  backslash forms are rejected;
+- raw `..` components are rejected before `posixpath.normpath()` can collapse
+  an embedded traversal such as `safe/../target.txt`;
 - shell metacharacters such as semicolon, dollar sign, backtick, pipe, and
   ampersand remain rejected;
 - only the existing Unicode letter, combining-mark, and number categories are
@@ -38,9 +40,13 @@ audited path policy.
 normalizer embedded in `scripts/ci/strix_quick_gate.sh`. The materializer first
 requires the historical Packrat fixture regression to fail on protected main,
 then applies the narrow allowlist change and requires the same test to pass.
-Permanent tests also preserve established punctuation and reject traversal,
-absolute paths, controls, whitespace ambiguity, backslashes, and representative
-shell punctuation.
+A test-only exact-head commit first demonstrated that `safe/../target.txt`
+passed after normalization; the production repair now rejects its raw `..`
+component before normalization. Permanent tests preserve established punctuation
+and reject traversal, absolute paths, controls, whitespace ambiguity, backslashes,
+and representative shell punctuation. The dedicated workflow runs the complete
+repository test suite through coverage.py and pytest whenever code or either
+authoritative contract document changes.
 
 ## Rollback and incident response
 
@@ -57,3 +63,9 @@ Git Project. (2026). *git-ls-tree documentation*. https://git-scm.com/docs/git-l
 
 Python Software Foundation. (2026). *pathlib—Object-oriented filesystem paths
 (Python 3.14.6 documentation)*. https://docs.python.org/3.14/library/pathlib.html
+
+Batchelder, N., & contributors. (2026). *coverage.py 7.15.2* [Computer
+software]. Python Package Index. https://pypi.org/project/coverage/7.15.2/
+
+pytest development team. (2026). *pytest 9.1.1* [Computer software]. Python
+Package Index. https://pypi.org/project/pytest/9.1.1/

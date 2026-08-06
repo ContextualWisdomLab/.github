@@ -406,6 +406,8 @@ if "\x00" in relative_path_str:
     raise SystemExit(1)
 if "\\" in relative_path_str:
     raise SystemExit(1)
+if any(component == ".." for component in relative_path_str.split("/")):
+    raise SystemExit(1)
 normalized = posixpath.normpath(relative_path_str)
 if normalized in (".", "") or normalized.startswith("../") or normalized == "..":
     raise SystemExit(1)
