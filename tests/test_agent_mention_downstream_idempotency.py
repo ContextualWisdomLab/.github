@@ -13,6 +13,7 @@ NOEMA_WORKFLOW = (
 OPENCODE_WORKFLOW = (
     ROOT / ".github" / "workflows" / "agent-mention-opencode-dispatch.yml"
 )
+ROUTER_SCRIPT = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 
 
 def test_router_can_read_durable_central_workflow_runs() -> None:
@@ -49,6 +50,40 @@ def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> No
     assert "^(?!-)" not in opencode
     assert '[[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]' in opencode
     assert '[[ "$BASE_BRANCH" == -* ]]' in opencode
+
+
+def test_wrappers_recompute_the_router_canonical_payload_digest() -> None:
+    """A syntactically valid key cannot authorize altered payload fields."""
+
+    router = ROUTER_SCRIPT.read_text(encoding="utf-8")
+    noema_function = router.split("def noema_payload", 1)[1].split(
+        "def opencode_payload", 1
+    )[0]
+    assert '"base_branch": request.pull_request_base_branch' in noema_function
+
+    noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
+    opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+    canonical_fields = (
+        '"actor"',
+        '"agent"',
+        '"base_branch"',
+        '"comment_id"',
+        '"head_sha"',
+        '"pr_number"',
+        '"repository"',
+    )
+    for text in (noema, opencode):
+        assert "BASE_BRANCH:" in text
+        assert "import hashlib" in text
+        assert "import hmac" in text
+        assert "json.dumps(" in text
+        assert 'separators=(",", ":")' in text
+        assert "sort_keys=True" in text
+        assert "hashlib.sha256" in text
+        assert "hmac.compare_digest" in text
+        assert "INVOCATION_KEY" in text
+        for field in canonical_fields:
+            assert field in text
 
 
 def test_quality_gate_tracks_every_idempotency_surface() -> None:
