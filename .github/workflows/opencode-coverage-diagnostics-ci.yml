@@ -5,10 +5,13 @@ on:
     branches: [main]
     paths:
       - "scripts/ci/coverage_failure_summary.py"
+      - "scripts/ci/javascript_coverage_gate.py"
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "scripts/ci/materialize_base_python_requirements.py"
       - "scripts/ci/sanitize_github_output_summary.py"
       - "scripts/ci/strix_model_utils.sh"
+      - "tests/test_javascript_coverage_gate.py"
+      - "tests/test_javascript_coverage_gate_type_only.py"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_control_plane_branch_writer_absence.py"
@@ -36,10 +39,13 @@ on:
     branches: [main]
     paths:
       - "scripts/ci/coverage_failure_summary.py"
+      - "scripts/ci/javascript_coverage_gate.py"
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "scripts/ci/materialize_base_python_requirements.py"
       - "scripts/ci/sanitize_github_output_summary.py"
       - "scripts/ci/strix_model_utils.sh"
+      - "tests/test_javascript_coverage_gate.py"
+      - "tests/test_javascript_coverage_gate_type_only.py"
       - "tests/test_materialize_base_javascript_packages.py"
       - "tests/test_materialize_base_python_requirements.py"
       - "tests/test_control_plane_branch_writer_absence.py"
@@ -103,6 +109,7 @@ jobs:
         run: |
           python -m compileall -q \
             scripts/ci/coverage_failure_summary.py \
+            scripts/ci/javascript_coverage_gate.py \
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
             scripts/ci/sanitize_github_output_summary.py
@@ -172,6 +179,8 @@ jobs:
       - name: Run diagnostics and lock contracts with full branch coverage
         run: |
           python -m pytest \
+            tests/test_javascript_coverage_gate.py \
+            tests/test_javascript_coverage_gate_type_only.py \
             tests/test_materialize_base_javascript_packages.py \
             tests/test_materialize_base_python_requirements.py \
             tests/test_control_plane_branch_writer_absence.py \
@@ -189,6 +198,7 @@ jobs:
             tests/test_strix_dependency_security_floor.py \
             tests/test_strix_model_utils_source_dirs.py \
             --cov=scripts.ci.coverage_failure_summary \
+            --cov=scripts.ci.javascript_coverage_gate \
             --cov=scripts.ci.materialize_base_javascript_packages \
             --cov=scripts.ci.materialize_base_python_requirements \
             --cov=scripts.ci.sanitize_github_output_summary \
@@ -201,6 +211,7 @@ jobs:
           python -m interrogate \
             --fail-under 100 \
             scripts/ci/coverage_failure_summary.py \
+            scripts/ci/javascript_coverage_gate.py \
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
             scripts/ci/sanitize_github_output_summary.py
@@ -209,9 +220,12 @@ jobs:
         run: |
           python -m compileall -q \
             scripts/ci/coverage_failure_summary.py \
+            scripts/ci/javascript_coverage_gate.py \
             scripts/ci/materialize_base_javascript_packages.py \
             scripts/ci/materialize_base_python_requirements.py \
             scripts/ci/sanitize_github_output_summary.py \
+            tests/test_javascript_coverage_gate.py \
+            tests/test_javascript_coverage_gate_type_only.py \
             tests/test_control_plane_branch_writer_absence.py \
             tests/test_coverage_materializer_failure_diagnostics.py \
             tests/test_coverage_native_fuzz_lock_boundary.py \
