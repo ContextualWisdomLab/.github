@@ -105,3 +105,23 @@ def test_quality_gate_tracks_every_idempotency_surface() -> None:
     ):
         assert test_path in test_command
         assert test_path in compile_command
+
+
+def test_branch_contains_no_transient_pr787_repair_automation() -> None:
+    """One-shot branch writers and repair helpers must not ship with the router."""
+
+    transient_paths = (
+        ".github/pr787-payload-repair.trigger",
+        ".github/workflows/repair-pr787-export-reviewed-files.yml",
+        ".github/workflows/repair-pr787-export-workflows.yml",
+        ".github/workflows/repair-pr787-noema-base-branch.yml",
+        ".github/workflows/repair-pr787-payload-binding-push.yml",
+        ".github/workflows/repair-pr787-payload-bound-invocation.yml",
+        ".github/workflows/repair-pr787-payload-bound-v2.yml",
+        ".github/workflows/repair-pr787-payload-candidate.yml",
+        ".github/workflows/repair-pr787-payload-digest.yml",
+        ".github/workflows/repair-pr787-payload-upload.yml",
+        "scripts/ci/apply_pr787_payload_binding.py",
+        "scripts/ci/repair_pr787_payload_bound_once.py",
+    )
+    assert all(not (ROOT / relative_path).exists() for relative_path in transient_paths)

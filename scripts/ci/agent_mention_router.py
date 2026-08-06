@@ -325,6 +325,7 @@ def noema_payload(request: MentionRequest) -> dict[str, Any]:
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
             "pr_head_sha": request.pull_request_head_sha,
+            "base_branch": request.pull_request_base_branch,
             "requested_agent": agent,
             "agent_invocation_key": agent_invocation_key(request, agent),
             "requested_by": request.actor,

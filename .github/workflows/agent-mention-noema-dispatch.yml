@@ -13,14 +13,16 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  actions: read
-  contents: write
+  contents: read
 
 jobs:
   validate-and-forward:
     if: github.repository == 'ContextualWisdomLab/.github'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       REQUESTED_AGENT: "cwl-noema-review"
@@ -29,6 +31,7 @@ jobs:
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
       PR_NUMBER: ${{ github.event.client_payload.pr_number || '' }}
       PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+      BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}
       REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
       SOURCE_COMMENT_ID: ${{ github.event.client_payload.source_comment_id || '' }}
     steps:
@@ -41,11 +44,38 @@ jobs:
             ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+            [[ "$BASE_BRANCH" == -* ]] ||
             ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]+$ ]]; then
             echo "::error::Rejected malformed or mismatched Noema agent invocation payload."
             exit 1
           fi
+
+          python3 - <<'PYTHON'
+          import hashlib
+          import hmac
+          import json
+          import os
+
+          canonical = json.dumps(
+              {
+                  "actor": os.environ["REQUESTED_BY"],
+                  "agent": os.environ["REQUESTED_AGENT"],
+                  "base_branch": os.environ["BASE_BRANCH"],
+                  "comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
+                  "head_sha": os.environ["PR_HEAD_SHA"],
+                  "pr_number": int(os.environ["PR_NUMBER"]),
+                  "repository": os.environ["TARGET_REPOSITORY"],
+              },
+              ensure_ascii=True,
+              separators=(",", ":"),
+              sort_keys=True,
+          ).encode("utf-8")
+          expected = hashlib.sha256(canonical).hexdigest()
+          if not hmac.compare_digest(expected, os.environ["INVOCATION_KEY"]):
+              raise SystemExit("invocation key does not match canonical payload")
+          PYTHON
 
           marker="[cwl-agent-invocation:${INVOCATION_KEY}]"
           leader_id="$(
@@ -77,6 +107,7 @@ jobs:
             --arg target_repository "$TARGET_REPOSITORY" \
             --argjson pr_number "$PR_NUMBER" \
             --arg pr_head_sha "$PR_HEAD_SHA" \
+            --arg base_branch "$BASE_BRANCH" \
             --arg requested_agent "$REQUESTED_AGENT" \
             --arg agent_invocation_key "$INVOCATION_KEY" \
             --arg requested_by "$REQUESTED_BY" \
@@ -87,6 +118,7 @@ jobs:
                 target_repository: $target_repository,
                 pr_number: $pr_number,
                 pr_head_sha: $pr_head_sha,
+                base_branch: $base_branch,
                 requested_agent: $requested_agent,
                 agent_invocation_key: $agent_invocation_key,
                 requested_by: $requested_by,

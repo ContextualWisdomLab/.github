@@ -20,7 +20,7 @@ The implementation uses two bounded paths:
 1. **Local fast path.** Comments on `ContextualWisdomLab/.github` trigger `issue_comment` immediately.
 2. **Organization sweep.** Every five minutes, the central workflow enumerates repositories visible to its cross-repository credential, finds recently updated open PRs and recent comments, validates trusted exact mentions, and consults the central exact-key workflow-run ledger before queuing work.
 
-Each requested agent receives a deterministic invocation key containing the target repository, PR number, exact head SHA, requested agent, and source comment ID. Agent-specific wrapper workflows use that key in their run title and non-cancelling concurrency group. The earliest central wrapper run is the durable leader; later exact-key runs suppress forwarding. Completed, failed, queued, and in-progress wrapper records therefore prevent duplicate forwarding, while a partially completed multi-agent request can retry only its missing agent.
+Each requested agent receives a deterministic invocation key containing the target repository, PR number, exact head SHA, base branch, requested agent, source comment ID, and requesting actor. Before durable-leader election, each agent-specific wrapper reconstructs the same canonical JSON from its validated payload, hashes it with SHA-256, and compares the result in constant time with the supplied key. Altering any bound field while retaining a syntactically valid key therefore fails closed. Wrapper workflows use the verified key in their run title and non-cancelling concurrency group. The earliest central wrapper run is the durable leader; later exact-key runs suppress forwarding. Completed, failed, queued, and in-progress wrapper records therefore prevent duplicate forwarding, while a partially completed multi-agent request can retry only its missing agent.
 
 Target-repository acknowledgement comments and reactions are user-experience signals only. They are not dispatch authority because repository writers, bot identities, or credential rotation could otherwise forge or invalidate a marker. A failed acknowledgement cannot cause completed agent work to be redispatched.
 
@@ -36,12 +36,12 @@ This preserves the central MSA boundary without copying privileged workflow code
 - The workflow default token is read-only.
 - The local routing job receives job-scoped `actions: read`, `contents: write`, `issues: write`, and `pull-requests: read`.
 - The organization sweep receives job-scoped `actions: read`, `contents: write`, and `id-token: write`.
-- The two agent-specific wrapper workflows receive only `actions: read` and `contents: write`.
+- The two agent-specific wrapper workflows receive only job-scoped `actions: read` and `contents: write`; their workflow defaults remain `contents: read`.
 - `contents: write` is intentionally retained only on jobs that call GitHub's create-repository-dispatch endpoint. GitHub documents that endpoint as requiring Contents repository permission at write level. Removing it would disable the bounded central dispatch path; broad workflow-default write access is not granted.
 - The organization sweep uses the established cross-repository credential chain for reading target comments, while the central repository's own short-lived job token dispatches the central workflows.
 - OpenCode dispatch is restricted to the exact `OPENCODE_REPOSITORY_DISPATCH_TARGETS` allowlist.
 - An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are explicit in the dispatch payload.
-- Every dispatch is bound to live PR number, current head SHA, and base branch metadata fetched from GitHub immediately before dispatch.
+- Every dispatch is bound to live PR number, current head SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch.
 - Router jobs use the fixed `ubuntu-24.04` runner and an immutable `actions/checkout` v7.0.1 commit pin; checkout credentials are not persisted.
 - A branch-selectable `workflow_dispatch` trigger is intentionally absent. This prevents a repository writer from choosing an unreviewed branch version of the central router while the job holds dispatch permissions.
 
@@ -55,7 +55,7 @@ This preserves the central MSA boundary without copying privileged workflow code
 
 ## Verification and rollback
 
-The permanent quality workflow runs the deterministic router, sweep, durable-ledger, wrapper, receipt-authority, and workflow-contract suites under Python 3.14 and requires 100% production statement coverage, branch coverage, and public docstring coverage. It also compiles the Python files and checks the final diff for whitespace errors.
+The permanent quality workflow runs the deterministic router, sweep, durable-ledger, wrapper, receipt-authority, and workflow-contract suites under Python 3.14 and requires 100% production statement coverage, branch coverage, and public docstring coverage. It also compiles the Python files and checks the final diff for whitespace errors. A permanent regression contract also rejects the transient PR-specific branch-writer workflows and repair helpers used during development, so they cannot ship with the control plane.
 
 ### Activation gate
 
