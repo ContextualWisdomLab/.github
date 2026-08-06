@@ -24,6 +24,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
       - name: Checkout exact trigger without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,31 +36,30 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Restore and verify the low-privilege Git isolation boundary
+      - name: Restore the three low-privilege Git isolation boundaries
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
-          workflow = workflow_path.read_text(encoding='utf-8')
-          vulnerable = (
-              '              UV_NO_BUILD=1 \\\n'
-              '              GIT_CONFIG_COUNT=1 \\\n'
-          )
-          hardened = (
-              '              UV_NO_BUILD=1 \\\n'
-              '              GIT_CONFIG_NOSYSTEM=1 \\\n'
-              '              GIT_CONFIG_GLOBAL=/dev/null \\\n'
-              '              GIT_CONFIG_COUNT=1 \\\n'
-          )
-          count = workflow.count(vulnerable)
-          if count != 3:
-              raise SystemExit(f'expected three vulnerable wrapper anchors, found {count}')
-          workflow = workflow.replace(vulnerable, hardened)
-          if workflow.count(hardened) != 3:
-              raise SystemExit('failed to harden every low-privilege wrapper')
-          workflow_path.write_text(workflow, encoding='utf-8')
+          path = Path('.github/workflows/opencode-review-dispatch.yml')
+          lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+          repaired = []
+          insertions = 0
+          for index, line in enumerate(lines):
+              repaired.append(line)
+              if not line.strip().startswith('UV_NO_BUILD=1'):
+                  continue
+              if index + 1 >= len(lines) or not lines[index + 1].strip().startswith('GIT_CONFIG_COUNT=1'):
+                  continue
+              indentation = line[: len(line) - len(line.lstrip())]
+              slash = chr(92)
+              repaired.append(f'{indentation}GIT_CONFIG_NOSYSTEM=1 {slash}\n')
+              repaired.append(f'{indentation}GIT_CONFIG_GLOBAL=/dev/null {slash}\n')
+              insertions += 1
+          if insertions != 3:
+              raise SystemExit(f'expected exactly three repair anchors, found {insertions}')
+          path.write_text(''.join(repaired), encoding='utf-8')
 
           doctoring_path = Path('docs/doctoring/opencode-llvm-coverage-toolchain.md')
           doctoring = doctoring_path.read_text(encoding='utf-8')
@@ -87,7 +91,11 @@ jobs:
               changelog = changelog.replace(old, new, 1)
           changelog_path.write_text(changelog, encoding='utf-8')
           PY
+          git diff --check
 
+      - name: Execute focused LLVM and Git-isolation contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
           python3 - <<'PY'
           import importlib.util
           from pathlib import Path
@@ -111,7 +119,7 @@ jobs:
           python3 -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
           git diff --check
 
-      - name: Publish only the verified repair and remove this transient workflow
+      - name: Publish only the verified repair and remove this workflow
         env:
           EXPECTED_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: fix/opencode-llvm-coverage-current-main
