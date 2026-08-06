@@ -16,14 +16,14 @@ SECRET_KEY_RE = re.compile(
     r")[A-Z0-9_.-]*\b)(?P<sep>\s*[:=]\s*)"
 )
 URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s@]+)@")
-AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+")
+AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)[^\r\n]*")
 
 
 def sanitize_line(line: str) -> str:
-    """Redact one log line while preserving the key and evidence context."""
+    """Redact one log line while preserving non-credential evidence context."""
 
     sanitized = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
-    sanitized = AUTH_HEADER_RE.sub(r"\1\2 <redacted>", sanitized)
+    sanitized = AUTH_HEADER_RE.sub(r"\1<redacted>", sanitized)
     match = SECRET_KEY_RE.search(sanitized)
     if match:
         return f"{sanitized[: match.end()]}<redacted>"
