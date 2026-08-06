@@ -110,9 +110,13 @@ RAW_TEST_HEADINGS = (
     '"""Review-driven pagination and failure-isolation regressions."""',
 )
 
+RAW_GENERATED_FUNCTIONS = (
+    "def dispatch_request(",
+)
+
 
 def main() -> int:
-    """Patch matching, generated-test literals, and regex escaping."""
+    """Patch matching, generated literals, and nested regex escaping."""
 
     content = TARGET.read_text(encoding="utf-8")
     replacements = (
@@ -146,6 +150,14 @@ def main() -> int:
         new = "dedent(\n            r'''\n            " + heading
         if content.count(old) != 1:
             raise RuntimeError(f"generated test block no longer matches: {heading}")
+        content = content.replace(old, new, 1)
+    for signature in RAW_GENERATED_FUNCTIONS:
+        old = "dedent(\n            '''\n            " + signature
+        new = "dedent(\n            r'''\n            " + signature
+        if content.count(old) != 1:
+            raise RuntimeError(
+                f"generated function block no longer matches: {signature}"
+            )
         content = content.replace(old, new, 1)
     for overescaped, corrected in (
         (r"\\\\d", r"\\d"),
