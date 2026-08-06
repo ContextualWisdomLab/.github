@@ -9,10 +9,10 @@ on:
 
 concurrency:
   group: rebuild-pr748-current-main
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -22,9 +22,11 @@ jobs:
   rebuild:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.actor != 'github-actions[bot]' &&
+      github.actor == 'seonghobae' &&
       github.ref == 'refs/heads/fix/npm-workspace-coverage-root-clean'
-    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Harden runner
@@ -32,20 +34,68 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout exact trigger
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout exact trigger without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact trigger and apply reviewed patch
+      - name: Apply reviewed resolver patch without regressing current toolchain
+        env:
+          REVIEWED_MAIN: f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "4da492a385134b1c9e20eaea79a26ef0eae82230"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$REVIEWED_MAIN" HEAD
           python3 -m py_compile scripts/ci/apply_pr748_current_main.py
           python3 scripts/ci/apply_pr748_current_main.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/opencode-review-dispatch.yml')
+          workflow = path.read_text(encoding='utf-8')
+
+          package_anchor = (
+              '              r-cran-testthat \\\n'
+              '              rustc \\\n'
+          )
+          package_replacement = (
+              '              r-cran-testthat \\\n'
+              '              llvm-19 \\\n'
+              '              rustc \\\n'
+          )
+          if package_replacement not in workflow:
+              if workflow.count(package_anchor) != 1:
+                  raise SystemExit('LLVM package restoration anchor is not unique')
+              workflow = workflow.replace(package_anchor, package_replacement, 1)
+
+          tool_anchor = (
+              '            && rm -rf /var/lib/apt/lists/*\n'
+              '          RUN curl --proto \'=https\' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \\\n'
+          )
+          tool_replacement = (
+              '            && rm -rf /var/lib/apt/lists/*\n'
+              '          ENV LLVM_COV=/usr/bin/llvm-cov-19\n'
+              '          ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19\n'
+              '          RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"\n'
+              '          RUN curl --proto \'=https\' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \\\n'
+          )
+          if tool_replacement not in workflow:
+              if workflow.count(tool_anchor) != 1:
+                  raise SystemExit('LLVM executable restoration anchor is not unique')
+              workflow = workflow.replace(tool_anchor, tool_replacement, 1)
+
+          llvm_package = workflow.index('              llvm-19 ' + chr(92))
+          llvm_check = workflow.index('RUN test -x "$LLVM_COV" && test -x "$LLVM_PROFDATA"')
+          cargo_llvm_cov = workflow.index(
+              'https://github.com/taiki-e/cargo-llvm-cov/releases/download/'
+          )
+          if not llvm_package < llvm_check < cargo_llvm_cov:
+              raise SystemExit('LLVM package/check ordering regressed')
+          path.write_text(workflow, encoding='utf-8')
+          PY
+          git add .github/workflows/opencode-review-dispatch.yml
           git diff --cached --check
 
       - name: Set up Python 3.14
@@ -55,7 +105,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-opencode-review-ci-hashes.txt
 
-      - name: Install hash-locked central test dependencies
+      - name: Install exact hash-locked central test dependencies
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
@@ -103,6 +153,9 @@ jobs:
               'npm_workspace_install_root.py',
               '--workspace "$npm_workspace_selector"',
               'npm offline ci (workspace root), lifecycle hooks disabled',
+              '              llvm-19 ' + chr(92),
+              'ENV LLVM_COV=/usr/bin/llvm-cov-19',
+              'ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19',
           )
           missing = [fragment for fragment in required if fragment not in workflow]
           if missing:
@@ -114,9 +167,12 @@ jobs:
         env:
           PUSH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/npm-workspace-coverage-root-clean
+          EXPECTED_HEAD: ${{ github.sha }}
           REVIEWED_MAIN: f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
+          remote_head="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
           rm -f \
             .coverage \
             .github/workflows/rebuild-pr748-current-main.yml \
@@ -141,4 +197,5 @@ jobs:
           auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
           git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            push origin "HEAD:${TARGET_BRANCH}"
+            push --force-with-lease="refs/heads/${TARGET_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${TARGET_BRANCH}"
