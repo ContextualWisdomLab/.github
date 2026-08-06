@@ -1,1 +1,1 @@
-This branch-local marker exists only to trigger the self-removing exact-head materializer.
+Trigger the reviewed attempt-scoped coverage artifact repair after the repair workflow exists on the branch.
