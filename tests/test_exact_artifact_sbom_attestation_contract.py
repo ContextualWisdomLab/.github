@@ -110,7 +110,7 @@ def test_artifact_intake_verifies_exact_immutable_same_run_metadata() -> None:
     assert "${{ inputs.evidence_artifact_name }}" in intake
     assert "${{ inputs.evidence_artifact_digest }}" in intake
     assert "${{ inputs.source_repository }}" in intake
-    assert "${{ github.run_id }}" in intake
+    assert "GITHUB_RUN_ID" in intake
     assert "/actions/artifacts/" in intake
     assert ".workflow_run.id" in intake
     assert ".expired" in intake
