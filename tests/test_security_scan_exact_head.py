@@ -55,3 +55,17 @@ def test_dependency_review_checkout_is_bound_to_the_same_exact_head() -> None:
     assert "repository: ${{ github.event.pull_request.head.repo.full_name }}" in job
     assert "ref: ${{ github.event.pull_request.head.sha }}" in job
     assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in job
+
+
+def test_dependency_review_unavailability_fails_closed() -> None:
+    """An unavailable dependency-review API must never make the hard gate green."""
+
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow_job(workflow, "dependency-review")
+
+    assert "skipping dependency-review hard gate" not in job
+    assert 'echo "supported=false"' not in job
+    assert '::error::Dependency review is unavailable for ${REPOSITORY}' in job
+    assert "--connect-timeout" in job
+    assert "--max-time" in job
+    assert 'cat "$response_file"' not in job
