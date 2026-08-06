@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: write
     env:
-      PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+      PUSH_TOKEN: ${{ github.token }}
       TARGET_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Harden runner
@@ -77,7 +77,6 @@ jobs:
           export COVERAGE_RCFILE="${RUNNER_TEMP}/agent-mention-coveragerc"
           python -m coverage erase
           python -m coverage run -m pytest -q
-          nl -ba scripts/ci/agent_mention_sweep.py | sed -n '168,182p'
           python -m coverage report --show-missing --fail-under=100
           python -m interrogate --fail-under=100 \
             scripts/ci/agent_mention_router.py \
@@ -87,17 +86,23 @@ jobs:
           test ! -e .github/workflows/finalize-pr787-review-findings.yml
           test ! -e scripts/ci/finalize_pr787_review_findings.py
           test ! -e scripts/ci/repair_pr787_finalizer_source.py
-      - name: Commit and push verified final state
+      - name: Commit and push verified non-workflow final state
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           if [ -z "$PUSH_TOKEN" ]; then
-            echo "::error::A repository-scoped push token is required for the verified final-state commit."
+            echo "::error::The workflow GITHUB_TOKEN is required for the verified final-state commit."
             exit 1
           fi
-          git config user.name "cwl-automation[bot]"
+          git checkout "$TARGET_HEAD_SHA" -- \
+            .github/workflows/agent-mention-noema-dispatch.yml \
+            .github/workflows/agent-mention-opencode-dispatch.yml \
+            .github/workflows/agent-mention-router.yml \
+            .github/workflows/agent-mention-router-quality-ci.yml \
+            .github/workflows/finalize-pr787-review-findings.yml
+          git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "fix(automation): close mention-router review findings"
+          git commit -m "fix(automation): close mention-router runtime findings"
           askpass="$(mktemp)"
           cat >"$askpass" <<'EOF'
           #!/usr/bin/env bash
