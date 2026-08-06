@@ -1,0 +1,37 @@
+name: Security Scan Exact-Head Quality CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/security-scan.yml"
+      - ".github/workflows/security-scan-exact-head-quality-ci.yml"
+      - "tests/test_security_scan_exact_head.py"
+
+concurrency:
+  group: security-scan-exact-head-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout literal pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Compile exact-head contract
+        run: python3 -m py_compile tests/test_security_scan_exact_head.py
+      - name: Execute dependency-free exact-head contract
+        run: |
+          python3 - <<'PY'
+          from tests import test_security_scan_exact_head as contract
+
+          contract.test_repository_scanners_checkout_the_literal_pull_request_head()
+          contract.test_dependency_review_checkout_is_bound_to_the_same_exact_head()
+          print("security scan exact-head contract passed")
+          PY
