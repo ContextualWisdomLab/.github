@@ -2,6 +2,9 @@ from pathlib import Path
 
 
 _WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
+_QUALITY_WORKFLOW = Path(
+    ".github/workflows/opencode-coverage-toolchain-quality-ci.yml"
+)
 
 
 def test_opencode_coverage_image_provisions_compatible_llvm_tools_before_cargo_llvm_cov():
@@ -43,3 +46,19 @@ def test_low_privilege_coverage_wrappers_isolate_ambient_git_configuration():
         assert no_system < no_global < safe_directory_count
         assert wrapper.count("GIT_CONFIG_NOSYSTEM=1") == 1
         assert wrapper.count("GIT_CONFIG_GLOBAL=/dev/null") == 1
+
+
+def test_opencode_toolchain_quality_workflow_is_exact_head_bound_and_offline():
+    """Require durable exact-head execution without mutable test dependencies."""
+    workflow = _QUALITY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert "persist-credentials: false" in workflow
+    assert (
+        'test "$(git rev-parse HEAD)" = '
+        '"${{ github.event.pull_request.head.sha }}"' in workflow
+    )
+    assert "importlib.util.spec_from_file_location" in workflow
+    assert "python3 -m compileall -q" in workflow
+    assert "pip install" not in workflow
+    assert "uv sync" not in workflow
