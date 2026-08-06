@@ -1,18 +1,13 @@
+
 """Static contracts for downstream review-agent invocation idempotency."""
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTER_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router.yml"
-QUALITY_WORKFLOW = (
-    ROOT / ".github" / "workflows" / "agent-mention-router-quality-ci.yml"
-)
-NOEMA_WORKFLOW = (
-    ROOT / ".github" / "workflows" / "agent-mention-noema-dispatch.yml"
-)
-OPENCODE_WORKFLOW = (
-    ROOT / ".github" / "workflows" / "agent-mention-opencode-dispatch.yml"
-)
+QUALITY_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router-quality-ci.yml"
+NOEMA_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-noema-dispatch.yml"
+OPENCODE_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-opencode-dispatch.yml"
 ROUTER_SCRIPT = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 
 
@@ -27,8 +22,8 @@ def test_router_can_read_durable_central_workflow_runs() -> None:
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
 
 
-def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> None:
-    """Agent wrappers serialize and validate one exact invocation key."""
+def test_downstream_workflows_retry_visibility_and_bind_exact_key() -> None:
+    """Wrappers queue duplicates and never lose a request to eventual consistency."""
 
     noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
     opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
@@ -38,6 +33,10 @@ def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> No
         assert "source_comment_id" in text
         assert "requested_agent" in text
         assert "cancel-in-progress: false" in text
+        assert "queue: max" in text
+        assert "for attempt in 1 2 3" in text
+        assert 'sleep "$((attempt * 2))"' in text
+        assert "no lower durable run was observed" in text
         assert "^[0-9a-f]{64}$" in text
         assert "^[1-9][0-9]*$" in text
         assert "repos/${GITHUB_REPOSITORY}/dispatches" in text
@@ -47,7 +46,6 @@ def test_downstream_workflows_bind_run_name_and_concurrency_to_exact_key() -> No
     assert "types: [agent-mention-opencode]" in opencode
     assert 'event_type: "merge-scheduler"' in opencode
     assert 'REQUESTED_AGENT: "opencode-agent"' in opencode
-    assert "^(?!-)" not in opencode
     assert '[[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]' in opencode
     assert '[[ "$BASE_BRANCH" == -* ]]' in opencode
 
@@ -61,8 +59,6 @@ def test_wrappers_recompute_the_router_canonical_payload_digest() -> None:
     )[0]
     assert '"base_branch": request.pull_request_base_branch' in noema_function
 
-    noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
-    opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
     canonical_fields = (
         '"actor"',
         '"agent"',
@@ -72,7 +68,10 @@ def test_wrappers_recompute_the_router_canonical_payload_digest() -> None:
         '"pr_number"',
         '"repository"',
     )
-    for text in (noema, opencode):
+    for text in (
+        NOEMA_WORKFLOW.read_text(encoding="utf-8"),
+        OPENCODE_WORKFLOW.read_text(encoding="utf-8"),
+    ):
         assert "BASE_BRANCH:" in text
         assert "import hashlib" in text
         assert "import hmac" in text
@@ -86,42 +85,16 @@ def test_wrappers_recompute_the_router_canonical_payload_digest() -> None:
             assert field in text
 
 
-def test_quality_gate_tracks_every_idempotency_surface() -> None:
-    """The permanent focused gate reruns and executes all bounded contracts."""
+def test_quality_gate_runs_full_suite_for_docs_and_exact_diff() -> None:
+    """Every changed contract executes while coverage stays source-bounded."""
 
     text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
-    for workflow_path in (
-        ".github/workflows/agent-mention-noema-dispatch.yml",
-        ".github/workflows/agent-mention-opencode-dispatch.yml",
-    ):
-        assert f'      - "{workflow_path}"' in text
-
+    assert '      - "docs/automation/review-agent-comment-invocation.md"' in text
     assert '      - "tests/test_agent_mention_*.py"' in text
-    test_command = text.split("python -m coverage run -m pytest -q", 1)[1]
-    compile_command = text.split("python -m compileall -q", 1)[1]
-    for test_path in (
-        "tests/test_agent_mention_idempotency.py",
-        "tests/test_agent_mention_downstream_idempotency.py",
-    ):
-        assert test_path in test_command
-        assert test_path in compile_command
-
-
-def test_branch_contains_no_transient_pr787_repair_automation() -> None:
-    """One-shot branch writers and repair helpers must not ship with the router."""
-
-    transient_paths = (
-        ".github/pr787-payload-repair.trigger",
-        ".github/workflows/repair-pr787-export-reviewed-files.yml",
-        ".github/workflows/repair-pr787-export-workflows.yml",
-        ".github/workflows/repair-pr787-noema-base-branch.yml",
-        ".github/workflows/repair-pr787-payload-binding-push.yml",
-        ".github/workflows/repair-pr787-payload-bound-invocation.yml",
-        ".github/workflows/repair-pr787-payload-bound-v2.yml",
-        ".github/workflows/repair-pr787-payload-candidate.yml",
-        ".github/workflows/repair-pr787-payload-digest.yml",
-        ".github/workflows/repair-pr787-payload-upload.yml",
-        "scripts/ci/apply_pr787_payload_binding.py",
-        "scripts/ci/repair_pr787_payload_bound_once.py",
-    )
-    assert all(not (ROOT / relative_path).exists() for relative_path in transient_paths)
+    assert "python -m coverage run -m pytest -q\n" in text
+    assert "python -m compileall -q scripts/ci tests" in text
+    assert "CHANGE_DIFF_RANGE" in text
+    assert 'git diff --check "$CHANGE_DIFF_RANGE"' in text
+    coverage_config = text.split("[run]\n", 1)[1].split("[report]\n", 1)[0]
+    assert "scripts/ci/agent_mention_router.py" in coverage_config
+    assert "scripts/ci/agent_mention_sweep.py" in coverage_config

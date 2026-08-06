@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
@@ -37,8 +38,11 @@ AGENT_WORKFLOW_RUN_ENDPOINTS = {
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
+ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
+INVOCATION_MARKER_RE = re.compile(r"\[cwl-agent-invocation:[0-9a-f]{64}\]")
 MAX_WORKFLOW_RUN_RECORDS = 10_000
+WORKFLOW_RUN_LOOKBACK_HOURS = 24 * 30
 
 
 @dataclass(frozen=True)
@@ -82,9 +86,19 @@ class GitHubClient:
             input=None if input_payload is None else json.dumps(input_payload),
             text=True,
             capture_output=True,
-            check=True,
+            check=False,
             env=environment,
         )
+        return_code = int(getattr(completed, "returncode", 0))
+        if return_code:
+            diagnostic = " ".join(
+                str(getattr(completed, "stderr", "") or "").split()
+            )
+            if not diagnostic:
+                diagnostic = "no stderr output"
+            raise RuntimeError(
+                f"gh api failed with exit code {return_code}: {diagnostic[:2000]}"
+            )
         output = completed.stdout.strip()
         return None if not output else json.loads(output)
 
@@ -167,8 +181,8 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         raise ValueError("pull request head SHA is missing or invalid")
     if not BASE_BRANCH_RE.fullmatch(base_branch):
         raise ValueError("pull request base branch is missing or invalid")
-    if not actor:
-        raise ValueError("comment actor is missing")
+    if not ACTOR_RE.fullmatch(actor):
+        raise ValueError("comment actor is missing or invalid")
     return MentionRequest(
         repository_name,
         number,
@@ -208,7 +222,8 @@ def eligible_agents(
     if "cwl-noema-review" in request.agents:
         dispatchable.append("cwl-noema-review")
     if "opencode-agent" in request.agents:
-        if request.repository in opencode_allowlist:
+        normalized_allowlist = {entry.casefold() for entry in opencode_allowlist}
+        if request.repository.casefold() in normalized_allowlist:
             dispatchable.append("opencode-agent")
         else:
             rejected.append("opencode-agent")
@@ -248,6 +263,20 @@ def agent_invocation_marker(request: MentionRequest, agent: str) -> str:
     return f"[cwl-agent-invocation:{agent_invocation_key(request, agent)}]"
 
 
+def workflow_run_cutoff(
+    *,
+    now: datetime | None = None,
+    lookback_hours: int = WORKFLOW_RUN_LOOKBACK_HOURS,
+) -> str:
+    """Return the UTC lower bound for durable wrapper-run lookup."""
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("workflow-run cutoff time must be timezone-aware")
+    cutoff = current.astimezone(timezone.utc) - timedelta(hours=lookback_hours)
+    return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def _workflow_run_records(value: Any) -> tuple[dict[str, Any], ...]:
     """Validate and flatten bounded ``gh --paginate --slurp`` workflow runs."""
 
@@ -273,47 +302,58 @@ def dispatched_agents(
     request: MentionRequest,
     dispatch_client: GitHubClient,
     agents: Sequence[str] | None = None,
+    *,
+    workflow_run_since: str | None = None,
+    run_marker_cache: dict[str, set[str]] | None = None,
 ) -> frozenset[str]:
     """Return agents with a durable central run for this exact invocation.
 
-    A run record proves GitHub accepted the repository dispatch even when its
-    conclusion is failure. Repeating a failed invocation requires a new trusted
-    source comment, which produces a different key and preserves auditable
-    at-most-once behavior for each request.
+    Workflow inventories are bounded by the same maximum 30-day window as
+    the scheduled source-comment sweep. A caller-owned marker cache avoids
+    repeating the same agent workflow query for every candidate in one run.
     """
 
     candidates = tuple(request.agents if agents is None else agents)
     observed: set[str] = set()
+    cutoff = workflow_run_since or workflow_run_cutoff()
+    marker_cache = run_marker_cache if run_marker_cache is not None else {}
     for agent in candidates:
         endpoint = AGENT_WORKFLOW_RUN_ENDPOINTS.get(agent)
         if endpoint is None:
             raise ValueError(f"unsupported agent: {agent}")
-        response = dispatch_client.request(
-            [
-                endpoint,
-                "-X",
-                "GET",
-                "-f",
-                "event=repository_dispatch",
-                "-f",
-                "per_page=100",
-                "--paginate",
-                "--slurp",
-            ]
-        )
-        marker = agent_invocation_marker(request, agent)
-        for run in _workflow_run_records(response):
-            run_id = run.get("id")
-            if (
-                isinstance(run_id, int)
-                and run_id > 0
-                and run.get("event") == "repository_dispatch"
-                and marker in str(run.get("display_title") or "")
-            ):
-                observed.add(agent)
-                break
+        if endpoint not in marker_cache:
+            response = dispatch_client.request(
+                [
+                    endpoint,
+                    "-X",
+                    "GET",
+                    "-f",
+                    "event=repository_dispatch",
+                    "-f",
+                    f"created=>={cutoff}",
+                    "-f",
+                    "per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            )
+            markers: set[str] = set()
+            for run in _workflow_run_records(response):
+                run_id = run.get("id")
+                if (
+                    isinstance(run_id, int)
+                    and run_id > 0
+                    and run.get("event") == "repository_dispatch"
+                ):
+                    markers.update(
+                        INVOCATION_MARKER_RE.findall(
+                            str(run.get("display_title") or "")
+                        )
+                    )
+            marker_cache[endpoint] = markers
+        if agent_invocation_marker(request, agent) in marker_cache[endpoint]:
+            observed.add(agent)
     return frozenset(observed)
-
 
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
     """Return the durable Noema wrapper dispatch request body."""
@@ -365,8 +405,10 @@ def dispatch_request(
     dispatch_client: GitHubClient,
     opencode_allowlist: frozenset[str],
     dry_run: bool = False,
+    workflow_run_since: str | None = None,
+    run_marker_cache: dict[str, set[str]] | None = None,
 ) -> tuple[str, ...]:
-    """Dispatch only missing agents and acknowledge new work on the target PR."""
+    """Dispatch missing agents and acknowledge only newly queued work."""
 
     dispatchable, rejected = eligible_agents(
         request,
@@ -383,10 +425,23 @@ def dispatch_request(
         )
         return handles
 
-    existing = dispatched_agents(request, dispatch_client, dispatchable)
+    existing = dispatched_agents(
+        request,
+        dispatch_client,
+        dispatchable,
+        workflow_run_since=workflow_run_since,
+        run_marker_cache=run_marker_cache,
+    )
     missing = tuple(agent for agent in dispatchable if agent not in existing)
     handles = tuple(f"@{agent}" for agent in missing)
-    if not missing and not rejected:
+    if not missing:
+        if rejected:
+            print(
+                "Rejected agent mention without target mutation "
+                f"repo={request.repository} pr={request.pull_request_number} "
+                f"comment={request.comment_id} "
+                f"agents={','.join(rejected)}"
+            )
         return ()
 
     dispatch_endpoint = f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/dispatches"
@@ -395,20 +450,32 @@ def dispatch_request(
             [dispatch_endpoint, "-X", "POST"],
             input_payload=noema_payload(request),
         )
+        if run_marker_cache is not None:
+            endpoint = AGENT_WORKFLOW_RUN_ENDPOINTS["cwl-noema-review"]
+            run_marker_cache.setdefault(endpoint, set()).add(
+                agent_invocation_marker(request, "cwl-noema-review")
+            )
     if "opencode-agent" in missing:
         dispatch_client.request(
             [dispatch_endpoint, "-X", "POST"],
             input_payload=opencode_payload(request),
         )
+        if run_marker_cache is not None:
+            endpoint = AGENT_WORKFLOW_RUN_ENDPOINTS["opencode-agent"]
+            run_marker_cache.setdefault(endpoint, set()).add(
+                agent_invocation_marker(request, "opencode-agent")
+            )
 
     target_api = f"repos/{request.repository}"
     target_client.request(
-        [f"{target_api}/issues/comments/{request.comment_id}/reactions", "-X", "POST"],
+        [
+            f"{target_api}/issues/comments/{request.comment_id}/reactions",
+            "-X",
+            "POST",
+        ],
         input_payload={"content": "eyes"},
     )
-    status_parts: list[str] = []
-    if handles:
-        status_parts.append(f"Queued {' and '.join(handles)}")
+    status_parts = [f"Queued {' and '.join(handles)}"]
     existing_handles = tuple(
         f"@{agent}" for agent in dispatchable if agent in existing
     )
@@ -430,11 +497,14 @@ def dispatch_request(
         "authoritative for the final verdict and failure evidence."
     )
     target_client.request(
-        [f"{target_api}/issues/{request.pull_request_number}/comments", "-X", "POST"],
+        [
+            f"{target_api}/issues/{request.pull_request_number}/comments",
+            "-X",
+            "POST",
+        ],
         input_payload={"body": acknowledgement},
     )
     return handles
-
 
 def load_event(path: str) -> dict[str, Any]:
     """Load and validate a GitHub event JSON document."""

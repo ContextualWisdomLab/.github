@@ -254,7 +254,7 @@ def test_dispatch_uses_central_events_and_acknowledges() -> None:
 def test_dispatch_rejects_unallowlisted_opencode_and_supports_dry_run(
     capsys,
 ) -> None:
-    """OpenCode fails closed outside its allowlist while dry-run is mutation-free."""
+    """Rejected-only and dry-run requests remain mutation-free."""
 
     module = load_module()
     request = module.parse_event(event("@opencode-agent"))
@@ -267,8 +267,9 @@ def test_dispatch_rejects_unallowlisted_opencode_and_supports_dry_run(
         dispatch_client=central,
         opencode_allowlist=frozenset(),
     ) == ()
-    assert central.calls == []
-    assert "Rejected @opencode-agent" in target.calls[-1][1]["body"]
+    assert target.calls == central.calls == []
+    assert "Rejected agent mention without target mutation" in capsys.readouterr().out
+
     target = FakeClient()
     central = FakeClient()
     assert module.dispatch_request(

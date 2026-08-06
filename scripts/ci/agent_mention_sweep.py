@@ -6,8 +6,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 from agent_mention_router import (
     GitHubClient,
@@ -20,6 +21,13 @@ from agent_mention_router import (
 ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
+
+
+@dataclass
+class SweepMetrics:
+    """Mutable operational counters returned to the CLI boundary."""
+
+    failures: int = 0
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -51,6 +59,12 @@ def flatten_pages(value: Any, *, collection_key: str | None = None) -> list[dict
 
     if value is None:
         raise ValueError("paginated GitHub response is empty")
+    if (
+        collection_key is None
+        and isinstance(value, list)
+        and all(isinstance(record, dict) for record in value)
+    ):
+        return list(value)
     pages = value if isinstance(value, list) else [value]
     records: list[dict[str, Any]] = []
     for page in pages:
@@ -125,46 +139,72 @@ def list_recent_pull_requests(
     organization: str,
     repository_source: str,
     since: str,
+    on_error: Callable[[str, Exception], None] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Yield recent open pull requests and stop when the caller stops consuming."""
+    """Yield recent open pull requests with lazy cutoff-aware pagination."""
 
     cutoff = parse_timestamp(since)
-    for repository in list_accessible_repositories(
+    repositories = list_accessible_repositories(
         client,
         organization=organization,
         repository_source=repository_source,
-    ):
-        response = client.request(
-            [
-                f"repos/{repository}/pulls",
-                "-X",
-                "GET",
-                "-f",
-                "state=open",
-                "-f",
-                "sort=updated",
-                "-f",
-                "direction=desc",
-                "-f",
-                "per_page=100",
-                "--paginate",
-                "--slurp",
-            ]
-        )
-        for pull_request in flatten_pages(response):
-            if parse_timestamp(str(pull_request.get("updated_at") or "")) < cutoff:
-                continue
-            number = pull_request.get("number")
-            if not isinstance(number, int) or number < 1:
-                raise ValueError("GitHub returned an invalid pull request number")
-            yield {
-                "number": number,
-                "repository": repository,
-                "pull_request": {
-                    "url": f"https://api.github.com/repos/{repository}/pulls/{number}"
-                },
-            }
-
+    )
+    for repository in repositories:
+        try:
+            page = 1
+            while True:
+                response = client.request(
+                    [
+                        f"repos/{repository}/pulls",
+                        "-X",
+                        "GET",
+                        "-f",
+                        "state=open",
+                        "-f",
+                        "sort=updated",
+                        "-f",
+                        "direction=desc",
+                        "-f",
+                        "per_page=100",
+                        "-f",
+                        f"page={page}",
+                    ]
+                )
+                pull_requests = flatten_pages(response)
+                if not pull_requests:
+                    break
+                reached_cutoff = False
+                for pull_request in pull_requests:
+                    if (
+                        parse_timestamp(
+                            str(pull_request.get("updated_at") or "")
+                        )
+                        < cutoff
+                    ):
+                        reached_cutoff = True
+                        break
+                    number = pull_request.get("number")
+                    if not isinstance(number, int) or number < 1:
+                        raise ValueError(
+                            "GitHub returned an invalid pull request number"
+                        )
+                    yield {
+                        "number": number,
+                        "repository": repository,
+                        "pull_request": {
+                            "url": (
+                                "https://api.github.com/repos/"
+                                f"{repository}/pulls/{number}"
+                            )
+                        },
+                    }
+                if reached_cutoff or len(pull_requests) < 100:
+                    break
+                page += 1
+        except Exception as exc:
+            if on_error is None:
+                raise
+            on_error(repository, exc)
 
 def list_recent_comments(
     client: GitHubClient,
@@ -239,40 +279,70 @@ def sweep(
     opencode_allowlist: frozenset[str],
     dry_run: bool = False,
     now: datetime | None = None,
+    metrics: SweepMetrics | None = None,
 ) -> int:
-    """Bound source requests that actually queue at least one new agent."""
+    """Queue bounded new work while isolating candidate-local failures."""
 
     if max_dispatches < 1 or max_dispatches > 100:
         raise ValueError("max dispatches must be between 1 and 100")
     since = cutoff_timestamp(lookback_hours, now=now)
+    counters = metrics if metrics is not None else SweepMetrics()
+    run_marker_cache: dict[str, set[str]] = {}
     dispatched = 0
+
+    def record_failure(scope: str, error: Exception) -> None:
+        """Record one isolated error and preserve the remaining sweep."""
+
+        counters.failures += 1
+        message = " ".join(str(error).split()) or error.__class__.__name__
+        print(f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}")
+
     for issue in list_recent_pull_requests(
         target_client,
         organization=organization,
         repository_source=repository_source,
         since=since,
+        on_error=record_failure,
     ):
-        for request in build_requests_for_pull_request(
-            target_client,
-            issue=issue,
-            since=since,
-        ):
-            queued_agents = dispatch_request(
-                request,
-                target_client=target_client,
-                dispatch_client=dispatch_client,
-                opencode_allowlist=opencode_allowlist,
-                dry_run=dry_run,
+        issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
+        try:
+            requests = build_requests_for_pull_request(
+                target_client,
+                issue=issue,
+                since=since,
             )
+        except Exception as exc:
+            record_failure(issue_scope, exc)
+            continue
+        for request in requests:
+            request_scope = f"{issue_scope}/comment-{request.comment_id}"
+            try:
+                queued_agents = dispatch_request(
+                    request,
+                    target_client=target_client,
+                    dispatch_client=dispatch_client,
+                    opencode_allowlist=opencode_allowlist,
+                    dry_run=dry_run,
+                    workflow_run_since=since,
+                    run_marker_cache=run_marker_cache,
+                )
+            except Exception as exc:
+                record_failure(request_scope, exc)
+                continue
             if not queued_agents:
                 continue
             dispatched += 1
             if dispatched >= max_dispatches:
-                print(f"Agent mention sweep reached dispatch limit {max_dispatches}.")
+                print(
+                    "Agent mention sweep reached dispatch limit "
+                    f"{max_dispatches}; isolated failures={counters.failures}."
+                )
                 return dispatched
-    print(f"Agent mention sweep completed with {dispatched} dispatch(es).")
+    print(
+        "Agent mention sweep completed with "
+        f"{dispatched} dispatch(es) and {counters.failures} isolated failure(s)."
+    )
     return dispatched
-
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the scheduled organization mention sweep."""
@@ -291,6 +361,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     allowlist = parse_repository_allowlist(
         os.environ.get("OPENCODE_REPOSITORY_DISPATCH_TARGETS", "")
     )
+    metrics = SweepMetrics()
     sweep(
         target_client=GitHubClient(os.environ.get("TARGET_REPOSITORY_TOKEN", "")),
         dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
@@ -300,8 +371,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_dispatches=args.max_dispatches,
         opencode_allowlist=allowlist,
         dry_run=args.dry_run,
+        metrics=metrics,
     )
-    return 0
+    return 1 if metrics.failures else 0
 
 
 if __name__ == "__main__":  # pragma: no cover
