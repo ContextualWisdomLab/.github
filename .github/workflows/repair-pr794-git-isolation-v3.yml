@@ -132,7 +132,9 @@ jobs:
             _repair_artifact/docs/doctoring/opencode-llvm-coverage-toolchain.md
           install -m 0644 CHANGELOG.md _repair_artifact/CHANGELOG.md
           printf '%s\n' "${{ github.event.pull_request.head.sha }}" > _repair_artifact/expected-parent-sha.txt
-          find _repair_artifact -type f -print0 | sort -z | xargs -0 sha256sum > _repair_artifact/SHA256SUMS
+          find _repair_artifact -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > _repair_artifact/SHA256SUMS
 
       - name: Preserve exact-head patched files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -140,4 +142,5 @@ jobs:
           name: pr794-exact-head-repair-${{ github.event.pull_request.head.sha }}
           path: _repair_artifact
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 1
