@@ -77,7 +77,8 @@ jobs:
             scripts/ci/agent_mention_sweep.py
           python -m compileall -q scripts/ci tests
           git diff --check
-          test -z "$(git status --short --untracked-files=no | grep -E 'finalize-pr787|finalize_pr787' || true)"
+          test ! -e .github/workflows/finalize-pr787-review-findings.yml
+          test ! -e scripts/ci/finalize_pr787_review_findings.py
       - name: Commit and push verified final state
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
