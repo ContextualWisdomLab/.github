@@ -122,7 +122,7 @@ jobs:
 
       - name: Create an exact-parent candidate commit through Git data APIs
         env:
-          API_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          API_TOKEN: ${{ github.token }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           SOURCE_BRANCH: fix/opencode-llvm-coverage-current-main
         shell: bash --noprofile --norc -e -o pipefail {0}
