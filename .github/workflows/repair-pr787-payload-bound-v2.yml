@@ -1,3 +1,4 @@
+# Exact-head retrigger for the bounded payload-binding repair.
 name: Repair PR 787 payload-bound invocation v2
 
 on:
