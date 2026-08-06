@@ -123,7 +123,7 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: fix/opencode-llvm-coverage-current-main
-          PUSH_TOKEN: ${{ github.token }}
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
