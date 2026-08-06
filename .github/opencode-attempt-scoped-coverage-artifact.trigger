@@ -1,1 +1,1 @@
-Trigger the corrected workflow-preserving attempt-scoped coverage artifact repair.
+Trigger the expression-safe attempt-scoped coverage artifact repair.
