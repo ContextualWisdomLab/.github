@@ -167,6 +167,33 @@ def test_materializer_detects_destination_swap_after_pinned_write(
     assert outside_file.read_bytes() == b"unchanged"
 
 
+def test_materializer_detects_destination_removal_after_pinned_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removing a generated pathname after open is detected before success."""
+
+    output_directory = tmp_path / "generated_locks"
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    real_fsync = materializer.os.fsync
+    removed = False
+
+    def remove_after_file_sync(file_descriptor: int) -> None:
+        nonlocal removed
+        real_fsync(file_descriptor)
+        destination = output_directory / "requirements-000.txt"
+        if removed or not destination.exists():
+            return
+        removed = True
+        destination.unlink()
+
+    monkeypatch.setattr(materializer.os, "fsync", remove_after_file_sync)
+
+    with pytest.raises(ValueError, match="output file changed"):
+        materializer.materialize(tmp_path, "a" * 40, output_directory)
+
+    assert not (output_directory / "requirements-000.txt").exists()
+
+
 def test_materializer_fails_when_descriptor_write_makes_no_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -210,3 +237,85 @@ def test_materializer_normalizes_directory_open_failures(
             "a" * 40,
             tmp_path / "generated_locks",
         )
+
+
+def test_materializer_propagates_unclassified_directory_open_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unexpected directory open failures are not mislabeled as symlink attacks."""
+
+    real_open = materializer.os.open
+
+    def deny_output_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        if path == "generated_locks":
+            raise PermissionError(errno.EACCES, "synthetic")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(materializer.os, "open", deny_output_open)
+
+    with pytest.raises(PermissionError, match="synthetic"):
+        materializer.materialize(
+            tmp_path,
+            "a" * 40,
+            tmp_path / "generated_locks",
+        )
+
+
+def test_directory_component_closes_descriptor_after_binding_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An opened child descriptor is closed when inode validation fails."""
+
+    parent_fd = os.open(tmp_path, materializer.SECURE_DIRECTORY_OPEN_FLAGS)
+    opened_descriptors: list[int] = []
+    real_open = materializer.os.open
+
+    def capture_child_open(
+        path: object, flags: int, *args: object, **kwargs: object
+    ) -> int:
+        descriptor = real_open(path, flags, *args, **kwargs)
+        if path == "generated_locks":
+            opened_descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(materializer.os, "open", capture_child_open)
+    monkeypatch.setattr(
+        materializer,
+        "_validate_directory_binding",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("binding failed")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="binding failed"):
+            materializer._open_directory_component(parent_fd, "generated_locks")
+    finally:
+        os.close(parent_fd)
+
+    assert len(opened_descriptors) == 1
+    with pytest.raises(OSError) as raised:
+        os.fstat(opened_descriptors[0])
+    assert raised.value.errno == errno.EBADF
+
+
+def test_materializer_propagates_unclassified_existing_file_open_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unexpected existing-file failures remain their original fail-closed class."""
+
+    output_directory = tmp_path / "generated_locks"
+    output_directory.mkdir()
+    (output_directory / "requirements-000.txt").write_bytes(b"stale")
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    real_open = materializer.os.open
+
+    def deny_existing_file(
+        path: object, flags: int, *args: object, **kwargs: object
+    ) -> int:
+        if path == "requirements-000.txt" and not flags & os.O_CREAT:
+            raise PermissionError(errno.EACCES, "synthetic")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(materializer.os, "open", deny_existing_file)
+
+    with pytest.raises(PermissionError, match="synthetic"):
+        materializer.materialize(tmp_path, "a" * 40, output_directory)
