@@ -50,8 +50,13 @@ jobs:
           EXPECTED_MAIN: f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git merge-base "$GITHUB_SHA" main)" = "$EXPECTED_MAIN"
-          git cat-file -e "${SOURCE_SHA}^{commit}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git cat-file -e "${EXPECTED_MAIN}^{commit}"
+          test "$(git merge-base "$GITHUB_SHA" "$EXPECTED_MAIN")" = "$EXPECTED_MAIN"
+          if ! git cat-file -e "${SOURCE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin refs/pull/767/head
+          fi
+          test "$(git rev-parse "${SOURCE_SHA}^{commit}")" = "$SOURCE_SHA"
           git checkout "$SOURCE_SHA" -- \
             docs/doctoring/sandboxed-command-log-redaction.md \
             docs/doctoring/sandboxed-output-resource-bounds.md \
@@ -210,6 +215,6 @@ jobs:
           git commit -m "fix(ci): secure and bound sandbox evidence streams"
           auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
-          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${auth_header}" \
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
             push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
             origin "HEAD:refs/heads/${HEAD_BRANCH}"
