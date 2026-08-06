@@ -127,6 +127,7 @@ jobs:
           python -m coverage erase
           python -m coverage run -m pytest \
             tests/test_materialize_base_python_requirements.py \
+            tests/test_materialize_output_directory_security.py \
             tests/test_materialize_uv_export_hash_contract.py \
             tests/test_trusted_git_executable.py \
             tests/test_trusted_uv_download_contract.py \
@@ -155,6 +156,7 @@ jobs:
           python -m compileall -q \
             scripts/ci/materialize_base_python_requirements.py \
             tests/test_materialize_base_python_requirements.py \
+            tests/test_materialize_output_directory_security.py \
             tests/test_materialize_uv_export_hash_contract.py \
             tests/test_trusted_git_executable.py \
             tests/test_trusted_uv_download_contract.py \
