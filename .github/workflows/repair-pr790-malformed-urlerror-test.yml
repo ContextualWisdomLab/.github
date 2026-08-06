@@ -1,0 +1,156 @@
+name: Repair PR 790 malformed URL error regression
+
+on:
+  push:
+    branches:
+      - fix/trusted-uv-transient-download-retry
+    paths:
+      - .github/workflows/repair-pr790-malformed-urlerror-test.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr790-malformed-urlerror-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair-and-verify:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.ref == 'refs/heads/fix/trusted-uv-transient-download-retry'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair trigger
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked test tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Add fail-closed malformed reason regression
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          test_path = Path("tests/test_trusted_uv_portability_and_streaming.py")
+          source = test_path.read_text(encoding="utf-8")
+          anchor = '''def test_trusted_uv_download_does_not_retry_unclassified_os_error(
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+          '''
+          regression = '''def test_trusted_uv_download_does_not_retry_malformed_urlerror_reason(
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              """A non-exception URL reason fails once without leaking arbitrary text."""
+
+              calls: list[tuple[str, int]] = []
+              sleeps: list[float] = []
+              monkeypatch.setattr(
+                  materializer.urllib.request,
+                  "urlopen",
+                  _scripted_urlopen([urllib.error.URLError("malformed")], calls),
+              )
+              monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+              with pytest.raises(
+                  RuntimeError,
+                  match=r"trusted uv archive download failed: URLError$",
+              ) as raised:
+                  materializer._download_trusted_uv_archive()
+
+              assert "malformed" not in str(raised.value)
+              assert len(calls) == 1
+              assert sleeps == []
+
+
+          '''
+          if source.count(anchor) != 1:
+              raise SystemExit("expected one malformed URL error regression insertion point")
+          test_path.write_text(source.replace(anchor, regression + anchor), encoding="utf-8")
+          Path(".github/workflows/repair-pr790-malformed-urlerror-test.yml").unlink()
+          PY
+          git diff --check
+
+      - name: Run focused and complete quality contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/materialize_base_python_requirements.py
+
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/trusted-uv-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_materialize_uv_export_hash_contract.py \
+            tests/test_trusted_git_executable.py \
+            tests/test_trusted_uv_download_contract.py \
+            tests/test_trusted_uv_portability_and_streaming.py \
+            tests/test_uv_export_isolation_contract.py \
+            tests/test_uv_redirect_and_coverage_contract.py \
+            tests/test_uv_redirect_boundary.py \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_trusted_uv_materializer_quality_workflow_contract.py \
+            -q
+          python -m coverage report
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+          python -m interrogate --fail-under 100 \
+            scripts/ci/materialize_base_python_requirements.py
+          python -m compileall -q \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_trusted_uv_portability_and_streaming.py
+          git diff --check
+
+      - name: Publish verified regression
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          HEAD_BRANCH: ${{ github.ref_name }}
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git diff --cached --quiet && { echo "No regression generated" >&2; exit 1; }
+          git commit -m "test(coverage): pin malformed URL error failure"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${HEAD_BRANCH}"
