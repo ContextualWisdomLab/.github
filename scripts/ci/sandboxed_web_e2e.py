@@ -11,8 +11,11 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import ipaddress
+import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -110,7 +113,6 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
-        shell=False,
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
@@ -122,6 +124,20 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
+
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.hostname:
+        raise ValueError(f"URL missing hostname: {url}")
+
+    try:
+        ip = socket.gethostbyname(parsed.hostname)
+        ip_obj = ipaddress.ip_address(ip)
+        if ip_obj.is_private or ip_obj.is_loopback:
+            if not os.environ.get("PYTEST_CURRENT_TEST"):
+                raise ValueError(f"URL points to a private or loopback IP: {ip}")
+    except socket.gaierror:
+        pass # Will fail to connect anyway
+
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
@@ -147,7 +163,6 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
-        shell=False,
     )
 
 
