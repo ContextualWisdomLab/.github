@@ -1,0 +1,180 @@
+name: Python Native Extension Peer Gate Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - ".github/workflows/python-native-extension-peer-gate-quality-ci.yml"
+      - "scripts/ci/python_native_extension_peer_gate.py"
+      - "tests/test_python_native_extension_peer_gate.py"
+      - "tests/test_python_native_extension_peer_gate_nested_project.py"
+      - "tests/test_python_native_extension_peer_gate_workflow_contract.py"
+      - "docs/doctoring/python-native-extension-peer-evidence.md"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "CHANGELOG.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - ".github/workflows/python-native-extension-peer-gate-quality-ci.yml"
+      - "scripts/ci/python_native_extension_peer_gate.py"
+      - "tests/test_python_native_extension_peer_gate.py"
+      - "tests/test_python_native_extension_peer_gate_nested_project.py"
+      - "tests/test_python_native_extension_peer_gate_workflow_contract.py"
+      - "docs/doctoring/python-native-extension-peer-evidence.md"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "CHANGELOG.md"
+
+concurrency:
+  group: python-native-extension-peer-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  minimum-python-contract:
+    name: Python 3.10 compatibility contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up minimum supported Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Compile production and tests on Python 3.10
+        run: |
+          python -m compileall -q \
+            scripts/ci/python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate_nested_project.py \
+            tests/test_python_native_extension_peer_gate_workflow_contract.py
+
+      - name: Exercise the conditional tomli import
+        run: |
+          python - <<'PY'
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          stub_root = Path(tempfile.mkdtemp(prefix="pyo3-peer-gate-tomli-stub-"))
+          (stub_root / "tomli.py").write_text(
+              "class TOMLDecodeError(ValueError):\n"
+              "    pass\n"
+              "def loads(_value):\n"
+              "    return {}\n",
+              encoding="utf-8",
+          )
+          sys.path.insert(0, str(stub_root))
+          from scripts.ci import python_native_extension_peer_gate as gate
+
+          assert gate.tomllib.__name__ == "tomli"
+          PY
+
+  full-quality-gate:
+    name: Python 3.14 full quality gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run focused peer-gate tests with complete branch coverage
+        run: |
+          cat >"${RUNNER_TEMP}/python-native-peer-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/python_native_extension_peer_gate.py
+
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/python-native-peer-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest \
+            tests/test_python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate_nested_project.py \
+            tests/test_python_native_extension_peer_gate_workflow_contract.py \
+            -q
+          python -m coverage report
+
+      - name: Run complete central test and branch coverage gate
+        run: |
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+
+      - name: Enforce complete production docstrings
+        run: >-
+          python -m interrogate --fail-under 100
+          scripts/ci/python_native_extension_peer_gate.py
+
+      - name: Compile production and quality contracts
+        run: |
+          python -m compileall -q \
+            scripts/ci/python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate_nested_project.py \
+            tests/test_python_native_extension_peer_gate_workflow_contract.py
+
+      - name: Install checksum-pinned actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" actionlint
+          test -x "${RUNNER_TEMP}/actionlint"
+
+      - name: Validate protected workflow syntax with actionlint
+        run: |
+          "${RUNNER_TEMP}/actionlint" \
+            .github/workflows/opencode-review-dispatch.yml \
+            .github/workflows/python-native-extension-peer-gate-quality-ci.yml
+
+      - name: Verify clean patches
+        run: git diff --check
