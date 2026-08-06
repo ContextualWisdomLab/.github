@@ -70,6 +70,7 @@ class StrixChangedPathPolicyTests(unittest.TestCase):
             ".",
             "..",
             "../secret.txt",
+            "safe/../target.txt",
             "/tmp/secret.txt",
             "safe\\escape.txt",
             "safe\nname.txt",
