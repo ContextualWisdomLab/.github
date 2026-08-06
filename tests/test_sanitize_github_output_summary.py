@@ -71,7 +71,12 @@ def test_sanitizes_every_authorization_scheme_and_scheme_less_value():
 
     sanitized = sanitize_text(source)
 
-    assert sanitized == "Authorization: <redacted>\n" * 4
+    assert sanitized == (
+        "Authorization: <redacted>\n"
+        "Authorization=<redacted>\n"
+        "Authorization: <redacted>\n"
+        "Authorization: <redacted>\n"
+    )
     for secret_value in (
         "Token",
         "token-secret",
