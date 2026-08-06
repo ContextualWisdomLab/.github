@@ -46,14 +46,50 @@ def replace_once(path: str, old: str, new: str) -> None:
     write(path, content.replace(candidate, replacement, 1))
 '''
 
+OLD_REPLACE_BETWEEN = '''def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+    """Replace one section delimited by stable function markers."""
+
+    content = read(path)
+    start_index = content.index(start)
+    end_index = content.index(end, start_index)
+    write(path, content[:start_index] + replacement.rstrip() + "\\n\\n" + content[end_index + 1 :])
+'''
+
+NEW_REPLACE_BETWEEN = '''def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+    """Replace one section delimited by stable function markers."""
+
+    content = read(path)
+    start_index = content.index(start)
+    try:
+        end_index = content.index(end, start_index)
+    except ValueError:
+        if not end.endswith("(\\n"):
+            raise
+        end_index = content.index(end[:-1], start_index)
+    write(path, content[:start_index] + replacement.rstrip() + "\\n\\n" + content[end_index + 1 :])
+'''
+
 
 def main() -> int:
-    """Patch indentation matching and nested regex escaping deterministically."""
+    """Patch matching and nested regex escaping deterministically."""
 
     content = TARGET.read_text(encoding="utf-8")
-    if content.count(OLD_REPLACE_ONCE) != 1:
-        raise RuntimeError("transient replace_once source no longer matches its contract")
-    content = content.replace(OLD_REPLACE_ONCE, NEW_REPLACE_ONCE, 1)
+    replacements = (
+        (
+            OLD_REPLACE_ONCE,
+            NEW_REPLACE_ONCE,
+            "transient replace_once source no longer matches its contract",
+        ),
+        (
+            OLD_REPLACE_BETWEEN,
+            NEW_REPLACE_BETWEEN,
+            "transient replace_between source no longer matches its contract",
+        ),
+    )
+    for old, new, error in replacements:
+        if content.count(old) != 1:
+            raise RuntimeError(error)
+        content = content.replace(old, new, 1)
     for overescaped, corrected in (
         (r"\\\\d", r"\\d"),
         (r"\\\\[", r"\\["),
