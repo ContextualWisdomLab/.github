@@ -43,12 +43,13 @@ This preserves the central MSA boundary without copying privileged workflow code
 - An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are explicit in the dispatch payload.
 - Every dispatch is bound to live PR number, current head SHA, and base branch metadata fetched from GitHub immediately before dispatch.
 - Router jobs use the fixed `ubuntu-24.04` runner and an immutable `actions/checkout` v7.0.1 commit pin; checkout credentials are not persisted.
+- A branch-selectable `workflow_dispatch` trigger is intentionally absent. This prevents a repository writer from choosing an unreviewed branch version of the central router while the job holds dispatch permissions.
 
 ## Operator controls
 
 - `AGENT_MENTION_LOOKBACK_HOURS`: default `168`, allowed range 1–720.
 - `AGENT_MENTION_MAX_DISPATCHES`: default `20`, allowed range 1–100. The bound counts source requests that actually queue at least one new agent, not historical no-ops.
-- Manual `workflow_dispatch` supports the same bounds and a dry-run mode.
+- Operators request immediate work by writing an exact trusted mention on the target pull request; otherwise, the five-minute protected-default-branch sweep processes it.
 - The sweep fails visibly when no cross-repository credential is available.
 - `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN` takes precedence. Otherwise, the workflow exchanges its OIDC token for the existing OpenCode installation token and enumerates that installation's repositories.
 
