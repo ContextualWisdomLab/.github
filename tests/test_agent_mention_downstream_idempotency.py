@@ -1,4 +1,3 @@
-
 """Static contracts for downstream review-agent invocation idempotency."""
 
 from pathlib import Path
@@ -9,9 +8,10 @@ QUALITY_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-router-qualit
 NOEMA_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-noema-dispatch.yml"
 OPENCODE_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-opencode-dispatch.yml"
 ROUTER_SCRIPT = ROOT / "scripts" / "ci" / "agent_mention_router.py"
+UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
-def test_router_can_read_durable_central_workflow_runs() -> None:
+def test_router_can_read_durable_central_artifacts() -> None:
     """Both local routing and sibling sweeping receive actions read access."""
 
     text = ROUTER_WORKFLOW.read_text(encoding="utf-8")
@@ -22,8 +22,8 @@ def test_router_can_read_durable_central_workflow_runs() -> None:
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
 
 
-def test_downstream_workflows_retry_visibility_and_bind_exact_key() -> None:
-    """Wrappers queue duplicates and never lose a request to eventual consistency."""
+def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
+    """Exact-key concurrency serializes claims before authoritative forwarding."""
 
     noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
     opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
@@ -34,11 +34,17 @@ def test_downstream_workflows_retry_visibility_and_bind_exact_key() -> None:
         assert "requested_agent" in text
         assert "cancel-in-progress: false" in text
         assert "queue: max" in text
-        assert "for attempt in 1 2 3" in text
-        assert 'sleep "$((attempt * 2))"' in text
-        assert "no lower durable run was observed" in text
         assert "^[0-9a-f]{64}$" in text
         assert "^[1-9][0-9]*$" in text
+        assert "actions/artifacts" in text
+        assert "name=${LEDGER_ARTIFACT_NAME}" in text
+        assert f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}" in text
+        assert "retention-days: 30" in text
+        assert "overwrite: false" in text
+        assert text.index("actions/upload-artifact@") < text.index(
+            "Forward once to the authoritative"
+        )
+        assert "workflow_runs" not in text
         assert "repos/${GITHUB_REPOSITORY}/dispatches" in text
     assert "types: [agent-mention-noema]" in noema
     assert 'event_type: "noema-review"' in noema
