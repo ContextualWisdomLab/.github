@@ -114,3 +114,36 @@ def test_missing_type_only_source_does_not_require_istanbul_instrumentation(
     report = capsys.readouterr().out
     assert "type-only declarations" in report
     assert "Result: PASS" in report
+
+
+def test_type_only_classifier_rejects_mixed_runtime_tails(tmp_path: Path) -> None:
+    """Do not let declaration prefixes or comment braces hide runtime code."""
+    source = tmp_path / "src" / "mixed_types.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "export interface InlineShape {} const inlineRuntime = 1;\n"
+        "import type { InlineShape } from './shape.js'; runInline();\n"
+        "interface MultilineShape {\n"
+        "  readonly value: string;\n"
+        "} runAfterInterface();\n"
+        "import type {\n"
+        "  MultilineShape,\n"
+        "} from './shape.js'; runAfterImport();\n"
+        "interface CommentedShape {\n"
+        "  readonly value: string; /* brace { */\n"
+        "}\n"
+        "runAfterComment();\n"
+        "import type { SingleLineShape } from './shape.js'\n"
+        "runAfterSemicolonlessImport();\n"
+        "import type {\n"
+        "  MultilineShape,\n"
+        "} from './shape.js'\n"
+        "runAfterMultilineSemicolonlessImport();\n",
+        encoding="utf-8",
+    )
+
+    assert gate.likely_runtime_lines(
+        tmp_path,
+        "src/mixed_types.ts",
+        set(range(1, 19)),
+    ) == [1, 2, 5, 8, 12, 14, 18]
