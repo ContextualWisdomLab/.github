@@ -145,6 +145,35 @@ OLD_SWEEP_TEST_ANCHOR = '''                assert sweep.flatten_pages([{"number"
 NEW_SWEEP_TEST_ANCHOR = '''                assert sweep.flatten_pages([{"number": 1}]) == [{"number": 1}]
 
 
+            def test_pull_pagination_stops_on_empty_followup_page() -> None:
+                """A full page followed by an empty page terminates without page three."""
+
+                sweep = module()
+                recent = [pull(number) for number in range(1, 101)]
+                client = PagingClient(
+                    {
+                        ("orgs/ContextualWisdomLab/repos", 1): [[repository("example")]],
+                        ("repos/ContextualWisdomLab/example/pulls", 1): recent,
+                        ("repos/ContextualWisdomLab/example/pulls", 2): [],
+                    }
+                )
+                results = list(
+                    sweep.list_recent_pull_requests(
+                        client,
+                        organization="ContextualWisdomLab",
+                        repository_source="organization",
+                        since="2026-08-05T00:00:00Z",
+                    )
+                )
+                assert len(results) == 100
+                pull_calls = [
+                    args for args in client.calls if args[0].endswith("/pulls")
+                ]
+                assert len(pull_calls) == 2
+                assert any("page=2" in args for args in pull_calls)
+                assert not any("page=3" in args for args in pull_calls)
+
+
             def test_invalid_pull_number_fails_closed_without_error_sink() -> None:
                 """Malformed pull metadata raises when no isolation sink is supplied."""
 
