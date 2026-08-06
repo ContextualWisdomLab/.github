@@ -1,4 +1,3 @@
-
 """Review-driven pagination and failure-isolation regressions."""
 
 from __future__ import annotations
@@ -240,10 +239,10 @@ def test_sweep_continues_after_candidate_and_dispatch_failures(
         metrics=metrics,
     ) == 1
     assert metrics.failures == 2
-    assert dispatch_kwargs[0]["run_marker_cache"] is dispatch_kwargs[1][
-        "run_marker_cache"
+    assert dispatch_kwargs[0]["ledger_artifact_cache"] is dispatch_kwargs[1][
+        "ledger_artifact_cache"
     ]
-    assert dispatch_kwargs[0]["workflow_run_since"].endswith("Z")
+    assert dispatch_kwargs[0]["dry_run"] is False
     output = capsys.readouterr().out
     assert "comment inventory failed" in output
     assert "dispatch failed" in output
