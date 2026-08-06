@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 
 REVIEWED_BASE = "4d076f636b6de5043e8501e93c06ed0a8c896eb3"
 REVIEWED_CHILD = "b715577b9e946ecad4bd00c9f8afc7b2a219e048"
 EXPECTED_MAIN_PARENT = "f070c504c1cb06891b800d7ab0cf6ac7d3cf8eae"
-PATCH_PATH = Path("/tmp/pr748-current-main.patch")
 WORKFLOW_PATH = Path(".github/workflows/opencode-review-dispatch.yml")
 CONTRACT_PATH = Path("tests/test_opencode_agent_contract.py")
 PATCH_PATHS = (
@@ -226,6 +226,15 @@ def _verify_trigger_scope() -> None:
         )
 
 
+def _apply_reviewed_patch(patch: str) -> None:
+    """Apply one validated patch from an owner-only temporary directory."""
+
+    with tempfile.TemporaryDirectory(prefix="pr748-") as temporary_directory:
+        patch_path = Path(temporary_directory) / "reviewed.patch"
+        patch_path.write_text(_validate_reviewed_patch(patch), encoding="utf-8")
+        _run("git", "apply", "--3way", "--index", str(patch_path))
+
+
 def main() -> int:
     """Apply the reviewed resolver patch to the exact protected-main parent."""
 
@@ -242,8 +251,7 @@ def main() -> int:
         *PATCH_PATHS,
         capture=True,
     ).stdout
-    PATCH_PATH.write_text(_validate_reviewed_patch(patch), encoding="utf-8")
-    _run("git", "apply", "--3way", "--index", str(PATCH_PATH))
+    _apply_reviewed_patch(patch)
     _normalize_current_main_diagnostic()
     _update_current_contract_test()
     _run("git", "diff", "--cached", "--check")
