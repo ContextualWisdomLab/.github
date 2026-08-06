@@ -21,6 +21,8 @@ def test_strix_workflow_installs_only_hash_verified_wheels() -> None:
 
     assert "--only-binary=:all:" in workflow
     assert "--require-hashes" in workflow
+    assert 'cat >"${RUNNER_TEMP}/strix-quality-requirements.txt"' in workflow
+    assert '-r "${RUNNER_TEMP}/strix-quality-requirements.txt"' in workflow
     for requirement, digest in EXPECTED_WHEEL_HASHES.items():
         assert f"{requirement} --hash=sha256:{digest}" in workflow
 
