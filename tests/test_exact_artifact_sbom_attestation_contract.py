@@ -12,6 +12,12 @@ VERIFIER = Path("scripts/ci/verify_exact_artifact_sbom_handoff.py")
 DOCTORING = Path("docs/doctoring/exact-artifact-sbom-attestation.md")
 ATTEST_ACTION_PIN = "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26"
 CHECKOUT_ACTION_PIN = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+DOWNLOAD_ACTION_PIN = (
+    "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131"
+)
+UPLOAD_ACTION_PIN = (
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+)
 
 
 def _required_text(path: Path, label: str) -> str:
@@ -25,6 +31,19 @@ def _workflow_call_block(workflow: str) -> str:
     match = re.search(r"(?ms)^on:\n(?P<body>.*?)(?=^\S|\Z)", workflow)
     assert match is not None, "workflow must declare a top-level on block"
     return match.group("body")
+
+
+def _job_block(workflow: str, job_name: str) -> str:
+    """Return one exact top-level job body from a workflow source file."""
+    jobs_match = re.search(r"(?ms)^jobs:\n(?P<body>.*)\Z", workflow)
+    assert jobs_match is not None, "workflow must declare jobs"
+    jobs_body = jobs_match.group("body")
+    job_match = re.search(
+        rf"(?ms)^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        jobs_body,
+    )
+    assert job_match is not None, f"missing workflow job: {job_name}"
+    return job_match.group(0)
 
 
 def test_reusable_workflow_is_call_only_with_explicit_handoff_inputs() -> None:
@@ -48,6 +67,7 @@ def test_reusable_workflow_is_call_only_with_explicit_handoff_inputs() -> None:
     required_inputs = {
         "source_repository",
         "source_sha",
+        "evidence_artifact_id",
         "evidence_artifact_name",
         "evidence_artifact_digest",
         "wheel_filename",
@@ -75,19 +95,45 @@ def test_reusable_workflow_is_call_only_with_explicit_handoff_inputs() -> None:
         assert re.search(r"(?m)^        type: string\s*$", input_body)
 
 
+def test_artifact_intake_verifies_exact_immutable_same_run_metadata() -> None:
+    """Fail closed on artifact identity before the credentialed attestation job."""
+    workflow = _required_text(REUSABLE_WORKFLOW, "reusable attestation workflow")
+    intake = _job_block(workflow, "verify-evidence-artifact")
+
+    assert "permissions:" in intake
+    assert "actions: read" in intake
+    assert "contents: read" in intake
+    assert "id-token: write" not in intake
+    assert "attestations: write" not in intake
+    assert "artifact-metadata: write" not in intake
+    assert "${{ inputs.evidence_artifact_id }}" in intake
+    assert "${{ inputs.evidence_artifact_name }}" in intake
+    assert "${{ inputs.evidence_artifact_digest }}" in intake
+    assert "${{ inputs.source_repository }}" in intake
+    assert "${{ github.run_id }}" in intake
+    assert "/actions/artifacts/" in intake
+    assert ".workflow_run.id" in intake
+    assert ".expired" in intake
+    assert DOWNLOAD_ACTION_PIN in intake
+    assert "artifact-ids: ${{ inputs.evidence_artifact_id }}" in intake
+
+
 def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() -> None:
     """Keep signing authority separate from caller-controlled source and credentials."""
     workflow = _required_text(REUSABLE_WORKFLOW, "reusable attestation workflow")
+    signer = _job_block(workflow, "attest-exact-artifacts")
 
-    assert ATTEST_ACTION_PIN in workflow
+    assert ATTEST_ACTION_PIN in signer
     assert CHECKOUT_ACTION_PIN in workflow
-    assert "repository: ${{ job.workflow_repository }}" in workflow
-    assert "ref: ${{ job.workflow_sha }}" in workflow
-    assert "persist-credentials: false" in workflow
-    assert "id-token: write" in workflow
-    assert "attestations: write" in workflow
-    assert "artifact-metadata: write" in workflow
-    assert "contents: read" in workflow
+    assert workflow.count("repository: ${{ job.workflow_repository }}") >= 2
+    assert workflow.count("ref: ${{ job.workflow_sha }}") >= 2
+    assert workflow.count("persist-credentials: false") >= 2
+    assert "needs: verify-evidence-artifact" in signer
+    assert "contents: read" in signer
+    assert "id-token: write" in signer
+    assert "attestations: write" in signer
+    assert "artifact-metadata: write" in signer
+    assert "actions: read" not in signer
 
     for forbidden_permission in (
         "actions: write",
@@ -99,7 +145,8 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
     ):
         assert forbidden_permission not in workflow
 
-    assert "actions/checkout@" in workflow
+    assert DOWNLOAD_ACTION_PIN in signer
+    assert "artifact-ids: ${{ inputs.evidence_artifact_id }}" in signer
     assert "repository: ${{ github.repository }}" not in workflow
     assert "ref: ${{ inputs.source_sha }}" not in workflow
     assert "secrets: inherit" not in workflow
@@ -112,7 +159,7 @@ def test_verifier_is_data_only_and_workflow_never_executes_downloaded_evidence()
     workflow = _required_text(REUSABLE_WORKFLOW, "reusable attestation workflow")
     verifier = _required_text(VERIFIER, "sealed-evidence verifier")
 
-    assert "verify_exact_artifact_sbom_handoff.py" in workflow
+    assert workflow.count("verify_exact_artifact_sbom_handoff.py") >= 2
     assert "--source-repository" in workflow
     assert "--source-sha" in workflow
     assert "--evidence-root" in workflow
@@ -140,18 +187,21 @@ def test_verifier_is_data_only_and_workflow_never_executes_downloaded_evidence()
 def test_workflow_attests_each_exact_distribution_and_exports_offline_evidence() -> None:
     """Bind one CycloneDX predicate to each exact distribution and preserve bundles."""
     workflow = _required_text(REUSABLE_WORKFLOW, "reusable attestation workflow")
+    signer = _job_block(workflow, "attest-exact-artifacts")
 
-    assert workflow.count(ATTEST_ACTION_PIN) == 2
-    assert workflow.count("sbom-path:") == 2
-    assert workflow.count("subject-name:") == 2
-    assert workflow.count("subject-digest:") == 2
-    assert "predicate-type" in workflow
-    assert "bundle-path" in workflow
-    assert "gh attestation verify" in workflow
-    assert "--signer-repo" in workflow
-    assert "--signer-workflow" in workflow
-    assert "--predicate-type" in workflow
-    assert "offline" in workflow.lower()
+    assert signer.count(ATTEST_ACTION_PIN) == 2
+    assert signer.count("sbom-path:") == 2
+    assert signer.count("subject-name:") == 2
+    assert signer.count("subject-digest:") == 2
+    assert "predicate-type" in signer
+    assert "bundle-path" in signer
+    assert "gh attestation verify" in signer
+    assert "--signer-repo" in signer
+    assert "--signer-workflow" in signer
+    assert "--predicate-type" in signer
+    assert "gh attestation trusted-root" in signer
+    assert UPLOAD_ACTION_PIN in signer
+    assert "offline" in signer.lower()
 
 
 def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None:
