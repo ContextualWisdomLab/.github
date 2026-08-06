@@ -8,6 +8,8 @@ from pathlib import Path
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATH = _REPOSITORY_ROOT / ".github/workflows/opencode-review-dispatch.yml"
+_LLVM_COV_PATH = "/usr/bin/llvm-cov-19"
+_LLVM_PROFDATA_PATH = "/usr/bin/llvm-profdata-19"
 
 
 def _workflow_text() -> str:
@@ -29,10 +31,10 @@ def test_trusted_rust_coverage_image_provisions_verified_llvm_19_tools() -> None
 
     llvm_package = workflow.index("llvm-19")
     llvm_cov_environment = workflow.index(
-        "ENV LLVM_COV=/usr/bin/llvm-cov-19"
+        f"ENV LLVM_COV={_LLVM_COV_PATH}"
     )
     llvm_profdata_environment = workflow.index(
-        "ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19"
+        f"ENV LLVM_PROFDATA={_LLVM_PROFDATA_PATH}"
     )
     llvm_cov_checks = _all_positions(workflow, 'test -x "$LLVM_COV"')
     llvm_profdata_checks = _all_positions(workflow, 'test -x "$LLVM_PROFDATA"')
@@ -52,21 +54,30 @@ def test_trusted_rust_coverage_image_provisions_verified_llvm_19_tools() -> None
     )
 
 
-def test_isolated_runtime_receives_and_revalidates_explicit_llvm_paths() -> None:
-    """Require isolated Rust coverage to fail closed on missing LLVM executables."""
+def test_isolated_runtime_receives_reviewed_llvm_constants() -> None:
+    """Require exact LLVM 19 path propagation through the Docker boundary."""
 
     workflow = _workflow_text()
-    cargo_coverage_invocation = workflow.index("cargo llvm-cov")
+    docker_run = workflow.index("docker run --rm")
+    llvm_cov_binding = workflow.index(
+        f"--env LLVM_COV={_LLVM_COV_PATH}", docker_run
+    )
+    llvm_profdata_binding = workflow.index(
+        f"--env LLVM_PROFDATA={_LLVM_PROFDATA_PATH}", docker_run
+    )
+    coverage_image = workflow.index('"$coverage_tool_image"', docker_run)
+
+    assert docker_run < llvm_cov_binding < llvm_profdata_binding < coverage_image
+
+
+def test_isolated_runtime_revalidates_llvm_tools_before_coverage() -> None:
+    """Require a second fail-closed executable check before Rust coverage."""
+
+    workflow = _workflow_text()
+    docker_run = workflow.index("docker run --rm")
+    cargo_coverage_invocation = workflow.index("cargo llvm-cov", docker_run)
     llvm_cov_checks = _all_positions(workflow, 'test -x "$LLVM_COV"')
     llvm_profdata_checks = _all_positions(workflow, 'test -x "$LLVM_PROFDATA"')
 
-    assert re.search(
-        r"(?:-e|--env(?:=|\s+))\s*LLVM_COV(?:=|\s)",
-        workflow,
-    )
-    assert re.search(
-        r"(?:-e|--env(?:=|\s+))\s*LLVM_PROFDATA(?:=|\s)",
-        workflow,
-    )
-    assert llvm_cov_checks[-1] < cargo_coverage_invocation
-    assert llvm_profdata_checks[-1] < cargo_coverage_invocation
+    assert docker_run < llvm_cov_checks[-1] < cargo_coverage_invocation
+    assert docker_run < llvm_profdata_checks[-1] < cargo_coverage_invocation
