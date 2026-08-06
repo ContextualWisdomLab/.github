@@ -18,6 +18,7 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
@@ -84,6 +85,10 @@ TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
 TRUSTED_UV_ORIGIN_ERROR = (
     "trusted uv archive redirected outside the fixed GitHub release HTTPS origin"
 )
+SECURE_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+)
+SECURE_FILE_OPEN_FLAGS = os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
@@ -671,34 +676,170 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     return sorted(locks, key=lambda item: item[0])
 
 
+def _validate_directory_binding(
+    parent_fd: int,
+    name: str,
+    directory_fd: int,
+) -> None:
+    """Prove that a no-follow pathname still names the pinned directory inode."""
+
+    try:
+        path_metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "output directory changed during secure materialization"
+        ) from exc
+    descriptor_metadata = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or (path_metadata.st_dev, path_metadata.st_ino)
+        != (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
+    ):
+        raise ValueError("output directory changed during secure materialization")
+
+
+def _open_directory_component(parent_fd: int, name: str) -> int:
+    """Create or open one directory component without following symbolic links."""
+
+    try:
+        os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    try:
+        directory_fd = os.open(
+            name,
+            SECURE_DIRECTORY_OPEN_FLAGS,
+            dir_fd=parent_fd,
+        )
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise ValueError(
+                "output directory must not be a symlink; path must not contain symlinks"
+            ) from exc
+        raise
+    try:
+        _validate_directory_binding(parent_fd, name, directory_fd)
+    except Exception:
+        os.close(directory_fd)
+        raise
+    return directory_fd
+
+
+def _open_pinned_output_directory(
+    output_dir: pathlib.Path,
+) -> tuple[int, int, str]:
+    """Return parent and output descriptors pinned through a no-follow path walk."""
+
+    absolute_output = pathlib.Path(os.path.abspath(output_dir))
+    if absolute_output.parent == absolute_output:
+        raise ValueError("output directory must not be the filesystem root")
+
+    current_fd = os.open(os.path.sep, SECURE_DIRECTORY_OPEN_FLAGS)
+    try:
+        for component in absolute_output.parts[1:-1]:
+            next_fd = _open_directory_component(current_fd, component)
+            os.close(current_fd)
+            current_fd = next_fd
+        output_name = absolute_output.name
+        output_fd = _open_directory_component(current_fd, output_name)
+        return current_fd, output_fd, output_name
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def _validate_file_binding(directory_fd: int, name: str, file_fd: int) -> None:
+    """Prove that a generated name still references the pinned regular file."""
+
+    try:
+        path_metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise ValueError("output file changed during secure materialization") from exc
+    descriptor_metadata = os.fstat(file_fd)
+    if (
+        not stat.S_ISREG(path_metadata.st_mode)
+        or (path_metadata.st_dev, path_metadata.st_ino)
+        != (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
+    ):
+        raise ValueError("output file changed during secure materialization")
+
+
+def _write_pinned_output_file(
+    directory_fd: int,
+    name: str,
+    content: bytes,
+) -> None:
+    """Write one generated file through a no-follow descriptor-relative binding."""
+
+    try:
+        file_fd = os.open(
+            name,
+            SECURE_FILE_OPEN_FLAGS | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+    except FileExistsError:
+        try:
+            file_fd = os.open(
+                name,
+                SECURE_FILE_OPEN_FLAGS,
+                dir_fd=directory_fd,
+            )
+        except OSError as exc:
+            if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                raise ValueError("output files must not be symlinks") from exc
+            raise
+
+    try:
+        metadata = os.fstat(file_fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("output files must be singly linked regular files")
+        os.ftruncate(file_fd, 0)
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(file_fd, remaining)
+            if written <= 0:
+                raise OSError("output file write made no progress")
+            remaining = remaining[written:]
+        os.fsync(file_fd)
+        _validate_file_binding(directory_fd, name, file_fd)
+    finally:
+        os.close(file_fd)
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
 ) -> list[dict[str, str]]:
-    """Write base lock blobs under generated names safe for a Docker build context."""
-    if output_dir.exists() and output_dir.is_symlink():
-        raise ValueError("output directory must not be a symlink")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    """Write trusted locks through descriptor-pinned, no-follow output bindings."""
 
-    manifest: list[dict[str, str]] = []
-    for index, (source_path, content) in enumerate(
-        base_hash_locks(repo_root.resolve(), base_sha)
-    ):
-        generated_name = f"requirements-{index:03d}.txt"
-        destination = output_dir / generated_name
-        destination.write_bytes(content)
-        manifest.append({"file": generated_name, "source": source_path})
+    parent_fd, output_fd, output_name = _open_pinned_output_directory(output_dir)
+    try:
+        manifest: list[dict[str, str]] = []
+        for index, (source_path, content) in enumerate(
+            base_hash_locks(repo_root.resolve(), base_sha)
+        ):
+            generated_name = f"requirements-{index:03d}.txt"
+            _write_pinned_output_file(output_fd, generated_name, content)
+            manifest.append({"file": generated_name, "source": source_path})
 
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    (output_dir / "manifest.txt").write_text(
-        "".join(f"{entry['file']}\n" for entry in manifest),
-        encoding="utf-8",
-    )
-    return manifest
+        _write_pinned_output_file(
+            output_fd,
+            "manifest.json",
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        )
+        _write_pinned_output_file(
+            output_fd,
+            "manifest.txt",
+            "".join(f"{entry['file']}\n" for entry in manifest).encode("utf-8"),
+        )
+        os.fsync(output_fd)
+        _validate_directory_binding(parent_fd, output_name, output_fd)
+        return manifest
+    finally:
+        os.close(output_fd)
+        os.close(parent_fd)
 
 
 def main(argv: list[str] | None = None) -> int:
