@@ -1,18 +1,18 @@
 name: Repair requirements-directory lock discovery
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/coverage-materialize-requirements-directory-locks
-    paths:
-      - .github/workflows/repair-requirements-directory-locks.yml
+      - main
+    types:
+      - synchronize
 
 permissions:
   contents: read
 
 concurrency:
   group: repair-requirements-directory-locks
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,8 +21,8 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.actor == 'seonghobae' &&
-      github.ref == 'refs/heads/fix/coverage-materialize-requirements-directory-locks'
+      github.event.pull_request.number == 785 &&
+      github.event.pull_request.head.ref == 'fix/coverage-materialize-requirements-directory-locks'
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -33,22 +33,23 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Check out exact trigger without persisted credentials
+      - name: Check out exact pull-request head without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact RED lineage and bounded setup delta
         env:
           RED_CONTRACT_SHA: 8344a2b2e24d6952fe2442e68b9ee514cb1d7ee8
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git cat-file -e "${RED_CONTRACT_SHA}^{commit}"
-          git merge-base --is-ancestor "$RED_CONTRACT_SHA" "$GITHUB_SHA"
-          mapfile -t changed_paths < <(git diff --name-only "$RED_CONTRACT_SHA" "$GITHUB_SHA" | sort)
+          git merge-base --is-ancestor "$RED_CONTRACT_SHA" "$EXPECTED_HEAD"
+          mapfile -t changed_paths < <(git diff --name-only "$RED_CONTRACT_SHA" "$EXPECTED_HEAD" | sort)
           expected_paths=(
             ".github/workflows/repair-requirements-directory-locks.yml"
             "scripts/ci/apply_requirements_directory_lock_repair.py"
@@ -131,23 +132,64 @@ jobs:
           test ! -e scripts/ci/apply_requirements_directory_lock_repair.py
           git diff --check
 
-      - name: Publish verified product change and remove temporary machinery
+      - name: Publish immutable verified blob receipt
         env:
-          EXPECTED_HEAD: ${{ github.sha }}
-          HEAD_BRANCH: fix/coverage-materialize-requirements-directory-locks
-          PUSH_TOKEN: ${{ github.token }}
+          API_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          SOURCE_BRANCH: fix/coverage-materialize-requirements-directory-locks
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | cut -f1)"
           test "$remote_head" = "$EXPECTED_HEAD"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add --all
-          git diff --cached --check
-          git diff --cached --quiet && { echo "No verified product change generated" >&2; exit 1; }
-          git commit -m "fix(coverage): materialize requirements directory locks"
-          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
-          echo "::add-mask::$auth_header"
-          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
-            origin "HEAD:refs/heads/${HEAD_BRANCH}"
+          python3 - <<'PY' | tee "${RUNNER_TEMP}/pr785-repair-receipt.txt"
+          import base64
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repository = 'ContextualWisdomLab/.github'
+          expected_head = os.environ['EXPECTED_HEAD']
+          token = os.environ['API_TOKEN']
+          api_root = f'https://api.github.com/repos/{repository}'
+
+          def request(method, endpoint, payload=None):
+              data = None if payload is None else json.dumps(payload).encode('utf-8')
+              req = urllib.request.Request(
+                  api_root + endpoint,
+                  data=data,
+                  method=method,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'cwl-pr785-blob-receipt',
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
+
+          parent = request('GET', f'/git/commits/{expected_head}')
+          print(f"REPAIR_PARENT_SHA={expected_head}")
+          print(f"REPAIR_PARENT_TREE_SHA={parent['tree']['sha']}")
+          for label, path in (
+              ('MATERIALIZER', 'scripts/ci/materialize_base_python_requirements.py'),
+              ('QUALITY_WORKFLOW', '.github/workflows/trusted-uv-materializer-quality-ci.yml'),
+              ('DOCTORING', 'docs/doctoring/trusted-requirements-directory-lock-discovery.md'),
+              ('CHANGELOG', 'CHANGELOG.md'),
+          ):
+              encoded = base64.b64encode(Path(path).read_bytes()).decode('ascii')
+              blob = request('POST', '/git/blobs', {'content': encoded, 'encoding': 'base64'})
+              print(f"REPAIR_{label}_BLOB_SHA={blob['sha']}")
+          print('REPAIR_DELETE_PATH=.github/workflows/repair-requirements-directory-locks.yml')
+          print('REPAIR_DELETE_PATH=scripts/ci/apply_requirements_directory_lock_repair.py')
+          PY
+
+      - name: Upload exact-head repair receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: pr785-exact-head-repair
+          path: ${{ runner.temp }}/pr785-repair-receipt.txt
+          if-no-files-found: error
+          retention-days: 5
