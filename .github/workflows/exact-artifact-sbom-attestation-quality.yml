@@ -8,6 +8,7 @@ on:
       - ".github/workflows/exact-artifact-sbom-attestation-quality.yml"
       - "scripts/ci/verify_exact_artifact_sbom_handoff.py"
       - "tests/test_exact_artifact_sbom_attestation_contract.py"
+      - "tests/test_verify_exact_artifact_sbom_handoff.py"
       - "docs/doctoring/exact-artifact-sbom-attestation.md"
       - "CHANGELOG.md"
   push:
@@ -17,6 +18,7 @@ on:
       - ".github/workflows/exact-artifact-sbom-attestation-quality.yml"
       - "scripts/ci/verify_exact_artifact_sbom_handoff.py"
       - "tests/test_exact_artifact_sbom_attestation_contract.py"
+      - "tests/test_verify_exact_artifact_sbom_handoff.py"
       - "docs/doctoring/exact-artifact-sbom-attestation.md"
       - "CHANGELOG.md"
 
@@ -54,11 +56,15 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Compile the contract
-        run: python -m compileall -q tests/test_exact_artifact_sbom_attestation_contract.py
+      - name: Compile production and contracts on Python 3.10
+        run: |
+          python -m compileall -q \
+            scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py
 
   exact-contract:
-    name: Python 3.14 exact contract
+    name: Python 3.14 exact contract and complete coverage
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -88,11 +94,21 @@ jobs:
       - name: Install hash-locked quality tooling
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Run the exact RED or GREEN contract
-        run: python -m pytest tests/test_exact_artifact_sbom_attestation_contract.py -q
+      - name: Run exact contracts with complete verifier branch coverage
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q \
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py
+          python -m coverage report \
+            --include=scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            --show-missing \
+            --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci/verify_exact_artifact_sbom_handoff.py
 
       - name: Compile production and contract files
         run: |
           python -m compileall -q \
             scripts/ci/verify_exact_artifact_sbom_handoff.py \
-            tests/test_exact_artifact_sbom_attestation_contract.py
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py
