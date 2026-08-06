@@ -165,6 +165,45 @@ def _read_changed_files(path: Path) -> tuple[PurePosixPath, ...] | None:
     return tuple(paths)
 
 
+def _repository_contract_paths(
+    *,
+    repo_root_path: Path | None,
+    pyproject_path: Path,
+    manifest_path: PurePosixPath,
+    python_source: PurePosixPath,
+) -> tuple[PurePosixPath, PurePosixPath, PurePosixPath] | None:
+    """Return repository-relative PyO3 contract paths for one project."""
+
+    candidate_root = pyproject_path.parent if repo_root_path is None else repo_root_path
+    try:
+        if not candidate_root.is_dir() or candidate_root.is_symlink():
+            return None
+        repository_root = candidate_root.resolve()
+        project_root = pyproject_path.parent.resolve()
+        resolved_pyproject = pyproject_path.resolve()
+        if resolved_pyproject.parent != project_root:
+            return None
+        project_prefix_path = project_root.relative_to(repository_root)
+    except (OSError, ValueError):
+        return None
+
+    project_prefix = (
+        PurePosixPath(".")
+        if not project_prefix_path.parts
+        else PurePosixPath(project_prefix_path.as_posix())
+    )
+    relative_pyproject = project_prefix / pyproject_path.name
+    if relative_pyproject.name != "pyproject.toml":
+        return None
+    relative_manifest = project_prefix / manifest_path
+    relative_python_source = (
+        project_prefix
+        if python_source == PurePosixPath(".")
+        else project_prefix / python_source
+    )
+    return relative_pyproject, relative_manifest, relative_python_source
+
+
 def _touches_native_or_trust_boundary(
     changed_paths: tuple[PurePosixPath, ...],
     *,
@@ -250,6 +289,7 @@ def classify_pytest_inputs(
     log_path: Path,
     pyproject_path: Path,
     changed_files_path: Path,
+    repo_root_path: Path | None = None,
 ) -> str | None:
     """Return the safely deferred module name, or ``None`` when blocking."""
 
@@ -260,19 +300,21 @@ def classify_pytest_inputs(
         return None
 
     module_name, manifest_path, python_source = contract
-    project_root = pyproject_path.parent
-    try:
-        relative_pyproject = PurePosixPath(
-            pyproject_path.resolve().relative_to(project_root.resolve()).as_posix()
-        )
-    except (OSError, ValueError):
+    repository_paths = _repository_contract_paths(
+        repo_root_path=repo_root_path,
+        pyproject_path=pyproject_path,
+        manifest_path=manifest_path,
+        python_source=python_source,
+    )
+    if repository_paths is None:
         return None
+    relative_pyproject, relative_manifest, relative_python_source = repository_paths
     if _touches_native_or_trust_boundary(
         changed_paths,
         pyproject_path=relative_pyproject,
-        manifest_path=manifest_path,
+        manifest_path=relative_manifest,
         module_name=module_name,
-        python_source=python_source,
+        python_source=relative_python_source,
     ):
         return None
     if not classify_pytest_failure(log_text, module_name=module_name):
@@ -368,6 +410,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     classify.add_argument("--log", type=Path, required=True)
     classify.add_argument("--pyproject", type=Path, required=True)
     classify.add_argument("--changed-files", type=Path, required=True)
+    classify.add_argument("--repo-root", type=Path)
 
     require = subparsers.add_parser("require-checks")
     require.add_argument("--checks-json", type=Path, required=True)
@@ -390,6 +433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_path=args.log,
             pyproject_path=args.pyproject,
             changed_files_path=args.changed_files,
+            repo_root_path=args.repo_root,
         )
         if module_name is None:
             print("pytest failure is not safely deferrable", file=sys.stderr)
