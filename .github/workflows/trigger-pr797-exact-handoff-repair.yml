@@ -42,9 +42,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Apply reviewed contract repairs
+      - name: Apply reviewed contracts and final coverage cases
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 - <<'PY'
           from pathlib import Path
 
@@ -52,21 +55,62 @@ jobs:
           source = contract.read_text(encoding='utf-8')
           old = '    assert "' + '$' + '{{ github.run_id }}" in intake\n'
           new = '    assert "GITHUB_RUN_ID" in intake\n'
-          if source.count(old) != 1:
-              raise SystemExit('expected one exact run-ID contract anchor')
-          contract.write_text(source.replace(old, new, 1), encoding='utf-8')
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif new not in source:
+              raise SystemExit('exact artifact contract run-ID anchor is absent')
+          contract.write_text(source, encoding='utf-8')
 
           hostile = Path('tests/test_verify_exact_artifact_sbom_handoff.py')
           source = hostile.read_text(encoding='utf-8')
           old = '    root.mkdir()\n'
           new = '    root.mkdir(parents=True)\n'
-          if source.count(old) != 1:
-              raise SystemExit('expected one nested hostile-root anchor')
-          hostile.write_text(source.replace(old, new, 1), encoding='utf-8')
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif new not in source:
+              raise SystemExit('handoff fixture root anchor is absent')
+
+          marker = 'def test_checksum_control_file_bounds_and_entrypoint_are_covered('
+          if marker not in source:
+              source = source.rstrip() + r'''
+
+
+def test_checksum_control_file_bounds_and_entrypoint_are_covered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Cover bounded checksum decoding and the real module entrypoint."""
+    checksum = tmp_path / "checksums.sha256"
+    checksum.write_text(("0" * 64) + "  payload.bin\n", encoding="utf-8")
+    monkeypatch.setattr(verifier, "_MAX_CONTROL_BYTES", 4)
+    with pytest.raises(verifier.EvidenceError, match="size limit"):
+        verifier._parse_checksums(checksum)
+
+    monkeypatch.setattr(verifier, "_MAX_CONTROL_BYTES", 1024)
+    checksum.write_bytes(b"\xff")
+    with pytest.raises(verifier.EvidenceError, match="strict UTF-8"):
+        verifier._parse_checksums(checksum)
+
+    import runpy
+    import sys
+
+    arguments = _valid_handoff(tmp_path / "entrypoint")
+    argv: list[str] = []
+    for name, value in vars(arguments).items():
+        argv.extend(("--" + name.replace("_", "-"), str(value)))
+    monkeypatch.setattr(sys, "argv", [str(verifier.__file__), *argv])
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_path(str(verifier.__file__), run_name="__main__")
+    assert exit_info.value.code == 0
+    assert "sealed evidence verification passed" in capsys.readouterr().out
+'''.rstrip() + '\n'
+          hostile.write_text(source, encoding='utf-8')
           PY
           rm -f \
             .github/workflows/repair-pr797-exact-handoff.yml \
-            .github/workflows/trigger-pr797-exact-handoff-repair.yml
+            .github/workflows/trigger-pr797-exact-handoff-repair.yml \
+            .github/workflows/repair-pr797-final-coverage.yml
           git diff --check
 
       - name: Set up Python 3.14
@@ -81,7 +125,7 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Verify exact contracts and verifier coverage
+      - name: Verify exact contracts and complete verifier coverage
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python -m coverage erase
@@ -99,7 +143,7 @@ jobs:
             tests/test_verify_exact_artifact_sbom_handoff.py
           git diff --check
 
-      - name: Build immutable verified repair commit
+      - name: Build immutable workflow-free repair commit
         env:
           API_TOKEN: ${{ github.token }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
@@ -124,6 +168,7 @@ jobs:
           expected_paths = {
               '.github/workflows/repair-pr797-exact-handoff.yml',
               '.github/workflows/trigger-pr797-exact-handoff-repair.yml',
+              '.github/workflows/repair-pr797-final-coverage.yml',
               'tests/test_exact_artifact_sbom_attestation_contract.py',
               'tests/test_verify_exact_artifact_sbom_handoff.py',
           }
@@ -138,7 +183,7 @@ jobs:
                       'Accept': 'application/vnd.github+json',
                       'Authorization': f'Bearer {token}',
                       'X-GitHub-Api-Version': '2022-11-28',
-                      'User-Agent': 'cwl-pr797-trigger-repair',
+                      'User-Agent': 'cwl-pr797-final-repair',
                   },
               )
               with urllib.request.urlopen(req, timeout=60) as response:
@@ -174,7 +219,7 @@ jobs:
               'POST',
               '/git/commits',
               {
-                  'message': 'test: repair exact artifact handoff contracts',
+                  'message': 'test: complete exact artifact handoff coverage',
                   'tree': tree['sha'],
                   'parents': [parent_sha],
               },
@@ -197,7 +242,7 @@ jobs:
       - name: Upload repair receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
-          name: pr797-trigger-repair
+          name: pr797-final-repair
           path: ${{ runner.temp }}/pr797-trigger-receipt.txt
           if-no-files-found: error
           retention-days: 5
