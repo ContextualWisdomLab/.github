@@ -25,6 +25,8 @@ jobs:
       github.ref == 'refs/heads/fix/sandboxed-evidence-bounds-main'
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -90,6 +92,21 @@ jobs:
           bash "${RUNNER_TEMP}/build.sh" | tee "${RUNNER_TEMP}/pr788-materialization-receipt.txt"
           grep -E '^MATERIALIZATION_COMMIT_SHA=[0-9a-f]{40}$' \
             "${RUNNER_TEMP}/pr788-materialization-receipt.txt"
+
+      - name: Publish exact-head materialization pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          commit_sha="$(sed -n 's/^MATERIALIZATION_COMMIT_SHA=//p' "${RUNNER_TEMP}/pr788-materialization-receipt.txt")"
+          test "${#commit_sha}" -eq 40
+          case "$commit_sha" in (*[!0-9a-f]*) exit 1;; esac
+          body="PR788_MATERIALIZATION_PARENT_SHA=${EXPECTED_HEAD}%0APR788_MATERIALIZATION_COMMIT_SHA=${commit_sha}"
+          gh api \
+            --method POST \
+            repos/ContextualWisdomLab/.github/issues/788/comments \
+            -f "body=${body}"
 
       - name: Upload exact-head materialization receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
