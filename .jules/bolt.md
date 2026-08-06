@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2024-05-19 - Pre-compile regex patterns to optimize deep label-scanning loops
+**Learning:** Found a codebase-specific anti-pattern in `scripts/ci/opencode_review_normalize_output.py` where deep label-scanning loops over long review texts were redundantly recompiling regexes for verification labels inside the `label_matches` inner function. This caused measurable overhead in the CI review script.
+**Action:** When performing deep text inspection using repetitive substring or pattern matching across a known set of keys or labels, pre-compile the regex objects at the module level and reuse them to avoid compilation overhead.
