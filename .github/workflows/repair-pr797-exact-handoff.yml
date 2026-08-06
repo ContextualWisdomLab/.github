@@ -1,11 +1,12 @@
 name: Repair PR 797 exact handoff contracts
+run-name: Repair PR 797 exact handoff at ${{ github.sha }}
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
-    types:
-      - synchronize
+      - release/exact-artifact-sbom-attestation
+    paths:
+      - .github/workflows/repair-pr797-exact-handoff.yml
 
 permissions:
   contents: read
@@ -21,49 +22,50 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.event.pull_request.number == 797 &&
-      github.event.pull_request.head.ref == 'release/exact-artifact-sbom-attestation'
+      github.ref == 'refs/heads/release/exact-artifact-sbom-attestation'
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
 
-      - name: Check out exact pull-request head
+      - name: Check out exact trigger head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Apply two reviewed test-contract repairs
+      - name: Apply the two reviewed test-contract repairs
         env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_HEAD: ${{ github.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 - <<'PY'
           from pathlib import Path
 
-          replacements = {
-              Path('tests/test_exact_artifact_sbom_attestation_contract.py'): (
-                  '    assert "${{ github.run_id }}" in intake\n',
-                  '    assert "GITHUB_RUN_ID" in intake\n',
-              ),
-              Path('tests/test_verify_exact_artifact_sbom_handoff.py'): (
-                  '    root.mkdir()\n',
-                  '    root.mkdir(parents=True)\n',
-              ),
-          }
-          for path, (old, new) in replacements.items():
-              source = path.read_text(encoding='utf-8')
-              if source.count(old) != 1:
-                  raise SystemExit(f'{path}: expected exactly one repair anchor')
-              path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          contract = Path('tests/test_exact_artifact_sbom_attestation_contract.py')
+          source = contract.read_text(encoding='utf-8')
+          old = '    assert "' + '$' + '{{ github.run_id }}" in intake\n'
+          new = '    assert "GITHUB_RUN_ID" in intake\n'
+          if source.count(old) != 1:
+              raise SystemExit('exact artifact contract: expected one run-ID repair anchor')
+          contract.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          hostile = Path('tests/test_verify_exact_artifact_sbom_handoff.py')
+          source = hostile.read_text(encoding='utf-8')
+          old = '    root.mkdir()\n'
+          new = '    root.mkdir(parents=True)\n'
+          if source.count(old) != 1:
+              raise SystemExit('handoff verifier tests: expected one nested-root repair anchor')
+          hostile.write_text(source.replace(old, new, 1), encoding='utf-8')
           PY
           git diff --check
 
@@ -75,7 +77,9 @@ jobs:
           cache-dependency-path: requirements-opencode-review-ci-hashes.txt
 
       - name: Install exact hash-locked quality tooling
-        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
 
       - name: Verify exact contract and complete verifier coverage
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -95,26 +99,100 @@ jobs:
             tests/test_verify_exact_artifact_sbom_handoff.py
           git diff --check
 
-      - name: Publish verified test-only repair
+      - name: Build immutable verified repair commit object
         env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          API_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
           HEAD_BRANCH: release/exact-artifact-sbom-attestation
-          PUSH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
           test "$remote_head" = "$EXPECTED_HEAD"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            tests/test_exact_artifact_sbom_attestation_contract.py \
-            tests/test_verify_exact_artifact_sbom_handoff.py
-          git diff --cached --check
-          git diff --cached --quiet && { echo "No verified repair generated" >&2; exit 1; }
-          git commit -m "test: repair exact artifact handoff contracts"
-          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
-          echo "::add-mask::$auth_header"
-          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
-            origin "HEAD:refs/heads/${HEAD_BRANCH}"
+          python3 - <<'PY' | tee "${RUNNER_TEMP}/pr797-repair-receipt.txt"
+          import base64
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repository = 'ContextualWisdomLab/.github'
+          parent_sha = os.environ['EXPECTED_HEAD']
+          token = os.environ['API_TOKEN']
+          api_root = f'https://api.github.com/repos/{repository}'
+
+          def request(method, endpoint, payload=None):
+              data = None if payload is None else json.dumps(payload).encode('utf-8')
+              req = urllib.request.Request(
+                  api_root + endpoint,
+                  data=data,
+                  method=method,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'cwl-pr797-repair',
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+
+          parent = request('GET', f'/git/commits/{parent_sha}')
+          tree_entries = []
+          for path in (
+              'tests/test_exact_artifact_sbom_attestation_contract.py',
+              'tests/test_verify_exact_artifact_sbom_handoff.py',
+          ):
+              encoded = base64.b64encode(Path(path).read_bytes()).decode('ascii')
+              blob = request('POST', '/git/blobs', {'content': encoded, 'encoding': 'base64'})
+              tree_entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+              print(f"BLOB {blob['sha']} {path}")
+          tree_entries.append(
+              {
+                  'path': '.github/workflows/repair-pr797-exact-handoff.yml',
+                  'mode': '100644',
+                  'type': 'blob',
+                  'sha': None,
+              }
+          )
+          tree = request(
+              'POST',
+              '/git/trees',
+              {'base_tree': parent['tree']['sha'], 'tree': tree_entries},
+          )
+          commit = request(
+              'POST',
+              '/git/commits',
+              {
+                  'message': 'test: repair exact artifact handoff contracts',
+                  'tree': tree['sha'],
+                  'parents': [parent_sha],
+              },
+          )
+          print(f"PR797_REPAIR_PARENT_SHA={parent_sha}")
+          print(f"PR797_REPAIR_TREE_SHA={tree['sha']}")
+          print(f"PR797_REPAIR_COMMIT_SHA={commit['sha']}")
+          PY
+
+      - name: Publish exact-head repair pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          commit_sha="$(sed -n 's/^PR797_REPAIR_COMMIT_SHA=//p' "${RUNNER_TEMP}/pr797-repair-receipt.txt")"
+          test "${#commit_sha}" -eq 40
+          case "$commit_sha" in (*[!0-9a-f]*) exit 1;; esac
+          body="PR797_REPAIR_PARENT_SHA=${EXPECTED_HEAD}%0APR797_REPAIR_COMMIT_SHA=${commit_sha}"
+          gh api \
+            --method POST \
+            repos/ContextualWisdomLab/.github/issues/797/comments \
+            -f "body=${body}"
+
+      - name: Upload exact-head repair receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: pr797-exact-head-repair
+          path: ${{ runner.temp }}/pr797-repair-receipt.txt
+          if-no-files-found: error
+          retention-days: 5
