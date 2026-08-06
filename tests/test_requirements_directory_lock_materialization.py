@@ -62,3 +62,30 @@ def test_materializes_hash_pinned_requirements_directory_lock(
     assert (output / "requirements-000.txt").read_text(encoding="utf-8").startswith(
         "numpy==2.5.1"
     )
+
+
+def test_rejects_global_hash_directive_with_unpinned_requirement(
+    tmp_path: Path,
+) -> None:
+    """A global directive cannot make an unpinned direct-child lock trusted."""
+    repo = tmp_path / "repo"
+    requirements_dir = repo / "requirements"
+    requirements_dir.mkdir(parents=True)
+    _git(repo, "init")
+    _git(repo, "config", "user.name", "Test")
+    _git(repo, "config", "user.email", "test@example.invalid")
+
+    (requirements_dir / "ci.txt").write_text(
+        "--require-hashes\ndemo==1\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert manifest == []
+    assert not materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert (output / "manifest.json").read_text(encoding="utf-8") == "[]\n"
