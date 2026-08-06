@@ -15,6 +15,8 @@ on:
       - "tests/test_opencode_llvm_coverage_current_main.py"
       - "docs/doctoring/opencode-llvm-coverage-toolchain.md"
       - "CHANGELOG.md"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
 
 permissions:
   contents: read
@@ -75,3 +77,57 @@ jobs:
           python3 -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
           git diff --check
           test -z "$(git status --short)"
+
+  full-repository-quality:
+    name: Full repository test, coverage, and docstring gate
+    needs: exact-head-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Refuse stale or merge-tree evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --short)"
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked repository quality tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run complete central test and branch coverage gate
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+
+      - name: Enforce complete production docstrings
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: python -m interrogate --fail-under 100 scripts/ci
+
+      - name: Compile production and every repository test
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m compileall -q scripts/ci tests
+          git diff --check
