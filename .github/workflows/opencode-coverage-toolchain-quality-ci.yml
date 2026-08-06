@@ -13,7 +13,9 @@ on:
       - ".github/workflows/opencode-review-dispatch.yml"
       - ".github/workflows/opencode-coverage-toolchain-quality-ci.yml"
       - "tests/test_opencode_llvm_coverage_current_main.py"
+      - "tests/test_opencode_rust_coverage_toolchain_contract.py"
       - "docs/doctoring/opencode-llvm-coverage-toolchain.md"
+      - "docs/doctoring/rust-llvm-coverage-toolchain.md"
       - "CHANGELOG.md"
       - "requirements-opencode-review-ci-hashes.txt"
       - "pyproject.toml"
@@ -56,25 +58,36 @@ jobs:
           import importlib.util
           from pathlib import Path
 
-          test_path = Path("tests/test_opencode_llvm_coverage_current_main.py")
-          spec = importlib.util.spec_from_file_location("opencode_toolchain_contract", test_path)
-          if spec is None or spec.loader is None:
-              raise SystemExit("unable to load the OpenCode toolchain contract module")
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-
-          tests = sorted(
-              name
-              for name in vars(module)
-              if name.startswith("test_") and callable(getattr(module, name))
+          contract_paths = (
+              Path("tests/test_opencode_llvm_coverage_current_main.py"),
+              Path("tests/test_opencode_rust_coverage_toolchain_contract.py"),
           )
-          if not tests:
-              raise SystemExit("no OpenCode toolchain contract tests were discovered")
-          for test_name in tests:
-              getattr(module, test_name)()
-              print(f"PASS {test_name}")
+          for test_path in contract_paths:
+              module_name = f"opencode_toolchain_contract_{test_path.stem}"
+              spec = importlib.util.spec_from_file_location(module_name, test_path)
+              if spec is None or spec.loader is None:
+                  raise SystemExit(
+                      f"unable to load OpenCode toolchain contract: {test_path}"
+                  )
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+
+              tests = sorted(
+                  name
+                  for name in vars(module)
+                  if name.startswith("test_") and callable(getattr(module, name))
+              )
+              if not tests:
+                  raise SystemExit(
+                      f"no OpenCode toolchain contract tests discovered: {test_path}"
+                  )
+              for test_name in tests:
+                  getattr(module, test_name)()
+                  print(f"PASS {test_path}:{test_name}")
           PY
-          python3 -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
+          python3 -m compileall -q \
+            tests/test_opencode_llvm_coverage_current_main.py \
+            tests/test_opencode_rust_coverage_toolchain_contract.py
           git diff --check
           test -z "$(git status --short)"
 
