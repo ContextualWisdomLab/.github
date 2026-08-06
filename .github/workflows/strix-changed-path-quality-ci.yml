@@ -5,9 +5,10 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/strix-changed-path-quality-ci.yml"
+      - "CHANGELOG.md"
+      - "docs/doctoring/strix-legal-git-paths.md"
       - "scripts/ci/strix_quick_gate.sh"
       - "tests/test_strix_changed_path_policy.py"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,11 +34,24 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Install exact test runner dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        run: >-
+          python -m pip install --only-binary=:all:
+          coverage==7.15.2
+          iniconfig==2.1.0
+          packaging==26.2
+          pluggy==1.6.0
+          pygments==2.20.0
+          pytest==9.1.1
+
       - name: Verify exact-head path policy and syntax
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          python -m unittest -v tests/test_strix_changed_path_policy.py
+          python -m coverage run -m pytest tests -q
           python -m compileall -q tests/test_strix_changed_path_policy.py
           bash -n scripts/ci/strix_quick_gate.sh
           git diff --exit-code
