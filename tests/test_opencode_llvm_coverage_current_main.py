@@ -67,6 +67,26 @@ def test_opencode_toolchain_quality_workflow_is_exact_head_bound_and_offline():
     assert "uv sync" not in fast_job
 
 
+def test_opencode_toolchain_quality_tracks_every_llvm_contract_surface():
+    """Require every LLVM contract and doctoring file to trigger exact-head quality."""
+    workflow = _QUALITY_WORKFLOW.read_text(encoding="utf-8")
+    required_path_entries = (
+        '      - "tests/test_opencode_llvm_coverage_current_main.py"',
+        '      - "tests/test_opencode_rust_coverage_toolchain_contract.py"',
+        '      - "docs/doctoring/opencode-llvm-coverage-toolchain.md"',
+        '      - "docs/doctoring/rust-llvm-coverage-toolchain.md"',
+    )
+
+    for path_entry in required_path_entries:
+        assert path_entry in workflow
+
+    start = workflow.index("  exact-head-contract:")
+    end = workflow.index("  full-repository-quality:", start)
+    fast_job = workflow[start:end]
+    assert 'Path("tests/test_opencode_llvm_coverage_current_main.py")' in fast_job
+    assert 'Path("tests/test_opencode_rust_coverage_toolchain_contract.py")' in fast_job
+
+
 def test_opencode_toolchain_quality_runs_full_hash_locked_repository_suite():
     """Require a separate exact-head full-suite job with 100% quality gates."""
     workflow = _QUALITY_WORKFLOW.read_text(encoding="utf-8")
