@@ -103,9 +103,16 @@ NEW_STEP_REPLACEMENT = '''    step_matches = [
     write(path, content.replace(*step_matches[0], 1))
 '''
 
+RAW_TEST_HEADINGS = (
+    '"""Coverage-only regressions for the review-fix scheduler."""',
+    '"""Static contracts for downstream review-agent invocation idempotency."""',
+    '"""Review-driven runtime regressions for the agent mention control plane."""',
+    '"""Review-driven pagination and failure-isolation regressions."""',
+)
+
 
 def main() -> int:
-    """Patch matching and nested regex escaping deterministically."""
+    """Patch matching, generated-test literals, and regex escaping."""
 
     content = TARGET.read_text(encoding="utf-8")
     replacements = (
@@ -133,6 +140,12 @@ def main() -> int:
     for old, new, error in replacements:
         if content.count(old) != 1:
             raise RuntimeError(error)
+        content = content.replace(old, new, 1)
+    for heading in RAW_TEST_HEADINGS:
+        old = "dedent(\n            '''\n            " + heading
+        new = "dedent(\n            r'''\n            " + heading
+        if content.count(old) != 1:
+            raise RuntimeError(f"generated test block no longer matches: {heading}")
         content = content.replace(old, new, 1)
     for overescaped, corrected in (
         (r"\\\\d", r"\\d"),
