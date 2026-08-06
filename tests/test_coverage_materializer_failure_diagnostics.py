@@ -118,8 +118,8 @@ def test_materializer_failure_summary_redacts_mixed_credentials(
 
     published = output_file.read_text(encoding="utf-8")
     assert "https://&lt;redacted&gt;@example.invalid/a.tgz" in published
-    assert "Authorization: Bearer &lt;redacted&gt;" in published
-    assert "TOKEN=&lt;redacted&gt;" in published
+    assert "Authorization: &lt;redacted&gt;" in published
+    assert "TOKEN=" not in published
     for secret_value in secret_values:
         assert secret_value not in published
 
