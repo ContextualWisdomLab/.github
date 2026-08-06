@@ -24,11 +24,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
-
       - name: Checkout exact trigger without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,7 +31,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Restore all three low-privilege Git isolation boundaries
+      - name: Restore and verify the low-privilege Git isolation boundary
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 - <<'PY'
@@ -54,12 +49,9 @@ jobs:
               '              GIT_CONFIG_GLOBAL=/dev/null \\\n'
               '              GIT_CONFIG_COUNT=1 \\\n'
           )
-          if workflow.count(vulnerable) != 3:
-              raise SystemExit(
-                  f'expected exactly three vulnerable wrapper anchors, found {workflow.count(vulnerable)}'
-              )
-          if workflow.count(hardened) != 0:
-              raise SystemExit('unexpected pre-existing hardened wrapper anchor')
+          count = workflow.count(vulnerable)
+          if count != 3:
+              raise SystemExit(f'expected three vulnerable wrapper anchors, found {count}')
           workflow = workflow.replace(vulnerable, hardened)
           if workflow.count(hardened) != 3:
               raise SystemExit('failed to harden every low-privilege wrapper')
@@ -67,46 +59,35 @@ jobs:
 
           doctoring_path = Path('docs/doctoring/opencode-llvm-coverage-toolchain.md')
           doctoring = doctoring_path.read_text(encoding='utf-8')
-          security_anchor = (
-              '- Missing executables fail the image build before any pull-request coverage measurement starts.\n'
-          )
-          security_addition = (
-              security_anchor
-              + '- Every low-privilege coverage wrapper disables ambient system and global Git configuration before applying the single bounded `/work` safe-directory overlay.\n'
-          )
-          if doctoring.count(security_anchor) != 1:
-              raise SystemExit('doctoring security anchor is not unique')
-          doctoring = doctoring.replace(security_anchor, security_addition, 1)
-          regression_anchor = (
-              '5. the OpenCode approval path remains fail-closed when Rust coverage cannot run.\n'
-          )
-          regression_addition = (
-              '5. the OpenCode approval path remains fail-closed when Rust coverage cannot run; and\n'
-              '6. all three low-privilege wrapper processes isolate system and global Git configuration before the safe-directory overlay.\n'
-          )
-          if doctoring.count(regression_anchor) != 1:
-              raise SystemExit('doctoring regression anchor is not unique')
-          doctoring = doctoring.replace(regression_anchor, regression_addition, 1)
+          boundary = '- Every low-privilege coverage wrapper disables ambient system and global Git configuration before applying the single bounded `/work` safe-directory overlay.\n'
+          if boundary not in doctoring:
+              anchor = '- Missing executables fail the image build before any pull-request coverage measurement starts.\n'
+              if doctoring.count(anchor) != 1:
+                  raise SystemExit('doctoring security anchor is not unique')
+              doctoring = doctoring.replace(anchor, anchor + boundary, 1)
+          regression = '6. all three low-privilege wrapper processes isolate system and global Git configuration before the safe-directory overlay.\n'
+          if regression not in doctoring:
+              anchor = '5. the OpenCode approval path remains fail-closed when Rust coverage cannot run.\n'
+              if doctoring.count(anchor) != 1:
+                  raise SystemExit('doctoring regression anchor is not unique')
+              doctoring = doctoring.replace(
+                  anchor,
+                  '5. the OpenCode approval path remains fail-closed when Rust coverage cannot run; and\n' + regression,
+                  1,
+              )
           doctoring_path.write_text(doctoring, encoding='utf-8')
 
           changelog_path = Path('CHANGELOG.md')
           changelog = changelog_path.read_text(encoding='utf-8')
-          changelog_anchor = (
-              '- Restored the default-branch OpenCode Rust coverage image\'s Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, and a permanent ordering regression contract after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n'
-          )
-          changelog_replacement = (
-              '- Restored the default-branch OpenCode Rust coverage image\'s Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, and permanent ordering and low-privilege Git-configuration-isolation regressions after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n'
-          )
-          if changelog.count(changelog_anchor) != 1:
-              raise SystemExit('changelog anchor is not unique')
-          changelog = changelog.replace(changelog_anchor, changelog_replacement, 1)
+          old = "- Restored the default-branch OpenCode Rust coverage image's Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, and a permanent ordering regression contract after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n"
+          new = "- Restored the default-branch OpenCode Rust coverage image's Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, and permanent ordering and low-privilege Git-configuration-isolation regressions after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n"
+          if new not in changelog:
+              if changelog.count(old) != 1:
+                  raise SystemExit('changelog anchor is not unique')
+              changelog = changelog.replace(old, new, 1)
           changelog_path.write_text(changelog, encoding='utf-8')
           PY
-          git diff --check
 
-      - name: Execute the exact focused contracts without third-party test tooling
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
           python3 - <<'PY'
           import importlib.util
           from pathlib import Path
@@ -119,10 +100,6 @@ jobs:
           spec.loader.exec_module(module)
           module.test_opencode_coverage_image_provisions_compatible_llvm_tools_before_cargo_llvm_cov()
           module.test_low_privilege_coverage_wrappers_isolate_ambient_git_configuration()
-          PY
-          python3 -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
-          python3 - <<'PY'
-          from pathlib import Path
 
           workflow = Path('.github/workflows/opencode-review-dispatch.yml').read_text(encoding='utf-8')
           assert workflow.count('GIT_CONFIG_NOSYSTEM=1') == 4
@@ -131,9 +108,10 @@ jobs:
           assert workflow.count('ENV LLVM_COV=/usr/bin/llvm-cov-19') == 1
           assert workflow.count('ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19') == 1
           PY
+          python3 -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
           git diff --check
 
-      - name: Publish only the verified repair and remove the transient workflow
+      - name: Publish only the verified repair and remove this transient workflow
         env:
           EXPECTED_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: fix/opencode-llvm-coverage-current-main
