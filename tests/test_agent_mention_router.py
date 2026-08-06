@@ -75,11 +75,11 @@ class FakeClient:
         self.calls: list[tuple[list[str], dict | None]] = []
 
     def request(self, args, *, input_payload=None):
-        """Record one request and return an empty run inventory for reads."""
+        """Record one request and return an empty artifact inventory for reads."""
 
         self.calls.append((list(args), input_payload))
-        if args[0].endswith("/runs"):
-            return {"workflow_runs": []}
+        if args[0].endswith("/actions/artifacts"):
+            return {"total_count": 0, "artifacts": []}
         return None
 
 
@@ -249,6 +249,7 @@ def test_dispatch_uses_central_events_and_acknowledges() -> None:
     )
     assert target.calls[0][1] == {"content": "eyes"}
     assert "cwl-agent-mention-receipt:91" in target.calls[1][1]["body"]
+    assert "exact-name Actions artifacts" in target.calls[1][1]["body"]
 
 
 def test_dispatch_rejects_unallowlisted_opencode_and_supports_dry_run(
