@@ -1,11 +1,11 @@
 name: Repair PR 794 Git isolation v3
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/opencode-llvm-coverage-current-main
-    paths:
-      - .github/workflows/repair-pr794-git-isolation-v3.yml
+      - main
+    types:
+      - synchronize
 
 permissions:
   contents: read
@@ -18,7 +18,8 @@ jobs:
   repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.ref == 'refs/heads/fix/opencode-llvm-coverage-current-main'
+      github.event.pull_request.number == 794 &&
+      github.event.pull_request.head.ref == 'fix/opencode-llvm-coverage-current-main'
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -29,10 +30,10 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout exact trigger without persisted credentials
+      - name: Checkout exact pull-request head without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -121,7 +122,7 @@ jobs:
 
       - name: Publish only the verified repair and remove this workflow
         env:
-          EXPECTED_HEAD: ${{ github.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           SOURCE_BRANCH: fix/opencode-llvm-coverage-current-main
           PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
