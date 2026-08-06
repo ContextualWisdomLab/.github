@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/finalize-pr787-review-findings.yml"
       - "scripts/ci/finalize_pr787_review_findings.py"
+      - "scripts/ci/repair_pr787_finalizer_source.py"
 
 concurrency:
   group: finalize-pr787-review-findings-${{ github.event.pull_request.number }}
@@ -25,9 +26,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
-      contents: read
+      contents: write
     env:
-      PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+      PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
       TARGET_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Harden runner
@@ -54,10 +55,12 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "$TARGET_HEAD_SHA"
+          python3 scripts/ci/repair_pr787_finalizer_source.py
           python3 scripts/ci/finalize_pr787_review_findings.py
           rm -f \
             .github/workflows/finalize-pr787-review-findings.yml \
-            scripts/ci/finalize_pr787_review_findings.py
+            scripts/ci/finalize_pr787_review_findings.py \
+            scripts/ci/repair_pr787_finalizer_source.py
       - name: Verify complete suite, focused coverage, docs, and syntax
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -82,6 +85,7 @@ jobs:
           git diff --check
           test ! -e .github/workflows/finalize-pr787-review-findings.yml
           test ! -e scripts/ci/finalize_pr787_review_findings.py
+          test ! -e scripts/ci/repair_pr787_finalizer_source.py
       - name: Commit and push verified final state
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
