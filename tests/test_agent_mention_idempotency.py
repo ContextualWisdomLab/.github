@@ -40,25 +40,40 @@ def request(module: ModuleType):
     )
 
 
-class RunAwareClient:
-    """Fake GitHub client with workflow-run inventory and fault injection."""
+class ArtifactAwareClient:
+    """Fake GitHub client with exact artifact inventory and fault injection."""
 
-    def __init__(self, *, runs=None, fail_event=None, fail_target_call=None) -> None:
+    def __init__(
+        self,
+        *,
+        artifacts=None,
+        fail_event=None,
+        fail_target_call=None,
+    ) -> None:
         """Initialize bounded responses and optional deterministic failures."""
 
-        self.runs = runs or {}
+        self.artifacts = artifacts or {}
         self.fail_event = fail_event
         self.fail_target_call = fail_target_call
         self.calls: list[tuple[list[str], dict | None]] = []
 
     def request(self, args, *, input_payload=None):
-        """Return workflow runs, record mutations, or raise at a selected boundary."""
+        """Return exact artifacts, record mutations, or raise at one boundary."""
 
         call_number = len(self.calls) + 1
-        self.calls.append((list(args), input_payload))
+        args = list(args)
+        self.calls.append((args, input_payload))
         endpoint = args[0]
-        if endpoint.endswith("/runs"):
-            return self.runs.get(endpoint, {"workflow_runs": []})
+        if endpoint.endswith("/actions/artifacts"):
+            name = next(
+                value.split("=", 1)[1]
+                for value in args
+                if value.startswith("name=")
+            )
+            return self.artifacts.get(
+                name,
+                {"total_count": 0, "artifacts": []},
+            )
         if endpoint.endswith("/dispatches"):
             event_type = (input_payload or {}).get("event_type")
             if event_type == self.fail_event:
@@ -68,34 +83,30 @@ class RunAwareClient:
         return None
 
 
-def workflow_run(module: ModuleType, mention_request, agent: str, run_id: int) -> dict:
-    """Build one durable central workflow-run record for an exact agent request."""
+def artifact(module: ModuleType, mention_request, agent: str, artifact_id: int) -> dict:
+    """Build one live exact-name artifact record for an agent request."""
 
     return {
-        "id": run_id,
-        "event": "repository_dispatch",
-        "status": "completed",
-        "conclusion": "failure",
-        "display_title": (
-            "Required review "
-            f"{module.agent_invocation_marker(mention_request, agent)}"
-        ),
+        "id": artifact_id,
+        "name": module.agent_ledger_artifact_name(mention_request, agent),
+        "expired": False,
     }
 
 
-def run_inventory(module: ModuleType, mention_request, *agents: str) -> dict:
-    """Return endpoint-keyed workflow-run responses for selected agents."""
+def artifact_inventory(module: ModuleType, mention_request, *agents: str) -> dict:
+    """Return artifact-name-keyed responses for selected agents."""
 
     inventory = {}
     for index, agent in enumerate(agents, start=1):
-        endpoint = module.AGENT_WORKFLOW_RUN_ENDPOINTS[agent]
-        inventory[endpoint] = {
-            "workflow_runs": [workflow_run(module, mention_request, agent, index)]
+        name = module.agent_ledger_artifact_name(mention_request, agent)
+        inventory[name] = {
+            "total_count": 1,
+            "artifacts": [artifact(module, mention_request, agent, index)],
         }
     return inventory
 
 
-def dispatch_events(client: RunAwareClient) -> list[str]:
+def dispatch_events(client: ArtifactAwareClient) -> list[str]:
     """Return repository-dispatch event types recorded by one fake client."""
 
     return [
@@ -106,7 +117,7 @@ def dispatch_events(client: RunAwareClient) -> list[str]:
 
 
 def test_invocation_key_binds_complete_request_identity() -> None:
-    """The opaque key changes with agent, head, PR, repository, or source comment."""
+    """The opaque key changes with agent, head, PR, repository, or comment."""
 
     module = load_module()
     original = request(module)
@@ -117,6 +128,9 @@ def test_invocation_key_binds_complete_request_identity() -> None:
     assert module.agent_invocation_marker(original, "cwl-noema-review") == (
         f"[cwl-agent-invocation:{noema_key}]"
     )
+    assert module.agent_ledger_artifact_name(
+        original, "cwl-noema-review"
+    ).endswith(noema_key)
 
     changed_values = (
         module.MentionRequest(
@@ -191,75 +205,85 @@ def test_payloads_carry_exact_agent_invocation_identity() -> None:
         assert payload["source_comment_id"] == mention_request.comment_id
 
 
-def test_existing_workflow_runs_are_per_agent_durable_evidence() -> None:
-    """Queued, running, completed, or failed exact-key runs suppress only that agent."""
+def test_existing_artifacts_are_per_agent_durable_evidence() -> None:
+    """A live exact-name artifact suppresses only its matching agent."""
 
     module = load_module()
     mention_request = request(module)
-    client = RunAwareClient(
-        runs=run_inventory(module, mention_request, "cwl-noema-review")
+    client = ArtifactAwareClient(
+        artifacts=artifact_inventory(module, mention_request, "cwl-noema-review")
     )
     assert module.dispatched_agents(mention_request, client) == frozenset(
         {"cwl-noema-review"}
     )
 
-    forged = {
-        module.AGENT_WORKFLOW_RUN_ENDPOINTS["cwl-noema-review"]: {
-            "workflow_runs": [
-                {
-                    **workflow_run(
-                        module, mention_request, "cwl-noema-review", 2
-                    ),
-                    "display_title": "forged unrelated title",
+    with pytest.raises(ValueError, match="artifact"):
+        module.dispatched_agents(
+            mention_request,
+            ArtifactAwareClient(
+                artifacts={
+                    module.agent_ledger_artifact_name(
+                        mention_request, "cwl-noema-review"
+                    ): {"total_count": 1, "artifacts": "not-a-list"}
                 }
-            ]
-        }
-    }
-    assert module.dispatched_agents(
-        mention_request, RunAwareClient(runs=forged)
-    ) == frozenset()
-
-    malformed = RunAwareClient(
-        runs={
-            module.AGENT_WORKFLOW_RUN_ENDPOINTS["cwl-noema-review"]: {
-                "workflow_runs": "not-a-list"
-            }
-        }
-    )
-    with pytest.raises(ValueError, match="workflow-run"):
-        module.dispatched_agents(mention_request, malformed)
+            ),
+        )
 
 
-def test_workflow_run_inventory_edge_cases_fail_closed(monkeypatch) -> None:
-    """Empty, malformed, oversized, and unsupported run queries fail safely."""
+def test_artifact_inventory_edge_cases_fail_closed() -> None:
+    """Malformed, inconsistent, and unsupported evidence fails safely."""
 
     module = load_module()
     mention_request = request(module)
+    expected_name = module.agent_ledger_artifact_name(
+        mention_request, "cwl-noema-review"
+    )
+    malformed = (
+        None,
+        [],
+        {"total_count": True, "artifacts": []},
+        {"total_count": -1, "artifacts": []},
+        {"total_count": 0, "artifacts": "bad"},
+        {"total_count": 1, "artifacts": []},
+        {"total_count": 1, "artifacts": ["bad"]},
+        {"total_count": 1, "artifacts": [{"id": True, "name": expected_name, "expired": False}]},
+        {"total_count": 1, "artifacts": [{"id": 0, "name": expected_name, "expired": False}]},
+        {"total_count": 1, "artifacts": [{"id": 1, "name": "wrong", "expired": False}]},
+        {"total_count": 1, "artifacts": [{"id": 1, "name": expected_name, "expired": 0}]},
+    )
+    for value in malformed:
+        with pytest.raises(ValueError, match="artifact"):
+            module._artifact_records(value, expected_name=expected_name)
 
-    assert module._workflow_run_records(None) == ()
-    for malformed in ([], ["not-an-object"]):
-        with pytest.raises(ValueError, match="object pages"):
-            module._workflow_run_records(malformed)
-
-    monkeypatch.setattr(module, "MAX_WORKFLOW_RUN_RECORDS", 0)
-    with pytest.raises(ValueError, match="bounded record limit"):
-        module._workflow_run_records({"workflow_runs": [{}]})
+    assert module._artifact_records(
+        {"total_count": 0, "artifacts": []},
+        expected_name=expected_name,
+    ) == ()
+    assert module._artifact_records(
+        {
+            "total_count": 1,
+            "artifacts": [
+                {"id": 1, "name": expected_name, "expired": True}
+            ],
+        },
+        expected_name=expected_name,
+    ) == ()
 
     with pytest.raises(ValueError, match="unsupported agent"):
         module.dispatched_agents(
             mention_request,
-            RunAwareClient(),
+            ArtifactAwareClient(),
             agents=("unknown-agent",),
         )
 
 
 def test_partial_failure_retries_only_the_missing_agent() -> None:
-    """A later dispatch failure never repeats an already materialized agent run."""
+    """A later dispatch failure never repeats an already claimed agent."""
 
     module = load_module()
     mention_request = request(module)
-    target = RunAwareClient()
-    first = RunAwareClient(fail_event="agent-mention-opencode")
+    target = ArtifactAwareClient()
+    first = ArtifactAwareClient(fail_event="agent-mention-opencode")
 
     with pytest.raises(RuntimeError, match="agent-mention-opencode"):
         module.dispatch_request(
@@ -273,12 +297,16 @@ def test_partial_failure_retries_only_the_missing_agent() -> None:
         "agent-mention-opencode",
     ]
 
-    retry = RunAwareClient(
-        runs=run_inventory(module, mention_request, "cwl-noema-review")
+    retry = ArtifactAwareClient(
+        artifacts=artifact_inventory(
+            module,
+            mention_request,
+            "cwl-noema-review",
+        )
     )
     assert module.dispatch_request(
         mention_request,
-        target_client=RunAwareClient(),
+        target_client=ArtifactAwareClient(),
         dispatch_client=retry,
         opencode_allowlist=frozenset({mention_request.repository}),
     ) == ("@opencode-agent",)
@@ -290,8 +318,8 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
 
     module = load_module()
     mention_request = request(module)
-    central = RunAwareClient()
-    failing_target = RunAwareClient(fail_target_call=1)
+    central = ArtifactAwareClient()
+    failing_target = ArtifactAwareClient(fail_target_call=1)
     with pytest.raises(RuntimeError, match="target call"):
         module.dispatch_request(
             mention_request,
@@ -304,15 +332,15 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
         "agent-mention-opencode",
     ]
 
-    retry = RunAwareClient(
-        runs=run_inventory(
+    retry = ArtifactAwareClient(
+        artifacts=artifact_inventory(
             module,
             mention_request,
             "cwl-noema-review",
             "opencode-agent",
         )
     )
-    retry_target = RunAwareClient(fail_target_call=1)
+    retry_target = ArtifactAwareClient(fail_target_call=1)
     assert module.dispatch_request(
         mention_request,
         target_client=retry_target,
@@ -321,26 +349,3 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
     ) == ()
     assert dispatch_events(retry) == []
     assert retry_target.calls == []
-
-
-def test_exact_run_inventory_accepts_paginated_slurp_shape() -> None:
-    """The bounded parser handles gh --paginate --slurp pages deterministically."""
-
-    module = load_module()
-    mention_request = request(module)
-    endpoint = module.AGENT_WORKFLOW_RUN_ENDPOINTS["opencode-agent"]
-    client = RunAwareClient(
-        runs={
-            endpoint: [
-                {"workflow_runs": []},
-                {
-                    "workflow_runs": [
-                        workflow_run(module, mention_request, "opencode-agent", 9)
-                    ]
-                },
-            ]
-        }
-    )
-    assert module.dispatched_agents(mention_request, client) == frozenset(
-        {"opencode-agent"}
-    )
