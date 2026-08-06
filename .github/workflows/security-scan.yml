@@ -257,9 +257,11 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Checkout
+      - name: Checkout exact head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Check dependency review support
         id: dependency_review_support
@@ -311,9 +313,11 @@ jobs:
       security-events: write
       actions: read
     steps:
-      - name: Checkout
+      - name: Checkout exact head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
@@ -387,6 +391,8 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
           wait-for-processing: false
       - name: Report Trivy SARIF upload failure
         if: steps.upload_trivy_sarif.outcome == 'failure'
@@ -403,9 +409,11 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Checkout
+      - name: Checkout exact head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Run Scorecard
         uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
@@ -461,6 +469,8 @@ jobs:
         with:
           sarif_file: results.sarif
           category: scorecard
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
           wait-for-processing: false
       - name: Report Scorecard SARIF upload failure
         if: steps.upload_scorecard_sarif.outcome == 'failure'
