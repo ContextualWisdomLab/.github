@@ -54,7 +54,11 @@ def cutoff_timestamp(lookback_hours: int, *, now: datetime | None = None) -> str
     return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def flatten_pages(value: Any, *, collection_key: str | None = None) -> list[dict[str, Any]]:
+def flatten_pages(
+    value: Any,
+    *,
+    collection_key: str | None = None,
+) -> list[dict[str, Any]]:
     """Flatten ``gh api --paginate --slurp`` output into object records."""
 
     if value is None:
@@ -74,7 +78,9 @@ def flatten_pages(value: Any, *, collection_key: str | None = None) -> list[dict
         if not isinstance(collection, list):
             raise ValueError("paginated GitHub response is not a list")
         if not all(isinstance(record, dict) for record in collection):
-            raise ValueError("paginated GitHub response contains a non-object record")
+            raise ValueError(
+                "paginated GitHub response contains a non-object record"
+            )
         records.extend(collection)
     return records
 
@@ -201,7 +207,7 @@ def list_recent_pull_requests(
                 if reached_cutoff or len(pull_requests) < 100:
                     break
                 page += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - repository isolation boundary
             if on_error is None:
                 raise
             on_error(repository, exc)
@@ -259,7 +265,10 @@ def build_requests_for_pull_request(
     for comment in comments:
         event = {
             "repository": {"full_name": repository},
-            "issue": {"number": number, "pull_request": issue.get("pull_request")},
+            "issue": {
+                "number": number,
+                "pull_request": issue.get("pull_request"),
+            },
             "comment": comment,
             "pull_request": live_pull,
         }
@@ -296,7 +305,9 @@ def sweep(
 
         counters.failures += 1
         message = " ".join(str(error).split()) or error.__class__.__name__
-        print(f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}")
+        print(
+            f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
+        )
 
     for issue in list_recent_pull_requests(
         target_client,
@@ -312,7 +323,7 @@ def sweep(
                 issue=issue,
                 since=since,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - pull-request isolation boundary
             record_failure(issue_scope, exc)
             continue
         for request in requests:
@@ -326,7 +337,7 @@ def sweep(
                     dry_run=dry_run,
                     ledger_artifact_cache=ledger_artifact_cache,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - request isolation boundary
                 record_failure(request_scope, exc)
                 continue
             if not queued_agents:
@@ -364,7 +375,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     metrics = SweepMetrics()
     sweep(
-        target_client=GitHubClient(os.environ.get("TARGET_REPOSITORY_TOKEN", "")),
+        target_client=GitHubClient(
+            os.environ.get("TARGET_REPOSITORY_TOKEN", "")
+        ),
         dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
         organization=args.organization,
         repository_source=args.repository_source,
