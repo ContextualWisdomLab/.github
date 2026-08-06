@@ -167,15 +167,17 @@ def test_type_only_classifier_rejects_mixed_runtime_tails(tmp_path: Path) -> Non
         "export type InlineAlias = string; runAfterTypeAlias();\n"
         "export type MultilineAlias =\n"
         "  | 'left'\n"
-        "  | 'right'; runAfterMultilineType();\n",
+        "  | 'right'; runAfterMultilineType();\n"
+        "export type SemicolonlessAlias = string\n"
+        "runAfterSemicolonlessType();\n",
         encoding="utf-8",
     )
 
     assert gate.likely_runtime_lines(
         tmp_path,
         "src/mixed_types.ts",
-        set(range(1, 23)),
-    ) == [1, 2, 5, 8, 12, 14, 18, 19, 22]
+        set(range(1, 25)),
+    ) == [1, 2, 5, 8, 12, 14, 18, 19, 22, 23, 24]
 
 
 def test_type_only_classifier_fails_closed_on_lexical_edges(tmp_path: Path) -> None:
