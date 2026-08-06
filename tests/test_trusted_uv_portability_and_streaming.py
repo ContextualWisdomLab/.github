@@ -304,7 +304,12 @@ def test_trusted_uv_download_does_not_retry_malformed_urlerror_reason(
         materializer._download_trusted_uv_archive()
 
     assert "malformed" not in str(raised.value)
-    assert len(calls) == 1
+    assert calls == [
+        (
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+        )
+    ]
     assert sleeps == []
 
 
@@ -326,34 +331,6 @@ def test_trusted_uv_download_does_not_retry_unclassified_os_error(
         materializer._download_trusted_uv_archive()
 
     assert len(calls) == 1
-    assert sleeps == []
-
-
-def test_trusted_uv_download_does_not_retry_malformed_url_error_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A non-exception URL reason fails once without exposing untrusted text."""
-
-    calls: list[tuple[str, int]] = []
-    sleeps: list[float] = []
-    failure = urllib.error.URLError("malformed")
-    monkeypatch.setattr(
-        materializer.urllib.request,
-        "urlopen",
-        _scripted_urlopen([failure], calls),
-    )
-    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
-
-    with pytest.raises(RuntimeError) as exc_info:
-        materializer._download_trusted_uv_archive()
-
-    assert str(exc_info.value) == "trusted uv archive download failed: URLError"
-    assert calls == [
-        (
-            materializer.TRUSTED_UV_ARCHIVE_URL,
-            materializer.TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
-        )
-    ]
     assert sleeps == []
 
 
