@@ -39,3 +39,11 @@
 **Vulnerability:** Server-Side Request Forgery (SSRF)
 **Learning:** URL scheme validation (checking for `http://` or `https://`) and disabling HTTP redirects are not sufficient to prevent all forms of Server-Side Request Forgery. If an attacker can provide an arbitrary HTTP/HTTPS URL, they can point it to a private or loopback IP address (e.g. `http://127.0.0.1` or `http://10.0.0.1`), allowing them to scan or interact with internal services that the host environment can reach.
 **Prevention:** In addition to validating URL schemes, always resolve the hostname to its IP address and use the `ipaddress` module to verify that the IP is not private (`ip.is_private`) or a loopback (`ip.is_loopback`) address before making the request.
+## 2026-08-06 - Prevent Security Theater and SSRF Implementation Flaws
+**Vulnerability:** Security Theater / Incomplete SSRF Fix (TOCTOU, DNS Rebinding)
+**Learning:**
+1. Subprocess calls (`subprocess.run`, `subprocess.Popen`) default to `shell=False`. Modifying these to explicitly declare `shell=False` when it was already the default does not fix any actual vulnerabilities and is considered security theater.
+2. Attempting to fix SSRF by resolving a hostname to a single IPv4 address before a request is fatally flawed. It is vulnerable to DNS Rebinding (Time-Of-Check to Time-Of-Use, TOCTOU) because the actual HTTP client (e.g. `urllib.request`) will resolve the hostname again. Additionally, failing open on DNS errors or bypassing security checks based on test environment variables (`PYTEST_CURRENT_TEST`) in production code is unsafe.
+**Prevention:**
+1. Do not submit changes that merely state default parameters without changing behavior (like adding `shell=False` where it is already implicit), as this wastes review cycles and provides false confidence.
+2. Effective SSRF prevention must validate all resolved IP addresses, bind the actual HTTP connection directly to the validated IP, fail closed on resolution errors, and never include test-environment bypasses in production logic. Such changes must be test-driven and start from the `main` branch.
