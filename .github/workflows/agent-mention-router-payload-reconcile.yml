@@ -1,0 +1,127 @@
+name: Reconcile PR 787 Noema payload binding
+
+on:
+  push:
+    branches:
+      - feat/review-agent-mention-router-main
+    paths:
+      - .github/workflows/agent-mention-router-payload-reconcile.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr787-noema-payload-reconcile
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  reconcile:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/feat/review-agent-mention-router-main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact head without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply minimal reviewed production fix
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/agent_mention_router.py")
+          source = path.read_text(encoding="utf-8")
+          old = '''            "pr_head_sha": request.pull_request_head_sha,
+            "requested_agent": agent,
+'''
+          new = '''            "pr_head_sha": request.pull_request_head_sha,
+            "base_branch": request.pull_request_base_branch,
+            "requested_agent": agent,
+'''
+          if source.count(old) != 1:
+              raise SystemExit("expected one unbound Noema payload")
+          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Verify focused and complete quality contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/agent_mention_router.py
+              scripts/ci/agent_mention_sweep.py
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest -q \
+            tests/test_agent_mention_router.py \
+            tests/test_agent_mention_sweep.py \
+            tests/test_agent_mention_workflow_contract.py \
+            tests/test_agent_mention_idempotency.py \
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under=100 \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py
+          python -m compileall -q scripts/ci tests
+          git diff --check
+
+      - name: Remove temporary workflow and publish exact repair
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: feat/review-agent-mention-router-main
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          rm -f .github/workflows/agent-mention-router-payload-reconcile.yml
+          git add -A
+          git diff --cached --check
+          changed="$(git diff --cached --name-only)"
+          printf '%s\n' "$changed"
+          test "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l)" -eq 2
+          printf '%s\n' "$changed" | grep -Fxq scripts/ci/agent_mention_router.py
+          printf '%s\n' "$changed" | grep -Fxq .github/workflows/agent-mention-router-payload-reconcile.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(automation): bind Noema payload to base branch"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
