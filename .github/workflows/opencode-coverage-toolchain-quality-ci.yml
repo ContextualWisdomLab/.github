@@ -111,9 +111,7 @@ jobs:
 
       - name: Install hash-locked repository quality tooling
         shell: bash --noprofile --norc -e -o pipefail {0}
-        run: >-
-          python -m pip install --disable-pip-version-check --require-hashes
-          -r requirements-opencode-review-ci-hashes.txt
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
       - name: Run complete central test and branch coverage gate
         shell: bash --noprofile --norc -e -o pipefail {0}
