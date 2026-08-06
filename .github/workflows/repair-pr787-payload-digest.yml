@@ -1,0 +1,251 @@
+name: Repair PR 787 payload-bound invocation keys
+
+on:
+  push:
+    branches:
+      - feat/review-agent-mention-router-main
+    paths:
+      - .github/workflows/repair-pr787-payload-digest.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr787-payload-digest-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair-and-verify:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.ref == 'refs/heads/feat/review-agent-mention-router-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair trigger
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked test tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply payload-bound invocation repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          router_path = Path("scripts/ci/agent_mention_router.py")
+          noema_path = Path(".github/workflows/agent-mention-noema-dispatch.yml")
+          opencode_path = Path(".github/workflows/agent-mention-opencode-dispatch.yml")
+
+          router = router_path.read_text(encoding="utf-8")
+          router_old = '''            "pr_head_sha": request.pull_request_head_sha,
+                      "requested_agent": agent,
+          '''
+          router_new = '''            "pr_head_sha": request.pull_request_head_sha,
+                      "base_branch": request.pull_request_base_branch,
+                      "requested_agent": agent,
+          '''
+          if router.count(router_old) != 1:
+              raise SystemExit("expected exactly one Noema router payload insertion point")
+          router_path.write_text(router.replace(router_old, router_new), encoding="utf-8")
+
+          canonical_check = '''          python3 - <<'PYTHON'
+                    import hashlib
+                    import hmac
+                    import json
+                    import os
+
+                    canonical = json.dumps(
+                        {
+                            "actor": os.environ["REQUESTED_BY"],
+                            "agent": os.environ["REQUESTED_AGENT"],
+                            "base_branch": os.environ["BASE_BRANCH"],
+                            "comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
+                            "head_sha": os.environ["PR_HEAD_SHA"],
+                            "pr_number": int(os.environ["PR_NUMBER"]),
+                            "repository": os.environ["TARGET_REPOSITORY"],
+                        },
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    expected = hashlib.sha256(canonical).hexdigest()
+                    if not hmac.compare_digest(expected, os.environ["INVOCATION_KEY"]):
+                        raise SystemExit("invocation key does not match canonical payload")
+                    PYTHON
+
+          '''
+
+          def scope_wrapper_permissions(text: str) -> str:
+              old = '''permissions:
+            actions: read
+            contents: write
+
+          jobs:
+            validate-and-forward:
+              if: github.repository == 'ContextualWisdomLab/.github'
+              runs-on: ubuntu-24.04
+              timeout-minutes: 5
+          '''
+              new = '''permissions:
+            contents: read
+
+          jobs:
+            validate-and-forward:
+              if: github.repository == 'ContextualWisdomLab/.github'
+              runs-on: ubuntu-24.04
+              timeout-minutes: 5
+              permissions:
+                actions: read
+                contents: write
+          '''
+              if text.count(old) != 1:
+                  raise SystemExit("expected one wrapper permission block")
+              return text.replace(old, new)
+
+          noema = scope_wrapper_permissions(noema_path.read_text(encoding="utf-8"))
+          noema_env_old = '''      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+                REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
+          '''
+          noema_env_new = '''      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+                BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}
+                REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
+          '''
+          if noema.count(noema_env_old) != 1:
+              raise SystemExit("expected one Noema base-branch environment insertion point")
+          noema = noema.replace(noema_env_old, noema_env_new)
+
+          noema_validation_old = '''            ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+                      ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
+          '''
+          noema_validation_new = '''            ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+                      ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+                      [[ "$BASE_BRANCH" == -* ]] ||
+                      ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
+          '''
+          if noema.count(noema_validation_old) != 1:
+              raise SystemExit("expected one Noema validation insertion point")
+          noema = noema.replace(noema_validation_old, noema_validation_new)
+
+          leader_marker = '''          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"
+          '''
+          if noema.count(leader_marker) != 1:
+              raise SystemExit("expected one Noema leader marker")
+          noema = noema.replace(leader_marker, canonical_check + leader_marker)
+
+          noema_arg_old = '''            --arg pr_head_sha "$PR_HEAD_SHA" \
+                      --arg requested_agent "$REQUESTED_AGENT" \
+          '''
+          noema_arg_new = '''            --arg pr_head_sha "$PR_HEAD_SHA" \
+                      --arg base_branch "$BASE_BRANCH" \
+                      --arg requested_agent "$REQUESTED_AGENT" \
+          '''
+          if noema.count(noema_arg_old) != 1:
+              raise SystemExit("expected one Noema forwarding argument insertion point")
+          noema = noema.replace(noema_arg_old, noema_arg_new)
+
+          noema_payload_old = '''                pr_head_sha: $pr_head_sha,
+                            requested_agent: $requested_agent,
+          '''
+          noema_payload_new = '''                pr_head_sha: $pr_head_sha,
+                            base_branch: $base_branch,
+                            requested_agent: $requested_agent,
+          '''
+          if noema.count(noema_payload_old) != 1:
+              raise SystemExit("expected one Noema forwarding payload insertion point")
+          noema_path.write_text(
+              noema.replace(noema_payload_old, noema_payload_new), encoding="utf-8"
+          )
+
+          opencode = scope_wrapper_permissions(opencode_path.read_text(encoding="utf-8"))
+          if opencode.count(leader_marker) != 1:
+              raise SystemExit("expected one OpenCode leader marker")
+          opencode_path.write_text(
+              opencode.replace(leader_marker, canonical_check + leader_marker),
+              encoding="utf-8",
+          )
+
+          Path(".github/workflows/repair-pr787-payload-digest.yml").unlink()
+          PY
+          git diff --check
+
+      - name: Verify complete focused behavior and quality
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/agent-mention-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/agent_mention_router.py
+              scripts/ci/agent_mention_sweep.py
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/agent-mention-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest -q \
+            tests/test_agent_mention_router.py \
+            tests/test_agent_mention_sweep.py \
+            tests/test_agent_mention_workflow_contract.py \
+            tests/test_agent_mention_idempotency.py \
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under=100 \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py
+          python -m compileall -q \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py \
+            tests/test_agent_mention_router.py \
+            tests/test_agent_mention_sweep.py \
+            tests/test_agent_mention_workflow_contract.py \
+            tests/test_agent_mention_idempotency.py \
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
+          git diff --check
+
+      - name: Publish verified repair
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          HEAD_BRANCH: ${{ github.ref_name }}
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git diff --cached --quiet && { echo "No repair generated" >&2; exit 1; }
+          git commit -m "fix(automation): bind agent invocation keys to payloads"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push --force-with-lease="refs/heads/${HEAD_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${HEAD_BRANCH}"
