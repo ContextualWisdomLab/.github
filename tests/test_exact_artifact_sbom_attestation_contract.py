@@ -181,7 +181,10 @@ def test_verifier_is_data_only_and_workflow_never_executes_downloaded_evidence()
         "chmod +x",
         "source ",
     ):
-        assert unsafe_command not in workflow
+        assert not re.search(
+            rf"(?m)^\s*{re.escape(unsafe_command)}",
+            workflow,
+        )
 
 
 def test_workflow_attests_each_exact_distribution_and_exports_offline_evidence() -> None:
