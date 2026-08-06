@@ -1,0 +1,145 @@
+name: Repair PR 794 Git isolation v2
+
+on:
+  push:
+    branches: [fix/opencode-llvm-coverage-current-main]
+    paths:
+      - .github/workflows/repair-pr794-git-isolation-v2.yml
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact pushed head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 20
+          persist-credentials: false
+
+      - name: Validate exact repair trigger and scope
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$GITHUB_REF_NAME" = "fix/opencode-llvm-coverage-current-main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mapfile -t delta < <(git diff --name-only HEAD^ HEAD)
+          test "${#delta[@]}" -eq 1
+          test "${delta[0]}" = ".github/workflows/repair-pr794-git-isolation-v2.yml"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-locked verification tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Preserve RED contract evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set +e
+          red_output="$(python -m pytest -q \
+            tests/test_opencode_llvm_coverage_current_main.py::test_low_privilege_coverage_wrappers_isolate_ambient_git_configuration \
+            2>&1)"
+          red_status=$?
+          set -e
+          printf '%s\n' "$red_output"
+          test "$red_status" -ne 0
+          printf '%s\n' "$red_output" | grep -F "GIT_CONFIG_NOSYSTEM=1"
+
+      - name: Restore Git isolation and authoritative evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          old = """              UV_NO_BUILD=1 \\
+              GIT_CONFIG_COUNT=1 \\
+"""
+          new = """              UV_NO_BUILD=1 \\
+              GIT_CONFIG_NOSYSTEM=1 \\
+              GIT_CONFIG_GLOBAL=/dev/null \\
+              GIT_CONFIG_COUNT=1 \\
+"""
+          count = workflow.count(old)
+          if count != 3:
+              raise SystemExit(f'expected three missing Git-isolation anchors, found {count}')
+          workflow_path.write_text(workflow.replace(old, new), encoding='utf-8')
+
+          doctoring_path = Path('docs/doctoring/opencode-llvm-coverage-toolchain.md')
+          doctoring = doctoring_path.read_text(encoding='utf-8')
+          anchor = '- Missing executables fail the image build before any pull-request coverage measurement starts.\n'
+          sentence = (
+              '- Every low-privilege coverage wrapper disables system and global Git configuration '
+              'with `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null` before applying only '
+              'the validated `/work` safe-directory overlay.\n'
+          )
+          if sentence not in doctoring:
+              if doctoring.count(anchor) != 1:
+                  raise SystemExit('doctoring security anchor drifted')
+              doctoring = doctoring.replace(anchor, anchor + sentence, 1)
+              doctoring_path.write_text(doctoring, encoding='utf-8')
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          old_bullet = "- Restored the default-branch OpenCode Rust coverage image's Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, and a permanent ordering regression contract after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n"
+          new_bullet = "- Restored the default-branch OpenCode Rust coverage image's Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, preserved system/global Git isolation in every low-privilege coverage wrapper, and permanent ordering/isolation regression contracts after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n"
+          if new_bullet not in changelog:
+              if changelog.count(old_bullet) != 1:
+                  raise SystemExit('changelog LLVM bullet drifted')
+              changelog_path.write_text(changelog.replace(old_bullet, new_bullet, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/repair-pr794-git-isolation-v2.yml
+          git diff --check
+
+      - name: Verify GREEN focused contract
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q tests/test_opencode_llvm_coverage_current_main.py
+          python -m compileall -q tests/test_opencode_llvm_coverage_current_main.py
+          git diff --check
+
+      - name: Publish exact-head repair and self-delete
+        env:
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test -n "$PUSH_TOKEN"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+          mapfile -t changed < <(git diff --name-only)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 4
+          printf '%s\n' "${changed[@]}" | grep -Fx '.github/workflows/opencode-review-dispatch.yml'
+          printf '%s\n' "${changed[@]}" | grep -Fx 'CHANGELOG.md'
+          printf '%s\n' "${changed[@]}" | grep -Fx 'docs/doctoring/opencode-llvm-coverage-toolchain.md'
+          printf '%s\n' "${changed[@]}" | grep -Fx '.github/workflows/repair-pr794-git-isolation-v2.yml'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(coverage): restore sandbox Git isolation"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+
+# The second push activates this workflow after it exists on the branch.
