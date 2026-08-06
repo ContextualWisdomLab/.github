@@ -24,9 +24,28 @@ EXCLUDED_PARTS = {
 }
 TEST_NAME_RE = re.compile(r"\.(?:spec|test)\.[cm]?[jt]sx?$")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-INTERFACE_RE = re.compile(r"^(?:export\s+)?(?:declare\s+)?interface\b")
+TYPE_IDENTIFIER_PATTERN = r"[$A-Z_a-z][$\w]*"
+TYPE_MODULE_LITERAL_PATTERN = (
+    r"(?:'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\")"
+)
+INTERFACE_RE = re.compile(
+    rf"^(?:export\s+)?(?:declare\s+)?interface\s+"
+    rf"{TYPE_IDENTIFIER_PATTERN}\s*\{{"
+)
 STRING_LITERAL_RE = re.compile(
     r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`"
+)
+TYPE_IMPORT_SINGLE_RE = re.compile(
+    rf"^import\s+type\s+(?:{TYPE_IDENTIFIER_PATTERN}|\{{[^{{}}]*\}})"
+    rf"\s+from\s+{TYPE_MODULE_LITERAL_PATTERN}\s*;?$"
+)
+TYPE_IMPORT_START_RE = re.compile(r"^import\s+type\s+\{\s*$")
+TYPE_IMPORT_MEMBER_RE = re.compile(
+    rf"^(?:type\s+)?{TYPE_IDENTIFIER_PATTERN}"
+    rf"(?:\s+as\s+{TYPE_IDENTIFIER_PATTERN})?,?$"
+)
+TYPE_IMPORT_END_RE = re.compile(
+    rf"^\}}\s+from\s+{TYPE_MODULE_LITERAL_PATTERN}\s*;?$"
 )
 
 
@@ -297,63 +316,185 @@ def normalize_coverage_path(
     return suffix_matches[0] if len(suffix_matches) == 1 else None
 
 
+def _type_code_without_comments(line: str) -> tuple[str | None, bool]:
+    """Return comment-free TypeScript code and an open-comment indicator.
+
+    Complete quoted literals are masked before comment recognition so comment
+    markers inside module specifiers or string-literal types remain ordinary
+    syntax. Unmatched quotes and stray block-comment closers return ``None`` so
+    the caller classifies the line as runtime-looking rather than repairing it.
+    """
+    masked = STRING_LITERAL_RE.sub(
+        lambda match: " " * len(match.group(0)),
+        line,
+    )
+    if any(quote in masked for quote in ("'", '"', "`")):
+        return None, False
+
+    code = list(line)
+    cursor = 0
+    while True:
+        line_comment = masked.find("//", cursor)
+        block_start = masked.find("/*", cursor)
+        if line_comment >= 0 and (
+            block_start < 0 or line_comment < block_start
+        ):
+            return "".join(code[:line_comment]).strip(), False
+        if block_start < 0:
+            break
+        block_end = masked.find("*/", block_start + 2)
+        if block_end < 0:
+            for index in range(block_start, len(code)):
+                code[index] = " "
+            return "".join(code).strip(), True
+        for index in range(block_start, block_end + 2):
+            code[index] = " "
+        masked = (
+            masked[:block_start]
+            + (" " * (block_end + 2 - block_start))
+            + masked[block_end + 2 :]
+        )
+        cursor = block_start
+
+    if "*/" in masked:
+        return None, False
+    return "".join(code).strip(), False
+
+
+def _advance_interface_state(
+    structural: str, depth: int
+) -> tuple[int, str | None]:
+    """Advance interface brace depth and return code after its closing brace.
+
+    ``None`` means the declaration remains open. A string tail means the outer
+    declaration closed on this line; only an empty tail or standalone semicolon
+    can remain syntax-erased.
+    """
+    for index, character in enumerate(structural):
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth <= 0:
+                return depth, structural[index + 1 :].strip()
+    return depth, None
+
+
 def likely_runtime_lines(
     repo_root: Path, path: str, changed_lines: set[int]
 ) -> list[int]:
     """Return changed lines that look executable when Istanbul maps no units.
 
-    Multiline ``import type`` statements and balanced TypeScript interface
-    bodies are treated as syntax-erased declarations. Recognition is narrow and
-    all unsupported syntax remains runtime-looking so the gate fails closed.
+    Only a narrow grammar of complete ``import type`` declarations and balanced
+    simple TypeScript interfaces is accepted as syntax-erased. Runtime tails,
+    malformed literals or comments, unsupported declaration forms, and
+    unterminated lexical or declaration state remain runtime-looking so omitted
+    instrumentation fails closed.
     """
     source_lines = (repo_root / path).read_text(
         encoding="utf-8", errors="replace"
     ).splitlines()
     runtime_lines: list[int] = []
     in_block_comment = False
+    block_comment_changed_lines: list[int] = []
     in_type_import = False
+    type_import_changed_lines: list[int] = []
     in_interface = False
+    interface_changed_lines: list[int] = []
     interface_depth = 0
 
     for line_number, raw_line in enumerate(source_lines, start=1):
         stripped = raw_line.strip()
-        if stripped.startswith("/*"):
-            in_block_comment = True
+        syntax_invalid = False
+        comment_only = False
+
+        if in_block_comment:
+            block_end = stripped.find("*/")
+            if block_end < 0:
+                code = ""
+                comment_only = True
+            else:
+                in_block_comment = False
+                block_comment_changed_lines.clear()
+                tail = stripped[block_end + 2 :].strip()
+                if not tail or tail.startswith("//"):
+                    code = ""
+                    comment_only = True
+                else:
+                    code, in_block_comment = _type_code_without_comments(tail)
+                    syntax_invalid = code is None
+                    if code is None:
+                        code = tail
+                    comment_only = not code and not syntax_invalid
+        else:
+            code, in_block_comment = _type_code_without_comments(stripped)
+            syntax_invalid = code is None
+            if code is None:
+                code = stripped
+            comment_only = not code and bool(stripped) and not syntax_invalid
+
+        if in_block_comment and line_number in changed_lines:
+            block_comment_changed_lines.append(line_number)
 
         type_only = False
-        if in_type_import:
-            type_only = True
-            if ";" in stripped and not in_block_comment:
-                in_type_import = False
-        elif in_interface:
-            type_only = True
-            if not in_block_comment:
-                structural = STRING_LITERAL_RE.sub("", stripped).split("//", 1)[0]
-                interface_depth += structural.count("{") - structural.count("}")
-                if interface_depth <= 0:
+        if not comment_only and not syntax_invalid:
+            if in_type_import:
+                if TYPE_IMPORT_END_RE.fullmatch(code):
+                    type_only = True
+                    in_type_import = False
+                    type_import_changed_lines.clear()
+                elif TYPE_IMPORT_MEMBER_RE.fullmatch(code):
+                    type_only = True
+                else:
+                    in_type_import = False
+            elif in_interface:
+                structural = STRING_LITERAL_RE.sub("", code).strip()
+                interface_depth, tail = _advance_interface_state(
+                    structural,
+                    interface_depth,
+                )
+                if tail is None:
+                    type_only = True
+                else:
                     in_interface = False
-        elif stripped.startswith("import type "):
-            type_only = True
-            in_type_import = ";" not in stripped
-        elif INTERFACE_RE.match(stripped) and "{" in stripped:
-            type_only = True
-            structural = STRING_LITERAL_RE.sub("", stripped).split("//", 1)[0]
-            interface_depth = structural.count("{") - structural.count("}")
-            in_interface = interface_depth > 0
+                    interface_changed_lines.clear()
+                    type_only = interface_depth == 0 and tail in {"", ";"}
+            elif TYPE_IMPORT_SINGLE_RE.fullmatch(code):
+                type_only = True
+            elif TYPE_IMPORT_START_RE.fullmatch(code):
+                type_only = True
+                in_type_import = True
+            elif INTERFACE_RE.match(code):
+                structural = STRING_LITERAL_RE.sub("", code).strip()
+                interface_depth, tail = _advance_interface_state(structural, 0)
+                if tail is None:
+                    in_interface = interface_depth > 0
+                    type_only = in_interface
+                else:
+                    type_only = interface_depth == 0 and tail in {"", ";"}
+
+        if in_type_import and line_number in changed_lines:
+            type_import_changed_lines.append(line_number)
+        if in_interface and line_number in changed_lines:
+            interface_changed_lines.append(line_number)
 
         non_runtime = (
             not stripped
-            or in_block_comment
+            or comment_only
             or stripped.startswith("//")
             or stripped in {"{", "}", "};", ");", "]", "],"}
-            or stripped.startswith(("interface ", "type ", "export type ", "import type "))
             or type_only
         )
         if line_number in changed_lines and not non_runtime:
             runtime_lines.append(line_number)
-        if "*/" in stripped:
-            in_block_comment = False
-    return runtime_lines
+
+    if in_type_import:
+        runtime_lines.extend(type_import_changed_lines)
+    if in_interface:
+        runtime_lines.extend(interface_changed_lines)
+    if in_block_comment:
+        runtime_lines.extend(block_comment_changed_lines)
+    return sorted(set(runtime_lines))
 
 
 def load_coverage_files(
