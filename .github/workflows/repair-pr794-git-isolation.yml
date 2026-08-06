@@ -1,14 +1,14 @@
 name: Repair PR 794 coverage Git isolation
 
 on:
-  push:
-    branches:
-      - fix/opencode-llvm-coverage-current-main
+  pull_request:
+    branches: [main]
+    types: [synchronize]
     paths:
       - .github/workflows/repair-pr794-git-isolation.yml
 
 concurrency:
-  group: repair-pr794-git-isolation-${{ github.ref }}
+  group: repair-pr794-git-isolation-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 permissions:
@@ -22,7 +22,9 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       github.actor == 'seonghobae' &&
-      github.ref == 'refs/heads/fix/opencode-llvm-coverage-current-main'
+      github.event.pull_request.number == 794 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/opencode-llvm-coverage-current-main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -34,7 +36,7 @@ jobs:
       - name: Check out exact contributor head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 20
           persist-credentials: false
 
@@ -71,14 +73,14 @@ jobs:
           test "$red_status" -eq 1
           printf '%s\n' "$red_output" | grep -F 'ValueError: substring not found'
 
-      - name: Restore complete Git isolation in all three wrappers
+      - name: Restore complete Git isolation and permanent evidence
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 -I - <<'PY'
           from pathlib import Path
 
-          path = Path('.github/workflows/opencode-review-dispatch.yml')
-          source = path.read_text(encoding='utf-8')
+          workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
           old = '''              UV_NO_BUILD=1 \\
               GIT_CONFIG_COUNT=1 \\
 '''
@@ -87,11 +89,33 @@ jobs:
               GIT_CONFIG_GLOBAL=/dev/null \\
               GIT_CONFIG_COUNT=1 \\
 '''
-          if source.count(old) != 3:
+          if workflow.count(old) != 3:
               raise SystemExit(
-                  f'expected exactly three low-privilege Git isolation anchors, found {source.count(old)}'
+                  f'expected exactly three low-privilege Git isolation anchors, found {workflow.count(old)}'
               )
-          path.write_text(source.replace(old, new), encoding='utf-8')
+          workflow_path.write_text(workflow.replace(old, new), encoding='utf-8')
+
+          doctoring_path = Path('docs/doctoring/opencode-llvm-coverage-toolchain.md')
+          doctoring = doctoring_path.read_text(encoding='utf-8')
+          sentence = (
+              '- Every low-privilege test wrapper sets `GIT_CONFIG_NOSYSTEM=1` and '
+              '`GIT_CONFIG_GLOBAL=/dev/null` before applying only the validated '
+              '`/work` safe-directory overlay.\n'
+          )
+          anchor = '- Missing executables fail the image build before any pull-request coverage measurement starts.\n'
+          if sentence not in doctoring:
+              if doctoring.count(anchor) != 1:
+                  raise SystemExit('doctoring security anchor drifted')
+              doctoring_path.write_text(doctoring.replace(anchor, anchor + sentence, 1), encoding='utf-8')
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          old_bullet = "- Restored the default-branch OpenCode Rust coverage image's Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, and a permanent ordering regression contract after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n"
+          new_bullet = "- Restored the default-branch OpenCode Rust coverage image's Debian LLVM 19 tools, explicit `LLVM_COV` and `LLVM_PROFDATA` bindings, pre-install executable validation, preserved system/global Git isolation in every low-privilege coverage wrapper, and permanent ordering/isolation regression contracts after DiskSage exact-head coverage exposed the missing system-toolchain boundary.\n"
+          if new_bullet not in changelog:
+              if changelog.count(old_bullet) != 1:
+                  raise SystemExit('changelog LLVM bullet drifted')
+              changelog_path.write_text(changelog.replace(old_bullet, new_bullet, 1), encoding='utf-8')
           PY
           rm .github/workflows/repair-pr794-git-isolation.yml
           git diff --check
@@ -105,8 +129,8 @@ jobs:
 
       - name: Publish verified repair with workflow-capable credential
         env:
-          EXPECTED_HEAD: ${{ github.sha }}
-          HEAD_BRANCH: ${{ github.ref_name }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.head_ref }}
           PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
