@@ -41,8 +41,7 @@ jobs:
       UPDATE_BRANCHES: ${{ github.event.client_payload.update_branches }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || '' }}
     steps:
-      - name: Validate exact invocation and elect one durable leader
-        id: leader
+      - name: Validate exact invocation payload
         run: |
           set -euo pipefail
           if [ "$PAYLOAD_AGENT" != "$REQUESTED_AGENT" ] ||
@@ -88,45 +87,92 @@ jobs:
               raise SystemExit("invocation key does not match canonical payload")
           PYTHON
 
-          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"
-          matching_run_ids() {
-            gh api --paginate --slurp \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/agent-mention-opencode-dispatch.yml/runs?event=repository_dispatch&per_page=100" \
-              | jq -r --arg marker "$marker" '
-                  [.[].workflow_runs[]
-                    | select((.display_title // "") | contains($marker))
-                    | .id]
-                  | unique
-                  | sort
-                  | .[]
-                '
+      - name: Inspect exact-name Actions artifact ledger
+        id: ledger
+        run: |
+          set -euo pipefail
+          LEDGER_ARTIFACT_NAME="cwl-agent-invocation-${INVOCATION_KEY}"
+          export LEDGER_ARTIFACT_NAME
+          echo "LEDGER_ARTIFACT_NAME=$LEDGER_ARTIFACT_NAME" >>"$GITHUB_ENV"
+          response_file="${RUNNER_TEMP}/agent-mention-artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+            -X GET \
+            -f "name=${LEDGER_ARTIFACT_NAME}" \
+            -f "per_page=100" >"$response_file"
+          python3 - "$response_file" <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          response_path = Path(sys.argv[1])
+          payload = json.loads(response_path.read_text(encoding="utf-8"))
+          expected_name = os.environ["LEDGER_ARTIFACT_NAME"]
+          if not isinstance(payload, dict):
+              raise SystemExit("artifact response must be an object")
+          total_count = payload.get("total_count")
+          artifacts = payload.get("artifacts")
+          if type(total_count) is not int or total_count < 0:
+              raise SystemExit("artifact response has an invalid total_count")
+          if not isinstance(artifacts, list):
+              raise SystemExit("artifact response has an invalid artifacts collection")
+          if total_count != len(artifacts):
+              raise SystemExit("artifact response is truncated or inconsistent")
+          live = False
+          for artifact in artifacts:
+              if not isinstance(artifact, dict):
+                  raise SystemExit("artifact response contains a non-object record")
+              artifact_id = artifact.get("id")
+              name = artifact.get("name")
+              expired = artifact.get("expired")
+              if type(artifact_id) is not int or artifact_id < 1:
+                  raise SystemExit("artifact response contains an invalid artifact id")
+              if not isinstance(name, str) or name != expected_name:
+                  raise SystemExit("artifact response contains a mismatched artifact name")
+              if type(expired) is not bool:
+                  raise SystemExit("artifact response contains an invalid expired flag")
+              live = live or not expired
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          if live:
+              with output_path.open("a", encoding="utf-8") as handle:
+                  handle.write("claim=false\n")
+              raise SystemExit(0)
+
+          claim_dir = Path(os.environ["RUNNER_TEMP"]) / "cwl-agent-invocation-ledger"
+          claim_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+          claim = {
+              "actor": os.environ["REQUESTED_BY"],
+              "agent": os.environ["REQUESTED_AGENT"],
+              "base_branch": os.environ["BASE_BRANCH"],
+              "comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
+              "head_sha": os.environ["PR_HEAD_SHA"],
+              "invocation_key": os.environ["INVOCATION_KEY"],
+              "pr_number": int(os.environ["PR_NUMBER"]),
+              "repository": os.environ["TARGET_REPOSITORY"],
           }
+          (claim_dir / "claim.json").write_text(
+              json.dumps(claim, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          with output_path.open("a", encoding="utf-8") as handle:
+              handle.write("claim=true\n")
+          PYTHON
 
-          for attempt in 1 2 3; do
-            run_ids="$(matching_run_ids)"
-            lower_id="$(
-              awk -v current="$GITHUB_RUN_ID" '$1 < current { print $1; exit }' \
-                <<<"$run_ids"
-            )"
-            if [ -n "$lower_id" ]; then
-              echo "forward=false" >>"$GITHUB_OUTPUT"
-              echo "Duplicate exact-key invocation suppressed by lower durable run $lower_id."
-              exit 0
-            fi
-            if grep -Fxq "$GITHUB_RUN_ID" <<<"$run_ids"; then
-              echo "forward=true" >>"$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              sleep "$((attempt * 2))"
-            fi
-          done
-
-          echo "::notice::Current run remained absent from the eventually consistent workflow-run list after retries; self-electing because no lower durable run was observed."
-          echo "forward=true" >>"$GITHUB_OUTPUT"
+      - name: Claim exact invocation in the durable artifact ledger
+        if: steps.ledger.outputs.claim == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cwl-agent-invocation-${{ env.INVOCATION_KEY }}
+          path: ${{ runner.temp }}/cwl-agent-invocation-ledger/claim.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
 
       - name: Forward once to the authoritative review-only scheduler
-        if: steps.leader.outputs.forward == 'true'
+        if: steps.ledger.outputs.claim == 'true'
         run: |
           set -euo pipefail
           jq -n \
