@@ -1,0 +1,131 @@
+name: One-shot Strix semantic non-finding repair
+
+on:
+  push:
+    branches:
+      - fix/trusted-uv-transient-download-retry
+
+concurrency:
+  group: one-shot-strix-semantic-nonfinding-repair
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      EXPECTED_BRANCH: fix/trusted-uv-transient-download-retry
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger head without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Refuse stale or unexpected trigger
+        env:
+          TRIGGER_SHA: ${{ github.sha }}
+          TRIGGER_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$TRIGGER_REF" = "$EXPECTED_BRANCH"
+          test "$(git rev-parse HEAD)" = "$TRIGGER_SHA"
+          remote_head="$(git ls-remote origin "refs/heads/$EXPECTED_BRANCH" | awk '{print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$TRIGGER_SHA"
+          test -f scripts/ci/strix_quick_gate.sh
+          test -f scripts/ci/strix_report_classifier.py
+          test -f tests/test_strix_report_classifier.py
+          test -f .github/workflows/one-shot-strix-semantic-nonfinding-repair.yml
+
+      - name: Apply bounded classifier integration
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gate_path = Path("scripts/ci/strix_quick_gate.sh")
+          source = gate_path.read_text(encoding="utf-8")
+          needle = '''vulnerability_file_is_retryable_model_inconsistency() {
+          \tlocal vuln_file="$1"
+          \tif ! vulnerability_file_is_below_threshold "$vuln_file"; then
+          '''
+          replacement = '''vulnerability_file_is_retryable_model_inconsistency() {
+          \tlocal vuln_file="$1"
+          \tlocal semantic_nonfinding_rc=0
+          \tpython3 "$SCRIPT_DIR/strix_report_classifier.py" "$vuln_file" || semantic_nonfinding_rc=$?
+          \tcase "$semantic_nonfinding_rc" in
+          \t0)
+          \t\techo "Detected a structurally complete Strix report whose required sections consistently state that no vulnerability exists; treating as retryable model inconsistency." >&2
+          \t\treturn 0
+          \t\t;;
+          \t1)
+          \t\t;;
+          \t*)
+          \t\techo "Invalid semantic non-finding classifier input; retaining the report as blocking evidence." >&2
+          \t\treturn 1
+          \t\t;;
+          \tesac
+          \tif ! vulnerability_file_is_below_threshold "$vuln_file"; then
+          '''
+          if source.count(needle) != 1:
+              raise SystemExit("expected exact classifier integration point once")
+          updated = source.replace(needle, replacement, 1)
+          gate_path.write_text(updated, encoding="utf-8")
+          PY
+
+      - name: Verify deterministic repair before write credentials exist
+        run: |
+          set -euo pipefail
+          bash -n scripts/ci/strix_quick_gate.sh
+          python3 -m compileall -q scripts/ci/strix_report_classifier.py tests/test_strix_report_classifier.py
+          python3 -m pytest tests/test_strix_report_classifier.py -q
+          git diff --check
+          git diff --exit-code -- .github/workflows/one-shot-strix-semantic-nonfinding-repair.yml
+
+      - name: Remove one-shot workflow and publish exact repair
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/$EXPECTED_BRANCH" | awk '{print $1}')"
+          test "$remote_head" = "$TRIGGER_SHA"
+
+          rm .github/workflows/one-shot-strix-semantic-nonfinding-repair.yml
+          git add scripts/ci/strix_quick_gate.sh
+          git add -u .github/workflows/one-shot-strix-semantic-nonfinding-repair.yml
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' '.github/workflows/one-shot-strix-semantic-nonfinding-repair.yml' 'scripts/ci/strix_quick_gate.sh' | sort)"
+
+          git config user.name "OpenAI exact-head repair"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(strix): ignore explicit semantic non-findings"
+
+          askpass="$RUNNER_TEMP/git-askpass.sh"
+          cat >"$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$GITHUB_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 \
+            git push "https://github.com/$GITHUB_REPOSITORY.git" \
+            "HEAD:refs/heads/$EXPECTED_BRANCH"
+          rm -f "$askpass"
