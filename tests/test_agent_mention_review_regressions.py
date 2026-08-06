@@ -1,11 +1,9 @@
-
 """Review-driven runtime regressions for the agent mention control plane."""
 
 from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -42,7 +40,7 @@ def request(module: ModuleType, agents=("cwl-noema-review", "opencode-agent")):
 
 
 class FakeClient:
-    """Capture API requests and expose endpoint-keyed run inventories."""
+    """Capture API requests and expose exact-name artifact inventories."""
 
     def __init__(self, responses=None) -> None:
         """Initialize responses and an empty call ledger."""
@@ -51,11 +49,20 @@ class FakeClient:
         self.calls: list[tuple[list[str], dict | None]] = []
 
     def request(self, args, *, input_payload=None):
-        """Record a call and return its registered response."""
+        """Record a call and return its registered artifact response."""
 
-        self.calls.append((list(args), input_payload))
-        if args[0].endswith("/runs"):
-            return self.responses.get(args[0], {"workflow_runs": []})
+        args = list(args)
+        self.calls.append((args, input_payload))
+        if args[0].endswith("/actions/artifacts"):
+            name = next(
+                value.split("=", 1)[1]
+                for value in args
+                if value.startswith("name=")
+            )
+            return self.responses.get(
+                name,
+                {"total_count": 0, "artifacts": []},
+            )
         return None
 
 
@@ -113,66 +120,49 @@ def test_github_client_surfaces_bounded_api_diagnostics(
         module.GitHubClient("token").request(["repos/x/y"])
 
 
-def test_workflow_run_cutoff_and_marker_cache_bound_api_cost() -> None:
-    """Each agent workflow inventory is queried once per sweep window."""
+def test_exact_artifact_cache_bounds_api_cost() -> None:
+    """Each exact artifact name is queried once per router or sweep run."""
 
     module = load_module()
-    now = datetime(2026, 8, 6, 12, tzinfo=timezone.utc)
-    cutoff = module.workflow_run_cutoff(now=now, lookback_hours=24)
-    assert cutoff == "2026-08-05T12:00:00Z"
-    with pytest.raises(ValueError, match="timezone-aware"):
-        module.workflow_run_cutoff(now=datetime(2026, 8, 6))
-
     mention = request(module)
-    noema_endpoint = module.AGENT_WORKFLOW_RUN_ENDPOINTS["cwl-noema-review"]
-    noema_marker = module.agent_invocation_marker(
-        mention, "cwl-noema-review"
-    )
+    name = module.agent_ledger_artifact_name(mention, "cwl-noema-review")
     client = FakeClient(
         {
-            noema_endpoint: {
-                "workflow_runs": [
-                    {
-                        "id": 0,
-                        "event": "repository_dispatch",
-                        "display_title": f"ignored {noema_marker}",
-                    },
-                    {
-                        "id": 1,
-                        "event": "repository_dispatch",
-                        "display_title": f"run {noema_marker}",
-                    },
-                ]
+            name: {
+                "total_count": 1,
+                "artifacts": [
+                    {"id": 1, "name": name, "expired": False}
+                ],
             }
         }
     )
-    cache: dict[str, set[str]] = {}
+    cache: dict[str, bool] = {}
     expected = frozenset({"cwl-noema-review"})
     assert module.dispatched_agents(
         mention,
         client,
-        workflow_run_since=cutoff,
-        run_marker_cache=cache,
+        ledger_artifact_cache=cache,
     ) == expected
     assert module.dispatched_agents(
         mention,
         client,
-        workflow_run_since=cutoff,
-        run_marker_cache=cache,
+        ledger_artifact_cache=cache,
     ) == expected
-    run_calls = [args for args, _ in client.calls if args[0].endswith("/runs")]
-    assert len(run_calls) == 2
-    assert all(f"created=>={cutoff}" in args for args in run_calls)
+    artifact_calls = [
+        args for args, _ in client.calls if args[0].endswith("/actions/artifacts")
+    ]
+    assert len(artifact_calls) == 2
+    assert all("per_page=100" in args for args in artifact_calls)
 
 
 def test_dispatch_cache_suppresses_same_run_retries_and_rejection_noise() -> None:
-    """Accepted dispatches update the in-memory ledger before wrapper visibility."""
+    """Accepted dispatches update the in-memory ledger before artifact visibility."""
 
     module = load_module()
     mention = request(module)
     target = FakeClient()
     central = FakeClient()
-    cache: dict[str, set[str]] = {}
+    cache: dict[str, bool] = {}
     allowlist = frozenset({"contextualwisdomlab/example"})
 
     assert module.dispatch_request(
@@ -180,8 +170,7 @@ def test_dispatch_cache_suppresses_same_run_retries_and_rejection_noise() -> Non
         target_client=target,
         dispatch_client=central,
         opencode_allowlist=allowlist,
-        workflow_run_since="2026-08-01T00:00:00Z",
-        run_marker_cache=cache,
+        ledger_artifact_cache=cache,
     ) == ("@cwl-noema-review", "@opencode-agent")
     first_target_calls = len(target.calls)
     assert module.dispatch_request(
@@ -189,8 +178,7 @@ def test_dispatch_cache_suppresses_same_run_retries_and_rejection_noise() -> Non
         target_client=target,
         dispatch_client=central,
         opencode_allowlist=allowlist,
-        workflow_run_since="2026-08-01T00:00:00Z",
-        run_marker_cache=cache,
+        ledger_artifact_cache=cache,
     ) == ()
     assert len(target.calls) == first_target_calls
     dispatches = [
@@ -203,13 +191,13 @@ def test_dispatch_cache_suppresses_same_run_retries_and_rejection_noise() -> Non
     mixed = request(module)
     mixed_target = FakeClient()
     mixed_central = FakeClient()
-    mixed_cache: dict[str, set[str]] = {}
+    mixed_cache: dict[str, bool] = {}
     assert module.dispatch_request(
         mixed,
         target_client=mixed_target,
         dispatch_client=mixed_central,
         opencode_allowlist=frozenset(),
-        run_marker_cache=mixed_cache,
+        ledger_artifact_cache=mixed_cache,
     ) == ("@cwl-noema-review",)
     first_mixed_calls = len(mixed_target.calls)
     assert module.dispatch_request(
@@ -217,6 +205,6 @@ def test_dispatch_cache_suppresses_same_run_retries_and_rejection_noise() -> Non
         target_client=mixed_target,
         dispatch_client=mixed_central,
         opencode_allowlist=frozenset(),
-        run_marker_cache=mixed_cache,
+        ledger_artifact_cache=mixed_cache,
     ) == ()
     assert len(mixed_target.calls) == first_mixed_calls
