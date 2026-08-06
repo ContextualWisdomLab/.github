@@ -111,7 +111,7 @@ jobs:
             *) separator="?" ;;
           esac
           if ! oidc_response="$(
-            curl -fsS \
+            curl -fsS --connect-timeout 10 --max-time 30 \
               -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               "${request_url}${separator}audience=${OIDC_AUDIENCE}"
           )"; then
@@ -126,7 +126,7 @@ jobs:
             exit 0
           fi
           if ! token_response="$(
-            curl -fsS \
+            curl -fsS --connect-timeout 10 --max-time 30 \
               -X POST \
               -H "Authorization: Bearer ${oidc_token}" \
               "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
@@ -142,10 +142,8 @@ jobs:
             exit 0
           fi
           echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
+          echo "available=true" >>"$GITHUB_OUTPUT"
+          echo "SWEEP_APP_TOKEN=$app_token" >>"$GITHUB_ENV"
 
       - name: Check out trusted central router
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -155,12 +153,23 @@ jobs:
 
       - name: Sweep recent organization PR comments
         env:
-          TARGET_REPOSITORY_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.sweep_app_token.outputs.token }}
-          TARGET_REPOSITORY_SOURCE: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'organization' || steps.sweep_app_token.outputs.available == 'true' && 'installation' || '' }}
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
           AGENT_DISPATCH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ -z "${TARGET_REPOSITORY_TOKEN:-}" ] || [ -z "${TARGET_REPOSITORY_SOURCE:-}" ]; then
+          if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then
+            TARGET_REPOSITORY_TOKEN="$PR_REVIEW_MERGE_TOKEN"
+            TARGET_REPOSITORY_SOURCE="organization"
+          elif [ -n "$OPENCODE_APPROVE_TOKEN" ]; then
+            TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"
+            TARGET_REPOSITORY_SOURCE="organization"
+          else
+            TARGET_REPOSITORY_TOKEN="${SWEEP_APP_TOKEN:-}"
+            TARGET_REPOSITORY_SOURCE="${TARGET_REPOSITORY_TOKEN:+installation}"
+          fi
+          export TARGET_REPOSITORY_TOKEN
+          if [ -z "$TARGET_REPOSITORY_TOKEN" ] || [ -z "$TARGET_REPOSITORY_SOURCE" ]; then
             echo "::error::Agent mention sweep requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app token exchange."
             exit 1
           fi
