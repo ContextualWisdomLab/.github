@@ -10,7 +10,6 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
@@ -25,24 +24,15 @@ MENTION_PATTERNS = {
         re.IGNORECASE,
     ),
 }
-AGENT_WORKFLOW_RUN_ENDPOINTS = {
-    "cwl-noema-review": (
-        f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/workflows/"
-        "agent-mention-noema-dispatch.yml/runs"
-    ),
-    "opencode-agent": (
-        f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/workflows/"
-        "agent-mention-opencode-dispatch.yml/runs"
-    ),
-}
+LEDGER_ARTIFACTS_ENDPOINT = (
+    f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/artifacts"
+)
+LEDGER_ARTIFACT_PREFIX = "cwl-agent-invocation-"
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
-INVOCATION_MARKER_RE = re.compile(r"\[cwl-agent-invocation:[0-9a-f]{64}\]")
-MAX_WORKFLOW_RUN_RECORDS = 10_000
-WORKFLOW_RUN_LOOKBACK_HOURS = 24 * 30
 
 
 @dataclass(frozen=True)
@@ -123,7 +113,7 @@ def processed_comment_ids(comments: Sequence[dict[str, Any]]) -> frozenset[int]:
     """Extract local receipts authored by the trusted GitHub Actions bot only.
 
     These target-repository comments are a local optimization and user-facing
-    acknowledgement. Central exact-key workflow-run records remain authoritative
+    acknowledgement. Central exact-name Actions artifacts remain authoritative
     for cross-repository dispatch idempotency because PAT and installation-token
     identities can rotate and target-repository actors can be spoofed.
     """
@@ -235,10 +225,10 @@ def agent_invocation_key(request: MentionRequest, agent: str) -> str:
 
     The key binds repository, pull request, exact head, base branch, requested
     agent, source comment, and requesting actor. It contains no credential or
-    provider response and is safe to place in workflow run names.
+    provider response and is safe to place in workflow and artifact names.
     """
 
-    if agent not in AGENT_WORKFLOW_RUN_ENDPOINTS:
+    if agent not in MENTION_PATTERNS:
         raise ValueError(f"unsupported agent: {agent}")
     canonical = json.dumps(
         {
@@ -258,44 +248,56 @@ def agent_invocation_key(request: MentionRequest, agent: str) -> str:
 
 
 def agent_invocation_marker(request: MentionRequest, agent: str) -> str:
-    """Return the exact workflow-run marker for one agent invocation."""
+    """Return the exact human-readable workflow-run marker for one invocation."""
 
     return f"[cwl-agent-invocation:{agent_invocation_key(request, agent)}]"
 
 
-def workflow_run_cutoff(
+def agent_ledger_artifact_name(request: MentionRequest, agent: str) -> str:
+    """Return the exact-name durable artifact ledger key for one invocation."""
+
+    return f"{LEDGER_ARTIFACT_PREFIX}{agent_invocation_key(request, agent)}"
+
+
+def _artifact_records(
+    value: Any,
     *,
-    now: datetime | None = None,
-    lookback_hours: int = WORKFLOW_RUN_LOOKBACK_HOURS,
-) -> str:
-    """Return the UTC lower bound for durable wrapper-run lookup."""
+    expected_name: str,
+) -> tuple[dict[str, Any], ...]:
+    """Validate one exact-name repository artifact response and return live claims.
 
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        raise ValueError("workflow-run cutoff time must be timezone-aware")
-    cutoff = current.astimezone(timezone.utc) - timedelta(hours=lookback_hours)
-    return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    The server-side ``name`` filter makes this response directly addressable by
+    invocation key. Any malformed, mismatched, truncated, or ambiguous response
+    fails closed rather than being interpreted as permission to redispatch.
+    """
 
+    if not isinstance(value, dict):
+        raise ValueError("artifact response must be an object")
+    total_count = value.get("total_count")
+    artifacts = value.get("artifacts")
+    if type(total_count) is not int or total_count < 0:
+        raise ValueError("artifact response has an invalid total_count")
+    if not isinstance(artifacts, list):
+        raise ValueError("artifact response has an invalid artifacts collection")
+    if total_count != len(artifacts):
+        raise ValueError("artifact response is truncated or internally inconsistent")
 
-def _workflow_run_records(value: Any) -> tuple[dict[str, Any], ...]:
-    """Validate and flatten bounded ``gh --paginate --slurp`` workflow runs."""
-
-    if value is None:
-        return ()
-    pages = value if isinstance(value, list) else [value]
-    if not pages or not all(isinstance(page, dict) for page in pages):
-        raise ValueError("workflow-run response must contain object pages")
-    records: list[dict[str, Any]] = []
-    for page in pages:
-        page_records = page.get("workflow_runs")
-        if not isinstance(page_records, list) or not all(
-            isinstance(record, dict) for record in page_records
-        ):
-            raise ValueError("workflow-run response contains invalid records")
-        records.extend(page_records)
-        if len(records) > MAX_WORKFLOW_RUN_RECORDS:
-            raise ValueError("workflow-run response exceeds the bounded record limit")
-    return tuple(records)
+    live: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            raise ValueError("artifact response contains a non-object record")
+        artifact_id = artifact.get("id")
+        name = artifact.get("name")
+        expired = artifact.get("expired")
+        if type(artifact_id) is not int or artifact_id < 1:
+            raise ValueError("artifact response contains an invalid artifact id")
+        if not isinstance(name, str) or name != expected_name:
+            raise ValueError("artifact response contains a mismatched artifact name")
+        if type(expired) is not bool:
+            raise ValueError("artifact response contains an invalid expired flag")
+        if not expired:
+            live.append(artifact)
+    return tuple(live)
 
 
 def dispatched_agents(
@@ -303,57 +305,41 @@ def dispatched_agents(
     dispatch_client: GitHubClient,
     agents: Sequence[str] | None = None,
     *,
-    workflow_run_since: str | None = None,
-    run_marker_cache: dict[str, set[str]] | None = None,
+    ledger_artifact_cache: dict[str, bool] | None = None,
 ) -> frozenset[str]:
-    """Return agents with a durable central run for this exact invocation.
+    """Return agents with a durable exact-name artifact for this invocation.
 
-    Workflow inventories are bounded by the same maximum 30-day window as
-    the scheduled source-comment sweep. A caller-owned marker cache avoids
-    repeating the same agent workflow query for every candidate in one run.
+    Each candidate uses the repository artifact endpoint's exact ``name`` filter,
+    avoiding workflow-run enumeration and its filtered-result cap. A caller-owned
+    cache bounds repeated API work during one local route or organization sweep.
     """
 
     candidates = tuple(request.agents if agents is None else agents)
     observed: set[str] = set()
-    cutoff = workflow_run_since or workflow_run_cutoff()
-    marker_cache = run_marker_cache if run_marker_cache is not None else {}
+    artifact_cache = (
+        ledger_artifact_cache if ledger_artifact_cache is not None else {}
+    )
     for agent in candidates:
-        endpoint = AGENT_WORKFLOW_RUN_ENDPOINTS.get(agent)
-        if endpoint is None:
-            raise ValueError(f"unsupported agent: {agent}")
-        if endpoint not in marker_cache:
+        artifact_name = agent_ledger_artifact_name(request, agent)
+        if artifact_name not in artifact_cache:
             response = dispatch_client.request(
                 [
-                    endpoint,
+                    LEDGER_ARTIFACTS_ENDPOINT,
                     "-X",
                     "GET",
                     "-f",
-                    "event=repository_dispatch",
-                    "-f",
-                    f"created=>={cutoff}",
+                    f"name={artifact_name}",
                     "-f",
                     "per_page=100",
-                    "--paginate",
-                    "--slurp",
                 ]
             )
-            markers: set[str] = set()
-            for run in _workflow_run_records(response):
-                run_id = run.get("id")
-                if (
-                    isinstance(run_id, int)
-                    and run_id > 0
-                    and run.get("event") == "repository_dispatch"
-                ):
-                    markers.update(
-                        INVOCATION_MARKER_RE.findall(
-                            str(run.get("display_title") or "")
-                        )
-                    )
-            marker_cache[endpoint] = markers
-        if agent_invocation_marker(request, agent) in marker_cache[endpoint]:
+            artifact_cache[artifact_name] = bool(
+                _artifact_records(response, expected_name=artifact_name)
+            )
+        if artifact_cache[artifact_name]:
             observed.add(agent)
     return frozenset(observed)
+
 
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
     """Return the durable Noema wrapper dispatch request body."""
@@ -405,8 +391,7 @@ def dispatch_request(
     dispatch_client: GitHubClient,
     opencode_allowlist: frozenset[str],
     dry_run: bool = False,
-    workflow_run_since: str | None = None,
-    run_marker_cache: dict[str, set[str]] | None = None,
+    ledger_artifact_cache: dict[str, bool] | None = None,
 ) -> tuple[str, ...]:
     """Dispatch missing agents and acknowledge only newly queued work."""
 
@@ -429,8 +414,7 @@ def dispatch_request(
         request,
         dispatch_client,
         dispatchable,
-        workflow_run_since=workflow_run_since,
-        run_marker_cache=run_marker_cache,
+        ledger_artifact_cache=ledger_artifact_cache,
     )
     missing = tuple(agent for agent in dispatchable if agent not in existing)
     handles = tuple(f"@{agent}" for agent in missing)
@@ -446,25 +430,21 @@ def dispatch_request(
 
     dispatch_endpoint = f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/dispatches"
     if "cwl-noema-review" in missing:
+        agent = "cwl-noema-review"
         dispatch_client.request(
             [dispatch_endpoint, "-X", "POST"],
             input_payload=noema_payload(request),
         )
-        if run_marker_cache is not None:
-            endpoint = AGENT_WORKFLOW_RUN_ENDPOINTS["cwl-noema-review"]
-            run_marker_cache.setdefault(endpoint, set()).add(
-                agent_invocation_marker(request, "cwl-noema-review")
-            )
+        if ledger_artifact_cache is not None:
+            ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
     if "opencode-agent" in missing:
+        agent = "opencode-agent"
         dispatch_client.request(
             [dispatch_endpoint, "-X", "POST"],
             input_payload=opencode_payload(request),
         )
-        if run_marker_cache is not None:
-            endpoint = AGENT_WORKFLOW_RUN_ENDPOINTS["opencode-agent"]
-            run_marker_cache.setdefault(endpoint, set()).add(
-                agent_invocation_marker(request, "opencode-agent")
-            )
+        if ledger_artifact_cache is not None:
+            ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
 
     target_api = f"repos/{request.repository}"
     target_client.request(
@@ -492,8 +472,8 @@ def dispatch_request(
     acknowledgement = (
         f"{receipt_marker(request.comment_id)}\n"
         f"{' ; '.join(status_parts)} for PR #{request.pull_request_number} at head "
-        f"`{request.pull_request_head_sha}`. Central exact-key workflow runs are "
-        "the durable dispatch ledger; existing review workflows remain "
+        f"`{request.pull_request_head_sha}`. Central exact-name Actions artifacts "
+        "are the durable dispatch ledger; existing review workflows remain "
         "authoritative for the final verdict and failure evidence."
     )
     target_client.request(
@@ -505,6 +485,7 @@ def dispatch_request(
         input_payload={"body": acknowledgement},
     )
     return handles
+
 
 def load_event(path: str) -> dict[str, Any]:
     """Load and validate a GitHub event JSON document."""
