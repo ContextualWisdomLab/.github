@@ -147,3 +147,36 @@ def test_type_only_classifier_rejects_mixed_runtime_tails(tmp_path: Path) -> Non
         "src/mixed_types.ts",
         set(range(1, 19)),
     ) == [1, 2, 5, 8, 12, 14, 18]
+
+
+def test_type_only_classifier_fails_closed_on_lexical_edges(tmp_path: Path) -> None:
+    """Reject malformed literals, stray closers, and runtime comment tails."""
+    source = tmp_path / "src" / "lexical_edges.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "interface UnterminatedString {\n"
+        "  readonly safe: '{';\n"
+        "  readonly bad: 'unterminated {\n"
+        "}\n"
+        "runAfterUnterminatedString();\n"
+        "interface StrayComment {\n"
+        "  readonly bad: string; */\n"
+        "}\n"
+        "runAfterStrayComment();\n"
+        "interface OpenComment {\n"
+        "  readonly value: string; /* brace {\n"
+        "  still comment\n"
+        "  */\n"
+        "}\n"
+        "runAfterOpenComment();\n"
+        "interface CloseTail {\n"
+        "  /* comment\n"
+        "  */ } runAfterCommentClose();\n",
+        encoding="utf-8",
+    )
+
+    assert gate.likely_runtime_lines(
+        tmp_path,
+        "src/lexical_edges.ts",
+        set(range(1, 19)),
+    ) == [3, 5, 7, 9, 15, 18]
