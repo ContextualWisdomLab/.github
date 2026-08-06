@@ -94,6 +94,77 @@ jobs:
             tests/test_sandboxed_web_e2e_branch_contract.py \
             tests/test_sandboxed_web_e2e_output_limits.py
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_repository_branch_coverage_execution_sandboxes.py')
+          source = path.read_text(encoding='utf-8')
+          replacements = (
+              (
+                  '''    def timeout_runner(
+        command: list[str], _cwd: Path, _env: dict[str, str], timeout: int
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, timeout, output=None, stderr=None)
+''',
+                  '''    def timeout_runner(
+        command: list[str],
+        _cwd: Path,
+        _env: dict[str, str],
+        timeout: int,
+        output_limit_bytes: int,
+    ) -> subprocess.CompletedProcess[str]:
+        assert output_limit_bytes == 1_048_576
+        raise subprocess.TimeoutExpired(command, timeout, output=None, stderr=None)
+''',
+              ),
+              (
+                  '''    def start_service(
+        label: str,
+        command: str,
+        _cwd: Path,
+        _env: dict[str, str],
+        logs_dir: Path,
+    ) -> sandboxed_web_e2e.Service:
+        log_path = logs_dir / f"{label}.log"
+''',
+                  '''    def start_service(
+        label: str,
+        command: str,
+        _cwd: Path,
+        _env: dict[str, str],
+        logs_dir: Path,
+        log_limit_bytes: int,
+    ) -> sandboxed_web_e2e.Service:
+        assert log_limit_bytes == 4_194_304
+        log_path = logs_dir / f"{label}.log"
+''',
+              ),
+              (
+                  '''    def timeout_runner(
+        command: str, _cwd: Path, _env: dict[str, str], timeout: int
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, timeout, output=None, stderr=None)
+''',
+                  '''    def timeout_runner(
+        command: str,
+        _cwd: Path,
+        _env: dict[str, str],
+        timeout: int,
+        output_limit_bytes: int,
+    ) -> subprocess.CompletedProcess[str]:
+        assert output_limit_bytes == 1_048_576
+        raise subprocess.TimeoutExpired(command, timeout, output=None, stderr=None)
+''',
+              ),
+          )
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one legacy sandbox helper signature, found {count}')
+              source = source.replace(old, new, 1)
+          path.write_text(source, encoding='utf-8')
+          PY
+
           cat >.github/workflows/sandboxed-evidence-quality-ci.yml <<'YAML'
           name: Sandboxed Evidence Quality CI
 
@@ -110,6 +181,7 @@ jobs:
                 - "tests/test_bounded_subprocess*.py"
                 - "tests/test_opencode_model_pool_runner.py"
                 - "tests/test_redact*.py"
+                - "tests/test_repository_branch_coverage_execution_sandboxes.py"
                 - "tests/test_sandboxed*.py"
                 - "requirements-opencode-review-ci-hashes.txt"
             push:
@@ -124,11 +196,12 @@ jobs:
                 - "tests/test_bounded_subprocess*.py"
                 - "tests/test_opencode_model_pool_runner.py"
                 - "tests/test_redact*.py"
+                - "tests/test_repository_branch_coverage_execution_sandboxes.py"
                 - "tests/test_sandboxed*.py"
                 - "requirements-opencode-review-ci-hashes.txt"
 
           concurrency:
-            group: sandboxed-evidence-quality-${{ github.event.pull_request.number || github.ref }}
+            group: sandboxed-evidence-quality-__PR_OR_REF__
             cancel-in-progress: true
 
           permissions:
@@ -149,7 +222,7 @@ jobs:
                 - name: Checkout exact head
                   uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
                   with:
-                    ref: ${{ github.event.pull_request.head.sha || github.sha }}
+                    ref: __HEAD_OR_SHA__
                     persist-credentials: false
                 - name: Set up Python
                   uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -176,21 +249,34 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          changelog = Path("CHANGELOG.md")
-          source = changelog.read_text(encoding="utf-8")
-          entries = (
-              "- Redact credentials from every sandbox command, timeout, service-tail, JSON, and review-evidence sink while preserving ordinary diagnostics.\n",
-              "- Bound command and long-running service output, terminate isolated process groups on overflow, and emit deterministic resource-limit evidence without capping unrelated repository artifacts.\n",
-              "- Add a permanent exact-head quality workflow enforcing 100% production statement, branch, and docstring coverage for sandbox evidence controls.\n",
+          quality_path = Path('.github/workflows/sandboxed-evidence-quality-ci.yml')
+          quality = quality_path.read_text(encoding='utf-8')
+          quality = quality.replace(
+              '__PR_OR_REF__',
+              '$' + '{{ github.event.pull_request.number || github.ref }}',
+          ).replace(
+              '__HEAD_OR_SHA__',
+              '$' + '{{ github.event.pull_request.head.sha || github.sha }}',
           )
-          marker = "## [Unreleased]\n"
+          if '__PR_OR_REF__' in quality or '__HEAD_OR_SHA__' in quality:
+              raise SystemExit('permanent workflow expression placeholders remain')
+          quality_path.write_text(quality, encoding='utf-8')
+
+          changelog = Path('CHANGELOG.md')
+          source = changelog.read_text(encoding='utf-8')
+          entries = (
+              '- Redact credentials from every sandbox command, timeout, service-tail, JSON, and review-evidence sink while preserving ordinary diagnostics.\n',
+              '- Bound command and long-running service output, terminate isolated process groups on overflow, and emit deterministic resource-limit evidence without capping unrelated repository artifacts.\n',
+              '- Add a permanent exact-head quality workflow enforcing 100% production statement, branch, and docstring coverage for sandbox evidence controls.\n',
+          )
+          marker = '## [Unreleased]\n'
           if marker not in source:
-              raise SystemExit("CHANGELOG is missing the Unreleased section")
-          missing = "".join(entry for entry in entries if entry not in source)
+              raise SystemExit('CHANGELOG is missing the Unreleased section')
+          missing = ''.join(entry for entry in entries if entry not in source)
           if missing:
               changelog.write_text(
-                  source.replace(marker, marker + "\n" + missing, 1),
-                  encoding="utf-8",
+                  source.replace(marker, marker + '\n' + missing, 1),
+                  encoding='utf-8',
               )
           PY
           rm \
@@ -257,6 +343,7 @@ jobs:
               'tests/test_opencode_model_pool_runner.py',
               'tests/test_redact_json_key_boundary.py',
               'tests/test_redact_sensitive_log_contract.py',
+              'tests/test_repository_branch_coverage_execution_sandboxes.py',
               'tests/test_sandboxed_entrypoint_and_cleanup_coverage.py',
               'tests/test_sandboxed_output_redaction.py',
               'tests/test_sandboxed_service_capture_startup.py',
@@ -282,9 +369,7 @@ jobs:
               with urllib.request.urlopen(req, timeout=60) as response:
                   return json.load(response)
 
-          raw = subprocess.check_output(
-              ['git', 'diff', '--name-status', '-z', 'HEAD'],
-          )
+          raw = subprocess.check_output(['git', 'diff', '--name-status', '-z', 'HEAD'])
           parts = raw.decode('utf-8').split('\0')
           changes = []
           index = 0
