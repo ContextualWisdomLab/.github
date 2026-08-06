@@ -30,11 +30,21 @@ A response body belongs to one attempt only. Partial bytes read before a transie
 
 The base-commit reader resolves `git` with `shutil.which("git", path=os.defpath)` and accepts only an absolute result. The ambient process `PATH` cannot select the executable; missing or relative resolution fails before any repository command runs.
 
+## Descriptor-pinned output boundary
+
+The generated-lock output path is treated as an untrusted namespace rather than as a stable object. Every directory component is created or opened relative to an already-open parent descriptor with `O_DIRECTORY`, `O_NOFOLLOW`, and `O_CLOEXEC`. The materializer compares the path entry's device and inode to the pinned descriptor immediately after open and again before reporting success. Removing, replacing, or redirecting the output pathname therefore fails closed; subsequent writes never re-resolve that mutable pathname.
+
+Generated requirements and manifests are opened relative to the pinned output directory. A new file requires `O_CREAT | O_EXCL | O_NOFOLLOW`; a rerun may reopen only an existing singly linked regular file. Symbolic links, hard links, directories, FIFOs, and other special files are rejected before truncation. Each write is bounded by forward-progress checks, synchronized with `fsync`, and revalidated against the pinned file descriptor before the directory itself is synchronized and revalidated.
+
+This contract intentionally uses the POSIX descriptor-relative interface represented by `openat()` and Python's `dir_fd` operations. It prevents the check-then-use gap reported against the earlier `Path.exists()`/`Path.is_symlink()` followed by `Path.mkdir()` sequence. The central GitHub runner is Linux; a platform that does not provide the required no-follow descriptor flags fails at import or execution rather than silently falling back to pathname-based writes.
+
 ## Incident evidence
 
 Central OpenCode coverage run `31002427460` for `ContextualWisdomLab/newsdom-api#524` reached the exact trusted-uv materialization stage and failed with `trusted uv archive download failed: HTTPError`. The source PR changed only `AGENTS.md`; all repository-local checks were successful. A later workflow in the same operating window downloaded the pinned uv release successfully, supporting a bounded transient-retry response rather than weakening the immutable bootstrap or bypassing coverage.
 
 The same failure class later blocked exact-head OpenCode coverage for `ContextualWisdomLab/pg-llm-batch#53` in central workflow run `31022108085`. Repository-local CI, security, and SAST checks passed on that exact product head, while trusted uv archive materialization failed before PR-controlled tests ran.
+
+Exact-head Strix run `31076540331` for organization control-plane PR `ContextualWisdomLab/.github#790` identified a medium-severity time-of-check/time-of-use race between output-directory symlink inspection and directory creation. The finding was valid rather than stale or infrastructure-only. Test-first commit `a1dcc679c1767f7e806793d7c0225a1342a9a875` captured intermediate symlink, pathname removal and replacement, generated-file symlink and hard-link, post-open swap, zero-progress write, and root-output regressions before descriptor-pinned production remediation.
 
 ## Verification contract
 
@@ -46,18 +56,25 @@ Permanent tests require:
 - certificate verification, permanent DNS, malformed transport reasons, and unclassified local errors fail after one attempt and no sleep;
 - persistent transient failures stop after exactly three attempts and delays of one and two seconds;
 - every attempt reuses the literal trusted URL and exact timeout;
-- partial bytes from a failed response are absent from the next attempt; and
+- partial bytes from a failed response are absent from the next attempt;
+- every output path component is opened without following symlinks and remains bound to the pinned descriptor;
+- output-path removal or inode replacement fails closed after descriptor-relative writes;
+- generated-file symlinks and multiply linked files are rejected before mutation;
+- a singly linked regular generated file can be safely refreshed on a rerun;
+- a post-open generated-file path swap and a zero-progress descriptor write fail closed; and
 - the no-proxy opener, redirect rejection, final-origin validation, repeated bounded reads, maximum size, checksum, archive member, executable version, Python compatibility, offline export, full SHA-256 grammar, 100% statement and branch coverage, and production docstrings remain unchanged.
 
 A permanent documentation contract rejects broader legacy wording such as all `URLError` or `OSError` failures and generic `5xx` retries.
 
 ## MSA and operational boundary
 
-This retry belongs to the organization-owned coverage control plane because every leaf repository consumes the same trusted bootstrap. Leaf repositories such as pg-llm-batch, NewsDOM, and naruon must not duplicate a downloader or weaken their review gates. If all three attempts fail, the current-head review remains fail-closed and publishes bounded evidence; no approval or merge is synthesized.
+This retry and output hardening belong to the organization-owned coverage control plane because every leaf repository consumes the same trusted bootstrap. Leaf repositories such as pg-llm-batch, NewsDOM, and naruon must not duplicate a downloader, pathname race workaround, or weakened review gate. If all three attempts fail or any output binding changes, the current-head review remains fail-closed and publishes bounded evidence; no approval or merge is synthesized.
 
 ## Rollback
 
-Rollback removes the retry constants and loop while retaining every immutable-source, no-proxy, no-redirect, bounded-read, checksum, archive, executable-version, and offline-export control. Operators may also set the delay tuple to empty in a reviewed change to restore one attempt. Increasing attempts, delays, or the closed classifier requires a separate availability, security, and runner-budget review.
+Rollback of the transport slice removes the retry constants and loop while retaining every immutable-source, no-proxy, no-redirect, bounded-read, checksum, archive, executable-version, and offline-export control. Operators may also set the delay tuple to empty in a reviewed change to restore one attempt. Increasing attempts, delays, or the closed classifier requires a separate availability, security, and runner-budget review.
+
+The output-binding remediation must not be rolled back to pathname prechecks. A safe rollback may stop materialization entirely or replace the implementation with an independently reviewed descriptor-relative or private-directory publication design that preserves no-follow opening, inode validation, regular-file validation, and fail-closed behavior.
 
 ## References
 
@@ -65,6 +82,10 @@ Fielding, R. T., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 911
 
 Nottingham, M., & Fielding, R. (2012). *Additional HTTP status codes* (RFC 6585). RFC Editor. https://doi.org/10.17487/RFC6585
 
+Python Software Foundation. (2026). *os—Miscellaneous operating system interfaces*. Python 3.14 documentation. https://docs.python.org/3.14/library/os.html
+
 Python Software Foundation. (2026). *urllib.error—Exception classes raised by urllib.request*. Python 3.14 documentation. https://docs.python.org/3/library/urllib.error.html
+
+The Open Group. (2024). *open, openat—Open file relative to directory file descriptor*. In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024*. https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html
 
 Thomson, M., Nottingham, M., & Tarreau, W. (2018). *Using early data in HTTP* (RFC 8470). RFC Editor. https://doi.org/10.17487/RFC8470
