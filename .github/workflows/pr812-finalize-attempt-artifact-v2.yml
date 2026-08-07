@@ -1,0 +1,131 @@
+name: PR 812 Finalize Attempt Artifact Handoff V2
+
+on:
+  push:
+    branches:
+      - fix/opencode-attempt-scoped-coverage-artifact
+    paths:
+      - .github/workflows/pr812-finalize-attempt-artifact-v2.yml
+
+concurrency:
+  group: pr812-finalize-attempt-artifact-v2
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  finalize:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/fix/opencode-attempt-scoped-coverage-artifact'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Refuse concurrent branch movement
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_BRANCH: fix/opencode-attempt-scoped-coverage-artifact
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          remote_sha="$(git ls-remote origin "refs/heads/$EXPECTED_BRANCH" | awk '{print $1}')"
+          test "$remote_sha" = "$EXPECTED_SHA"
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked quality tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Execute reviewed repair source and remove temporary writers
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          repair_path = Path('.github/workflows/opencode-coverage-artifact-rerun-repair.yml')
+          repair_text = repair_path.read_text(encoding='utf-8')
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n          rm .github/workflows/opencode-coverage-artifact-rerun-repair.yml"
+          if repair_text.count(start_marker) != 1 or repair_text.count(end_marker) != 1:
+              raise SystemExit('reviewed repair source markers changed')
+          embedded = repair_text.split(start_marker, 1)[1].split(end_marker, 1)[0]
+          exec(compile(textwrap.dedent(embedded), str(repair_path), 'exec'), {})
+
+          test_path = Path('tests/test_opencode_coverage_artifact_rerun_contract.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          old_assertion = '    assert "artifact_id=$COVERAGE_SOURCE_ARTIFACT_ID" in evidence_job\n'
+          new_assertion = (
+              '    assert (\n'
+              '        "printf \'artifact_id=%s\\\\n\' \\\"$COVERAGE_SOURCE_ARTIFACT_ID\\\" "\n'
+              '        ">>\\\"$GITHUB_OUTPUT\\\"" in evidence_job\n'
+              '    )\n'
+          )
+          if test_text.count(old_assertion) != 1:
+              raise SystemExit('artifact output assertion anchor changed')
+          test_path.write_text(test_text.replace(old_assertion, new_assertion, 1), encoding='utf-8')
+          PY
+
+          rm -- .github/workflows/opencode-coverage-artifact-rerun-repair.yml
+          rm -- .github/workflows/pr812-finalize-attempt-artifact.yml
+          rm -- .github/workflows/pr812-finalize-attempt-artifact-v2.yml
+          git diff --check
+
+      - name: Verify focused and complete GREEN evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q tests/test_opencode_coverage_artifact_rerun_contract.py
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate .
+          python -m compileall -q scripts tests
+          git diff --check
+          expected="$(printf '%s\n' \
+            '.github/workflows/opencode-coverage-artifact-rerun-repair.yml' \
+            '.github/workflows/opencode-review-dispatch.yml' \
+            '.github/workflows/pr812-finalize-attempt-artifact-v2.yml' \
+            '.github/workflows/pr812-finalize-attempt-artifact.yml' \
+            'CHANGELOG.md' \
+            'docs/doctoring/opencode-coverage-artifact-reruns.md' \
+            'tests/test_opencode_coverage_artifact_rerun_contract.py' | sort)"
+          actual="$(git diff --name-only HEAD | sort)"
+          test "$actual" = "$expected"
+
+      - name: Publish verified permanent repair
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_BRANCH: fix/opencode-attempt-scoped-coverage-artifact
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          remote_sha="$(git ls-remote origin "refs/heads/$EXPECTED_BRANCH" | awk '{print $1}')"
+          test "$remote_sha" = "$EXPECTED_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(opencode): validate current-attempt artifact identity before download"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_SHA"
+          git push origin "HEAD:refs/heads/$EXPECTED_BRANCH"
