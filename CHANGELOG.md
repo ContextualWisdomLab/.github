@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Made the required dependency-review support probe require both successful `curl` transport completion and exact HTTP 200 evidence before emitting `supported=true`; partial transfers and every other nonzero curl exit now fail closed even if an HTTP 200 status was already written.
 - Terminated fatal-provider OpenCode attempts as complete process groups instead of killing only the timeout wrapper, preventing descendant processes from retaining workflow pipes and stalling exact-head coverage evidence after the review launcher exits.
 - Bound each review-agent invocation key to the wrapper's complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.
 - Bound both trusted-uv quality jobs to `github.event.pull_request.head.sha` and added a permanent two-checkout regression contract so exact-head compatibility, coverage, docstring, and compilation claims cannot silently measure GitHub's generated pull-request merge revision.
