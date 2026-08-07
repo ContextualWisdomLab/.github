@@ -46,6 +46,7 @@ class MentionRequest:
     comment_id: int
     actor: str
     agents: tuple[str, ...]
+    pull_request_base_sha: str = ""
 
 
 class GitHubClient:
@@ -154,7 +155,9 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
     repository_name = str(repository.get("full_name") or "").strip()
     actor = str(comment.get("user", {}).get("login") or "").strip()
     head_sha = str(pull_request.get("head", {}).get("sha") or "").strip()
-    base_branch = str(pull_request.get("base", {}).get("ref") or "").strip()
+    base = pull_request.get("base") or {}
+    base_branch = str(base.get("ref") or "").strip()
+    base_sha = str(base.get("sha") or "").strip()
     number = issue.get("number")
     comment_id = comment.get("id")
     if not REPOSITORY_RE.fullmatch(repository_name):
@@ -171,6 +174,8 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         raise ValueError("pull request head SHA is missing or invalid")
     if not BASE_BRANCH_RE.fullmatch(base_branch):
         raise ValueError("pull request base branch is missing or invalid")
+    if not HEAD_SHA_RE.fullmatch(base_sha):
+        raise ValueError("pull request base SHA is missing or invalid")
     if not ACTOR_RE.fullmatch(actor):
         raise ValueError("comment actor is missing or invalid")
     return MentionRequest(
@@ -181,6 +186,7 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         comment_id,
         actor,
         agents,
+        pull_request_base_sha=base_sha.lower(),
     )
 
 
@@ -220,26 +226,48 @@ def eligible_agents(
     return tuple(dispatchable), tuple(rejected)
 
 
-def agent_invocation_key(request: MentionRequest, agent: str) -> str:
-    """Return a deterministic opaque key for one exact agent invocation.
-
-    The key binds repository, pull request, exact head, base branch, requested
-    agent, source comment, and requesting actor. It contains no credential or
-    provider response and is safe to place in workflow and artifact names.
-    """
+def agent_invocation_claim(
+    request: MentionRequest,
+    agent: str,
+) -> dict[str, object]:
+    """Return the complete canonical security claim for one agent dispatch."""
 
     if agent not in MENTION_PATTERNS:
         raise ValueError(f"unsupported agent: {agent}")
+    claim: dict[str, object] = {
+        "actor": request.actor,
+        "agent": agent,
+        "base_branch": request.pull_request_base_branch,
+        "base_sha": request.pull_request_base_sha,
+        "comment_id": request.comment_id,
+        "head_sha": request.pull_request_head_sha,
+        "pr_number": request.pull_request_number,
+        "repository": request.repository,
+    }
+    if agent == "opencode-agent":
+        claim.update(
+            {
+                "enable_auto_merge": False,
+                "merge_mode": "disabled",
+                "review_dispatch_limit": "1",
+                "trigger_reviews": True,
+                "update_branches": False,
+            }
+        )
+    return claim
+
+
+def agent_invocation_key(request: MentionRequest, agent: str) -> str:
+    """Return a deterministic opaque key for one exact agent invocation.
+
+    The key binds repository, pull request, exact head and base identities,
+    requested agent, source comment, requesting actor, and every downstream
+    behavior flag. It contains no credential or provider response and is safe
+    to place in workflow and artifact names.
+    """
+
     canonical = json.dumps(
-        {
-            "actor": request.actor,
-            "agent": agent,
-            "base_branch": request.pull_request_base_branch,
-            "comment_id": request.comment_id,
-            "head_sha": request.pull_request_head_sha,
-            "pr_number": request.pull_request_number,
-            "repository": request.repository,
-        },
+        agent_invocation_claim(request, agent),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -351,6 +379,7 @@ def noema_payload(request: MentionRequest) -> dict[str, Any]:
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
             "pr_head_sha": request.pull_request_head_sha,
+            "pr_base_sha": request.pull_request_base_sha,
             "base_branch": request.pull_request_base_branch,
             "requested_agent": agent,
             "agent_invocation_key": agent_invocation_key(request, agent),
@@ -364,18 +393,20 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
     """Return the durable review-only OpenCode wrapper dispatch body."""
 
     agent = "opencode-agent"
+    claim = agent_invocation_claim(request, agent)
     return {
         "event_type": "agent-mention-opencode",
         "client_payload": {
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
             "pr_head_sha": request.pull_request_head_sha,
+            "pr_base_sha": request.pull_request_base_sha,
             "base_branch": request.pull_request_base_branch,
-            "trigger_reviews": True,
-            "review_dispatch_limit": "1",
-            "enable_auto_merge": False,
-            "update_branches": False,
-            "merge_mode": "disabled",
+            "trigger_reviews": claim["trigger_reviews"],
+            "review_dispatch_limit": claim["review_dispatch_limit"],
+            "enable_auto_merge": claim["enable_auto_merge"],
+            "update_branches": claim["update_branches"],
+            "merge_mode": claim["merge_mode"],
             "requested_agent": agent,
             "agent_invocation_key": agent_invocation_key(request, agent),
             "requested_by": request.actor,
