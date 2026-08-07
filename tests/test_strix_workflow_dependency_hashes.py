@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
@@ -39,6 +41,24 @@ def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" not in workflow
+
+
+@pytest.mark.parametrize(
+    "yaml_key",
+    (
+        "workflow_dispatch:",
+        "workflow_dispatch :",
+        "'workflow_dispatch':",
+        '"workflow_dispatch":',
+    ),
+)
+def test_manual_dispatch_guard_recognizes_valid_yaml_key_spellings(
+    yaml_key: str,
+) -> None:
+    """The manual-dispatch guard must recognize equivalent YAML key spellings."""
+    synthetic_workflow = f"on:\n  {yaml_key}\n"
+
+    assert "workflow_dispatch:" in synthetic_workflow
 
 
 def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
