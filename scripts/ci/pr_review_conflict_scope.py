@@ -9,7 +9,9 @@ retargeted path fails closed before the workflow stages a commit.
 
 The module never executes pull-request code. It uses a fixed, validated system
 Git executable only to enumerate path names and hashes regular-file bytes
-directly with SHA-256.
+directly with SHA-256. Every symbolic link must resolve to a regular file that
+is itself present in the same authoritative Git inventory, preventing links
+from exposing external, ignored, dangling, or directory-backed write paths.
 """
 
 from __future__ import annotations
@@ -36,7 +38,10 @@ def _validated_root(root: Path) -> Path:
     candidate = root.absolute()
     if candidate.is_symlink() or not candidate.is_dir():
         raise ValueError("repository root must be a non-symlink directory")
-    return candidate
+    try:
+        return candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("repository root could not be canonicalized") from exc
 
 
 def _validated_relative_path(raw_path: str) -> str:
@@ -101,6 +106,49 @@ def _git_paths(root: Path) -> tuple[str, ...]:
     return _bounded_paths(raw_paths, source_name="repository inventory")
 
 
+def _validate_symlink_targets(root: Path, relative_paths: Sequence[str]) -> None:
+    """Require every inventoried symlink to resolve to an inventoried regular file."""
+    inventory = frozenset(relative_paths)
+    for relative_path in relative_paths:
+        link_path = root / relative_path
+        try:
+            link_metadata = link_path.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISLNK(link_metadata.st_mode):
+            continue
+
+        try:
+            resolved_target = link_path.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(
+                f"repository symlink {relative_path!r} must resolve to a regular file"
+            ) from exc
+        try:
+            target_relative = resolved_target.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise ValueError(
+                f"repository symlink {relative_path!r} must resolve inside the repository"
+            ) from exc
+
+        try:
+            target_metadata = resolved_target.lstat()
+        except OSError as exc:
+            raise ValueError(
+                f"repository symlink {relative_path!r} must resolve to a regular file"
+            ) from exc
+        if not stat.S_ISREG(target_metadata.st_mode):
+            raise ValueError(
+                f"repository symlink {relative_path!r} must resolve to a regular file"
+            )
+
+        normalized_target = _validated_relative_path(target_relative)
+        if normalized_target not in inventory:
+            raise ValueError(
+                f"repository symlink {relative_path!r} target must be present in the Git inventory"
+            )
+
+
 def _sha256_file(path: Path) -> str:
     """Return the SHA-256 digest of one regular file without loading it whole."""
     digest = hashlib.sha256()
@@ -138,9 +186,11 @@ def _fingerprint(root: Path, relative_path: str) -> dict[str, Any]:
 def build_snapshot(root: Path) -> dict[str, Any]:
     """Build a deterministic worktree snapshot after the protected-base merge."""
     canonical_root = _validated_root(root)
+    relative_paths = _git_paths(canonical_root)
+    _validate_symlink_targets(canonical_root, relative_paths)
     entries = {
         relative_path: _fingerprint(canonical_root, relative_path)
-        for relative_path in _git_paths(canonical_root)
+        for relative_path in relative_paths
     }
     return {"schema_version": _SCHEMA_VERSION, "entries": entries}
 
@@ -219,13 +269,18 @@ def verify_snapshot(
         raise ValueError("allowed path is absent from the pre-model snapshot")
 
     current_paths = _git_paths(canonical_root)
-    all_paths = tuple(sorted(set(before).union(current_paths)))
+    _validate_symlink_targets(canonical_root, current_paths)
+    current = {
+        relative_path: _fingerprint(canonical_root, relative_path)
+        for relative_path in current_paths
+    }
+    all_paths = tuple(sorted(set(before).union(current)))
     violations = tuple(
         relative_path
         for relative_path in all_paths
         if relative_path not in allowed_paths
         and before.get(relative_path, {"kind": "missing"})
-        != _fingerprint(canonical_root, relative_path)
+        != current.get(relative_path, {"kind": "missing"})
     )
     return violations
 
