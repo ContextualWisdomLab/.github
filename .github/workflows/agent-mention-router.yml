@@ -6,10 +6,6 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
-concurrency:
-  group: review-agent-mention-router-${{ github.repository }}
-  cancel-in-progress: false
-
 # Organization required-workflow rules do not propagate issue_comment events
 # into sibling repositories. Keep the workflow default read-only; each bounded
 # job declares only the writes it actually needs.
@@ -28,6 +24,9 @@ jobs:
         contains(github.event.comment.body, '@cwl-noema-review')
         || contains(github.event.comment.body, '@opencode-agent')
       )
+    concurrency:
+      group: review-agent-mention-router-local-${{ github.repository }}
+      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -70,6 +69,9 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
       && github.event_name == 'schedule'
+    concurrency:
+      group: review-agent-mention-router-sweep-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -128,8 +130,10 @@ jobs:
           if ! token_response="$(
             curl -fsS --connect-timeout 10 --max-time 30 \
               -X POST \
+              -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+              --data "$(jq -cn --arg target_repository "$TARGET_REPOSITORY" '{target_repository:$target_repository}')" \
+              "${TOKEN_EXCHANGE_URL}"
           )"; then
             echo "OpenCode app token exchange unavailable: app token request did not complete."
             mark_unavailable
