@@ -47,6 +47,38 @@ def test_coverage_source_artifact_is_attempt_scoped_and_downloaded_by_id() -> No
     assert "name: opencode-coverage-source\n" not in evidence_job
 
 
+def test_coverage_source_requires_current_producer_attempt() -> None:
+    """Reject reused producer output when a selective rerun advances the attempt."""
+    workflow = _workflow_text()
+    source_job = _job_block(workflow, "coverage-source-tree", "coverage-evidence")
+    evidence_job = _job_block(workflow, "coverage-evidence", "opencode-review-target")
+
+    assert (
+        "coverage_source_run_attempt: "
+        "${{ steps.coverage_source_attempt.outputs.run_attempt }}"
+        in source_job
+    )
+    assert "id: coverage_source_attempt" in source_job
+    assert "GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}" in source_job
+    assert "run_attempt=%s" in source_job
+
+    assert (
+        "COVERAGE_SOURCE_RUN_ATTEMPT: "
+        "${{ needs.coverage-source-tree.outputs.coverage_source_run_attempt }}"
+        in evidence_job
+    )
+    assert "CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}" in evidence_job
+    assert '[ "$COVERAGE_SOURCE_RUN_ATTEMPT" != "$CURRENT_RUN_ATTEMPT" ]' in evidence_job
+    assert "full rerun or a fresh repository dispatch" in evidence_job
+    guard_index = evidence_job.index(
+        "- name: Verify coverage source was produced in current workflow attempt"
+    )
+    download_index = evidence_job.index(
+        "- name: Download current-attempt materialized pull request merge tree"
+    )
+    assert guard_index < download_index
+
+
 def test_missing_current_attempt_artifact_fails_with_fresh_run_guidance() -> None:
     """Reject partial reruns instead of falling back to stale source evidence."""
     workflow = _workflow_text()
