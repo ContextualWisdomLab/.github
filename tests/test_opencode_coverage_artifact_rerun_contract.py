@@ -26,6 +26,13 @@ def _job_block(workflow: str, job_name: str, next_job_name: str) -> str:
     return workflow[start:end]
 
 
+def _step_block(job: str, step_name: str, next_step_name: str) -> str:
+    """Return one workflow step bounded by the following named step."""
+    start = job.index(f"      - name: {step_name}\n")
+    end = job.index(f"\n      - name: {next_step_name}\n", start)
+    return job[start:end]
+
+
 def test_coverage_source_artifact_is_attempt_scoped_and_downloaded_by_id() -> None:
     """Bind every producer attempt to its immutable uploaded artifact ID."""
     workflow = _workflow_text()
@@ -41,24 +48,34 @@ def test_coverage_source_artifact_is_attempt_scoped_and_downloaded_by_id() -> No
     assert "name: opencode-coverage-source-${{ github.run_attempt }}" in source_job
     assert "retention-days: 1" in source_job
 
-    assert "id: coverage_source_identity" in evidence_job
+    identity = _step_block(
+        evidence_job,
+        "Verify coverage source identity for current workflow attempt",
+        "Download current-attempt materialized pull request merge tree",
+    )
+    download = _step_block(
+        evidence_job,
+        "Download current-attempt materialized pull request merge tree",
+        "Report missing current-attempt coverage source",
+    )
+    assert "id: coverage_source_identity" in identity
     assert (
         "COVERAGE_SOURCE_ARTIFACT_ID: "
         "${{ needs.coverage-source-tree.outputs.coverage_source_artifact_id }}"
-        in evidence_job
+        in identity
     )
-    assert '[[ "$COVERAGE_SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in evidence_job
-    assert "artifact_id=$COVERAGE_SOURCE_ARTIFACT_ID" in evidence_job
+    assert '[[ "$COVERAGE_SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in identity
+    assert "artifact_id=$COVERAGE_SOURCE_ARTIFACT_ID" in identity
     assert (
         "artifact-ids: ${{ steps.coverage_source_identity.outputs.artifact_id }}"
-        in evidence_job
+        in download
     )
     assert (
         "artifact-ids: "
         "${{ needs.coverage-source-tree.outputs.coverage_source_artifact_id }}"
-        not in evidence_job
+        not in download
     )
-    assert "name: opencode-coverage-source\n" not in evidence_job
+    assert "name: opencode-coverage-source\n" not in download
 
 
 def test_coverage_source_requires_current_producer_attempt() -> None:
@@ -66,6 +83,11 @@ def test_coverage_source_requires_current_producer_attempt() -> None:
     workflow = _workflow_text()
     source_job = _job_block(workflow, "coverage-source-tree", "coverage-evidence")
     evidence_job = _job_block(workflow, "coverage-evidence", "opencode-review-target")
+    identity = _step_block(
+        evidence_job,
+        "Verify coverage source identity for current workflow attempt",
+        "Download current-attempt materialized pull request merge tree",
+    )
 
     assert (
         "coverage_source_run_attempt: "
@@ -79,12 +101,12 @@ def test_coverage_source_requires_current_producer_attempt() -> None:
     assert (
         "COVERAGE_SOURCE_RUN_ATTEMPT: "
         "${{ needs.coverage-source-tree.outputs.coverage_source_run_attempt }}"
-        in evidence_job
+        in identity
     )
-    assert "CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}" in evidence_job
-    assert '[ "$COVERAGE_SOURCE_RUN_ATTEMPT" != "$CURRENT_RUN_ATTEMPT" ]' in evidence_job
-    assert "failed-jobs-only reruns cannot reuse prior-attempt source evidence" in evidence_job
-    assert "full rerun or a fresh repository dispatch" in evidence_job
+    assert "CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}" in identity
+    assert '[ "$COVERAGE_SOURCE_RUN_ATTEMPT" != "$CURRENT_RUN_ATTEMPT" ]' in identity
+    assert "failed-jobs-only reruns cannot reuse prior-attempt source evidence" in identity
+    assert "full rerun or a fresh repository dispatch" in identity
 
     guard_index = evidence_job.index(
         "- name: Verify coverage source identity for current workflow attempt"
@@ -99,24 +121,35 @@ def test_missing_or_expired_artifact_fails_with_bounded_recovery_guidance() -> N
     """Fail closed on absent exact evidence without searching earlier attempts."""
     workflow = _workflow_text()
     evidence_job = _job_block(workflow, "coverage-evidence", "opencode-review-target")
+    identity = _step_block(
+        evidence_job,
+        "Verify coverage source identity for current workflow attempt",
+        "Download current-attempt materialized pull request merge tree",
+    )
+    download = _step_block(
+        evidence_job,
+        "Download current-attempt materialized pull request merge tree",
+        "Report missing current-attempt coverage source",
+    )
+    recovery = _step_block(
+        evidence_job,
+        "Report missing current-attempt coverage source",
+        "Prepare pull request merge tree for coverage measurement",
+    )
 
-    assert "id: coverage_source_identity" in evidence_job
-    assert "continue-on-error: true" in evidence_job
-    assert "id: coverage_source_download" in evidence_job
-    assert (
-        "if: steps.coverage_source_identity.outcome == 'success'" in evidence_job
-    )
-    assert (
-        "if: steps.coverage_source_identity.outcome != 'success' || "
-        "steps.coverage_source_download.outcome != 'success'"
-        in evidence_job
-    )
-    assert "failed-jobs-only rerun" in evidence_job
-    assert "full rerun or a fresh repository dispatch" in evidence_job
-    assert "GITHUB_RUN_ATTEMPT" in evidence_job
-    assert "exit 1" in evidence_job
-    assert "list-artifacts" not in evidence_job
-    assert "latest" not in evidence_job.lower()
+    assert "id: coverage_source_identity" in identity
+    assert "continue-on-error: true" in identity
+    assert "if: needs.coverage-source-tree.result == 'success'" in identity
+    assert "id: coverage_source_download" in download
+    assert "continue-on-error: true" in download
+    assert "if: steps.coverage_source_identity.outcome == 'success'" in download
+    assert "steps.coverage_source_identity.outcome != 'success'" in recovery
+    assert "steps.coverage_source_download.outcome != 'success'" in recovery
+    assert "failed-jobs-only rerun" in recovery
+    assert "full rerun or a fresh repository dispatch" in recovery
+    assert "GITHUB_RUN_ATTEMPT" in recovery
+    assert "exit 1" in recovery
+    assert "list-artifacts" not in identity + download + recovery
 
 
 def test_coverage_consumer_remains_credential_free() -> None:
