@@ -14,12 +14,6 @@ permissions:
 
 jobs:
   dispatch-review-repair:
-    permissions:
-      actions: write
-      contents: read
-      issues: write
-      pull-requests: read
-      statuses: read
     uses: ./.github/workflows/pr-review-fix-scheduler.yml
     with:
       target_repository: ContextualWisdomLab/clearfolio
