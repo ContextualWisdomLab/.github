@@ -24,6 +24,7 @@ _MAX_CONTROL_BYTES = 1024 * 1024
 _SOURCE_IDENTITY = "source-identity.json"
 _CHECKSUM_FILE = "checksums.sha256"
 _FILENAME_PROPERTY = "cwl:artifact:filename"
+_CYCLONEDX_PREDICATE_TYPE = "https://cyclonedx.org/bom"
 
 
 class EvidenceError(ValueError):
@@ -225,6 +226,11 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         raise EvidenceError("source SHA must be a lowercase 40-character Git SHA")
     if not _ARTIFACT_DIGEST_RE.fullmatch(arguments.evidence_artifact_digest):
         raise EvidenceError("evidence artifact digest must use sha256:<hex>")
+    if arguments.predicate_type != _CYCLONEDX_PREDICATE_TYPE:
+        raise EvidenceError(
+            "predicate type must be the canonical CycloneDX predicate "
+            f"{_CYCLONEDX_PREDICATE_TYPE}"
+        )
 
     root = _validate_evidence_root(Path(arguments.evidence_root))
 
