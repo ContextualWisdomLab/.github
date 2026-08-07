@@ -58,7 +58,9 @@ def pr_view(repo: str, number: int) -> dict[str, Any]:
 
 def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any]]:
     """Return current-head approval or change-request reviews."""
-    pages = run_json(["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"])
+    pages = run_json(
+        ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"]
+    )
     reviews = [review for page in pages for review in page]
     current: list[dict[str, Any]] = []
     for review in reviews:
@@ -66,7 +68,10 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
         commit_id = str(review.get("commit_id") or "")
         if commit_id != head_sha and head_sha not in body:
             continue
-        if str(review.get("state") or "").upper() not in {"CHANGES_REQUESTED", "APPROVED"}:
+        if str(review.get("state") or "").upper() not in {
+            "CHANGES_REQUESTED",
+            "APPROVED",
+        }:
             continue
         current.append(review)
     return current[-8:]
@@ -116,7 +121,11 @@ def review_threads(repo: str, number: int) -> list[dict[str, Any]]:
         ]
     )
     nodes = result["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
-    return [node for node in nodes if not node.get("isResolved") and not node.get("isOutdated")]
+    return [
+        node
+        for node in nodes
+        if not node.get("isResolved") and not node.get("isOutdated")
+    ]
 
 
 def check_summary(status_rollup: list[dict[str, Any]] | None) -> list[str]:
@@ -136,8 +145,9 @@ def check_summary(status_rollup: list[dict[str, Any]] | None) -> list[str]:
 
 
 def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
-    """Return sorted repository paths safe for the rendered authority section."""
-    paths: set[str] = set()
+    """Return unique safe repository paths in first-seen review order."""
+    paths: list[str] = []
+    seen: set[str] = set()
     for thread in threads:
         for comment in (thread.get("comments") or {}).get("nodes") or []:
             path = str(comment.get("path") or "").strip()
@@ -146,16 +156,20 @@ def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
                 or any(delimiter in path for delimiter in ("\0", "\r", "\n", "`"))
                 or path.startswith("/")
                 or ".." in path.split("/")
+                or path in seen
             ):
                 continue
-            paths.add(path)
-    return sorted(paths)
+            seen.add(path)
+            paths.append(path)
+    return paths
 
 
 def _quote_untrusted_markdown(body: str) -> str:
     """Render untrusted review prose without creating authoritative headings."""
     bounded = body[:6000]
-    return "\n".join(f"> {line}" if line else ">" for line in bounded.splitlines())
+    return "\n".join(
+        f"> {line}" if line else ">" for line in bounded.splitlines()
+    )
 
 
 def _write_allowed_paths(paths: list[str], output: Path) -> None:
@@ -180,7 +194,9 @@ def write_context(
     """Write bounded review text plus a separately sealed path authorization."""
     pr = pr_view(repo, number)
     if pr["headRefOid"] != head_sha:
-        raise RuntimeError(f"live head {pr['headRefOid']} does not match expected {head_sha}")
+        raise RuntimeError(
+            f"live head {pr['headRefOid']} does not match expected {head_sha}"
+        )
 
     reviews = current_reviews(repo, number, head_sha)
     threads = review_threads(repo, number)
@@ -282,13 +298,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     """Run the context writer."""
     args = parse_args(argv)
-    write_context(
-        args.repo,
-        args.pr_number,
-        args.head_sha,
-        args.output,
-        allowed_paths_output=args.allowed_paths_output,
-    )
+    if args.allowed_paths_output is None:
+        write_context(
+            args.repo,
+            args.pr_number,
+            args.head_sha,
+            args.output,
+        )
+    else:
+        write_context(
+            args.repo,
+            args.pr_number,
+            args.head_sha,
+            args.output,
+            allowed_paths_output=args.allowed_paths_output,
+        )
     return 0
 
 
