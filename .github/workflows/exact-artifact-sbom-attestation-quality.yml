@@ -32,7 +32,7 @@ permissions:
 jobs:
   minimum-python-contract:
     name: Python 3.10 contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Harden runner
@@ -65,7 +65,7 @@ jobs:
 
   exact-contract:
     name: Python 3.14 exact contract and complete coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Harden runner
