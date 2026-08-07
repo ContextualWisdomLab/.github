@@ -113,7 +113,7 @@ incident evidence. Do not bypass the required security check.
 If an exact dependency wheel becomes unavailable, first verify the release and
 artifact digest against PyPI's file record and provenance. A rollback may select
 the last known-good fully versioned wheel only when its exact hash is recorded in
-the workflow, regression contract, and this document together. Never replace
+the workflow, regression contract, and this document. Never replace
 `--require-hashes` with an unhashed install.
 
 Do not restore `workflow_dispatch` to this executable central workflow as an
