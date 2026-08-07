@@ -22,6 +22,10 @@ def test_context_helper_is_part_of_the_focused_exact_head_quality_gate() -> None
     assert workflow.count("- scripts/ci/pr_review_autofix_context.py") == 2
     assert workflow.count("- tests/test_pr_review_fix_scheduler.py") == 2
     assert workflow.count("- tests/test_hourly_autofix_context_quality_gate.py") == 2
+    assert (
+        workflow.count("- tests/test_pr_review_autofix_writer_security_contract.py")
+        == 2
+    )
     pytest_start = workflow.index("python -m pytest -q")
     coverage_start = workflow.index(
         "--cov=scripts.ci.pr_review_conflict_scope", pytest_start
