@@ -419,6 +419,24 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
             )
 
 
+def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
+    """Reject existing symlink components before materialization writes begin."""
+    candidate = output_dir.absolute()
+    current = pathlib.Path(candidate.anchor)
+    for component in candidate.parts[1:]:
+        current /= component
+        if current.is_symlink():
+            raise ValueError(
+                f"output directory path must not contain symlinks: {current}"
+            )
+        if not current.exists():
+            break
+        if not current.is_dir():
+            raise ValueError(
+                f"output directory path component must be a directory: {current}"
+            )
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
@@ -426,9 +444,9 @@ def materialize(
     head_sha: str | None = None,
 ) -> list[dict[str, str]]:
     """Write trusted base and bounded HEAD inputs under Docker-context-safe paths."""
-    if output_dir.exists() and output_dir.is_symlink():
-        raise ValueError("output directory must not be a symlink")
+    _reject_symlinked_output_components(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    _reject_symlinked_output_components(output_dir)
 
     manifest: list[dict[str, str]] = []
     projects: list[tuple[str, str, dict[str, bytes], str, str]] = []
