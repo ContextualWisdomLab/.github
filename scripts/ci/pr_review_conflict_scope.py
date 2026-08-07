@@ -7,8 +7,9 @@ compares the live worktree with that snapshot. Only paths that Git reported as
 unmerged conflict paths may differ; any other changed, created, deleted, or
 retargeted path fails closed before the workflow stages a commit.
 
-The module never executes pull-request code. It uses Git only to enumerate path
-names and hashes regular-file bytes directly with SHA-256.
+The module never executes pull-request code. It uses a fixed, validated system
+Git executable only to enumerate path names and hashes regular-file bytes
+directly with SHA-256.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ _SCHEMA_VERSION = 1
 _MAX_PATHS = 100_000
 _MAX_PATH_BYTES = 4_096
 _HASH_CHUNK_BYTES = 1024 * 1024
+_TRUSTED_GIT_EXECUTABLE = Path("/usr/bin/git")
 
 
 def _validated_root(root: Path) -> Path:
@@ -61,11 +63,25 @@ def _bounded_paths(paths: Sequence[str], *, source_name: str) -> tuple[str, ...]
     return tuple(sorted({_validated_relative_path(path) for path in paths}))
 
 
+def _trusted_git_executable() -> str:
+    """Return the fixed regular executable used for security-sensitive Git reads."""
+    candidate = _TRUSTED_GIT_EXECUTABLE
+    if not candidate.is_absolute():
+        raise RuntimeError("trusted Git executable path must be absolute")
+    try:
+        metadata = candidate.lstat()
+    except OSError as exc:
+        raise RuntimeError("trusted Git executable is unavailable") from exc
+    if not stat.S_ISREG(metadata.st_mode) or not os.access(candidate, os.X_OK):
+        raise RuntimeError("trusted Git executable must be a regular executable")
+    return os.fspath(candidate)
+
+
 def _git_paths(root: Path) -> tuple[str, ...]:
     """Return tracked and non-ignored untracked worktree paths from Git."""
     completed = subprocess.run(
         [
-            "git",
+            _trusted_git_executable(),
             "-C",
             str(root),
             "ls-files",
