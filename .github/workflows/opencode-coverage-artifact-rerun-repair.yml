@@ -12,13 +12,13 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  repair:
+  materialize-and-export:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
       && github.ref == 'refs/heads/fix/opencode-attempt-scoped-coverage-artifact'
@@ -35,7 +35,6 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          fetch-depth: 0
           ref: ${{ github.sha }}
 
       - name: Set up current stable Python
@@ -48,253 +47,34 @@ jobs:
       - name: Install hash-locked quality tooling
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Apply exact attempt-scoped artifact repair
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
+      - name: Materialize attempt-scoped artifact repair
+        run: python scripts/ci/prepare_opencode_attempt_artifact_patch.py
 
-          def action_expression(value: str) -> str:
-              """Build a literal GitHub Actions expression at runtime."""
-              return "$" + "{{ " + value + " }}"
-
-          def unique_index(
-              lines: list[str],
-              needle: str,
-              *,
-              start: int = 0,
-              end: int | None = None,
-              label: str,
-          ) -> int:
-              """Return the only exact line match inside a bounded range."""
-              stop = len(lines) if end is None else end
-              matches = [
-                  index
-                  for index in range(start, stop)
-                  if lines[index] == needle
-              ]
-              if len(matches) != 1:
-                  raise SystemExit(
-                      f"Expected exactly one {label} line, found {len(matches)}."
-                  )
-              return matches[0]
-
-          workflow_path = Path(".github/workflows/opencode-review-dispatch.yml")
-          lines = workflow_path.read_text(encoding="utf-8").splitlines(keepends=True)
-
-          producer_start = unique_index(
-              lines,
-              "  coverage-source-tree:\n",
-              label="coverage-source-tree job",
-          )
-          consumer_start = unique_index(
-              lines,
-              "  coverage-evidence:\n",
-              label="coverage-evidence job",
-          )
-          producer_env = unique_index(
-              lines,
-              "    env:\n",
-              start=producer_start,
-              end=consumer_start,
-              label="coverage-source-tree env",
-          )
-          expected_permissions = [
-              "    permissions:\n",
-              "      contents: read\n",
-              "      id-token: write\n",
-          ]
-          if lines[producer_env - 3 : producer_env] != expected_permissions:
-              raise SystemExit(
-                  "coverage-source-tree permission boundary no longer matches the reviewed contract."
-              )
-          lines[producer_env:producer_env] = [
-              "    outputs:\n",
-              "      coverage_source_artifact_id: "
-              + action_expression("steps.coverage_source_upload.outputs.artifact-id")
-              + "\n",
-          ]
-
-          producer_start = unique_index(
-              lines,
-              "  coverage-source-tree:\n",
-              label="coverage-source-tree job after output insertion",
-          )
-          consumer_start = unique_index(
-              lines,
-              "  coverage-evidence:\n",
-              label="coverage-evidence job after output insertion",
-          )
-          upload_step = unique_index(
-              lines,
-              "      - name: Upload materialized pull request merge tree\n",
-              start=producer_start,
-              end=consumer_start,
-              label="coverage source upload step",
-          )
-          if not lines[upload_step + 1].startswith(
-              "        uses: actions/upload-artifact@"
-          ):
-              raise SystemExit("Coverage upload action anchor changed unexpectedly.")
-          lines[upload_step + 1 : upload_step + 1] = [
-              "        id: coverage_source_upload\n"
-          ]
-
-          consumer_start = unique_index(
-              lines,
-              "  coverage-evidence:\n",
-              label="coverage-evidence job after upload ID insertion",
-          )
-          upload_name = unique_index(
-              lines,
-              "          name: opencode-coverage-source\n",
-              start=upload_step,
-              end=consumer_start,
-              label="coverage source upload name",
-          )
-          lines[upload_name] = (
-              "          name: opencode-coverage-source-"
-              + action_expression("github.run_attempt")
-              + "\n"
-          )
-
-          consumer_start = unique_index(
-              lines,
-              "  coverage-evidence:\n",
-              label="coverage-evidence job before download repair",
-          )
-          review_start = unique_index(
-              lines,
-              "  opencode-review-target:\n",
-              start=consumer_start,
-              label="opencode-review-target job",
-          )
-          download_step = unique_index(
-              lines,
-              "      - name: Download materialized pull request merge tree\n",
-              start=consumer_start,
-              end=review_start,
-              label="coverage source download step",
-          )
-          if not lines[download_step + 1].startswith(
-              "        uses: actions/download-artifact@"
-          ):
-              raise SystemExit("Coverage download action anchor changed unexpectedly.")
-          lines[download_step] = (
-              "      - name: Download current-attempt materialized pull request merge tree\n"
-          )
-          lines[download_step + 1 : download_step + 1] = [
-              "        id: coverage_source_download\n",
-              "        continue-on-error: true\n",
-          ]
-
-          review_start = unique_index(
-              lines,
-              "  opencode-review-target:\n",
-              start=consumer_start,
-              label="opencode-review-target job after download ID insertion",
-          )
-          download_name = unique_index(
-              lines,
-              "          name: opencode-coverage-source\n",
-              start=download_step,
-              end=review_start,
-              label="coverage source download name",
-          )
-          lines[download_name] = (
-              "          artifact-ids: "
-              + action_expression(
-                  "needs.coverage-source-tree.outputs.coverage_source_artifact_id"
-              )
-              + "\n"
-          )
-
-          review_start = unique_index(
-              lines,
-              "  opencode-review-target:\n",
-              start=consumer_start,
-              label="opencode-review-target job before failure guidance insertion",
-          )
-          download_path = unique_index(
-              lines,
-              "          path: "
-              + action_expression("runner.temp")
-              + "/opencode-coverage-artifact\n",
-              start=download_step,
-              end=review_start,
-              label="coverage source download path",
-          )
-          if lines[download_path + 1] != "\n":
-              raise SystemExit("Expected a blank line after the coverage download step.")
-          shell_run_attempt = "$" + "{GITHUB_RUN_ATTEMPT}"
-          lines[download_path + 1 : download_path + 2] = [
-              "\n",
-              "      - name: Report missing current-attempt coverage source\n",
-              "        if: steps.coverage_source_download.outcome != 'success'\n",
-              "        env:\n",
-              "          GITHUB_RUN_ATTEMPT: "
-              + action_expression("github.run_attempt")
-              + "\n",
-              "        run: |\n",
-              "          set -euo pipefail\n",
-              "          echo \"::error::Coverage source evidence is unavailable for workflow run attempt "
-              + shell_run_attempt
-              + "; a failed-jobs-only rerun cannot safely reconstruct or reuse source evidence from another attempt.\"\n",
-              "          echo \"::error::Use a full rerun or a fresh repository dispatch so coverage-source-tree uploads exact current-attempt evidence.\"\n",
-              "          exit 1\n",
-              "\n",
-          ]
-
-          workflow_path.write_text("".join(lines), encoding="utf-8")
-
-          changelog_path = Path("CHANGELOG.md")
-          changelog = changelog_path.read_text(encoding="utf-8")
-          marker = "### Fixed\n\n"
-          entry = (
-              "- Bound OpenCode coverage source artifacts to one workflow attempt and immutable "
-              "artifact ID, retained one-day source evidence, and made failed-jobs-only reruns "
-              "fail closed with full-rerun or fresh-dispatch guidance instead of searching for "
-              "expired or prior-attempt artifacts.\n"
-          )
-          if changelog.count(marker) != 1:
-              raise SystemExit("Expected exactly one Unreleased Fixed marker.")
-          if entry not in changelog:
-              changelog = changelog.replace(marker, marker + entry, 1)
-          changelog_path.write_text(changelog, encoding="utf-8")
-          PY
-
-          rm .github/workflows/opencode-coverage-artifact-rerun-repair.yml
-
-      - name: Verify focused regression is green
+      - name: Verify focused regression
         run: python -m pytest tests/test_opencode_coverage_artifact_rerun_contract.py -q
 
       - name: Verify complete central test suite
         run: python -m pytest tests -q
 
-      - name: Verify Python compilation and clean patch
+      - name: Verify compilation and bounded patch
         run: |
           set -euo pipefail
           python -m compileall -q scripts tests
           git diff --check
-          test -z "$(git ls-files --others --exclude-standard)"
-
-      - name: Commit verified direct repair and remove bootstrap
-        env:
-          PUSH_TOKEN: ${{ github.token }}
-          TARGET_BRANCH: fix/opencode-attempt-scoped-coverage-artifact
-        run: |
-          set -euo pipefail
-          if [ -z "${PUSH_TOKEN:-}" ]; then
-            echo "::error::The repository-scoped GitHub Actions token is required to publish the verified workflow-file repair."
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' '.github/workflows/opencode-review-dispatch.yml' 'CHANGELOG.md' | sort)"
+          if [ "$changed" != "$expected" ]; then
+            printf 'Unexpected materialized paths:\n%s\n' "$changed" >&2
             exit 1
           fi
-          echo "::add-mask::$PUSH_TOKEN"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            .github/workflows/opencode-review-dispatch.yml \
-            .github/workflows/opencode-coverage-artifact-rerun-repair.yml \
+
+      - name: Upload verified repair payload
+        id: repair_payload_upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opencode-attempt-artifact-repair-payload-${{ github.run_attempt }}
+          path: |
+            .github/workflows/opencode-review-dispatch.yml
             CHANGELOG.md
-          git commit -m "fix(opencode): bind coverage source artifacts to attempts"
-          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          if-no-files-found: error
+          retention-days: 1
