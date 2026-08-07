@@ -26,6 +26,13 @@ def _job_block(workflow: str, job_name: str, next_job_name: str) -> str:
     return workflow[start:end]
 
 
+def _step_block(job: str, step_name: str, next_step_name: str) -> str:
+    """Return one workflow step bounded by the following named step."""
+    start = job.index(f"      - name: {step_name}\n")
+    end = job.index(f"\n      - name: {next_step_name}\n", start)
+    return job[start:end]
+
+
 def test_coverage_source_artifact_is_attempt_scoped_and_downloaded_by_id() -> None:
     """Bind every producer attempt to its immutable uploaded artifact ID."""
     workflow = _workflow_text()
@@ -49,9 +56,6 @@ def test_coverage_source_artifact_is_attempt_scoped_and_downloaded_by_id() -> No
     )
     assert '[[ "$COVERAGE_SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in evidence_job
     assert "artifact_id=$COVERAGE_SOURCE_ARTIFACT_ID" in evidence_job
-    assert (
-        "if: steps.coverage_source_identity.outcome == 'success'" in evidence_job
-    )
     assert (
         "artifact-ids: ${{ steps.coverage_source_identity.outputs.artifact_id }}"
         in evidence_job
@@ -97,19 +101,66 @@ def test_coverage_source_requires_current_producer_attempt() -> None:
 
 
 def test_missing_current_attempt_artifact_fails_with_fresh_run_guidance() -> None:
-    """Reject partial reruns instead of falling back to stale source evidence."""
+    """Keep recovery guidance reachable for every absent producer or download."""
     workflow = _workflow_text()
     evidence_job = _job_block(workflow, "coverage-evidence", "opencode-review-target")
+    producer_diagnostic = _step_block(
+        evidence_job,
+        "Report coverage source materialization failure",
+        "Verify coverage source identity for current workflow attempt",
+    )
+    identity = _step_block(
+        evidence_job,
+        "Verify coverage source identity for current workflow attempt",
+        "Download current-attempt materialized pull request merge tree",
+    )
+    download = _step_block(
+        evidence_job,
+        "Download current-attempt materialized pull request merge tree",
+        "Report missing current-attempt coverage source",
+    )
+    recovery = _step_block(
+        evidence_job,
+        "Report missing current-attempt coverage source",
+        "Prepare pull request merge tree for coverage measurement",
+    )
 
-    assert "id: coverage_source_identity" in evidence_job
-    assert "id: coverage_source_download" in evidence_job
-    assert evidence_job.count("continue-on-error: true") >= 2
-    assert "steps.coverage_source_identity.outcome != 'success'" in evidence_job
-    assert "steps.coverage_source_download.outcome != 'success'" in evidence_job
-    assert "failed-jobs-only rerun" in evidence_job
-    assert "full rerun or a fresh repository dispatch" in evidence_job
-    assert "GITHUB_RUN_ATTEMPT" in evidence_job
-    assert "exit 1" in evidence_job
+    assert "always()" in evidence_job.split("    runs-on:", 1)[0]
+    assert "needs.coverage-source-tree.result != 'cancelled'" not in evidence_job
+    assert "needs.coverage-source-tree.result != 'success'" in producer_diagnostic
+    assert "exit 1" not in producer_diagnostic
+
+    assert "id: coverage_source_identity" in identity
+    assert "continue-on-error: true" in identity
+    assert "if: needs.coverage-source-tree.result == 'success'" in identity
+
+    assert "id: coverage_source_download" in download
+    assert "continue-on-error: true" in download
+    assert "needs.coverage-source-tree.result == 'success'" in download
+    assert "steps.coverage_source_identity.outcome == 'success'" in download
+
+    assert "always()" in recovery
+    assert "needs.coverage-source-tree.result != 'success'" in recovery
+    assert "steps.coverage_source_identity.outcome != 'success'" in recovery
+    assert "steps.coverage_source_download.outcome != 'success'" in recovery
+    assert "failed-jobs-only rerun" in recovery
+    assert "full rerun or a fresh repository dispatch" in recovery
+    assert "GITHUB_RUN_ATTEMPT" in recovery
+    assert "exit 1" in recovery
+
+    diagnostic_index = evidence_job.index(
+        "- name: Report coverage source materialization failure"
+    )
+    identity_index = evidence_job.index(
+        "- name: Verify coverage source identity for current workflow attempt"
+    )
+    download_index = evidence_job.index(
+        "- name: Download current-attempt materialized pull request merge tree"
+    )
+    recovery_index = evidence_job.index(
+        "- name: Report missing current-attempt coverage source"
+    )
+    assert diagnostic_index < identity_index < download_index < recovery_index
 
 
 def test_coverage_consumer_remains_credential_free() -> None:
