@@ -427,7 +427,7 @@ def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
         current /= component
         if current.is_symlink():
             raise ValueError(
-                f"output directory path must not contain symlinks: {current}"
+                f"output directory must not be a symlink or contain symlinks: {current}"
             )
         if not current.exists():
             break
