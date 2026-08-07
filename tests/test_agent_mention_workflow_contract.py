@@ -10,6 +10,23 @@ QUALITY_WORKFLOW = (
 CHECKOUT_PIN = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
 
 
+def _job_block(workflow: str, job_name: str, next_job_name: str | None) -> str:
+    """Return one top-level job block bounded by the following job."""
+    jobs = workflow.split("\njobs:\n", 1)[1]
+    start = jobs.index(f"  {job_name}:\n")
+    if next_job_name is None:
+        return jobs[start:]
+    end = jobs.index(f"\n  {next_job_name}:\n", start)
+    return jobs[start:end]
+
+
+def _concurrency_block(job: str) -> str:
+    """Return the exact job-scoped concurrency mapping before ``runs-on``."""
+    start = job.index("    concurrency:\n")
+    end = job.index("\n    runs-on:", start)
+    return job[start:end]
+
+
 def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() -> None:
     """The router is central-only, scheduled, and least-privileged."""
 
@@ -55,16 +72,25 @@ def test_interactive_mentions_and_sweeps_have_independent_queue_contracts() -> N
     """Scheduled sweeps cannot replace a pending trusted comment invocation."""
 
     text = WORKFLOW.read_text(encoding="utf-8")
-    header, jobs = text.split("\njobs:\n", 1)
-    local, sweep = jobs.split("\n  sweep-organization-agent-mentions:\n", 1)
+    header = text.split("\njobs:\n", 1)[0]
+    local_job = _job_block(
+        text,
+        "route-local-agent-mention",
+        "sweep-organization-agent-mentions",
+    )
+    sweep_job = _job_block(text, "sweep-organization-agent-mentions", None)
 
     assert "\nconcurrency:\n" not in header
-    assert "group: review-agent-mention-router-local-${{ github.repository }}" in local
-    assert "queue: max" in local
-    assert "cancel-in-progress:" not in local
-    assert "group: review-agent-mention-router-sweep-${{ github.repository }}" in sweep
-    assert "cancel-in-progress: false" in sweep
-    assert "queue: max" not in sweep
+    assert _concurrency_block(local_job) == (
+        "    concurrency:\n"
+        "      group: review-agent-mention-router-local-${{ github.repository }}\n"
+        "      queue: max"
+    )
+    assert _concurrency_block(sweep_job) == (
+        "    concurrency:\n"
+        "      group: review-agent-mention-router-sweep-${{ github.repository }}\n"
+        "      cancel-in-progress: false"
+    )
 
 
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:
