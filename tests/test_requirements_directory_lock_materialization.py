@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path, PurePosixPath
 
+import pytest
+
 from scripts.ci import materialize_base_python_requirements as materializer
 
 
@@ -62,6 +64,35 @@ def test_materializes_hash_pinned_requirements_directory_lock(
     assert (output / "requirements-000.txt").read_text(encoding="utf-8").startswith(
         "numpy==2.5.1"
     )
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    (
+        (b"--require-hashes\n", False),
+        (b"--require-hashes\ndemo==1\n", False),
+        (
+            b"--require-hashes\ndemo==1 --hash=sha256:"
+            + (b"a" * 64)
+            + b"\n",
+            True,
+        ),
+        (
+            b"pinned==1 --hash=sha256:"
+            + (b"b" * 64)
+            + b"\nunpinned==2\n",
+            False,
+        ),
+        (b"--index-url https://packages.example.invalid/simple\n", False),
+        (b"--requirement other.txt\n", True),
+    ),
+)
+def test_global_hash_directive_does_not_replace_per_requirement_trust(
+    content: bytes,
+    expected: bool,
+) -> None:
+    """Only substantive hashed pins or bounded requirement includes qualify."""
+    assert materializer._is_hash_pinned(content) is expected
 
 
 def test_rejects_global_hash_directive_with_unpinned_requirement(
