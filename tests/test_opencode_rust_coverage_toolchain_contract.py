@@ -69,13 +69,18 @@ def test_isolated_runtime_receives_reviewed_llvm_constants() -> None:
 
 
 def test_isolated_runtime_revalidates_llvm_tools_before_coverage() -> None:
-    """Require a second fail-closed executable check before Rust coverage."""
+    """Require reviewed-path equality and executable checks before Rust coverage."""
 
     workflow = _workflow_text()
     docker_run = workflow.index("docker run --rm")
-    cargo_coverage_invocation = workflow.index("cargo llvm-cov", docker_run)
+    toolchain_start = workflow.index("ensure_rust_toolchain() {", docker_run)
+    toolchain_end = workflow.index("rust_coverage_manifests() {", toolchain_start)
+    toolchain = workflow[toolchain_start:toolchain_end]
+    cargo_coverage_invocation = workflow.index("cargo llvm-cov", toolchain_end)
     llvm_cov_checks = _all_positions(workflow, 'test -x "$LLVM_COV"')
     llvm_profdata_checks = _all_positions(workflow, 'test -x "$LLVM_PROFDATA"')
 
+    assert f'"${{LLVM_COV:-}}" != "{_LLVM_COV_PATH}"' in toolchain
+    assert f'"${{LLVM_PROFDATA:-}}" != "{_LLVM_PROFDATA_PATH}"' in toolchain
     assert docker_run < llvm_cov_checks[-1] < cargo_coverage_invocation
     assert docker_run < llvm_profdata_checks[-1] < cargo_coverage_invocation
