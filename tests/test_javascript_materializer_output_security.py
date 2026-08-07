@@ -132,7 +132,7 @@ def test_materializer_anchors_writes_when_output_path_becomes_symlink(
     assert list(attacker_directory.iterdir()) == []
 
 
-@pytest.mark.parametrize("relative_path", ["../escape", "/absolute", "nested\\escape"])
+@pytest.mark.parametrize("relative_path", ["", "../escape", "/absolute", "nested\\escape"])
 def test_materializer_rejects_unsafe_relative_input_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -289,3 +289,97 @@ def test_materializer_normalizes_directory_open_failures(
             "a" * 40,
             tmp_path / "generated_locks",
         )
+
+
+def test_output_binding_rejects_removed_published_path(tmp_path: Path) -> None:
+    """A removed output pathname cannot validate against its still-open descriptor."""
+
+    output_directory = tmp_path / "generated_locks"
+    output_directory.mkdir()
+    output_fd = os.open(output_directory, materializer._DIRECTORY_OPEN_FLAGS)
+    metadata = os.fstat(output_fd)
+    try:
+        output_directory.rmdir()
+        with pytest.raises(ValueError, match="changed during secure materialization"):
+            materializer._verify_output_directory_binding(
+                output_directory,
+                output_fd,
+                (metadata.st_dev, metadata.st_ino),
+            )
+    finally:
+        os.close(output_fd)
+
+
+def test_relative_directory_open_failure_closes_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child directory that cannot be opened propagates a bounded hard failure."""
+
+    root_fd = os.open(tmp_path, materializer._DIRECTORY_OPEN_FLAGS)
+    real_open = os.open
+
+    def fail_child_open(
+        path: object,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        if path == "nested_directory":
+            raise OSError(errno.EACCES, "synthetic")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", fail_child_open)
+    try:
+        with pytest.raises(OSError, match="synthetic"):
+            materializer._open_relative_directory(root_fd, ("nested_directory",))
+    finally:
+        os.close(root_fd)
+
+
+def test_project_directory_must_be_fresh(tmp_path: Path) -> None:
+    """A pre-existing numbered project directory is rejected before any file write."""
+
+    (tmp_path / "project-000").mkdir()
+    output_fd = os.open(tmp_path, materializer._DIRECTORY_OPEN_FLAGS)
+    try:
+        with pytest.raises(ValueError, match="must not pre-exist"):
+            materializer._create_project_directory(output_fd, "project-000")
+    finally:
+        os.close(output_fd)
+
+
+def test_descriptor_file_must_be_fresh(tmp_path: Path) -> None:
+    """A pre-existing file name cannot be reopened through the descriptor helper."""
+
+    (tmp_path / "manifest.json").write_bytes(b"unchanged")
+    parent_fd = os.open(tmp_path, materializer._DIRECTORY_OPEN_FLAGS)
+    try:
+        with pytest.raises(ValueError, match="must not pre-exist"):
+            materializer._write_new_file(parent_fd, "manifest.json", b"replacement")
+    finally:
+        os.close(parent_fd)
+    assert (tmp_path / "manifest.json").read_bytes() == b"unchanged"
+
+
+def test_new_file_rejects_non_single_link_initial_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected initial link count fails before trusted bytes are written."""
+
+    parent_fd = os.open(tmp_path, materializer._DIRECTORY_OPEN_FLAGS)
+    real_fstat = os.fstat
+
+    def force_multiple_links(file_descriptor: int) -> os.stat_result:
+        metadata = real_fstat(file_descriptor)
+        if file_descriptor == parent_fd:
+            return metadata
+        values = list(metadata)
+        values[3] = 2
+        return os.stat_result(values)
+
+    monkeypatch.setattr(os, "fstat", force_multiple_links)
+    try:
+        with pytest.raises(ValueError, match="singly linked regular files"):
+            materializer._write_new_file(parent_fd, "new-lock.json", b"trusted")
+    finally:
+        os.close(parent_fd)
