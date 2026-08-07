@@ -103,6 +103,36 @@ entrypoint that treats target repository, pull-request number, and exact head
 SHA as untrusted bounded data. It must never execute a caller-selected workflow
 revision or receive broader credentials merely to improve convenience.
 
+## Quality-gate runtime budget
+
+Exact-head Strix Changed Path Quality CI run `31222595171` for
+`ContextualWisdomLab/.github#790` checked out
+`c9f11e803b2d797604276b64a51c4ff47d9e3757`, installed the hash-locked test
+runner, and completed the full central Python suite with `1,017 passed` and
+`16 subtests passed` in about 55 seconds. It then entered the complete shell
+regression harness, which intentionally exercises multiple bounded timeout and
+fail-closed paths. GitHub cancelled the job at the configured ten-minute job
+budget before that harness could finish; no failing assertion preceded the
+cancellation.
+
+That cancellation is not passing security evidence and is not a reason to remove
+or shorten the shell regressions. Test-first commit
+`1912d39d7d9b395e66c6bdb7cfcd37f31850f37f` adds a permanent contract requiring
+the quality job to reserve at least 20 minutes while preserving the harness's
+30-second process-timeout and 60-second fake-sleep boundaries. Production commit
+`e0ea9cea372286eefcfb914b2113554d93654ffe` raises only the job-level
+`timeout-minutes` from 10 to 20. It does not change test selection, assertions,
+coverage requirements, dependency integrity, security classification, or scanner
+behavior.
+
+GitHub documents `jobs.<job_id>.timeout-minutes` as the maximum time before a job
+is automatically cancelled. A larger explicit budget therefore preserves a
+bounded failure mode while allowing the already-bounded regression harness to
+complete. Future changes must keep the workflow budget above the measured
+worst-case harness envelope; if the harness gains additional bounded waits, the
+budget contract and this record must be reviewed together rather than deleting
+slow security tests.
+
 ## Rollback and incident response
 
 Roll back the allowlist and regression together only if a downstream call is
@@ -120,10 +150,18 @@ Do not restore `workflow_dispatch` to this executable central workflow as an
 availability workaround. Use a new pull-request event, a protected-main change,
 or a separately reviewed immutable-target dispatcher.
 
+Do not roll the Strix quality job back to a budget that is shorter than its
+complete bounded regression harness. If runtime becomes unacceptable, optimize
+or decompose the harness with equivalent coverage first and retain exact-head,
+fail-closed evidence throughout the migration.
+
 ## References
 
 Batchelder, N., & contributors. (2026). *coverage.py 7.15.2* [Computer
 software]. Python Package Index. https://pypi.org/project/coverage/7.15.2/
+
+GitHub. (2026). *Workflow syntax for GitHub Actions*. GitHub Docs.
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 
 GitHub. (2026). *Manually running a workflow*. GitHub Docs.
 https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow
