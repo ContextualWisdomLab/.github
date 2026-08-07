@@ -53,15 +53,41 @@ def test_git_inventory_ignores_a_path_hijacked_executable(
     assert not marker.exists()
 
 
-def test_git_resolver_rejects_an_executable_outside_trusted_directories(
+@pytest.mark.parametrize(
+    "candidate_kind, error_pattern",
+    [
+        ("relative", "must be absolute"),
+        ("missing", "is unavailable"),
+        ("directory", "regular executable"),
+        ("non_executable", "regular executable"),
+        ("symlink", "regular executable"),
+    ],
+)
+def test_trusted_git_executable_validation_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    candidate_kind: str,
+    error_pattern: str,
 ) -> None:
-    """An executable found outside the fixed system directories is rejected."""
-    hostile_bin = tmp_path / "hostile-bin"
-    hostile_bin.mkdir()
-    _write_executable(hostile_bin / "git", "#!/bin/sh\nexit 0\n")
-    monkeypatch.setattr(scope, "_TRUSTED_GIT_SEARCH_PATH", str(hostile_bin))
+    """Only the fixed absolute regular executable can enumerate repository paths."""
+    if candidate_kind == "relative":
+        candidate = Path("git")
+    elif candidate_kind == "missing":
+        candidate = tmp_path / "missing-git"
+    elif candidate_kind == "directory":
+        candidate = tmp_path / "git-directory"
+        candidate.mkdir()
+    elif candidate_kind == "non_executable":
+        candidate = tmp_path / "git-file"
+        candidate.write_text("not executable\n", encoding="utf-8")
+        candidate.chmod(0o644)
+    else:
+        target = tmp_path / "git-target"
+        _write_executable(target, "#!/bin/sh\nexit 0\n")
+        candidate = tmp_path / "git-link"
+        candidate.symlink_to(target)
 
-    with pytest.raises(RuntimeError, match="trusted system directory"):
+    monkeypatch.setattr(scope, "_TRUSTED_GIT_EXECUTABLE", candidate)
+
+    with pytest.raises(RuntimeError, match=error_pattern):
         scope._trusted_git_executable()
