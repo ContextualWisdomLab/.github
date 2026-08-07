@@ -87,7 +87,7 @@ Nottingham, M., & Fielding, R. (2012). *Additional HTTP status codes* (RFC 6585)
 
 Python Software Foundation. (2026). *os—Miscellaneous operating system interfaces*. Python 3.14 documentation. https://docs.python.org/3.14/library/os.html
 
-Python Software Foundation. (2026). *urllib.error—Exception classes raised by urllib.request*. Python 3.14 documentation. https://docs.python.org/3/library/urllib.error.html
+Python Software Foundation. (2026). *urllib.error—Exception classes raised by urllib.request*. Python 3.14 documentation. https://docs.python.org/3.14/library/urllib.error.html
 
 The Open Group. (2024). *open, openat—Open file relative to directory file descriptor*. In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024*. https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html
 
