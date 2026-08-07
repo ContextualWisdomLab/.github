@@ -291,11 +291,10 @@ jobs:
           root captured during signing, and the independently verified handoff
           manifest. Verify `SHA256SUMS` before using any member.
 
-          Run `gh attestation verify` for each distribution with its matching
-          bundle, `trusted_root.jsonl`, exact source repository and SHA, exact
-          signer repository/workflow, and expected predicate type. A successful
-          signature does not prove that the SBOM is complete or that the
-          software is vulnerability-free.
+          A successful signature does not prove that the SBOM is complete or
+          that the software is vulnerability-free. Use the exact commands below
+          so repository, source, signer, workflow, predicate, bundle, and trust
+          root identities remain explicit.
           EOF
           {
             printf '\n## Exact signed identity\n\n'
@@ -306,6 +305,44 @@ jobs:
             printf -- '- Predicate type: `%s`\n' "$PREDICATE_TYPE"
             printf -- '- Wheel: `%s`\n' "$WHEEL_FILENAME"
             printf -- '- Source distribution: `%s`\n' "$SDIST_FILENAME"
+            cat <<EOF
+
+          ## Online verification commands
+
+              gh attestation verify "sealed-evidence/${WHEEL_FILENAME}" \
+                --repo "$SOURCE_REPOSITORY" \
+                --signer-repo "$SIGNER_REPOSITORY" \
+                --signer-workflow "$signer_workflow" \
+                --source-digest "$SOURCE_SHA" \
+                --predicate-type "$PREDICATE_TYPE"
+
+              gh attestation verify "sealed-evidence/${SDIST_FILENAME}" \
+                --repo "$SOURCE_REPOSITORY" \
+                --signer-repo "$SIGNER_REPOSITORY" \
+                --signer-workflow "$signer_workflow" \
+                --source-digest "$SOURCE_SHA" \
+                --predicate-type "$PREDICATE_TYPE"
+
+          ## Offline verification commands
+
+              gh attestation verify "sealed-evidence/${WHEEL_FILENAME}" \
+                --repo "$SOURCE_REPOSITORY" \
+                --bundle offline-attestation-evidence/wheel-sbom-attestation.json \
+                --custom-trusted-root offline-attestation-evidence/trusted_root.jsonl \
+                --signer-repo "$SIGNER_REPOSITORY" \
+                --signer-workflow "$signer_workflow" \
+                --source-digest "$SOURCE_SHA" \
+                --predicate-type "$PREDICATE_TYPE"
+
+              gh attestation verify "sealed-evidence/${SDIST_FILENAME}" \
+                --repo "$SOURCE_REPOSITORY" \
+                --bundle offline-attestation-evidence/sdist-sbom-attestation.json \
+                --custom-trusted-root offline-attestation-evidence/trusted_root.jsonl \
+                --signer-repo "$SIGNER_REPOSITORY" \
+                --signer-workflow "$signer_workflow" \
+                --source-digest "$SOURCE_SHA" \
+                --predicate-type "$PREDICATE_TYPE"
+          EOF
           } >> offline-attestation-evidence/README.md
           (
             cd offline-attestation-evidence
