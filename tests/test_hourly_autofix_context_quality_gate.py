@@ -1,7 +1,13 @@
 """Contract tests for exact-head quality evidence of autofix context production."""
 
 import hashlib
+import json
 from pathlib import Path
+import runpy
+import subprocess
+import sys
+
+import pytest
 
 from scripts.ci import pr_review_autofix_context as context
 
@@ -80,3 +86,87 @@ def test_context_helper_covers_unknown_checks_and_explicit_path_output(
         f"{hashlib.sha256(b'').hexdigest()}\n"
     )
     assert markdown_output.is_file()
+
+
+def test_context_rejects_leading_and_trailing_space_paths() -> None:
+    """Git paths with external spaces must not normalize into another file."""
+    threads = [
+        {
+            "comments": {
+                "nodes": [
+                    {"path": " src/reviewed.py"},
+                    {"path": "src/reviewed.py "},
+                ]
+            }
+        }
+    ]
+
+    assert context.thread_paths(threads) == []
+
+
+def test_context_script_main_guard_completes_on_valid_cli_input(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Exercise the executable module guard through a successful bounded CLI run."""
+    head = "a" * 40
+    output = tmp_path / "script-context.md"
+    pull_request = {
+        "number": 7,
+        "title": "CLI context",
+        "url": "https://example.invalid/pull/7",
+        "headRefName": "feature",
+        "baseRefName": "main",
+        "headRefOid": head,
+        "baseRefOid": "b" * 40,
+        "mergeStateStatus": "CLEAN",
+        "statusCheckRollup": [],
+    }
+
+    def fake_run(argv, **_kwargs):
+        joined = " ".join(argv)
+        if argv[1:3] == ["pr", "view"]:
+            payload = pull_request
+        elif "pulls/7/reviews" in joined:
+            payload = [[]]
+        elif argv[1:3] == ["api", "graphql"]:
+            payload = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {"reviewThreads": {"nodes": []}}
+                    }
+                }
+            }
+        else:
+            raise AssertionError(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pr_review_autofix_context.py",
+            "--repo",
+            "owner/repo",
+            "--pr-number",
+            "7",
+            "--head-sha",
+            head,
+            "--output",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_path(
+            "scripts/ci/pr_review_autofix_context.py",
+            run_name="__main__",
+        )
+
+    assert exit_info.value.code == 0
+    assert output.is_file()
