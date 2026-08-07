@@ -233,3 +233,24 @@ def test_registry_pin_rejects_non_string_metadata() -> None:
             123,
             _VALID_INTEGRITY,
         )
+
+
+def test_materialize_rejects_symlinked_output_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parent symlink must never redirect materialized lockfile writes."""
+
+    trusted_parent = tmp_path / "trusted-parent"
+    redirected_parent = tmp_path / "redirected-parent"
+    trusted_parent.mkdir()
+    redirected_parent.mkdir()
+    symlink_parent = trusted_parent / "attacker-controlled"
+    symlink_parent.symlink_to(redirected_parent, target_is_directory=True)
+    output_dir = symlink_parent / "materialized-locks"
+
+    monkeypatch.setattr(materializer, "base_npm_projects", lambda *_args: [])
+    monkeypatch.setattr(materializer, "base_pnpm_projects", lambda *_args: [])
+
+    with pytest.raises(ValueError, match="symlink"):
+        materializer.materialize(tmp_path, "a" * 40, output_dir)
+    assert not (redirected_parent / "materialized-locks").exists()
