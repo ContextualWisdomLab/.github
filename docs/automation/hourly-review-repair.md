@@ -7,13 +7,15 @@ engine**.
   of every hour.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
-  contextual-orchestrator, or another CWL service with an explicit repository
-  and base branch.
+  contextual-orchestrator, Inkspan, or another CWL service with an explicit
+  repository and base branch.
 - `pr-review-autofix.yml` is the bounded write-capable worker. It uses OpenCode
   with NVIDIA NIM and does not approve or merge pull requests.
 
 Merge eligibility remains owned by the separate merge scheduler, branch
 protection, required checks, independent review, and unresolved-thread policy.
+The repair worker proposes changes only; it cannot reinterpret queued or failed
+checks as success.
 
 ## Clearfolio execution contract
 
@@ -43,7 +45,7 @@ The shared scheduler resolves its target in this order:
 
 1. `repository_dispatch` payload `target_repository`;
 2. reusable-workflow input `target_repository`;
-3. repository variable `PR_REVIEW_FIX_TARGET_REPOSITORY`;
+3. repository variable `PR_REVIEW_FIX_TARGET_REPOSITORY`; and
 4. the repository in which the scheduler executes.
 
 This ordering keeps standalone operation possible while preventing the central
@@ -76,6 +78,54 @@ workflow validates repository, SHA, workflow ref, and file path before checkout,
 then verifies the resulting Git revision before executing the scheduler helper.
 Checkout credentials are not persisted.
 
+The later repository-dispatch worker similarly checks out trusted central helper
+source at `${{ github.sha }}`. The dispatch payload does not select executable
+worker code.
+
+## Exact model write scope
+
+Ordinary and conflict repair use the same fail-closed worktree comparison. The
+worker snapshots the complete pre-model repository through the trusted central
+helper, including ignored paths, tracked files, other untracked files, file modes,
+regular-file hashes, and symbolic-link targets. It then verifies the complete
+post-model inventory after temporary OpenCode configuration is restored and
+before any stage, commit, or push.
+
+The authoritative allowlist is NUL-delimited. Ordinary repair receives only
+current-head file-scoped actionable review paths. Conflict repair receives only
+Git's exact unresolved paths from `git diff --name-only -z --diff-filter=U`.
+An empty ordinary allowlist authorizes no changes.
+
+The verifier rejects created, deleted, modified, mode-changed, retargeted,
+ignored, dangling, directory-backed, external-link, metadata-race, and other
+out-of-scope paths. It invokes a fixed validated `/usr/bin/git`, bounds path and
+inventory sizes, and emits redacted static failures for filesystem races. A
+symlink target must be a regular in-repository path present in the reviewable Git
+inventory.
+
+Both OpenCode permission objects allow ordinary file repair but explicitly deny
+`.git` and `.git/*`. Model child processes also receive neither GitHub write
+credentials nor Actions OIDC request credentials. These permission controls are
+defense in depth; the complete pre/post snapshot remains authoritative.
+
+## Privileged Git publication
+
+Every reviewed commit and push runs with `core.hooksPath=/dev/null`, preventing a
+repository hook from executing after model work with the privileged GitHub
+credential. This does not replace syntax, allowlist, merge-marker, exact-head, or
+branch-protection checks.
+
+Before publication, the worker re-reads the live PR head. It reconstructs an
+explicit revalidated repository URL from `GITHUB_SERVER_URL` and the exact target
+repository and supplies that URL directly to `git push`. It never trusts
+model-mutable `origin`, `remote.origin.url`, push URLs, aliases, or hooks as the
+publication destination.
+
+A head movement, unresolved marker, missing merge state, out-of-scope write,
+malformed repository identity, absent model credential, or failed validation
+terminates the run without publication. A successful push creates a new head
+that must be reviewed and checked again; the worker does not synthesize approval.
+
 ## Security and MSA boundary
 
 The scheduler may inspect review state and dispatch the already-reviewed bounded
@@ -84,39 +134,73 @@ convert queued checks to success, publish releases, or bypass independent
 review. Product repositories remain independently operable and consume the
 central policy as a reusable module rather than copying privileged automation.
 
-Clearfolio, naruon, contextual-orchestrator, and other CWL services retain their
-own product tests, authorization, release, deployment, data-governance, and
-runtime responsibilities. The central workflow owns only organization-level
-queue inspection and bounded repair dispatch.
+Clearfolio, naruon, contextual-orchestrator, Inkspan, and other CWL services
+retain their own product tests, authorization, release, deployment,
+data-governance, and runtime responsibilities. The central workflow owns only
+organization-level queue inspection and bounded repair dispatch.
+
+## Operator procedure
+
+When a scheduled run fails, classify the result before rerunning:
+
+- no actionable file-scoped feedback: expected no-op;
+- missing `NVIDIA_NIM_API_KEY`: central secret configuration failure;
+- head changed: safe optimistic-concurrency refusal; inspect the new head rather
+  than retrying predecessor evidence;
+- out-of-scope or ignored-path change: treat as a security failure and preserve
+  the failed exact-head evidence;
+- invalid symlink or metadata race: inspect the repository path without exposing
+  private runner exceptions;
+- model timeout or provider failure: do not treat it as review, approval, or
+  check success; and
+- push or branch-protection refusal: retain the branch unchanged and resolve the
+  GitHub policy or credential cause independently.
+
+Never add a one-shot write workflow to repair this worker. Apply reviewed source
+changes directly to the exact branch head, rerun focused contracts, then rerun
+all required security and review gates.
 
 ## Verification
 
-Permanent static tests prove:
+Permanent tests prove:
 
 - the Clearfolio caller owns exactly one hourly schedule and names the exact
-  Clearfolio repository and protected base branch;
+  repository and protected base branch;
 - the shared scheduler contains no product-specific timer or repository name;
-- the default dispatch budget and same-head retry floor remain one;
-- caller and reusable-workflow secret declarations are explicit and do not use
+- the dispatch budget and same-head retry floor remain one;
+- caller and reusable-workflow secrets are explicit and never use
   `secrets: inherit`;
-- the active product caller is included in the focused workflow path filters;
 - immutable source, NVIDIA-only model authentication, child-process credential
-  stripping, file allowlists, and live-head guards remain intact.
+  stripping, live-head guards, and independent reviewer identity remain intact;
+- ordinary and conflict repair share the complete ignored-inclusive snapshot and
+  NUL-delimited allowlist boundary;
+- `.git` edits, repository hooks, and model-mutable push destinations cannot
+  control privileged publication; and
+- the production verifier retains 100% statement and branch coverage and 100%
+  public docstrings.
 
-Every exact PR head must also pass all central security, coverage,
-workflow-contract, automated-review, independent-review, unresolved-thread, and
-branch-protection gates before merge.
+Every exact PR head must also pass all central security, workflow-contract,
+automated-review, independent-review, unresolved-thread, and branch-protection
+gates before merge.
 
 ## References (APA 7th edition)
 
+Git Project. (2026). *git-ls-files*. Retrieved August 7, 2026, from
+https://git-scm.com/docs/git-ls-files
+
+Git Project. (2026). *githooks*. Retrieved August 7, 2026, from
+https://git-scm.com/docs/githooks
+
 GitHub, Inc. (n.d.-a). *Contexts reference: Job context*. GitHub Docs. Retrieved
-August 5, 2026, from
+August 7, 2026, from
 https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-and-actions/contexts#job-context
 
 GitHub, Inc. (n.d.-b). *Events that trigger workflows*. GitHub Docs. Retrieved
-August 5, 2026, from
+August 7, 2026, from
 https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
 
-GitHub, Inc. (n.d.-c). *Reusing workflows*. GitHub Docs. Retrieved August 5,
+GitHub, Inc. (n.d.-c). *Reusing workflows*. GitHub Docs. Retrieved August 7,
 2026, from
 https://docs.github.com/en/enterprise-cloud@latest/actions/how-tos/reuse-automations/reuse-workflows
+
+OpenCode. (2026). *Permissions*. https://opencode.ai/docs/permissions
