@@ -37,6 +37,23 @@ def _allowed_file(path: Path, *relative_paths: str) -> Path:
     return path
 
 
+def test_repository_root_canonicalization_failure_is_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filesystem resolution failures do not expose platform-specific details."""
+    root = _repository(tmp_path)
+
+    def reject_resolution(_path: Path, *, strict: bool) -> Path:
+        assert strict is True
+        raise OSError("sensitive filesystem detail")
+
+    monkeypatch.setattr(Path, "resolve", reject_resolution)
+
+    with pytest.raises(ValueError, match="could not be canonicalized"):
+        scope.build_snapshot(root)
+
+
 def test_snapshot_rejects_a_symlink_target_outside_the_repository(
     tmp_path: Path,
 ) -> None:
@@ -65,12 +82,45 @@ def test_snapshot_rejects_a_symlink_target_excluded_from_git_inventory(
         scope.build_snapshot(root)
 
 
+def test_snapshot_rejects_a_dangling_symlink(tmp_path: Path) -> None:
+    """Dangling links cannot become deferred writes outside the snapshot."""
+    root = _repository(tmp_path)
+    os.symlink("missing-target.txt", root / "linked.txt")
+    _git(root, "add", "linked.txt")
+
+    with pytest.raises(ValueError, match="regular file"):
+        scope.build_snapshot(root)
+
+
 def test_snapshot_rejects_a_symlink_to_a_directory(tmp_path: Path) -> None:
     """Directory links cannot expose an unbounded tree to the repair model."""
     root = _repository(tmp_path)
     (root / "target-directory").mkdir()
     os.symlink("target-directory", root / "linked-directory")
     _git(root, "add", "linked-directory")
+
+    with pytest.raises(ValueError, match="regular file"):
+        scope.build_snapshot(root)
+
+
+def test_symlink_target_metadata_failure_is_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A target disappearing during validation fails closed without raw detail."""
+    root = _repository(tmp_path)
+    target = root / "z-target.txt"
+    target.write_text("target\n", encoding="utf-8")
+    os.symlink("z-target.txt", root / "linked.txt")
+    _git(root, "add", "linked.txt", "z-target.txt")
+    original_lstat = Path.lstat
+
+    def reject_target_metadata(path: Path) -> os.stat_result:
+        if path == target:
+            raise OSError("sensitive race detail")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", reject_target_metadata)
 
     with pytest.raises(ValueError, match="regular file"):
         scope.build_snapshot(root)
