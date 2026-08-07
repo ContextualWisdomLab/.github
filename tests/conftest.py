@@ -3,10 +3,50 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import os
+import pathlib
 
 import pytest
 
 from scripts.ci import materialize_base_python_requirements as materializer
+
+
+_MATERIALIZER_OPEN_INSTRUMENTATION_TESTS = {
+    "test_javascript_materializer_descriptor_ancestry.py",
+    "test_javascript_materializer_output_security.py",
+}
+
+
+class _DynamicDirectoryFdSupport:
+    """Preserve ``dir_fd`` truth for an instrumented forwarding ``os.open``."""
+
+    def __init__(self, baseline: object) -> None:
+        """Retain the platform capability set used before test instrumentation."""
+        self._baseline = baseline
+
+    def __contains__(self, function: object) -> bool:
+        """Treat the current forwarding ``os.open`` like the supported original."""
+        return function is os.open or function in self._baseline  # type: ignore[operator]
+
+
+@pytest.fixture(autouse=True)
+def preserve_instrumented_open_directory_fd_support(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Keep race-injection wrappers from invalidating the platform preflight."""
+    test_filename = pathlib.Path(str(request.node.path)).name
+    if test_filename not in _MATERIALIZER_OPEN_INSTRUMENTATION_TESTS:
+        yield
+        return
+
+    baseline = os.supports_dir_fd
+    monkeypatch.setattr(
+        os,
+        "supports_dir_fd",
+        _DynamicDirectoryFdSupport(baseline),
+    )
+    yield
 
 
 @pytest.fixture(autouse=True)
