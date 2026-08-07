@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import urllib.parse
@@ -26,6 +28,8 @@ PNPM_BASE_INPUT_NAMES = ("package.json", "pnpm-workspace.yaml", ".pnpmfile.cjs")
 NPM_LOCK_NAMES = ("npm-shrinkwrap.json", "package-lock.json")
 NPM_REGISTRY_HOST = "registry.npmjs.org"
 SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -422,12 +426,15 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
 def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
     """Reject existing symlink components before materialization writes begin."""
     candidate = output_dir.absolute()
+    if candidate == pathlib.Path(candidate.anchor):
+        raise ValueError("output directory must not be the filesystem root")
     current = pathlib.Path(candidate.anchor)
     for component in candidate.parts[1:]:
         current /= component
         if current.is_symlink():
             raise ValueError(
-                f"output directory must not be a symlink or contain symlinks: {current}"
+                "output directory must not be a symlink; "
+                f"path must not contain symlinks: {current}"
             )
         if not current.exists():
             break
@@ -437,6 +444,152 @@ def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
             )
 
 
+def _open_output_directory(output_dir: pathlib.Path) -> tuple[int, tuple[int, int]]:
+    """Open one no-follow output directory and return its descriptor identity."""
+    candidate = output_dir.absolute()
+    _reject_symlinked_output_components(candidate)
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.mkdir(exist_ok=True)
+    _reject_symlinked_output_components(candidate)
+    parent_fd = os.open(candidate.parent, _DIRECTORY_OPEN_FLAGS)
+    try:
+        try:
+            output_fd = os.open(
+                candidate.name,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=parent_fd,
+            )
+        except OSError as exc:
+            raise ValueError(
+                "output directory must not be a symlink; "
+                f"path must not contain symlinks: {candidate}"
+            ) from exc
+    finally:
+        os.close(parent_fd)
+    metadata = os.fstat(output_fd)
+    return output_fd, (metadata.st_dev, metadata.st_ino)
+
+
+def _verify_output_directory_binding(
+    output_dir: pathlib.Path,
+    output_fd: int,
+    identity: tuple[int, int],
+) -> None:
+    """Fail closed if the published output pathname no longer names the opened directory."""
+    descriptor_metadata = os.fstat(output_fd)
+    try:
+        path_metadata = os.stat(output_dir.absolute(), follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError("output directory changed during secure materialization") from exc
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or (descriptor_metadata.st_dev, descriptor_metadata.st_ino) != identity
+        or (path_metadata.st_dev, path_metadata.st_ino) != identity
+    ):
+        raise ValueError("output directory changed during secure materialization")
+
+
+def _safe_relative_parts(relative_path: str) -> tuple[str, ...]:
+    """Return one normalized relative POSIX output path or fail closed."""
+    candidate = pathlib.PurePosixPath(relative_path)
+    if (
+        not relative_path
+        or "\\" in relative_path
+        or candidate.is_absolute()
+        or ".." in candidate.parts
+        or candidate.as_posix() != relative_path
+        or not candidate.parts
+    ):
+        raise ValueError(f"unsafe relative output path: {relative_path!r}")
+    return candidate.parts
+
+
+def _open_relative_directory(root_fd: int, parts: tuple[str, ...]) -> int:
+    """Open or create trusted child directories relative to one pinned descriptor."""
+    current_fd = os.dup(root_fd)
+    try:
+        for part in parts:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(part, _DIRECTORY_OPEN_FLAGS, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _create_project_directory(output_fd: int, directory: str) -> int:
+    """Create a fresh project directory beneath the pinned output descriptor."""
+    try:
+        os.mkdir(directory, mode=0o700, dir_fd=output_fd)
+    except FileExistsError as exc:
+        raise ValueError(
+            f"generated output path must not pre-exist: {directory}"
+        ) from exc
+    return os.open(directory, _DIRECTORY_OPEN_FLAGS, dir_fd=output_fd)
+
+
+def _write_new_file(parent_fd: int, filename: str, content: bytes) -> None:
+    """Create, synchronize, and revalidate one descriptor-pinned regular file."""
+    try:
+        file_fd = os.open(
+            filename,
+            _NEW_FILE_FLAGS,
+            0o600,
+            dir_fd=parent_fd,
+        )
+    except FileExistsError as exc:
+        raise ValueError(
+            f"generated output file must not pre-exist: {filename}"
+        ) from exc
+    try:
+        initial_metadata = os.fstat(file_fd)
+        if not stat.S_ISREG(initial_metadata.st_mode) or initial_metadata.st_nlink != 1:
+            raise ValueError(
+                "generated output files must be singly linked regular files"
+            )
+        view = memoryview(content)
+        offset = 0
+        while offset < len(view):
+            written = os.write(file_fd, view[offset:])
+            if written <= 0:
+                raise OSError("output write made no progress")
+            offset += written
+        os.fsync(file_fd)
+        final_metadata = os.fstat(file_fd)
+        path_metadata = os.stat(filename, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(path_metadata.st_mode)
+            or (final_metadata.st_dev, final_metadata.st_ino)
+            != (path_metadata.st_dev, path_metadata.st_ino)
+        ):
+            raise ValueError("output file changed during secure materialization")
+        if final_metadata.st_nlink != 1 or path_metadata.st_nlink != 1:
+            raise ValueError(
+                "generated output files must remain singly linked regular files"
+            )
+    finally:
+        os.close(file_fd)
+
+
+def _write_relative_file(
+    project_fd: int,
+    relative_path: str,
+    content: bytes,
+) -> None:
+    """Write one validated project-relative input through pinned directories."""
+    parts = _safe_relative_parts(relative_path)
+    parent_fd = _open_relative_directory(project_fd, tuple(parts[:-1]))
+    try:
+        _write_new_file(parent_fd, parts[-1], content)
+    finally:
+        os.close(parent_fd)
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
@@ -444,81 +597,82 @@ def materialize(
     head_sha: str | None = None,
 ) -> list[dict[str, str]]:
     """Write trusted base and bounded HEAD inputs under Docker-context-safe paths."""
-    _reject_symlinked_output_components(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _reject_symlinked_output_components(output_dir)
-
-    manifest: list[dict[str, str]] = []
-    projects: list[tuple[str, str, dict[str, bytes], str, str]] = []
-    base_npm = base_npm_projects(repo_root, base_sha)
-    base_npm_paths = {source_path for source_path, _manager, _inputs in base_npm}
-    base_npm_blobs: dict[str, str] = {}
-    for source_path, package_manager, base_inputs in (
-        base_pnpm_projects(repo_root, base_sha) + base_npm
-    ):
-        lock_blob = _lock_blob_sha(repo_root, base_sha, source_path)
-        projects.append(
-            (
-                source_path,
-                package_manager,
-                base_inputs,
-                base_sha.lower(),
-                lock_blob,
-            )
-        )
-        if source_path in base_npm_paths:
-            base_npm_blobs[source_path] = lock_blob
-
-    if head_sha is not None:
-        if not SHA_RE.fullmatch(head_sha):
-            raise ValueError("head SHA must be exactly 40 hexadecimal characters")
-        for source_path, package_manager, head_inputs in base_npm_projects(
-            repo_root, head_sha
+    output_fd, output_identity = _open_output_directory(output_dir)
+    try:
+        manifest: list[dict[str, str]] = []
+        projects: list[tuple[str, str, dict[str, bytes], str, str]] = []
+        base_npm = base_npm_projects(repo_root, base_sha)
+        base_npm_paths = {source_path for source_path, _manager, _inputs in base_npm}
+        base_npm_blobs: dict[str, str] = {}
+        for source_path, package_manager, base_inputs in (
+            base_pnpm_projects(repo_root, base_sha) + base_npm
         ):
-            head_blob = _lock_blob_sha(repo_root, head_sha, source_path)
-            if base_npm_blobs.get(source_path) == head_blob:
-                continue
-            lock_name = pathlib.PurePosixPath(source_path).name
-            validate_head_npm_lock(source_path, head_inputs[lock_name])
+            lock_blob = _lock_blob_sha(repo_root, base_sha, source_path)
             projects.append(
                 (
                     source_path,
                     package_manager,
-                    head_inputs,
-                    head_sha.lower(),
-                    head_blob,
+                    base_inputs,
+                    base_sha.lower(),
+                    lock_blob,
                 )
             )
+            if source_path in base_npm_paths:
+                base_npm_blobs[source_path] = lock_blob
 
-    for index, (
-        source_path,
-        package_manager,
-        base_inputs,
-        revision_sha,
-        lock_blob,
-    ) in enumerate(sorted(projects, key=lambda project: (project[0], project[3]))):
-        directory = f"project-{index:03d}"
-        project_dir = output_dir / directory
-        project_dir.mkdir()
-        for relative_path, content in sorted(base_inputs.items()):
-            destination = project_dir / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(content)
-        manifest.append(
-            {
-                "directory": directory,
-                "lock_blob": lock_blob,
-                "package_manager": package_manager,
-                "revision_sha": revision_sha,
-                "source": source_path,
-            }
-        )
+        if head_sha is not None:
+            if not SHA_RE.fullmatch(head_sha):
+                raise ValueError("head SHA must be exactly 40 hexadecimal characters")
+            for source_path, package_manager, head_inputs in base_npm_projects(
+                repo_root, head_sha
+            ):
+                head_blob = _lock_blob_sha(repo_root, head_sha, source_path)
+                if base_npm_blobs.get(source_path) == head_blob:
+                    continue
+                lock_name = pathlib.PurePosixPath(source_path).name
+                validate_head_npm_lock(source_path, head_inputs[lock_name])
+                projects.append(
+                    (
+                        source_path,
+                        package_manager,
+                        head_inputs,
+                        head_sha.lower(),
+                        head_blob,
+                    )
+                )
 
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return manifest
+        for index, (
+            source_path,
+            package_manager,
+            base_inputs,
+            revision_sha,
+            lock_blob,
+        ) in enumerate(sorted(projects, key=lambda project: (project[0], project[3]))):
+            directory = f"project-{index:03d}"
+            project_fd = _create_project_directory(output_fd, directory)
+            try:
+                for relative_path, content in sorted(base_inputs.items()):
+                    _write_relative_file(project_fd, relative_path, content)
+            finally:
+                os.close(project_fd)
+            manifest.append(
+                {
+                    "directory": directory,
+                    "lock_blob": lock_blob,
+                    "package_manager": package_manager,
+                    "revision_sha": revision_sha,
+                    "source": source_path,
+                }
+            )
+
+        manifest_content = (
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        _write_new_file(output_fd, "manifest.json", manifest_content)
+        _verify_output_directory_binding(output_dir, output_fd, output_identity)
+        return manifest
+    finally:
+        os.close(output_fd)
 
 
 def main(argv: list[str] | None = None) -> int:
