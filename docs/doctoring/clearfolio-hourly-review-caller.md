@@ -65,13 +65,13 @@ It does not use `secrets: inherit`. It does not receive
 execution. The NVIDIA credential is bound only inside the separately reviewed
 `PR Review Autofix` workflow's two OpenCode execution steps.
 
-The workflow-level token is read-only. Actions and Issues write permission is
-granted only on the single `dispatch-review-repair` reusable-workflow job,
-along with read access to Contents, Pull Requests, and Statuses. GitHub supports
-`jobs.<job_id>.permissions` on a job that calls a reusable workflow; omitted
-scopes become `none`. This job-local boundary prevents a future sibling job from
-silently inheriting scheduler mutation authority while retaining the exact
-permissions required by the called scheduler.
+Both the caller and reusable scheduler keep the workflow-generated
+`GITHUB_TOKEN` read-only with only `contents: read`; neither declares job-level
+write elevation. Cross-repository PR inspection, acknowledgement, workflow
+dispatch, and branch updates are authorized only through the explicitly mapped
+`PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`, exposed to the scheduler as
+`GH_TOKEN`. The scheduler has no `github.token` fallback. Missing credentials
+therefore fail closed instead of silently broadening the workflow token.
 
 The repair worker still cannot approve a PR, merge a PR, publish a release,
 lower branch protection, or convert incomplete checks into success.
@@ -103,8 +103,9 @@ Permanent tests require all of the following:
 8. `secrets: inherit`, `COPILOT_GITHUB_TOKEN`, and direct NVIDIA credential
    binding are absent from the caller;
 9. the focused exact-head contract workflow reruns whenever the caller changes;
-10. workflow scope remains read-only and all required write permissions are
-    confined to the single reusable-scheduler job.
+10. the caller and reusable scheduler retain read-only workflow-token
+    permissions, declare no job-level write elevation, and contain no
+    `github.token` mutation fallback.
 
 Repository acceptance still requires current-head workflow, security,
 supply-chain, automated-review, independent-review, unresolved-thread, and
@@ -116,8 +117,8 @@ Rollback removes the dedicated caller and its documentation while leaving the
 reusable scheduler and reviewer credentials unchanged. A rollback must not
 restore an ambiguous schedule that defaults to the central repository, add a
 product literal to the shared engine, expose NVIDIA credentials to queue
-inspection, replace explicit secret mapping with `secrets: inherit`, or move
-job-specific write authority back to workflow scope.
+inspection, replace explicit secret mapping with `secrets: inherit`, add a
+`github.token` mutation fallback, or elevate the workflow-generated token.
 
 ## References (APA 7th edition)
 
@@ -133,6 +134,6 @@ GitHub, Inc. (n.d.-c). *Workflow syntax for GitHub Actions: Jobs.<job_id>.secret
 GitHub Docs. Retrieved August 5, 2026, from
 https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idsecrets
 
-GitHub, Inc. (n.d.-d). *Workflow syntax for GitHub Actions: Jobs.<job_id>.permissions*.
+GitHub, Inc. (n.d.-d). *Workflow syntax for GitHub Actions: Permissions*.
 GitHub Docs. Retrieved August 5, 2026, from
-https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idpermissions
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
