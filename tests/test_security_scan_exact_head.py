@@ -55,3 +55,19 @@ def test_dependency_review_checkout_is_bound_to_the_same_exact_head() -> None:
     assert "repository: ${{ github.event.pull_request.head.repo.full_name }}" in job
     assert "ref: ${{ github.event.pull_request.head.sha }}" in job
     assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in job
+
+
+def test_dependency_review_support_probe_fails_closed_unless_api_returns_200() -> None:
+    """Unavailable dependency-review evidence must never become a green gate."""
+
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow_job(workflow, "dependency-review")
+
+    assert 'if [ "$status" != "200" ]; then' in job
+    assert "supported=false" not in job
+    assert "skipping dependency-review hard gate" not in job
+    assert 'cat "$response_file"' not in job
+    assert "${REPOSITORY}" in job
+    assert "${BASE_SHA}" in job
+    assert "${HEAD_SHA}" in job
+    assert "HTTP ${status}" in job
