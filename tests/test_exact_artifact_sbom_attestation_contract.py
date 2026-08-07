@@ -8,6 +8,9 @@ from pathlib import Path
 REUSABLE_WORKFLOW = Path(
     ".github/workflows/exact-artifact-sbom-attestation.yml"
 )
+QUALITY_WORKFLOW = Path(
+    ".github/workflows/exact-artifact-sbom-attestation-quality.yml"
+)
 VERIFIER = Path("scripts/ci/verify_exact_artifact_sbom_handoff.py")
 DOCTORING = Path("docs/doctoring/exact-artifact-sbom-attestation.md")
 ATTEST_ACTION_PIN = "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26"
@@ -44,6 +47,14 @@ def _job_block(workflow: str, job_name: str) -> str:
     )
     assert job_match is not None, f"missing workflow job: {job_name}"
     return job_match.group(0)
+
+
+def _run_blocks(workflow: str) -> list[str]:
+    """Return every multiline shell body from one workflow source file."""
+    return re.findall(
+        r"(?ms)^        run: \|\n(?P<body>(?:^ {10}.*\n|^\s*\n)+)",
+        workflow,
+    )
 
 
 def test_reusable_workflow_is_call_only_with_explicit_handoff_inputs() -> None:
@@ -172,6 +183,14 @@ def test_verifier_is_data_only_and_workflow_never_executes_downloaded_evidence()
     assert "zipfile" not in verifier
     assert "tarfile" not in verifier
 
+    run_blocks = _run_blocks(workflow)
+    assert run_blocks, "workflow must declare multiline run blocks"
+    for block in run_blocks:
+        assert "${{ inputs." not in block, (
+            "caller input must enter shell commands through an environment variable: "
+            f"{block}"
+        )
+
     for unsafe_command in (
         "pip install",
         "python -m build",
@@ -205,6 +224,16 @@ def test_workflow_attests_each_exact_distribution_and_exports_offline_evidence()
     assert "gh attestation trusted-root" in signer
     assert UPLOAD_ACTION_PIN in signer
     assert "offline" in signer.lower()
+    assert "offline-attestation-evidence/README.md" in signer
+    assert "offline-attestation-evidence/SHA256SUMS" in signer
+    assert "sha256sum" in signer
+
+
+def test_quality_workflow_pins_supported_runner_images() -> None:
+    """Keep exact supply-chain evidence on an explicit runner image."""
+    workflow = _required_text(QUALITY_WORKFLOW, "attestation quality workflow")
+    assert "ubuntu-latest" not in workflow
+    assert workflow.count("runs-on: ubuntu-24.04") == 2
 
 
 def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None:
@@ -221,7 +250,7 @@ def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None
     ):
         assert required_section in doctoring
 
-    assert "SLSA Build Lx (v1.2)" in doctoring
+    assert "does not claim SLSA Build L3 (v1.2)" in doctoring
     assert "59d89421af93a897026c735860bf21b6eb4f7b26" in doctoring
     assert "CycloneDX specification 1.7" in doctoring
     assert "SLSA specification version 1.2" in doctoring
