@@ -242,11 +242,21 @@ jobs:
             fail_unavailable "Noema app token exchange unavailable: app token request did not complete."
           fi
 
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if ! jq -e --arg target_repository "$TARGET_REPOSITORY" '
+            .ok == true
+            and (.data | type == "object")
+            and (.data.token | type == "string" and length > 0)
+            and .data.repository == $target_repository
+            and (.data.workflow_ref | type == "string" and length > 0)
+            and (.data.token_expires_at | type == "string" and length > 0)
+          ' >/dev/null <<<"$token_response"; then
+            fail_unavailable "Noema app token exchange unavailable: response envelope was invalid."
+          fi
+
+          app_token="$(jq -r '.data.token' <<<"$token_response")"
           if [ -z "$app_token" ]; then
             fail_unavailable "Noema app token exchange unavailable: app token response was empty."
           fi
-
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
