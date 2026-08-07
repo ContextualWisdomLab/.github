@@ -55,6 +55,29 @@ def test_repository_root_canonicalization_failure_is_redacted(
     assert "sensitive filesystem detail" not in str(error.value)
 
 
+def test_symlink_entry_metadata_failure_is_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An uninspectable inventoried link fails closed without raw error detail."""
+    root = _repository(tmp_path)
+    linked_path = root / "linked.txt"
+    os.symlink("stable.txt", linked_path)
+    _git(root, "add", "linked.txt")
+    original_lstat = os.lstat
+
+    def reject_link_metadata(path: os.PathLike[str] | str) -> os.stat_result:
+        if os.fspath(path) == os.fspath(linked_path):
+            raise OSError("sensitive entry metadata detail")
+        return original_lstat(path)
+
+    monkeypatch.setattr(scope.os, "lstat", reject_link_metadata)
+
+    with pytest.raises(ValueError, match="could not be inspected safely") as error:
+        scope.build_snapshot(root)
+    assert "sensitive entry metadata detail" not in str(error.value)
+
+
 def test_snapshot_rejects_a_symlink_target_outside_the_repository(
     tmp_path: Path,
 ) -> None:
