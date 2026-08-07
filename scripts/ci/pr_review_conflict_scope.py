@@ -133,7 +133,15 @@ def _validate_symlink_targets(root: Path, relative_paths: Sequence[str]) -> None
     symlinks: list[tuple[str, Path]] = []
     for relative_path in relative_paths:
         link_path = root / relative_path
-        if os.path.islink(link_path):
+        try:
+            link_metadata = os.lstat(link_path)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise ValueError(
+                f"repository path {relative_path!r} could not be inspected safely"
+            ) from None
+        if stat.S_ISLNK(link_metadata.st_mode):
             symlinks.append((relative_path, link_path))
 
     if not symlinks:
