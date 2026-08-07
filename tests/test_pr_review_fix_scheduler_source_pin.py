@@ -75,3 +75,15 @@ def test_reusable_scheduler_retains_least_privilege_and_bounded_dispatch() -> No
     assert "MAX_DISPATCHES:" in workflow
     assert "RETRY_HOURS:" in workflow
     assert "cancel-in-progress: true" in workflow
+
+
+def test_reusable_scheduler_bounds_both_oidc_exchange_requests() -> None:
+    """OIDC and app-token exchange network calls must fail within bounded time."""
+    workflow = _workflow_text()
+    exchange = workflow.split(
+        "- name: Exchange OpenCode app token for scheduler mutations", 1
+    )[1].split("- name: Resolve immutable called-workflow source", 1)[0]
+
+    assert exchange.count("curl -fsS \\") == 2
+    assert exchange.count("--connect-timeout 10 \\") == 2
+    assert exchange.count("--max-time 30 \\") == 2
