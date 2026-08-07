@@ -112,12 +112,6 @@ def base_pnpm_projects(
                 str(project_root / lock_name) in regular_paths
                 for lock_name in NPM_LOCK_NAMES
             ):
-                # A sibling npm lock means npm owns this project and the
-                # pnpm-lock.yaml is a vestigial second lockfile. Skip pnpm
-                # materialization so the downstream npm install path handles
-                # it, instead of failing the whole coverage-evidence job. A
-                # genuine pnpm-only project (no sibling npm lock) still must
-                # pin an exact pnpm packageManager.
                 continue
             raise ValueError(
                 f"trusted base package manifest {package_path} must declare an exact pnpm packageManager version"
@@ -194,8 +188,6 @@ def base_npm_projects(
             )
         package_manager = package_data.get("packageManager")
         if isinstance(package_manager, str) and PNPM_SPEC_RE.fullmatch(package_manager):
-            # An exact pnpm declaration owns this project. A sibling npm lock
-            # is vestigial and must not create a second dependency cache.
             continue
 
         lock_content = _git(repo_root, "show", f"{base_sha}:{lock_path}")
@@ -378,20 +370,12 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
                 )
             continue
 
-        version = metadata.get("version")
-        if not isinstance(version, str) or not version:
-            raise ValueError(
-                f"current-head npm lock {lock_path} package {package_path} must declare a nonempty exact version"
-            )
         has_resolved = "resolved" in metadata
         has_integrity = "integrity" in metadata
         if has_resolved != has_integrity:
             raise ValueError(
                 f"current-head npm lock {lock_path} package {package_path} must not partially declare a registry tarball and SHA-512 integrity"
             )
-
-        canonical_path = f"node_modules/{identity}"
-        is_canonical_root = package_path == canonical_path
         if has_resolved:
             _validate_npm_registry_pin(
                 lock_path,
@@ -399,6 +383,20 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
                 metadata.get("resolved"),
                 metadata.get("integrity"),
             )
+
+        version = metadata.get("version")
+        canonical_path = f"node_modules/{identity}"
+        is_canonical_root = package_path == canonical_path
+        if not isinstance(version, str) or not version:
+            if is_canonical_root and not has_resolved:
+                raise ValueError(
+                    f"current-head npm lock {lock_path} package {package_path} must pin a registry tarball and SHA-512 integrity"
+                )
+            raise ValueError(
+                f"current-head npm lock {lock_path} package {package_path} must declare a nonempty exact version"
+            )
+
+        if has_resolved:
             if is_canonical_root:
                 canonical_versions[identity] = version
             continue
