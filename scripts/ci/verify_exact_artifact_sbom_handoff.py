@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -22,6 +23,7 @@ _MAX_JSON_BYTES = 16 * 1024 * 1024
 _MAX_CONTROL_BYTES = 1024 * 1024
 _SOURCE_IDENTITY = "source-identity.json"
 _CHECKSUM_FILE = "checksums.sha256"
+_FILENAME_PROPERTY = "cwl:artifact:filename"
 
 
 class EvidenceError(ValueError):
@@ -38,6 +40,11 @@ def _reject_duplicate_keys(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_nonfinite_constant(value: str) -> Any:
+    """Reject JSON extensions for NaN and positive or negative infinity."""
+    raise EvidenceError(f"non-finite JSON number is forbidden: {value}")
+
+
 def _load_json(path: Path, maximum_bytes: int = _MAX_JSON_BYTES) -> Any:
     """Load strict bounded UTF-8 JSON from one regular non-symlink file."""
     _require_regular_file(path)
@@ -45,7 +52,11 @@ def _load_json(path: Path, maximum_bytes: int = _MAX_JSON_BYTES) -> Any:
         raise EvidenceError(f"JSON file exceeds {maximum_bytes} bytes: {path.name}")
     try:
         text = path.read_text(encoding="utf-8", errors="strict")
-        return json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonfinite_constant,
+        )
     except UnicodeError as error:
         raise EvidenceError(f"invalid UTF-8 in {path.name}") from error
     except json.JSONDecodeError as error:
@@ -120,6 +131,12 @@ def _parse_checksums(path: Path) -> dict[str, str]:
     return parsed
 
 
+def _cyclonedx_serial_number(subject_name: str, subject_sha256: str) -> str:
+    """Return the canonical UUIDv5 serial number for one exact distribution."""
+    identity = f"urn:cwl:artifact:{subject_name}:sha256:{subject_sha256}"
+    return f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, identity)}"
+
+
 def _validate_cyclonedx(
     path: Path,
     *,
@@ -135,14 +152,29 @@ def _validate_cyclonedx(
         raise EvidenceError(f"{path.name} uses an unexpected CycloneDX schema")
     if document.get("bomFormat") != "CycloneDX" or document.get("specVersion") != "1.7":
         raise EvidenceError(f"{path.name} must be CycloneDX specification 1.7")
+    version = document.get("version")
+    if (type(version), version) != (int, 1):
+        raise EvidenceError(f"{path.name} document version must be the integer 1")
+    expected_serial = _cyclonedx_serial_number(subject_name, subject_sha256)
+    if document.get("serialNumber") != expected_serial:
+        raise EvidenceError(f"{path.name} serial number does not match the exact subject")
+
     metadata = document.get("metadata")
     component = metadata.get("component") if isinstance(metadata, dict) else None
     if not isinstance(component, dict) or component.get("name") != subject_name:
         raise EvidenceError(f"{path.name} root component does not name {subject_name}")
-    hashes = component.get("hashes")
+    if component.get("type") != "file":
+        raise EvidenceError(f"{path.name} root component type must be file")
+
+    expected_property = {"name": _FILENAME_PROPERTY, "value": subject_name}
+    if component.get("properties") != [expected_property]:
+        raise EvidenceError(f"{path.name} root component filename property is not exact")
+
     expected_hash = {"alg": "SHA-256", "content": subject_sha256}
-    if not isinstance(hashes, list) or expected_hash not in hashes:
-        raise EvidenceError(f"{path.name} root component is not bound to the subject digest")
+    if component.get("hashes") != [expected_hash]:
+        raise EvidenceError(
+            f"{path.name} root component must contain one canonical SHA-256 subject hash"
+        )
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
