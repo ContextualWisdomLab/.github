@@ -108,12 +108,13 @@ def test_verify_snapshot_detects_new_deleted_and_symlink_paths(tmp_path: Path) -
     root = _repository(tmp_path)
     snapshot = tmp_path / "snapshot.json"
     allowed = _allowed_file(tmp_path / "allowed.zlist", "conflicted.txt")
+    (root / "target-b.txt").write_text("b\n", encoding="utf-8")
     scope.write_snapshot(root, snapshot)
 
     (root / "stable.txt").unlink()
     (root / "new.txt").write_text("new\n", encoding="utf-8")
     (root / "linked.txt").unlink()
-    os.symlink("stable.txt", root / "linked.txt")
+    os.symlink("target-b.txt", root / "linked.txt")
 
     assert scope.verify_snapshot(root, snapshot, allowed) == (
         "linked.txt",
