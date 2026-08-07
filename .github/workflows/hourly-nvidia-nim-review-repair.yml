@@ -8,6 +8,7 @@ on:
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
+      - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_git_executable.py
       - tests/test_pr_review_conflict_scope_ignored_paths.py
@@ -25,6 +26,7 @@ on:
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
+      - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_git_executable.py
       - tests/test_pr_review_conflict_scope_ignored_paths.py
@@ -70,6 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest -q \
+            tests/test_hourly_autofix_context_quality_gate.py \
             tests/test_pr_review_conflict_scope.py \
             tests/test_pr_review_conflict_scope_git_executable.py \
             tests/test_pr_review_conflict_scope_ignored_paths.py \
@@ -85,6 +88,7 @@ jobs:
             scripts/ci/pr_review_conflict_scope.py
           python -m compileall -q \
             scripts/ci/pr_review_conflict_scope.py \
+            tests/test_hourly_autofix_context_quality_gate.py \
             tests/test_pr_review_conflict_scope.py \
             tests/test_pr_review_conflict_scope_git_executable.py \
             tests/test_pr_review_conflict_scope_ignored_paths.py \
