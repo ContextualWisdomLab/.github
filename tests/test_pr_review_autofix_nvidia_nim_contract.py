@@ -189,3 +189,14 @@ def test_model_cannot_edit_git_control_files_or_execute_repository_hooks() -> No
     assert '"edit": "allow"' not in workflow
     assert workflow.count("git -c core.hooksPath=/dev/null commit") == 2
     assert workflow.count("git -c core.hooksPath=/dev/null push") == 2
+
+
+def test_privileged_pushes_ignore_mutable_origin_configuration() -> None:
+    """Push only to the revalidated target URL rather than model-mutable origin."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    expected_origin = 'expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"'
+    explicit_push = 'git -c core.hooksPath=/dev/null push "$expected_origin"'
+
+    assert workflow.count(expected_origin) == 2
+    assert workflow.count(explicit_push) == 2
+    assert 'push origin "HEAD:${PR_HEAD_REF}"' not in workflow
