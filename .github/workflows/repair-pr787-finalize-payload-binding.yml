@@ -1,0 +1,327 @@
+name: Repair PR 787 finalize payload binding
+
+on:
+  push:
+    branches:
+      - feat/review-agent-mention-router-main
+    paths:
+      - .github/workflows/repair-pr787-finalize-payload-binding.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr787-finalize-payload-binding
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  finalize:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/feat/review-agent-mention-router-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked quality tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply the idempotent reviewed repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import textwrap
+          from pathlib import Path
+
+
+          def replace_once(source: str, old: str, new: str, label: str) -> str:
+              count = source.count(old)
+              if count != 1:
+                  raise RuntimeError(f'expected exactly one {label}, found {count}')
+              return source.replace(old, new, 1)
+
+
+          def indented_digest_block() -> str:
+              block = textwrap.dedent(
+                  '''\
+                  python3 - <<'PY_DIGEST'
+                  import hashlib
+                  import hmac
+                  import json
+                  import os
+
+                  canonical = json.dumps(
+                      {
+                          "actor": os.environ["REQUESTED_BY"],
+                          "agent": os.environ["REQUESTED_AGENT"],
+                          "base_branch": os.environ["BASE_BRANCH"],
+                          "comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
+                          "head_sha": os.environ["PR_HEAD_SHA"],
+                          "pr_number": int(os.environ["PR_NUMBER"]),
+                          "repository": os.environ["TARGET_REPOSITORY"],
+                      },
+                      ensure_ascii=True,
+                      separators=(",", ":"),
+                      sort_keys=True,
+                  ).encode("utf-8")
+                  calculated_key = hashlib.sha256(canonical).hexdigest()
+                  if not hmac.compare_digest(calculated_key, os.environ["INVOCATION_KEY"]):
+                      raise SystemExit("agent invocation key does not match canonical payload")
+                  PY_DIGEST
+
+                  '''
+              )
+              return ''.join(
+                  f'          {line}' if line.strip() else line
+                  for line in block.splitlines(keepends=True)
+              )
+
+
+          router_path = Path('scripts/ci/agent_mention_router.py')
+          router = router_path.read_text(encoding='utf-8')
+          if '"base_branch": request.pull_request_base_branch' not in router.split('def noema_payload', 1)[1].split('def opencode_payload', 1)[0]:
+              router = replace_once(
+                  router,
+                  '            "pr_head_sha": request.pull_request_head_sha,\n'
+                  '            "requested_agent": agent,\n',
+                  '            "pr_head_sha": request.pull_request_head_sha,\n'
+                  '            "base_branch": request.pull_request_base_branch,\n'
+                  '            "requested_agent": agent,\n',
+                  'Noema base-branch payload boundary',
+              )
+          router_path.write_text(router, encoding='utf-8')
+
+          noema_path = Path('.github/workflows/agent-mention-noema-dispatch.yml')
+          noema = noema_path.read_text(encoding='utf-8')
+          old_permissions = (
+              "permissions:\n  actions: read\n  contents: write\n\n"
+              "jobs:\n  validate-and-forward:\n"
+              "    if: github.repository == 'ContextualWisdomLab/.github'\n"
+          )
+          new_permissions = (
+              "permissions:\n  contents: read\n\n"
+              "jobs:\n  validate-and-forward:\n"
+              "    if: github.repository == 'ContextualWisdomLab/.github'\n"
+              "    permissions:\n      actions: read\n      contents: write\n"
+          )
+          if old_permissions in noema:
+              noema = replace_once(noema, old_permissions, new_permissions, 'Noema job-scoped write permission')
+          if '      BASE_BRANCH: ${{ github.event.client_payload.base_branch || \'\' }}\n' not in noema:
+              noema = replace_once(
+                  noema,
+                  "      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}\n"
+                  "      REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}\n",
+                  "      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}\n"
+                  "      BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}\n"
+                  "      REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}\n",
+                  'Noema base-branch environment binding',
+              )
+          if '! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]' not in noema:
+              noema = replace_once(
+                  noema,
+                  '            ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||\n'
+                  '            ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||\n',
+                  '            ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||\n'
+                  '            ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] ||\n'
+                  '            [[ "$BASE_BRANCH" == -* ]] ||\n'
+                  '            ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||\n',
+                  'Noema base-branch validation',
+              )
+          if 'hmac.compare_digest' not in noema:
+              noema = replace_once(
+                  noema,
+                  '          fi\n\n          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"\n',
+                  '          fi\n\n' + indented_digest_block() + '          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"\n',
+                  'Noema digest verification insertion point',
+              )
+          if '            --arg base_branch "$BASE_BRANCH" \\\n' not in noema:
+              noema = replace_once(
+                  noema,
+                  '            --arg pr_head_sha "$PR_HEAD_SHA" \\\n'
+                  '            --arg requested_agent "$REQUESTED_AGENT" \\\n',
+                  '            --arg pr_head_sha "$PR_HEAD_SHA" \\\n'
+                  '            --arg base_branch "$BASE_BRANCH" \\\n'
+                  '            --arg requested_agent "$REQUESTED_AGENT" \\\n',
+                  'Noema forwarded base-branch argument',
+              )
+          if '                base_branch: $base_branch,\n' not in noema:
+              noema = replace_once(
+                  noema,
+                  '                pr_head_sha: $pr_head_sha,\n'
+                  '                requested_agent: $requested_agent,\n',
+                  '                pr_head_sha: $pr_head_sha,\n'
+                  '                base_branch: $base_branch,\n'
+                  '                requested_agent: $requested_agent,\n',
+                  'Noema forwarded base-branch field',
+              )
+          noema_path.write_text(noema, encoding='utf-8')
+
+          opencode_path = Path('.github/workflows/agent-mention-opencode-dispatch.yml')
+          opencode = opencode_path.read_text(encoding='utf-8')
+          if old_permissions in opencode:
+              opencode = replace_once(opencode, old_permissions, new_permissions, 'OpenCode job-scoped write permission')
+          if 'hmac.compare_digest' not in opencode:
+              opencode = replace_once(
+                  opencode,
+                  '          fi\n\n          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"\n',
+                  '          fi\n\n' + indented_digest_block() + '          marker="[cwl-agent-invocation:${INVOCATION_KEY}]"\n',
+                  'OpenCode digest verification insertion point',
+              )
+          opencode_path.write_text(opencode, encoding='utf-8')
+
+          tests_path = Path('tests/test_agent_mention_idempotency.py')
+          tests = tests_path.read_text(encoding='utf-8')
+          base_variant = '''        module.MentionRequest(
+              original.repository,
+              original.pull_request_number,
+              original.pull_request_head_sha,
+              "develop",
+              original.comment_id,
+              original.actor,
+              original.agents,
+          ),
+          '''
+          if '              "develop",\n' not in tests:
+              anchor = '''        module.MentionRequest(
+              original.repository,
+              original.pull_request_number,
+              "b" * 40,
+              original.pull_request_base_branch,
+              original.comment_id,
+              original.actor,
+              original.agents,
+          ),
+          '''
+              tests = replace_once(tests, anchor, anchor + base_variant, 'base-branch-only invocation-key regression')
+          assertion = '        assert payload["base_branch"] == mention_request.pull_request_base_branch\n'
+          if assertion not in tests:
+              tests = replace_once(
+                  tests,
+                  '        assert payload["pr_head_sha"] == mention_request.pull_request_head_sha\n'
+                  '        assert payload["source_comment_id"] == mention_request.comment_id\n',
+                  '        assert payload["pr_head_sha"] == mention_request.pull_request_head_sha\n'
+                  + assertion
+                  + '        assert payload["source_comment_id"] == mention_request.comment_id\n',
+                  'payload base-branch identity assertion',
+              )
+          tests_path.write_text(tests, encoding='utf-8')
+
+          docs_path = Path('docs/automation/review-agent-comment-invocation.md')
+          docs = docs_path.read_text(encoding='utf-8')
+          digest_sentence = (
+              'Each wrapper reconstructs the complete sorted compact JSON invocation identity—repository, pull request, exact head SHA, base branch, requested agent, source comment ID, and requesting actor—and compares its SHA-256 digest before durable-leader election or forwarding. A valid-format key paired with altered payload fields therefore fails closed.\n'
+          )
+          if digest_sentence not in docs:
+              marker = '## Idempotency\n'
+              if marker not in docs:
+                  marker = '# Review-agent comment invocation\n'
+              docs = docs.replace(marker, marker + '\n' + digest_sentence, 1)
+          permission_sentence = (
+              'Workflow defaults remain contents-read-only; only the validated forwarding jobs receive the narrow write permission required to create repository-dispatch events.\n'
+          )
+          if permission_sentence not in docs:
+              docs += '\n' + permission_sentence
+          docs_path.write_text(docs, encoding='utf-8')
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          entry = (
+              '- Bound each review-agent invocation key to the wrapper\'s complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.\n'
+          )
+          if entry not in changelog:
+              changelog = replace_once(changelog, '### Fixed\n\n', '### Fixed\n\n' + entry, 'Unreleased Fixed heading')
+          changelog_path.write_text(changelog, encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Verify focused quality and payload identity
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/agent-mention-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/agent_mention_router.py
+              scripts/ci/agent_mention_sweep.py
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/agent-mention-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest -q \
+            tests/test_agent_mention_router.py \
+            tests/test_agent_mention_sweep.py \
+            tests/test_agent_mention_workflow_contract.py \
+            tests/test_agent_mention_idempotency.py \
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under=100 \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py
+          python -m compileall -q \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py \
+            tests/test_agent_mention_router.py \
+            tests/test_agent_mention_sweep.py \
+            tests/test_agent_mention_workflow_contract.py \
+            tests/test_agent_mention_idempotency.py \
+            tests/test_agent_mention_downstream_idempotency.py \
+            tests/test_agent_mention_receipt_authority.py
+          test "$(grep -c 'hmac.compare_digest' .github/workflows/agent-mention-noema-dispatch.yml)" -eq 1
+          test "$(grep -c 'hmac.compare_digest' .github/workflows/agent-mention-opencode-dispatch.yml)" -eq 1
+          git diff --check
+
+      - name: Publish only the verified product tree
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: feat/review-agent-mention-router-main
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -n "$PUSH_TOKEN"
+          remote_head="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          rm -f .github/pr787-payload-repair.trigger
+          find .github/workflows -maxdepth 1 -type f -name 'repair-pr787-*' -delete
+          rm -f scripts/ci/repair_pr787_payload_bound_once.py
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'No verified PR 787 repair generated.' >&2; exit 1; }
+          test -z "$(git diff --cached --name-only | grep -E '(^|/)repair-pr787-|repair_pr787_payload_bound_once' || true)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(automation): bind invocation keys to complete payloads'
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${SOURCE_BRANCH}"
