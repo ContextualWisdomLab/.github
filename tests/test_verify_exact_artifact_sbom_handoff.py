@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -21,17 +22,28 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _serial_number(name: str, digest: str) -> str:
+    """Return the canonical UUIDv5 serial number for one exact subject."""
+    identity = f"urn:cwl:artifact:{name}:sha256:{digest}"
+    return f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, identity)}"
+
+
 def _sbom(name: str, digest: str) -> dict[str, object]:
     """Return the minimum valid CycloneDX root-component fixture."""
     return {
         "$schema": SCHEMA,
         "bomFormat": "CycloneDX",
         "specVersion": "1.7",
+        "serialNumber": _serial_number(name, digest),
+        "version": 1,
         "metadata": {
             "component": {
                 "type": "file",
                 "name": name,
                 "hashes": [{"alg": "SHA-256", "content": digest}],
+                "properties": [
+                    {"name": "cwl:artifact:filename", "value": name}
+                ],
             }
         },
     }
@@ -165,7 +177,9 @@ def test_valid_handoff_is_verified_and_manifest_is_deterministic(tmp_path: Path)
     assert output.read_text(encoding="utf-8").endswith("\n")
 
 
-def test_main_prints_success_and_returns_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_prints_success_and_returns_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Exercise the public command-line success entrypoint."""
     arguments = _valid_handoff(tmp_path)
     argv: list[str] = []
@@ -195,7 +209,9 @@ def test_invalid_external_identifiers_fail_closed(
         verifier.verify(arguments)
 
 
-@pytest.mark.parametrize("filename", ["", ".", "..", "../escape.whl", "a\\b.whl", "a\x00b.whl"])
+@pytest.mark.parametrize(
+    "filename", ["", ".", "..", "../escape.whl", "a\\b.whl", "a\x00b.whl"]
+)
 def test_unsafe_filenames_are_rejected(tmp_path: Path, filename: str) -> None:
     """Keep every evidence member at one non-hostile root-level filename."""
     arguments = _valid_handoff(tmp_path)
@@ -254,7 +270,9 @@ def test_extra_missing_and_nonregular_members_fail_cardinality(tmp_path: Path) -
         verifier.verify(arguments)
 
 
-def test_distribution_digest_mismatch_fails_before_semantic_parsing(tmp_path: Path) -> None:
+def test_distribution_digest_mismatch_fails_before_semantic_parsing(
+    tmp_path: Path,
+) -> None:
     """Reject changed bytes even when filenames and control files are unchanged."""
     arguments = _valid_handoff(tmp_path)
     Path(arguments.evidence_root, arguments.wheel_filename).write_bytes(b"tampered")
@@ -281,7 +299,9 @@ def test_malformed_or_duplicate_checksum_lines_are_rejected(
         verifier.verify(arguments)
 
 
-def test_unsorted_wrong_set_and_wrong_value_checksums_are_rejected(tmp_path: Path) -> None:
+def test_unsorted_wrong_set_and_wrong_value_checksums_are_rejected(
+    tmp_path: Path,
+) -> None:
     """Bind exactly the other five evidence files in canonical order and value."""
     arguments = _valid_handoff(tmp_path)
     root = Path(arguments.evidence_root)
@@ -335,11 +355,18 @@ def test_source_identity_must_be_an_exact_object(tmp_path: Path) -> None:
         (lambda value: {**value, "$schema": "wrong"}, "unexpected CycloneDX schema"),
         (lambda value: {**value, "bomFormat": "SPDX"}, "specification 1.7"),
         (lambda value: {**value, "specVersion": "1.6"}, "specification 1.7"),
+        (lambda value: {**value, "version": "1"}, "document version"),
+        (lambda value: {**value, "serialNumber": "urn:uuid:wrong"}, "serial number"),
         (lambda value: {**value, "metadata": {}}, "root component"),
         (
             lambda value: {
                 **value,
-                "metadata": {"component": {"name": "wrong", "hashes": []}},
+                "metadata": {
+                    "component": {
+                        **value["metadata"]["component"],
+                        "name": "wrong",
+                    }
+                },
             },
             "root component",
         ),
@@ -348,30 +375,88 @@ def test_source_identity_must_be_an_exact_object(tmp_path: Path) -> None:
                 **value,
                 "metadata": {
                     "component": {
-                        "name": value["metadata"]["component"]["name"],
+                        **value["metadata"]["component"],
+                        "type": "library",
+                    }
+                },
+            },
+            "root component type",
+        ),
+        (
+            lambda value: {
+                **value,
+                "metadata": {
+                    "component": {
+                        **value["metadata"]["component"],
+                        "properties": [],
+                    }
+                },
+            },
+            "filename property",
+        ),
+        (
+            lambda value: {
+                **value,
+                "metadata": {
+                    "component": {
+                        **value["metadata"]["component"],
                         "hashes": [],
                     }
                 },
             },
-            "not bound",
+            "canonical SHA-256",
+        ),
+        (
+            lambda value: {
+                **value,
+                "metadata": {
+                    "component": {
+                        **value["metadata"]["component"],
+                        "hashes": [
+                            *value["metadata"]["component"]["hashes"],
+                            {"alg": "SHA-1", "content": "0" * 40},
+                        ],
+                    }
+                },
+            },
+            "canonical SHA-256",
+        ),
+        (
+            lambda value: {
+                **value,
+                "metadata": {
+                    "component": {
+                        **value["metadata"]["component"],
+                        "hashes": [
+                            {
+                                **value["metadata"]["component"]["hashes"][0],
+                                "unexpected": "field",
+                            }
+                        ],
+                    }
+                },
+            },
+            "canonical SHA-256",
         ),
     ],
 )
 def test_cyclonedx_semantics_fail_closed(
     tmp_path: Path, mutation: object, message: str
 ) -> None:
-    """Reject the wrong schema, version, root component, or subject hash."""
+    """Reject malformed document and exact root-component subject bindings."""
     arguments = _valid_handoff(tmp_path)
     root = Path(arguments.evidence_root)
-    original = json.loads((root / arguments.wheel_sbom_filename).read_text(encoding="utf-8"))
+    original = json.loads(
+        (root / arguments.wheel_sbom_filename).read_text(encoding="utf-8")
+    )
     altered = mutation(original)  # type: ignore[operator]
     _reseal_json_member(arguments, arguments.wheel_sbom_filename, altered)
     with pytest.raises(verifier.EvidenceError, match=message):
         verifier.verify(arguments)
 
 
-def test_strict_json_rejects_duplicate_keys_bad_utf8_and_oversize(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_strict_json_rejects_duplicate_keys_bad_utf8_nonfinite_and_oversize(
+    tmp_path: Path,
 ) -> None:
     """Exercise strict bounded JSON parsing boundaries directly."""
     duplicate = tmp_path / "duplicate.json"
@@ -389,9 +474,14 @@ def test_strict_json_rejects_duplicate_keys_bad_utf8_and_oversize(
     with pytest.raises(verifier.EvidenceError, match="UTF-8"):
         verifier._load_json(bad_utf8)
 
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        constant = tmp_path / f"{literal.removeprefix('-')}.json"
+        constant.write_text('{"value":' + literal + "}", encoding="utf-8")
+        with pytest.raises(verifier.EvidenceError, match="non-finite"):
+            verifier._load_json(constant)
+
     oversized = tmp_path / "oversized.json"
-    oversized.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(Path, "stat", lambda self: argparse.Namespace(st_size=3))
+    oversized.write_text('{"padding":"aaaa"}', encoding="utf-8")
     with pytest.raises(verifier.EvidenceError, match="exceeds"):
         verifier._load_json(oversized, maximum_bytes=2)
 
@@ -429,6 +519,7 @@ def test_main_converts_validation_errors_to_system_exit(tmp_path: Path) -> None:
         argv.extend(("--" + name.replace("_", "-"), str(value)))
     with pytest.raises(SystemExit, match="sealed evidence verification failed"):
         verifier.main(argv)
+
 
 def test_checksum_control_file_bounds_and_entrypoint_are_covered(
     tmp_path: Path,
