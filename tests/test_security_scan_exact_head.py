@@ -67,6 +67,9 @@ def test_dependency_review_support_probe_fails_closed_unless_api_returns_200() -
     assert "supported=false" not in job
     assert "skipping dependency-review hard gate" not in job
     assert 'cat "$response_file"' not in job
+    assert "-o /dev/null" in job
+    assert "--connect-timeout 10" in job
+    assert "--max-time 30" in job
     assert "${REPOSITORY}" in job
     assert "${BASE_SHA}" in job
     assert "${HEAD_SHA}" in job
