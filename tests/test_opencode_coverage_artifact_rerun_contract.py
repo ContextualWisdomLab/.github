@@ -4,6 +4,13 @@ from pathlib import Path
 
 
 WORKFLOW_PATH = Path(".github/workflows/opencode-review-dispatch.yml")
+TEMPORARY_REPAIR_PATHS = (
+    Path(".github/opencode-attempt-scoped-coverage-artifact.trigger"),
+    Path(".github/workflows/materialize-opencode-attempt-scoped-coverage-artifact.yml"),
+    Path(".github/workflows/opencode-coverage-artifact-rerun-quality-ci.yml"),
+    Path(".github/workflows/opencode-coverage-artifact-rerun-repair.yml"),
+    Path("scripts/ci/prepare_opencode_attempt_artifact_patch.py"),
+)
 
 
 def _workflow_text() -> str:
@@ -68,3 +75,8 @@ def test_coverage_consumer_remains_credential_free() -> None:
     assert "id-token:" not in permissions
     assert "secrets." not in evidence_job
     assert "GH_TOKEN:" not in evidence_job
+
+
+def test_temporary_repair_supply_chain_is_absent_from_final_tree() -> None:
+    """Keep only permanent workflow, regression, doctoring, and changelog files."""
+    assert [str(path) for path in TEMPORARY_REPAIR_PATHS if path.exists()] == []
