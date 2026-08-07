@@ -135,9 +135,9 @@ snapshot while ordinary repair depended only on a later visible Git diff.
 Before either model process starts, the worker creates:
 
 1. a NUL-delimited authoritative allowlist of exact paths; and
-2. a deterministic snapshot of the complete pre-model worktree, including ignored
-   paths, tracked paths, non-ignored untracked paths, file modes, regular-file
-   SHA-256 values, sizes, and symbolic-link targets.
+2. a deterministic snapshot of the complete pre-model worktree, including ignored paths,
+   tracked paths, non-ignored untracked paths, file modes, regular-file SHA-256
+   values, sizes, and symbolic-link targets.
 
 For conflict repair, Git supplies the allowlist through `git diff --name-only -z
 --diff-filter=U`. For ordinary repair, the context builder supplies current-head
