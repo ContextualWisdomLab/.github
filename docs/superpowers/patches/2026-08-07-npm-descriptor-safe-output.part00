@@ -1,0 +1,197 @@
+diff --git a/docs/doctoring/npm-materializer-descriptor-safety.md b/docs/doctoring/npm-materializer-descriptor-safety.md
+new file mode 100644
+index 0000000..7a839cc
+--- /dev/null
++++ b/docs/doctoring/npm-materializer-descriptor-safety.md
+@@ -0,0 +1,59 @@
++# Descriptor-safe trusted JavaScript materialization
++
++## Decision
++
++Trusted base and bounded current-head JavaScript inputs are written only through
++held POSIX directory descriptors. Every descendant directory is created with
++`mkdirat` semantics and reopened with `O_DIRECTORY | O_NOFOLLOW`; every file is
++created with `O_CREAT | O_EXCL | O_NOFOLLOW`, written with an explicit
++forward-progress loop, and synchronized together with its parent directory.
++
++The implementation deliberately fails closed on runtimes without the required
++`dir_fd`, `O_DIRECTORY`, and `O_NOFOLLOW` primitives. It never falls back to
++`Path.mkdir`, `Path.write_bytes`, or `Path.write_text`, because pathname
++re-resolution would recreate the same time-of-check/time-of-use boundary the
++control is intended to remove.
++
++## Threat model
++
++A concurrent process under the same runner identity may rename an output root or
++nested project directory and replace the pathname with a symbolic link after a
++validation check. Held directory descriptors remain bound to the opened inode;
++subsequent relative opens either continue inside that inode or fail closed when
++a nested component was replaced. Pre-existing files and descendant directories
++are not adopted or overwritten.
++
++## Failure and cleanup
++
++Only the final output root may be created; its parent hierarchy must already
++exist. A zero-progress write is an error. Partially created files are unlinked
++through their parent descriptor. Context-manager failure cleanup removes only
++files and directories owned by the current invocation and removes the output
++root only when that invocation created it. A pre-existing empty root remains
++caller-owned.
++
++## Verification
++
++Permanent regressions cover root and nested-directory rename/symlink swaps,
++pre-existing files and directories, parent and absolute path rejection,
++zero-progress writes, cleanup ownership and cleanup refusal, descriptor-close
++behavior, constructor races, unexpected operating-system failures, and missing
++secure primitives. The helper itself is held to 100% statement and branch
++coverage. Production use remains limited to POSIX runners until an equivalent
++descriptor/capability implementation is reviewed for another platform.
++
++## References
++
++The Open Group. (2018). *The Open Group Base Specifications Issue 7, 2018
++edition: `openat()`*. IEEE and The Open Group.
++https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html
++
++Python Software Foundation. (2026). *`os`—Miscellaneous operating system
++interfaces*. Python 3.14 documentation.
++https://docs.python.org/3/library/os.html
++
++MITRE. (2025). *CWE-59: Improper link resolution before file access (link
++following)*. https://cwe.mitre.org/data/definitions/59.html
++
++MITRE. (2025). *CWE-367: Time-of-check time-of-use (TOCTOU) race condition*.
++https://cwe.mitre.org/data/definitions/367.html
+diff --git a/scripts/ci/materialize_base_javascript_packages.py b/scripts/ci/materialize_base_javascript_packages.py
+index 2bdfa2e..52066b8 100644
+--- a/scripts/ci/materialize_base_javascript_packages.py
++++ b/scripts/ci/materialize_base_javascript_packages.py
+@@ -12,26 +12,10 @@ import sys
+ import urllib.parse
+ from typing import Any
+ 
+-
+-SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
++from secure_output_tree import SecureOutputTree
+ 
+ 
+-def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
+-    """Reject existing symlink components before materialization writes begin."""
+-    candidate = output_dir.absolute()
+-    current = pathlib.Path(candidate.anchor)
+-    for component in candidate.parts[1:]:
+-        current /= component
+-        if current.is_symlink():
+-            raise ValueError(
+-                f"output directory must not be a symlink or contain symlinks: {current}"
+-            )
+-        if not current.exists():
+-            break
+-        if not current.is_dir():
+-            raise ValueError(
+-                f"output directory path component must be a directory: {current}"
+-            )
++SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+ 
+ 
+ def materialize(
+@@ -41,10 +25,6 @@ def materialize(
+     head_sha: str | None = None,
+ ) -> list[dict[str, str]]:
+     """Write trusted base and bounded HEAD inputs under Docker-context-safe paths."""
+-    _reject_symlinked_output_components(output_dir)
+-    output_dir.mkdir(parents=True, exist_ok=True)
+-    _reject_symlinked_output_components(output_dir)
+-
+     manifest: list[dict[str, str]] = []
+     projects: list[tuple[str, str, dict[str, bytes], str, str]] = []
+     base_npm = base_npm_projects(repo_root, base_sha)
+@@ -87,32 +67,33 @@ def materialize(
+                 )
+             )
+ 
+-    for index, (
+-        source_path,
+-        package_manager,
+-        base_inputs,
+-        revision_sha,
+-        lock_blob,
+-    ) in enumerate(sorted(projects, key=lambda project: (project[0], project[3]))):
+-        directory = f"project-{index:03d}"
+-        project_dir = output_dir / directory
+-        project_dir.mkdir()
+-        for relative_path, content in sorted(base_inputs.items()):
+-            destination = project_dir / relative_path
+-            destination.parent.mkdir(parents=True, exist_ok=True)
+-            destination.write_bytes(content)
+-        manifest.append(
+-            {
+-                "directory": directory,
+-                "lock_blob": lock_blob,
+-                "package_manager": package_manager,
+-                "revision_sha": revision_sha,
+-                "source": source_path,
+-            }
+-        )
++    with SecureOutputTree(output_dir) as output_tree:
++        for index, (
++            source_path,
++            package_manager,
++            base_inputs,
++            revision_sha,
++            lock_blob,
++        ) in enumerate(sorted(projects, key=lambda project: (project[0], project[3]))):
++            directory = f"project-{index:03d}"
++            output_tree.mkdir(directory)
++            for relative_path, content in sorted(base_inputs.items()):
++                output_tree.write_bytes(
++                    pathlib.PurePosixPath(directory) / relative_path,
++                    content,
++                )
++            manifest.append(
++                {
++                    "directory": directory,
++                    "lock_blob": lock_blob,
++                    "package_manager": package_manager,
++                    "revision_sha": revision_sha,
++                    "source": source_path,
++                }
++            )
+ 
+-    (output_dir / "manifest.json").write_text(
+-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+-        encoding="utf-8",
+-    )
++        output_tree.write_text(
++            "manifest.json",
++            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
++        )
+     return manifest
+diff --git a/scripts/ci/secure_output_tree.py b/scripts/ci/secure_output_tree.py
+new file mode 100644
+index 0000000..19f6f75
+--- /dev/null
++++ b/scripts/ci/secure_output_tree.py
+@@ -0,0 +1,333 @@
++#!/usr/bin/env python3
++"""Descriptor-anchored, no-follow output materialization primitives.
++
++The helper is intentionally POSIX-only. It keeps directory descriptors open,
++creates every descendant relative to those descriptors, and never falls back to
++pathname-based writes. This prevents a concurrent same-UID process from
++redirecting trusted output through rename-and-symlink races.
++"""
++
++from __future__ import annotations
++
++import errno
++import os
++import pathlib
++from collections.abc import Iterable
++from types import TracebackType
++from typing import Self, cast
++
++
++_DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
++_NOFOLLOW_DIRECTORY_FLAGS = _DIRECTORY_FLAGS | getattr(os, "O_NOFOLLOW", 0)
