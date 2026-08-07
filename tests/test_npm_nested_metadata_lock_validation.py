@@ -254,3 +254,19 @@ def test_materialize_rejects_symlinked_output_parent(
     with pytest.raises(ValueError, match="symlink"):
         materializer.materialize(tmp_path, "a" * 40, output_dir)
     assert not (redirected_parent / "materialized-locks").exists()
+
+
+def test_materialize_rejects_regular_file_output_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A regular-file path component must not be traversed as an output directory."""
+
+    regular_parent = tmp_path / "regular-parent"
+    regular_parent.write_text("not a directory\n", encoding="utf-8")
+    output_dir = regular_parent / "materialized-locks"
+
+    monkeypatch.setattr(materializer, "base_npm_projects", lambda *_args: [])
+    monkeypatch.setattr(materializer, "base_pnpm_projects", lambda *_args: [])
+
+    with pytest.raises(ValueError, match="path component must be a directory"):
+        materializer.materialize(tmp_path, "a" * 40, output_dir)
