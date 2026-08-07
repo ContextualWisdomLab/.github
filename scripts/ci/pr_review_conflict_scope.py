@@ -12,6 +12,8 @@ Git executable only to enumerate path names and hashes regular-file bytes
 directly with SHA-256. Every symbolic link must resolve to a regular file that
 is itself present in Git's tracked-or-non-ignored inventory, preventing links
 from exposing external, ignored, dangling, or directory-backed write paths.
+Security control files used to authorize or verify model writes must resolve
+outside the repository worktree so the model cannot modify its own evidence.
 """
 
 from __future__ import annotations
@@ -44,6 +46,34 @@ def _validated_root(root: Path) -> Path:
         return candidate.resolve(strict=True)
     except OSError as exc:
         raise ValueError("repository root could not be canonicalized") from exc
+
+
+def _is_within_root(root: Path, candidate: Path) -> bool:
+    """Return whether ``candidate`` is the repository root or one of its descendants."""
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _validated_external_control_path(
+    root: Path, path: Path, *, source_name: str
+) -> Path:
+    """Return a canonical control path that cannot be model-writable repository state.
+
+    Both the caller-visible absolute path and its resolved target are checked.
+    The first check rejects a control file placed directly in the worktree; the
+    second rejects an outside-looking symbolic link whose target resolves back
+    into the worktree. ``strict=False`` intentionally permits a new snapshot
+    output whose parent does not yet exist while still resolving existing
+    symbolic-link components.
+    """
+    candidate = path.absolute()
+    resolved = candidate.resolve(strict=False)
+    if _is_within_root(root, candidate) or _is_within_root(root, resolved):
+        raise ValueError(f"{source_name} must remain outside the repository worktree")
+    return resolved
 
 
 def _validated_relative_path(raw_path: str) -> str:
@@ -229,10 +259,16 @@ def build_snapshot(root: Path) -> dict[str, Any]:
 
 
 def write_snapshot(root: Path, output: Path) -> None:
-    """Write one deterministic UTF-8 JSON worktree snapshot."""
-    document = build_snapshot(root)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
+    """Write one deterministic snapshot to trusted storage outside the worktree."""
+    canonical_root = _validated_root(root)
+    trusted_output = _validated_external_control_path(
+        canonical_root,
+        output,
+        source_name="snapshot output",
+    )
+    document = build_snapshot(canonical_root)
+    trusted_output.parent.mkdir(parents=True, exist_ok=True)
+    trusted_output.write_text(
         json.dumps(document, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
         + "\n",
         encoding="utf-8",
@@ -309,10 +345,20 @@ def _read_allowed_paths(path: Path) -> tuple[str, ...]:
 def verify_snapshot(
     root: Path, snapshot_path: Path, allowed_paths_path: Path
 ) -> tuple[str, ...]:
-    """Return paths changed by the model outside Git's conflict allowlist."""
+    """Return model changes outside a trusted external conflict-path allowlist."""
     canonical_root = _validated_root(root)
-    before = _load_snapshot(snapshot_path)
-    allowed_paths = frozenset(_read_allowed_paths(allowed_paths_path))
+    trusted_snapshot = _validated_external_control_path(
+        canonical_root,
+        snapshot_path,
+        source_name="snapshot input",
+    )
+    trusted_allowed_paths = _validated_external_control_path(
+        canonical_root,
+        allowed_paths_path,
+        source_name="allowed-path input",
+    )
+    before = _load_snapshot(trusted_snapshot)
+    allowed_paths = frozenset(_read_allowed_paths(trusted_allowed_paths))
     unknown_allowed = allowed_paths.difference(before)
     if unknown_allowed:
         raise ValueError("allowed path is absent from the pre-model snapshot")
