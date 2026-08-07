@@ -4,12 +4,13 @@ from pathlib import Path
 
 
 WORKFLOW_PATH = Path(".github/workflows/opencode-review-dispatch.yml")
-TEMPORARY_REPAIR_PATHS = (
-    Path(".github/opencode-attempt-scoped-coverage-artifact.trigger"),
-    Path(".github/workflows/materialize-opencode-attempt-scoped-coverage-artifact.yml"),
-    Path(".github/workflows/opencode-coverage-artifact-rerun-repair.yml"),
-    Path(".github/workflows/pr812-finalize-attempt-artifact.yml"),
-    Path("scripts/ci/prepare_opencode_attempt_artifact_patch.py"),
+TEMPORARY_REPAIR_GLOBS = (
+    ".github/opencode-attempt-scoped-coverage-artifact*.trigger",
+    ".github/pr812*.trigger",
+    ".github/workflows/*opencode*artifact*materializ*.yml",
+    ".github/workflows/*opencode*artifact*repair*.yml",
+    ".github/workflows/pr812-finalize*.yml",
+    "scripts/ci/*opencode*artifact*patch*.py",
 )
 
 
@@ -125,5 +126,12 @@ def test_coverage_consumer_remains_credential_free() -> None:
 
 
 def test_temporary_branch_writers_are_absent_from_final_tree() -> None:
-    """Keep transient materializers and repair branch writers out of the PR."""
-    assert [str(path) for path in TEMPORARY_REPAIR_PATHS if path.exists()] == []
+    """Reject versioned or renamed materializers and branch finalizers."""
+    unexpected = sorted(
+        {
+            str(path)
+            for pattern in TEMPORARY_REPAIR_GLOBS
+            for path in Path(".").glob(pattern)
+        }
+    )
+    assert unexpected == []
