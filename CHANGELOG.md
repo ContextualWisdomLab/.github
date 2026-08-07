@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Bind the write-capable OpenCode PR autofix and conflict-resolution worker exclusively to NVIDIA NIM through `NVIDIA_NIM_API_KEY`, fail closed when that model credential is absent, disable implicit GitHub Models provider discovery, and preserve the existing repository-write identity chain separately from model inference.
 - Provision Debian LLVM 19 in the trusted OpenCode coverage image, bind the versioned `llvm-cov` and `llvm-profdata` executables, and preflight both paths before installing the pinned cargo-llvm-cov archive; isolated-runtime propagation and pre-invocation revalidation remain required by the permanent contract before this change can merge.
 - Distinguish conservatively proven type-only TypeScript changes from executable code when `coverage-final.json` omits the changed file, permitting only multiline `import type`, balanced `interface`, comment, and delimiter lines while preserving fail-closed missing-instrumentation errors for mixed or runtime-looking changes.
 - Bound both trusted-uv quality jobs to `github.event.pull_request.head.sha` and added a permanent two-checkout regression contract so exact-head compatibility, coverage, docstring, and compilation claims cannot silently measure GitHub's generated pull-request merge revision.
@@ -24,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Document the OpenCode PR autofix NVIDIA NIM provider/credential boundary, fail-closed secret handling, unchanged GitHub write-identity chain, regression contract, rollback rules, and current official NVIDIA, OpenCode, and GitHub references in APA 7th format.
 - Document the fail-closed Rust LLVM coverage boundary with APA 7 references to Debian's LLVM 19 package manifest, cargo-llvm-cov's compatibility and environment-variable contract, and the official LLVM `llvm-cov` and `llvm-profdata` command guides.
 - Extend the coverage diagnostics doctoring record with the type-erasure trust boundary, Inkspan reproduction, RED/GREEN exact-head evidence, fail-closed limitations, and APA 7 references to official TypeScript documentation.
 - Add APA 7 doctoring records for coverage diagnostics, the generic coverage/native fuzz-engine dependency boundary, the trusted-uv materializer, and the Strix NVIDIA fallback and source-directory boundary, including exact-base trust models, verification fixtures, limitations, and rollback requirements.
