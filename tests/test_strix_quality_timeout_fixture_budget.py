@@ -26,6 +26,15 @@ def test_strix_quality_uses_short_fake_process_timeouts() -> None:
     assert "bash scripts/ci/test_strix_quick_gate.sh" in step
 
 
+def test_strix_quality_trigger_includes_fixture_contract_paths() -> None:
+    """Keep fixture behavior and doctoring changes inside the quality trigger."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    trigger = workflow[: workflow.index("\njobs:")]
+
+    assert "docs/doctoring/strix-quality-timeout-fixtures.md" in trigger
+    assert "tests/test_strix_quality_timeout_fixture_budget.py" in trigger
+
+
 def test_strix_quality_keeps_real_scanner_budgets_out_of_fixture_overrides() -> None:
     """Fixture acceleration must not weaken production Strix scanner timeouts."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
