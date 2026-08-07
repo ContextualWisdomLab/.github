@@ -10,6 +10,9 @@ FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
 HOURLY_CALLER_WORKFLOW = Path(
     ".github/workflows/clearfolio-hourly-review-repair.yml"
 )
+AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
+DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
+CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 REVIEW_DISPATCH_BLOB_SHA = "83f6830d5c21a324b4dbcd4e5c21a07968994b81"
 
@@ -200,3 +203,25 @@ def test_privileged_pushes_ignore_mutable_origin_configuration() -> None:
     assert workflow.count(expected_origin) == 2
     assert workflow.count(explicit_push) == 2
     assert 'push origin "HEAD:${PR_HEAD_REF}"' not in workflow
+
+
+def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
+    """Keep public operator and acquisition records aligned with the implementation."""
+    operator = _workflow_text(AUTOMATION_GUIDE)
+    doctoring = _workflow_text(DOCTORING_RECORD)
+    changelog = _workflow_text(CHANGELOG)
+
+    for document in (operator, doctoring):
+        assert "ordinary and conflict repair" in document
+        assert "including ignored paths" in document
+        assert "`.git` and `.git/*`" in document
+        assert "`core.hooksPath=/dev/null`" in document
+        assert "explicit revalidated repository URL" in document
+
+    assert "tracked and non-ignored untracked" not in doctoring
+    assert "Ignored build caches are outside the comparison" not in doctoring
+    assert "Git Project. (2026). *git-ls-files*" in doctoring
+    assert "Git Project. (2026). *githooks*" in doctoring
+    assert "OpenCode. (2026a). *Permissions*" in doctoring
+    assert "ignored-path inventory" in changelog
+    assert "model-mutable Git metadata" in changelog
