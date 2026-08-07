@@ -50,8 +50,9 @@ def test_repository_root_canonicalization_failure_is_redacted(
 
     monkeypatch.setattr(Path, "resolve", reject_resolution)
 
-    with pytest.raises(ValueError, match="could not be canonicalized"):
+    with pytest.raises(ValueError, match="could not be canonicalized") as error:
         scope.build_snapshot(root)
+    assert "sensitive filesystem detail" not in str(error.value)
 
 
 def test_snapshot_rejects_a_symlink_target_outside_the_repository(
@@ -122,8 +123,9 @@ def test_symlink_target_metadata_failure_is_redacted(
 
     monkeypatch.setattr(Path, "lstat", reject_target_metadata)
 
-    with pytest.raises(ValueError, match="regular file"):
+    with pytest.raises(ValueError, match="regular file") as error:
         scope.build_snapshot(root)
+    assert "sensitive race detail" not in str(error.value)
 
 
 def test_verify_rejects_an_allowed_path_replaced_by_an_external_symlink(
