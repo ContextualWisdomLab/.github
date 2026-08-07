@@ -32,6 +32,7 @@ jobs:
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
       PR_NUMBER: ${{ github.event.client_payload.pr_number || '' }}
       PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+      PR_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
       BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}
       REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
       SOURCE_COMMENT_ID: ${{ github.event.client_payload.source_comment_id || '' }}
@@ -49,6 +50,7 @@ jobs:
             ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
             ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] ||
             [[ "$BASE_BRANCH" == -* ]] ||
             ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
@@ -73,10 +75,16 @@ jobs:
                   "actor": os.environ["REQUESTED_BY"],
                   "agent": os.environ["REQUESTED_AGENT"],
                   "base_branch": os.environ["BASE_BRANCH"],
+                  "base_sha": os.environ["PR_BASE_SHA"],
                   "comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
+                  "enable_auto_merge": os.environ["ENABLE_AUTO_MERGE"] == "true",
                   "head_sha": os.environ["PR_HEAD_SHA"],
+                  "merge_mode": os.environ["MERGE_MODE"],
                   "pr_number": int(os.environ["PR_NUMBER"]),
                   "repository": os.environ["TARGET_REPOSITORY"],
+                  "review_dispatch_limit": os.environ["REVIEW_DISPATCH_LIMIT"],
+                  "trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true",
+                  "update_branches": os.environ["UPDATE_BRANCHES"] == "true",
               },
               ensure_ascii=True,
               separators=(",", ":"),
@@ -145,11 +153,17 @@ jobs:
               "actor": os.environ["REQUESTED_BY"],
               "agent": os.environ["REQUESTED_AGENT"],
               "base_branch": os.environ["BASE_BRANCH"],
+              "base_sha": os.environ["PR_BASE_SHA"],
               "comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
+              "enable_auto_merge": os.environ["ENABLE_AUTO_MERGE"] == "true",
               "head_sha": os.environ["PR_HEAD_SHA"],
               "invocation_key": os.environ["INVOCATION_KEY"],
+              "merge_mode": os.environ["MERGE_MODE"],
               "pr_number": int(os.environ["PR_NUMBER"]),
               "repository": os.environ["TARGET_REPOSITORY"],
+              "review_dispatch_limit": os.environ["REVIEW_DISPATCH_LIMIT"],
+              "trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true",
+              "update_branches": os.environ["UPDATE_BRANCHES"] == "true",
           }
           (claim_dir / "claim.json").write_text(
               json.dumps(claim, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
@@ -179,6 +193,7 @@ jobs:
             --arg target_repository "$TARGET_REPOSITORY" \
             --argjson pr_number "$PR_NUMBER" \
             --arg pr_head_sha "$PR_HEAD_SHA" \
+            --arg pr_base_sha "$PR_BASE_SHA" \
             --arg base_branch "$BASE_BRANCH" \
             --arg requested_agent "$REQUESTED_AGENT" \
             --arg agent_invocation_key "$INVOCATION_KEY" \
@@ -190,6 +205,7 @@ jobs:
                 target_repository: $target_repository,
                 pr_number: $pr_number,
                 pr_head_sha: $pr_head_sha,
+                pr_base_sha: $pr_base_sha,
                 base_branch: $base_branch,
                 trigger_reviews: true,
                 review_dispatch_limit: "1",
