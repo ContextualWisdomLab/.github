@@ -131,6 +131,32 @@ root cause, fix direction, and focused rerun command. Cancelled or superseded
 checks must be described as queue or evidence blockers rather than invented
 source-code findings.
 
+## Security Scan exact-head operator contract
+
+Organization-required repository scanners authorize evidence against the
+literal pull-request head, not GitHub's generated merge revision. The central
+`Security Scan` therefore binds dependency-review support, Trivy, and Scorecard
+to the event's explicit head repository and immutable head SHA, and binds Trivy
+and Scorecard SARIF uploads to `refs/pull/<number>/head` plus that same SHA.
+A queued, cancelled, skipped, failed, missing, predecessor-head, or synthetic
+merge run is not current-head security evidence.
+
+Dependency review is a hard supply-chain gate. Its exact base-to-head capability
+probe may proceed only on HTTP `200`; `403`, `404`, `000`, malformed or empty
+status, timeout, transport failure, and other unexpected outcomes fail closed.
+Operators must repair the repository or organization dependency-graph/security
+capability, organization policy, entitlement, or read-token access and then
+rerun the exact head. Do not convert an unavailable dependency-review endpoint
+into a green skip, and do not treat OSV, Trivy, CodeQL, Semgrep, Secret Scan,
+Scorecard, or Dependabot as substitutes for dependency-review evidence.
+Private or internal repository exceptions require an explicit organization
+policy backed by independently reviewable entitlement evidence rather than an
+inference from a failed probe.
+
+The authoritative rationale, rollback procedure, verification contracts, and
+APA 7th primary-source references are maintained in
+[`docs/doctoring/security-scan-exact-head.md`](docs/doctoring/security-scan-exact-head.md).
+
 Operational cases folded into the central policy:
 
 - `naruon`: approved PRs can become `BEHIND`; the scheduler treats that as an
