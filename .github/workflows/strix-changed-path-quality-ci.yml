@@ -7,6 +7,7 @@ on:
       - ".github/workflows/strix-changed-path-quality-ci.yml"
       - "CHANGELOG.md"
       - "docs/doctoring/strix-legal-git-paths.md"
+      - "docs/doctoring/strix-quality-timeout-fixtures.md"
       - "scripts/ci/strix_quick_gate.sh"
       - "scripts/ci/test_strix_quick_gate.sh"
       - "tests/test_strix_changed_path_policy.py"
