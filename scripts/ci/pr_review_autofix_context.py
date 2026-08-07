@@ -141,7 +141,12 @@ def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
     for thread in threads:
         for comment in (thread.get("comments") or {}).get("nodes") or []:
             path = str(comment.get("path") or "").strip()
-            if not path or path.startswith("/") or ".." in path.split("/"):
+            if (
+                not path
+                or "\0" in path
+                or path.startswith("/")
+                or ".." in path.split("/")
+            ):
                 continue
             if path in seen:
                 continue
@@ -150,8 +155,21 @@ def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
     return paths
 
 
-def write_context(repo: str, number: int, head_sha: str, output: Path) -> None:
-    """Write bounded PR review/autofix context."""
+def _write_allowed_paths(paths: list[str], output: Path) -> None:
+    """Write exact review-thread paths as a deterministic NUL-delimited file."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"".join(os.fsencode(path) + b"\0" for path in paths))
+
+
+def write_context(
+    repo: str,
+    number: int,
+    head_sha: str,
+    output: Path,
+    *,
+    allowed_paths_output: Path | None = None,
+) -> None:
+    """Write bounded review text and an optional sealed path-authorization file."""
     pr = pr_view(repo, number)
     if pr["headRefOid"] != head_sha:
         raise RuntimeError(f"live head {pr['headRefOid']} does not match expected {head_sha}")
@@ -159,6 +177,8 @@ def write_context(repo: str, number: int, head_sha: str, output: Path) -> None:
     reviews = current_reviews(repo, number, head_sha)
     threads = review_threads(repo, number)
     paths = thread_paths(threads)
+    if allowed_paths_output is not None:
+        _write_allowed_paths(paths, allowed_paths_output)
 
     lines = [
         "# PR Review Autofix Context",
@@ -235,6 +255,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--pr-number", type=int, required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--allowed-paths-output", type=Path)
     args = parser.parse_args(argv)
     if not args.repo:
         parser.error("--repo is required")
@@ -250,7 +271,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     """Run the context writer."""
     args = parse_args(argv)
-    write_context(args.repo, args.pr_number, args.head_sha, args.output)
+    write_context(
+        args.repo,
+        args.pr_number,
+        args.head_sha,
+        args.output,
+        allowed_paths_output=args.allowed_paths_output,
+    )
     return 0
 
 
