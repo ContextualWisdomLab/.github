@@ -1,6 +1,7 @@
 """Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
 from pathlib import Path
+import re
 import subprocess
 
 
@@ -153,3 +154,38 @@ def test_independent_review_agent_key_system_is_unchanged() -> None:
     )
     assert result.stdout.strip() == REVIEW_DISPATCH_BLOB_SHA
     assert "pr-review-autofix" not in _workflow_text(REVIEW_DISPATCH_WORKFLOW)
+
+
+def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -> None:
+    """Snapshot ordinary repairs so ignored and symlink-mediated writes fail closed."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
+    ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
+    ordinary = workflow[ordinary_start:ordinary_end]
+
+    snapshot = 'pr_review_conflict_scope.py" snapshot'
+    verify = 'pr_review_conflict_scope.py" verify'
+    temporary_config = 'cp "$OPENCODE_AUTOFIX_WORKDIR/opencode.jsonc"'
+    restore = "restore_workspace_config\n          trap - EXIT"
+
+    assert snapshot in ordinary
+    assert verify in ordinary
+    assert "pr-review-autofix-allowed-paths.zlist" in ordinary
+    assert "printf '%s\\0'" in ordinary
+    assert ordinary.index(snapshot) < ordinary.index(temporary_config)
+    assert ordinary.index(restore) < ordinary.index(verify)
+
+
+def test_model_cannot_edit_git_control_files_or_execute_repository_hooks() -> None:
+    """Deny Git metadata edits and disable hooks in every privileged Git write."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    edit_rules = re.compile(
+        r'"edit":\s*\{\s*"\*":\s*"allow",\s*'
+        r'"\.git":\s*"deny",\s*"\.git/\*":\s*"deny"\s*\}',
+        flags=re.MULTILINE,
+    )
+
+    assert len(edit_rules.findall(workflow)) == 2
+    assert '"edit": "allow"' not in workflow
+    assert workflow.count("git -c core.hooksPath=/dev/null commit") == 2
+    assert workflow.count("git -c core.hooksPath=/dev/null push") == 2
