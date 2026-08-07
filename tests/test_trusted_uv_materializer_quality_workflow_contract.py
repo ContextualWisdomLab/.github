@@ -88,6 +88,7 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
         "tests/test_trusted_uv_download_contract.py",
         "tests/test_trusted_git_executable.py",
         "tests/test_trusted_uv_portability_and_streaming.py",
+        "tests/test_trusted_uv_retry_documentation.py",
         "tests/test_uv_export_isolation_contract.py",
         "tests/test_uv_redirect_and_coverage_contract.py",
         "tests/test_uv_redirect_boundary.py",
