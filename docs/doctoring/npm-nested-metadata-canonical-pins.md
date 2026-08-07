@@ -6,7 +6,7 @@ Changed npm lockfiles remain untrusted pull-request inputs. The central JavaScri
 
 npm can serialize a nested workspace or peer location with version and classification metadata while the canonical root location carries the registry tarball and integrity fields. The validator therefore distinguishes two safe forms:
 
-1. **Complete pin** — the location declares both `resolved` and `integrity`. The URL must be an HTTPS tarball on `registry.npmjs.org` with no user information, non-default port, query, or fragment, and the integrity value must be one canonical SHA-512 SRI value.
+1. **Complete pin** — the location declares both `resolved` and `integrity`. The URL must be an HTTPS tarball on `registry.npmjs.org` with no user information, explicit port, query, or fragment, and the integrity value must be one canonical SHA-512 SRI value.
 2. **Metadata-only nested location** — the location declares neither field. It is accepted only when `node_modules/<package identity>` contains one complete pin for the same scoped or unscoped package identity and the exact same version.
 
 A metadata-only canonical root entry is forbidden. A nested location that declares only one of `resolved` or `integrity` is also forbidden. Independently complete nested pins remain valid and may carry a different version because their bytes and integrity are self-contained.
