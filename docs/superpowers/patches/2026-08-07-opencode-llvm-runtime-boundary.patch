@@ -1,0 +1,38 @@
+diff --git a/.github/workflows/opencode-review-dispatch.yml b/.github/workflows/opencode-review-dispatch.yml
+--- a/.github/workflows/opencode-review-dispatch.yml
++++ b/.github/workflows/opencode-review-dispatch.yml
+@@ -1,6 +1,8 @@
+               --env RUNNER_TEMP=/secure-output \
+               --env GITHUB_OUTPUT=/secure-output/github-output \
+               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
++              --env LLVM_COV=/usr/bin/llvm-cov-19 \
++              --env LLVM_PROFDATA=/usr/bin/llvm-profdata-19 \
+               "$coverage_tool_image" \
+               /bin/bash /trusted-measure-step.sh || sandbox_status=$?
+@@ -1,6 +1,28 @@
+               failures=$((failures + 1))
+               return 1
+             fi
++            if ! test -x "$LLVM_COV"; then
++              append "### Rust coverage toolchain"
++              append ""
++              append "- Result: FAIL"
++              append "- Reason: the trusted offline coverage image is missing its reviewed LLVM coverage executable."
++              append "- Fix: rebuild the trusted coverage image with LLVM 19 before rerunning current-head evidence."
++              append ""
++              failures=$((failures + 1))
++              return 1
++            fi
++            if ! test -x "$LLVM_PROFDATA"; then
++              append "### Rust coverage toolchain"
++              append ""
++              append "- Result: FAIL"
++              append "- Reason: the trusted offline coverage image is missing its reviewed LLVM profile-data executable."
++              append "- Fix: rebuild the trusted coverage image with LLVM 19 before rerunning current-head evidence."
++              append ""
++              failures=$((failures + 1))
++              return 1
++            fi
+           }
+ 
+           ensure_tauri_frontend_dist() {
