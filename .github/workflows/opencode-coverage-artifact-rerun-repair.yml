@@ -280,12 +280,12 @@ jobs:
 
       - name: Commit verified direct repair and remove bootstrap
         env:
-          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          PUSH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/opencode-attempt-scoped-coverage-artifact
         run: |
           set -euo pipefail
           if [ -z "${PUSH_TOKEN:-}" ]; then
-            echo "::error::PR_REVIEW_MERGE_TOKEN is required to publish the verified workflow-file repair."
+            echo "::error::The repository-scoped GitHub Actions token is required to publish the verified workflow-file repair."
             exit 1
           fi
           echo "::add-mask::$PUSH_TOKEN"
