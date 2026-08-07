@@ -1,0 +1,191 @@
+, 0)
++_FILE_FLAGS = (
++    os.O_WRONLY
++    | os.O_CREAT
++    | os.O_EXCL
++    | getattr(os, "O_CLOEXEC", 0)
++    | getattr(os, "O_NOFOLLOW", 0)
++)
++
++
++def _secure_primitives_available() -> bool:
++    """Return whether this runtime exposes every required secure POSIX primitive."""
++    required_constants = ("O_DIRECTORY", "O_NOFOLLOW")
++    required_dir_fd = (os.open, os.mkdir, os.unlink, os.rmdir)
++    return (
++        os.name == "posix"
++        and all(hasattr(os, name) for name in required_constants)
++        and all(function in os.supports_dir_fd for function in required_dir_fd)
++        and hasattr(os, "fsync")
++        and hasattr(os, "write")
++    )
++
++
++def _relative_parts(value: str | pathlib.PurePosixPath) -> tuple[str, ...]:
++    """Return validated lexical POSIX components without normalization."""
++    raw = str(value)
++    if "\x00" in raw or "\\" in raw:
++        raise ValueError("secure output paths must be NUL-free POSIX paths")
++    if raw.startswith("/"):
++        raise ValueError("secure output paths must be relative")
++    parts = tuple(raw.split("/"))
++    if not parts or parts == ("",):
++        raise ValueError("secure output paths must not be empty")
++    if any(part in ("", ".", "..") for part in parts):
++        raise ValueError("secure output paths must not contain empty, dot, or parent components")
++    return parts
++
++
++def _write_all(file_descriptor: int, content: bytes) -> None:
++    """Write every byte or fail if the operating system makes no forward progress."""
++    remaining = memoryview(content)
++    while remaining:
++        written = os.write(file_descriptor, remaining)
++        if written <= 0:
++            raise OSError("secure output write made no forward progress")
++        remaining = remaining[written:]
++
++
++class SecureOutputTree:
++    """Create one isolated output tree through held no-follow descriptors.
++
++    Existing output roots may be reused only when target descendants do not
++    already exist. Every directory and file below the root is owned by this
++    instance. On failure the helper removes only descendants it created, and it
++    removes the root itself only when this instance created it.
++    """
++
++    def __init__(self, output_dir: pathlib.Path) -> None:
++        """Open or create ``output_dir`` without resolving mutable pathnames."""
++        if not _secure_primitives_available():
++            raise RuntimeError(
++                "secure output materialization requires POSIX dir_fd, O_DIRECTORY, and O_NOFOLLOW support"
++            )
++        raw_parts = pathlib.PurePath(os.fspath(output_dir)).parts
++        if ".." in raw_parts:
++            raise ValueError("output directory must not contain parent components")
++        absolute = output_dir.absolute()
++        if absolute == pathlib.Path(absolute.anchor):
++            raise ValueError("output directory must not be the filesystem root")
++
++        anchor_fd = os.open(absolute.anchor, _DIRECTORY_FLAGS)
++        current_fd = anchor_fd
++        current_owned = False
++        root_parent_fd: int | None = None
++        root_name: str | None = None
++        created_root = False
++        try:
++            components = absolute.parts[1:]
++            for index, component in enumerate(components):
++                final = index == len(components) - 1
++                if final:
++                    root_parent_fd = os.dup(current_fd)
++                    root_name = component
++                created = False
++                try:
++                    next_fd = os.open(component, _NOFOLLOW_DIRECTORY_FLAGS, dir_fd=current_fd)
++                except FileNotFoundError:
++                    if not final:
++                        raise ValueError(
++                            "output directory parent components must already exist"
++                        )
++                    os.mkdir(component, mode=0o700, dir_fd=current_fd)
++                    os.fsync(current_fd)
++                    created = True
++                    try:
++                        next_fd = os.open(
++                            component,
++                            _NOFOLLOW_DIRECTORY_FLAGS,
++                            dir_fd=current_fd,
++                        )
++                    except Exception:
++                        try:
++                            os.rmdir(component, dir_fd=current_fd)
++                            os.fsync(current_fd)
++                        except OSError:
++                            pass
++                        raise
++                except OSError as exc:
++                    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
++                        raise ValueError(
++                            f"output directory component is not a no-follow directory: {component}"
++                        ) from exc
++                    raise
++                if current_owned:
++                    os.close(current_fd)
++                current_fd = next_fd
++                current_owned = True
++                if final:
++                    created_root = created
++        except Exception:
++            if current_owned:
++                os.close(current_fd)
++            os.close(anchor_fd)
++            if root_parent_fd is not None:
++                os.close(root_parent_fd)
++            raise
++        os.close(anchor_fd)
++        root_parent_fd = cast(int, root_parent_fd)
++        root_name = cast(str, root_name)
++
++        self._root_fd = current_fd
++        self._root_parent_fd = root_parent_fd
++        self._root_name = root_name
++        self._created_root = created_root
++        self._closed = False
++        self._known_directories: set[tuple[str, ...]] = {()}
++        self._created_directories: list[tuple[str, ...]] = []
++        self._created_files: list[tuple[tuple[str, ...], str]] = []
++
++    def __enter__(self) -> Self:
++        """Return this open secure tree."""
++        return self
++
++    def __exit__(
++        self,
++        exc_type: type[BaseException] | None,
++        exc: BaseException | None,
++        traceback: TracebackType | None,
++    ) -> None:
++        """Clean owned partial output on failure and close all descriptors."""
++        if exc_type is not None:
++            self.cleanup()
++        self.close()
++
++    def _ensure_open(self) -> None:
++        """Fail when an operation is attempted after close."""
++        if self._closed:
++            raise RuntimeError("secure output tree is closed")
++
++    def _open_directory(self, parts: Iterable[str], *, create: bool) -> int:
++        """Open one descendant directory by walking held descriptors only."""
++        self._ensure_open()
++        current_fd = os.dup(self._root_fd)
++        prefix: tuple[str, ...] = ()
++        try:
++            for component in parts:
++                prefix = (*prefix, component)
++                if prefix not in self._known_directories:
++                    if not create:
++                        raise FileNotFoundError("secure output directory is unknown")
++                    try:
++                        os.mkdir(component, mode=0o700, dir_fd=current_fd)
++                    except FileExistsError as exc:
++                        raise FileExistsError(
++                            f"secure output entry already exists: {'/'.join(prefix)}"
++                        ) from exc
++                    os.fsync(current_fd)
++                    self._known_directories.add(prefix)
++                    self._created_directories.append(prefix)
++                try:
++                    next_fd = os.open(
++                        component,
++                        _NOFOLLOW_DIRECTORY_FLAGS,
++                        dir_fd=current_fd,
++                    )
++                except OSError as exc:
++                    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
++                        raise ValueError(
++                            f"secure output directory was replaced or is not a directory: {'/'.join(prefix)}"
++                        ) from exc
++                
