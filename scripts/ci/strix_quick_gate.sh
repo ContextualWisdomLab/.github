@@ -406,16 +406,21 @@ if "\x00" in relative_path_str:
     raise SystemExit(1)
 if "\\" in relative_path_str:
     raise SystemExit(1)
+if any(component == ".." for component in relative_path_str.split("/")):
+    raise SystemExit(1)
 normalized = posixpath.normpath(relative_path_str)
 if normalized in (".", "") or normalized.startswith("../") or normalized == "..":
     raise SystemExit(1)
 # '@' is required for Apple/Tauri retina asset names (128x128@2x.png) and '+'
-# for SvelteKit's mandatory route files (+page.svelte, +layout.ts). Preserve
-# the existing ASCII allowlist and additionally accept only Unicode letters,
-# combining marks, and numbers. This supports internationalized repository
-# paths without admitting controls, separators, bidi formatting, shell
-# metacharacters, or Unicode punctuation that could resemble a path boundary.
-allowed_ascii = frozenset("_.@+/ []-")
+# for SvelteKit's mandatory route files (+page.svelte, +layout.ts). Commas and
+# parentheses are ordinary Git filename characters used by historical Packrat
+# fixtures. They remain data because downstream filesystem and Git calls pass
+# the normalized path as a quoted argument rather than executable shell source.
+# Preserve the bounded ASCII allowlist and additionally accept only Unicode
+# letters, combining marks, and numbers. This supports internationalized
+# repository paths without admitting controls, separators, bidi formatting,
+# shell metacharacters, or Unicode punctuation resembling a path boundary.
+allowed_ascii = frozenset("_.@+/ [],()-")
 if not all(
     (character.isascii() and (character.isalnum() or character in allowed_ascii))
     or (
