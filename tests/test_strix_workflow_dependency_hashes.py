@@ -34,11 +34,11 @@ def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
     assert '      - "tests/test_strix_workflow_dependency_hashes.py"' in workflow
 
 
-def test_strix_workflow_supports_manual_dispatch() -> None:
-    """Operators can rerun the permanent exact-head contract on demand."""
+def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
+    """Central executable workflows load no branch-selected manual source."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "  workflow_dispatch:" in workflow
+    assert "workflow_dispatch:" not in workflow
 
 
 def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
