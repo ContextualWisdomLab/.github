@@ -263,10 +263,10 @@ def test_materializer_rejects_filesystem_root_output(
         materializer.materialize(tmp_path, "a" * 40, Path("/"))
 
 
-def test_materializer_normalizes_directory_open_failures(
+def test_materializer_preserves_bounded_directory_open_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No-follow directory failures remain bounded and operator-readable."""
+    """Descriptor-relative ENOTDIR remains fail-closed without a full-path leak."""
 
     _stub_project_discovery(monkeypatch, [])
     real_open = os.open
@@ -283,12 +283,14 @@ def test_materializer_normalizes_directory_open_failures(
 
     monkeypatch.setattr(os, "open", fail_output_open)
 
-    with pytest.raises(ValueError, match="must not contain symlinks"):
+    with pytest.raises(NotADirectoryError, match="synthetic") as raised:
         materializer.materialize(
             tmp_path,
             "a" * 40,
             tmp_path / "generated_locks",
         )
+    assert raised.value.errno == errno.ENOTDIR
+    assert raised.value.filename is None
 
 
 def test_output_binding_rejects_removed_published_path(tmp_path: Path) -> None:
