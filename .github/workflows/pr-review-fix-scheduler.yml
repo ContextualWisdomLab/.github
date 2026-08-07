@@ -63,16 +63,17 @@ concurrency:
   cancel-in-progress: true
 
 # Keep the workflow-generated token read-only. Cross-repository mutation is
-# authorized only by the two explicitly forwarded established credentials.
+# authorized only by the two explicitly forwarded established credentials or
+# the established OpenCode GitHub App token exchanged from GitHub OIDC.
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   dispatch-review-fixes:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
       DEFAULT_BRANCH: ${{ github.event.client_payload.base_branch || inputs.base_branch || vars.PR_REVIEW_FIX_BASE_BRANCH || github.event.repository.default_branch }}
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
@@ -82,6 +83,72 @@ jobs:
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
     steps:
+      - name: Exchange OpenCode app token for scheduler mutations
+        id: scheduler_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Resolve immutable called-workflow source
         id: trusted_source
         env:
@@ -131,9 +198,8 @@ jobs:
       - name: Checkout immutable called-workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # GitHub documents job.workflow_repository and job.workflow_sha as
-          # the called workflow identity. The preceding step validates every
-          # field before checkout so an absent property cannot select defaults.
+          # Validated above to exactly: repository: ContextualWisdomLab/.github
+          # Keep the actual checkout bound to the validated called-workflow output.
           repository: ${{ steps.trusted_source.outputs.repository }}
           ref: ${{ steps.trusted_source.outputs.sha }}
           fetch-depth: 1
@@ -163,10 +229,13 @@ jobs:
         run: python3 scripts/ci/pr_review_fix_scheduler.py --self-test
 
       - name: Dispatch review-feedback autofix
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
+          MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.scheduler_app_token.outputs.available == 'true' }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN is required; the scheduler never elevates github.token."
+          if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then
+            echo "::error::PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token is required; github.token remains read-only and is never accepted as the mutation authority."
             exit 1
           fi
           args=(
