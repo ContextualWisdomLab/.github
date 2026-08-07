@@ -63,10 +63,20 @@ OpenAI-compatible adapter and NVIDIA hosted endpoint:
 https://integrate.api.nvidia.com/v1
 ```
 
-The primary repair model is `mistralai/mistral-nemotron`; the small model used
-for bounded helper work is `nvidia/nemotron-3-nano-30b-a3b`. The helper is not a
-fallback provider. GitHub Models configuration, identifiers, base URLs, and
-model-auth fallbacks are absent from the scheduled autofix execution path.
+The primary repair model is `mistralai/mistral-small-4-119b-2603`. The
+`ci-autofix` agent and its model configuration both request high reasoning
+through OpenCode's provider-option contract (`reasoningEffort: "high"`). NVIDIA's
+Mistral Small 4 NIM API documents the corresponding request behavior as
+`reasoning_effort: "high"`, which enables the model's reasoning mode. The small
+model used for bounded helper work remains `nvidia/nemotron-3-nano-30b-a3b` and
+is not a fallback provider. GitHub Models configuration, identifiers, base URLs,
+and model-auth fallbacks are absent from the scheduled autofix execution path.
+
+The high-reasoning setting is deliberate for write-capable review repair. This
+workflow optimizes correctness, evidence quality, and controllability rather than
+latency. It does not imply that deeper reasoning is universally superior; the
+setting is an explicit operational choice for this bounded, security-sensitive
+writer role and remains subject to exact-head regression evidence.
 
 ## Credential boundary
 
@@ -82,9 +92,16 @@ checkout, context preparation, validation, commit, and push do not receive the
 NVIDIA credential. A missing key is a fatal configuration error rather than a
 signal to choose another provider.
 
-The ordinary repair step does not bind a GitHub write token at step scope. The
-conflict-repair shell retains GitHub credentials because the same reviewed shell
-must re-read the live head and publish a verified merge after model execution.
+The ordinary model execution step does not bind a GitHub write token. Its later
+commit-and-push step may mutate only with `PR_REVIEW_MERGE_TOKEN`,
+`OPENCODE_APPROVE_TOKEN`, or the short-lived OpenCode GitHub App token exchanged
+from OIDC. The conflict-repair shell uses the same three mutation authorities
+because the reviewed shell must re-read the live head and publish a verified
+merge after model execution. Both mutation-capable paths evaluate an explicit
+credential-availability guard before any Git write and fail closed when none of
+those authorities exists. The workflow-generated `github.token` remains
+read-only and is never accepted in a mutation credential expression.
+
 Both model child processes run through:
 
 ```text
@@ -221,33 +238,40 @@ The ordinary write-scope defects were captured before production repair:
   focused tests and complete production statement and branch coverage remained
   green.
 
-Predecessor-head successes are historical TDD evidence, not merge evidence. The
-final integrated head must establish every required quality, security, review,
-and protection gate again.
+The later writer-model and mutation-authority hardening was likewise captured by
+permanent RED contracts before the implementation changed. Those contracts pin
+the exact NVIDIA Mistral Small 4 writer, high reasoning, absence of the obsolete
+Mistral Nemotron identifier, explicit mutation credentials, and guards that run
+before any Git write. Predecessor-head successes are historical TDD evidence,
+not merge evidence. The final integrated head must establish every required
+quality, security, review, and protection gate again.
 
 ## Verification contract
 
 Automated tests prove:
 
 1. the caller retains its approved one-hour cadence;
-2. OpenCode enables only NVIDIA NIM and receives the model key only in its two
-   execution steps;
+2. OpenCode enables only NVIDIA NIM, uses the exact Mistral Small 4 writer with
+   high reasoning, and receives the model key only in its two execution steps;
 3. missing model credentials fail closed and model children receive no GitHub or
    OIDC write credential;
-4. trusted helper source is checked out at the immutable workflow-run SHA;
-5. ordinary and conflict repair both snapshot before model execution and verify
+4. mutation-capable ordinary and conflict paths accept only established explicit
+   secrets or the exchanged OpenCode app token, never `github.token`, and fail
+   closed before Git writes when no mutation authority exists;
+5. trusted helper source is checked out at the immutable workflow-run SHA;
+6. ordinary and conflict repair both snapshot before model execution and verify
    after temporary configuration restoration but before staging;
-6. tracked, untracked, and ignored-path inventories, symlink targets, mode
+7. tracked, untracked, and ignored-path inventories, symlink targets, mode
    changes, deletions, creations, and metadata races are covered;
-7. both OpenCode permission maps deny `.git` and `.git/*` after the catch-all
+8. both OpenCode permission maps deny `.git` and `.git/*` after the catch-all
    edit rule;
-8. every privileged commit and push disables repository hooks through
+9. every privileged commit and push disables repository hooks through
    `core.hooksPath=/dev/null`;
-9. every push uses the explicit target URL and never model-mutable `origin`;
-10. the independent review workflow retains its exact reviewed Git blob SHA;
-11. the production helper retains 100% statement and branch coverage and 100%
+10. every push uses the explicit target URL and never model-mutable `origin`;
+11. the independent review workflow retains its exact reviewed Git blob SHA;
+12. the production helper retains 100% statement and branch coverage and 100%
     public docstrings; and
-12. exact-current-head security, automated review, independent approval,
+13. exact-current-head security, automated review, independent approval,
     unresolved-thread, and branch-protection gates pass before merge.
 
 ## Scheduling and activation
@@ -290,9 +314,9 @@ GitHub, Inc. (n.d.-b). *Secrets reference*. GitHub Docs. Retrieved August 7,
 NVIDIA Corporation. (n.d.-a). *LLM APIs*. NVIDIA API Catalog. Retrieved August
 7, 2026, from https://docs.api.nvidia.com/nim/reference/llm-apis
 
-NVIDIA Corporation. (n.d.-b). *Mistralai / mistral-nemotron*. NVIDIA API
-Catalog. Retrieved August 7, 2026, from
-https://docs.api.nvidia.com/nim/reference/mistralai-mistral-nemotron
+NVIDIA Corporation. (2026). *Query the Mistral-Small-4-119B-2603 API*. NVIDIA
+NIM for Vision Language Models. Retrieved August 8, 2026, from
+https://docs.nvidia.com/nim/vision-language-models/1.7.0/examples/mistral-small-4-119b-2603/api.html
 
 NVIDIA Corporation. (n.d.-c). *NVIDIA / nemotron-3-nano-30b-a3b*. NVIDIA API
 Catalog. Retrieved August 7, 2026, from
@@ -301,3 +325,9 @@ https://docs.api.nvidia.com/nim/re/reference/nvidia-nemotron-3-nano-30b-a3b
 OpenCode. (2026a). *Permissions*. https://opencode.ai/docs/permissions
 
 OpenCode. (2026b, July 28). *Providers*. https://opencode.ai/docs/providers
+
+OpenCode. (2026c). *Agents*. Retrieved August 8, 2026, from
+https://opencode.ai/docs/agents
+
+OpenCode. (2026d). *Models*. Retrieved August 8, 2026, from
+https://opencode.ai/docs/models
