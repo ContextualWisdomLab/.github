@@ -8,6 +8,7 @@ on:
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "tests/conftest.py"
       - "tests/test_javascript_materializer_descriptor_ancestry.py"
+      - "tests/test_javascript_materializer_existing_directory_coverage.py"
       - "tests/test_javascript_materializer_output_edge_coverage.py"
       - "tests/test_javascript_materializer_output_security.py"
       - "tests/test_materialize_base_javascript_packages.py"
@@ -22,6 +23,7 @@ on:
       - "scripts/ci/materialize_base_javascript_packages.py"
       - "tests/conftest.py"
       - "tests/test_javascript_materializer_descriptor_ancestry.py"
+      - "tests/test_javascript_materializer_existing_directory_coverage.py"
       - "tests/test_javascript_materializer_output_edge_coverage.py"
       - "tests/test_javascript_materializer_output_security.py"
       - "tests/test_materialize_base_javascript_packages.py"
@@ -65,6 +67,7 @@ jobs:
             scripts/ci/materialize_base_javascript_packages.py \
             tests/conftest.py \
             tests/test_javascript_materializer_descriptor_ancestry.py \
+            tests/test_javascript_materializer_existing_directory_coverage.py \
             tests/test_javascript_materializer_output_edge_coverage.py \
             tests/test_javascript_materializer_output_security.py \
             tests/test_materialize_base_javascript_packages.py \
@@ -99,6 +102,7 @@ jobs:
           python -m coverage erase
           python -m coverage run --branch -m pytest -q \
             tests/test_javascript_materializer_descriptor_ancestry.py \
+            tests/test_javascript_materializer_existing_directory_coverage.py \
             tests/test_javascript_materializer_output_edge_coverage.py \
             tests/test_javascript_materializer_output_security.py \
             tests/test_materialize_base_javascript_packages.py \
@@ -114,6 +118,7 @@ jobs:
             scripts/ci/materialize_base_javascript_packages.py \
             tests/conftest.py \
             tests/test_javascript_materializer_descriptor_ancestry.py \
+            tests/test_javascript_materializer_existing_directory_coverage.py \
             tests/test_javascript_materializer_output_edge_coverage.py \
             tests/test_javascript_materializer_output_security.py \
             tests/test_materialize_base_javascript_packages.py \
