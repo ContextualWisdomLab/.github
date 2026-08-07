@@ -8,6 +8,7 @@ TEMPORARY_REPAIR_PATHS = (
     Path(".github/opencode-attempt-scoped-coverage-artifact.trigger"),
     Path(".github/workflows/materialize-opencode-attempt-scoped-coverage-artifact.yml"),
     Path(".github/workflows/opencode-coverage-artifact-rerun-repair.yml"),
+    Path(".github/workflows/pr812-finalize-attempt-artifact.yml"),
     Path("scripts/ci/prepare_opencode_attempt_artifact_patch.py"),
 )
 
