@@ -1,0 +1,108 @@
+name: npm Nested Metadata Validation Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/npm-nested-metadata-validation-quality-ci.yml"
+      - "scripts/ci/materialize_base_javascript_packages.py"
+      - "tests/test_materialize_base_javascript_packages.py"
+      - "tests/test_npm_nested_metadata_lock_validation.py"
+      - "docs/doctoring/npm-nested-metadata-canonical-pins.md"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "CHANGELOG.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/npm-nested-metadata-validation-quality-ci.yml"
+      - "scripts/ci/materialize_base_javascript_packages.py"
+      - "tests/test_materialize_base_javascript_packages.py"
+      - "tests/test_npm_nested_metadata_lock_validation.py"
+      - "docs/doctoring/npm-nested-metadata-canonical-pins.md"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "CHANGELOG.md"
+
+concurrency:
+  group: npm-nested-metadata-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  python-310-compatibility:
+    name: Python 3.10 compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python 3.10
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+      - name: Compile implementation and contracts
+        run: |
+          python -m compileall -q \
+            scripts/ci/materialize_base_javascript_packages.py \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_npm_nested_metadata_lock_validation.py
+
+  python-314-quality:
+    name: Python 3.14 complete quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+      - name: Install exact hash-locked quality tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+      - name: Run focused tests with complete production branch coverage
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_npm_nested_metadata_lock_validation.py
+          python -m coverage report \
+            --include=scripts/ci/materialize_base_javascript_packages.py \
+            --show-missing \
+            --fail-under=100
+      - name: Enforce complete production docstrings and compilation
+        run: |
+          python -m interrogate --fail-under 100 scripts/ci/materialize_base_javascript_packages.py
+          python -m compileall -q \
+            scripts/ci/materialize_base_javascript_packages.py \
+            tests/test_materialize_base_javascript_packages.py \
+            tests/test_npm_nested_metadata_lock_validation.py
+      - name: Run complete central regression suite
+        run: |
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+      - name: Verify clean patches
+        run: git diff --check
