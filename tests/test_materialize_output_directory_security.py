@@ -119,6 +119,42 @@ def test_materializer_rejects_multiply_linked_destination_file(
     assert outside_file.read_bytes() == b"unchanged"
 
 
+def test_materializer_detects_hard_link_added_during_pinned_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hard link added after the initial check must fail before write success."""
+
+    output_directory = tmp_path / "generated_locks"
+    outside_link = tmp_path / "captured_output"
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    real_fsync = materializer.os.fsync
+    linked = False
+
+    def link_after_file_sync(file_descriptor: int) -> None:
+        nonlocal linked
+        real_fsync(file_descriptor)
+        destination = output_directory / "requirements-000.txt"
+        if linked or not destination.exists():
+            return
+        descriptor_metadata = os.fstat(file_descriptor)
+        path_metadata = os.stat(destination, follow_symlinks=False)
+        if (descriptor_metadata.st_dev, descriptor_metadata.st_ino) != (
+            path_metadata.st_dev,
+            path_metadata.st_ino,
+        ):
+            return
+        os.link(destination, outside_link)
+        linked = True
+
+    monkeypatch.setattr(materializer.os, "fsync", link_after_file_sync)
+
+    with pytest.raises(ValueError, match="singly linked regular files"):
+        materializer.materialize(tmp_path, "a" * 40, output_directory)
+
+    assert linked is True
+    assert outside_link.read_bytes() == _one_lock()[0][1]
+
+
 def test_materializer_safely_replaces_single_link_regular_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
