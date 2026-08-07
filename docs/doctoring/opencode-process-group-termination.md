@@ -24,4 +24,4 @@ IEEE & The Open Group. (2024). *The Open Group base specifications issue 8: Syst
 
 Free Software Foundation. (n.d.). *GNU Coreutils manual: `timeout`: Run a command with a time limit*. Retrieved August 7, 2026, from https://www.gnu.org/software/coreutils/manual/html_node/timeout-invocation.html
 
-Kerrisk, M. (n.d.). *setsid(2) — Linux manual page*. Linux man-pages project. Retrieved August 7, 2026, from https://man7.org/linux/man-pages/man2/setsid.2.html
+Linux man-pages project. (2026, February 8). *setsid(2) — Linux manual page* (Linux man-pages 6.18). https://man7.org/linux/man-pages/man2/setsid.2.html
