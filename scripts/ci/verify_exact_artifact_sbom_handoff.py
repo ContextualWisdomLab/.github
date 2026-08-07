@@ -198,6 +198,25 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
             pass
 
 
+def _validate_evidence_root(path: Path) -> Path:
+    """Return an absolute evidence root after rejecting symlinked path components."""
+    absolute = Path(os.path.abspath(path))
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:]:
+        current /= component
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError as error:
+            raise EvidenceError(
+                "evidence root must be an existing non-symlink directory"
+            ) from error
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            raise EvidenceError(
+                "evidence root and every ancestor must be non-symlink directories"
+            )
+    return absolute
+
+
 def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     """Validate exact evidence and return its deterministic verification manifest."""
     if not _REPOSITORY_RE.fullmatch(arguments.source_repository):
@@ -207,10 +226,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     if not _ARTIFACT_DIGEST_RE.fullmatch(arguments.evidence_artifact_digest):
         raise EvidenceError("evidence artifact digest must use sha256:<hex>")
 
-    root = Path(arguments.evidence_root)
-    if root.is_symlink() or not root.is_dir():
-        raise EvidenceError("evidence root must be a non-symlink directory")
-    root = root.resolve()
+    root = _validate_evidence_root(Path(arguments.evidence_root))
 
     names = {
         "wheel": _validate_filename(arguments.wheel_filename, "wheel filename"),
