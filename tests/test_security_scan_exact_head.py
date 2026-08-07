@@ -70,4 +70,4 @@ def test_dependency_review_support_probe_fails_closed_unless_api_returns_200() -
     assert "${REPOSITORY}" in job
     assert "${BASE_SHA}" in job
     assert "${HEAD_SHA}" in job
-    assert "HTTP ${status}" in job
+    assert "HTTP ${status:-unavailable}" in job
