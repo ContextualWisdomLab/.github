@@ -16,6 +16,14 @@ import pytest
 from scripts.ci import pr_review_conflict_scope as scope
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+QUALITY_WORKFLOW = (
+    REPOSITORY_ROOT / ".github" / "workflows" / "hourly-nvidia-nim-review-repair.yml"
+)
+CONTRACT_PATH = "tests/test_pr_review_conflict_scope_control_files.py"
+DOCTORING_PATH = "docs/doctoring/conflict-control-evidence-isolation.md"
+
+
 def _git(root: Path, *arguments: str) -> None:
     """Run one deterministic Git command in a temporary fixture repository."""
     subprocess.run(
@@ -94,3 +102,13 @@ def test_verify_rejects_external_symlink_resolving_into_repository(
 
     with pytest.raises(ValueError, match="outside the repository worktree"):
         scope.verify_snapshot(root, linked_snapshot, allowed)
+
+
+def test_control_evidence_contract_cannot_bypass_its_quality_workflow() -> None:
+    """Keep the security regression and doctoring in both exact-head triggers."""
+    workflow = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+    trigger_block = workflow[: workflow.index("\npermissions:")]
+
+    assert trigger_block.count(CONTRACT_PATH) == 2
+    assert trigger_block.count(DOCTORING_PATH) == 2
+    assert CONTRACT_PATH in workflow[workflow.index("python -m compileall -q") :]
