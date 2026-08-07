@@ -1,7 +1,6 @@
 import json
 import runpy
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -133,16 +132,12 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setenv("VISIBLE_TOKEN", "secret-value")
-    command = [sys.executable, "-c", "raise SystemExit('must not execute')"]
-
-    def timeout_runner(command, cwd, env, timeout):
-        """Return deterministic partial streams at the timeout boundary."""
-        del cwd, env
-        raise subprocess.TimeoutExpired(
-            command, timeout, output="timeout-out\n", stderr="timeout-err\n"
-        )
-
-    monkeypatch.setattr(sandboxed_verify, "run_command", timeout_runner)
+    command = (
+        "import sys, time; "
+        "print('timeout-out', flush=True); "
+        "print('timeout-err', file=sys.stderr, flush=True); "
+        "time.sleep(2)"
+    )
 
     exit_code = sandboxed_verify.main(
         [
@@ -158,7 +153,9 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
             "--evidence-note",
             "needs private dependency",
             "--",
-            *command,
+            sys.executable,
+            "-c",
+            command,
         ]
     )
     captured = capsys.readouterr()
