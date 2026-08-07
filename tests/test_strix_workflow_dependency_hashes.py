@@ -1,12 +1,16 @@
 """Supply-chain contracts for the Strix changed-path policy workflow."""
 
 from pathlib import Path
+import re
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+WORKFLOW_DISPATCH_KEY_RE = re.compile(
+    r"(?m)^[ \t]+['\"]?workflow_dispatch['\"]?\s*:"
+)
 EXPECTED_WHEEL_HASHES = {
     "coverage==7.15.2": "b9a6367e4aff723e8ee8190836836124284e8fcd4265e307c844010cfa074f3f",
     "iniconfig==2.1.0": "9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760",
@@ -40,7 +44,7 @@ def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
     """Central executable workflows load no branch-selected manual source."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "workflow_dispatch:" not in workflow
+    assert WORKFLOW_DISPATCH_KEY_RE.search(workflow) is None
 
 
 @pytest.mark.parametrize(
@@ -58,7 +62,7 @@ def test_manual_dispatch_guard_recognizes_valid_yaml_key_spellings(
     """The manual-dispatch guard must recognize equivalent YAML key spellings."""
     synthetic_workflow = f"on:\n  {yaml_key}\n"
 
-    assert "workflow_dispatch:" in synthetic_workflow
+    assert WORKFLOW_DISPATCH_KEY_RE.search(synthetic_workflow) is not None
 
 
 def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
