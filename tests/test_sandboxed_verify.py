@@ -201,3 +201,17 @@ def test_module_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_verify"] = module
     assert exc_info.value.code == 0
+
+
+def test_process_group_doctoring_uses_versioned_linux_man_pages_metadata() -> None:
+    """Cite the authoritative versioned setsid manual instead of its HTML renderer."""
+    doctoring = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "doctoring"
+        / "opencode-process-group-termination.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Linux man-pages project. (2026, February 8)." in doctoring
+    assert "*setsid(2) — Linux manual page* (Linux man-pages 6.18)." in doctoring
+    assert "Kerrisk, M. (n.d.). *setsid(2)" not in doctoring
