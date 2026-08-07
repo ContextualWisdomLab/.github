@@ -1,0 +1,205 @@
+     raise
++                os.close(current_fd)
++                current_fd = next_fd
++            return current_fd
++        except Exception:
++            os.close(current_fd)
++            raise
++
++    def mkdir(self, relative_dir: str | pathlib.PurePosixPath) -> None:
++        """Create one descendant directory tree exclusively and durably."""
++        parts = _relative_parts(relative_dir)
++        descriptor = self._open_directory(parts, create=True)
++        try:
++            os.fsync(descriptor)
++        finally:
++            os.close(descriptor)
++
++    def write_bytes(
++        self,
++        relative_path: str | pathlib.PurePosixPath,
++        content: bytes,
++    ) -> None:
++        """Create one file exclusively, write all bytes, and fsync it and its parent."""
++        if not isinstance(content, bytes):
++            raise TypeError("secure output content must be bytes")
++        parts = _relative_parts(relative_path)
++        parent_parts, file_name = parts[:-1], parts[-1]
++        parent_fd = self._open_directory(parent_parts, create=True)
++        file_fd: int | None = None
++        created = False
++        try:
++            try:
++                file_fd = os.open(file_name, _FILE_FLAGS, 0o600, dir_fd=parent_fd)
++            except FileExistsError as exc:
++                raise FileExistsError(
++                    f"secure output file already exists: {'/'.join(parts)}"
++                ) from exc
++            created = True
++            _write_all(file_fd, content)
++            os.fsync(file_fd)
++            os.close(file_fd)
++            file_fd = None
++            os.fsync(parent_fd)
++            self._created_files.append((parent_parts, file_name))
++        except Exception:
++            if file_fd is not None:
++                os.close(file_fd)
++            if created:
++                try:
++                    os.unlink(file_name, dir_fd=parent_fd)
++                    os.fsync(parent_fd)
++                except OSError:
++                    pass
++            raise
++        finally:
++            os.close(parent_fd)
++
++    def write_text(
++        self,
++        relative_path: str | pathlib.PurePosixPath,
++        content: str,
++    ) -> None:
++        """Encode UTF-8 text and create it through :meth:`write_bytes`."""
++        if not isinstance(content, str):
++            raise TypeError("secure output text must be a string")
++        self.write_bytes(relative_path, content.encode("utf-8"))
++
++    def _open_known_parent(self, parts: tuple[str, ...]) -> int | None:
++        """Reopen a known directory without following replacements for cleanup."""
++        try:
++            return self._open_directory(parts, create=False)
++        except (OSError, RuntimeError, ValueError):
++            return None
++
++    def cleanup(self) -> None:
++        """Remove only files and directories created by this instance."""
++        if self._closed:
++            return
++        for parent_parts, file_name in reversed(self._created_files):
++            parent_fd = self._open_known_parent(parent_parts)
++            if parent_fd is None:
++                continue
++            try:
++                try:
++                    os.unlink(file_name, dir_fd=parent_fd)
++                    os.fsync(parent_fd)
++                except OSError:
++                    pass
++            finally:
++                os.close(parent_fd)
++        self._created_files.clear()
++
++        for parts in sorted(self._created_directories, key=len, reverse=True):
++            parent_fd = self._open_known_parent(parts[:-1])
++            if parent_fd is None:
++                continue
++            try:
++                try:
++                    os.rmdir(parts[-1], dir_fd=parent_fd)
++                    os.fsync(parent_fd)
++                except OSError:
++                    pass
++            finally:
++                os.close(parent_fd)
++            self._known_directories.discard(parts)
++        self._created_directories.clear()
++
++    def close(self) -> None:
++        """Close descriptors and remove an empty root owned by this instance."""
++        if self._closed:
++            return
++        self._closed = True
++        try:
++            os.fsync(self._root_fd)
++        finally:
++            os.close(self._root_fd)
++        if self._created_root:
++            try:
++                os.rmdir(self._root_name, dir_fd=self._root_parent_fd)
++                os.fsync(self._root_parent_fd)
++            except OSError:
++                pass
++        os.close(self._root_parent_fd)
+diff --git a/tests/test_secure_output_tree.py b/tests/test_secure_output_tree.py
+new file mode 100644
+index 0000000..3c4a8e5
+--- /dev/null
++++ b/tests/test_secure_output_tree.py
+@@ -0,0 +1,363 @@
++"""Security and failure-contract tests for descriptor-relative output writes."""
++
++from __future__ import annotations
++
++import importlib.util
++import os
++from pathlib import Path
++
++import pytest
++
++
++MODULE_PATH = Path(__file__).parents[1] / "scripts" / "ci" / "secure_output_tree.py"
++SPEC = importlib.util.spec_from_file_location("secure_output_tree", MODULE_PATH)
++assert SPEC is not None and SPEC.loader is not None
++module = importlib.util.module_from_spec(SPEC)
++SPEC.loader.exec_module(module)
++SecureOutputTree = module.SecureOutputTree
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_secure_tree_writes_nested_bytes_and_text(tmp_path: Path) -> None:
++    """Owned files are written beneath a descriptor-anchored tree."""
++    output = tmp_path / "output"
++    with SecureOutputTree(output) as tree:
++        tree.mkdir("project-000")
++        tree.write_bytes("project-000/package.json", b"{}\n")
++        tree.write_text("manifest.json", "[]\n")
++
++    assert (output / "project-000" / "package.json").read_bytes() == b"{}\n"
++    assert (output / "manifest.json").read_text(encoding="utf-8") == "[]\n"
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++@pytest.mark.parametrize("path", ["../escape", "safe/../escape", "/absolute", "bad\\path", "a//b", "./x"])
++def test_secure_tree_rejects_nonlexical_relative_paths(tmp_path: Path, path: str) -> None:
++    """No normalization may erase an absolute, parent, empty, or dot component."""
++    with SecureOutputTree(tmp_path / "output") as tree:
++        with pytest.raises(ValueError):
++            tree.write_bytes(path, b"x")
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_root_rename_and_symlink_swap_cannot_redirect_write(tmp_path: Path) -> None:
++    """A swap after root open writes to the held directory, never the attacker path."""
++    output = tmp_path / "output"
++    moved = tmp_path / "moved"
++    attacker = tmp_path / "attacker"
++    attacker.mkdir()
++    tree = SecureOutputTree(output)
++    tree.mkdir("project-000")
++    output.rename(moved)
++    output.symlink_to(attacker, target_is_directory=True)
++    try:
++        tree.write_bytes("project-000/package.json", b"trusted")
++    finally:
++        tree.close()
++    assert (moved / "project-000" / "package.json").read_bytes() == b"trusted"
++    assert not (attacker / "project-000" / "package.json").exists()
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_nested_directory_swap_fails_closed(tmp_path: Path) -> None:
++    """A nested directory replaced by a symlink is rejected before file creation."""
++    output = tmp_path / "output"
++    attacker = tmp_path / "attacker"
++    attacker.mkdir()
++    with SecureOutputTree(output) as tree:
++        tree.mkdir("project-000")
++        (output / "project-000").rename(output / "project-moved")
++        (output / "project-000").symlink_to(attacker, target_is_directory=True)
++        with pytest.raises((OSError, ValueError)):
++            tree.write_bytes("project-000/package.json", b"trusted")
++    assert not (attacker / "package.json").exists()
++
++
++@pytest.mark.ski
