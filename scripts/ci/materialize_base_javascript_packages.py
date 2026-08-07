@@ -30,6 +30,7 @@ NPM_REGISTRY_HOST = "registry.npmjs.org"
 SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
 _DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+_REQUIRED_DIR_FD_FUNCTIONS = (os.open, os.mkdir, os.stat, os.unlink, os.rmdir)
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -426,8 +427,7 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
 def _require_descriptor_relative_capabilities() -> None:
     """Fail before mutation when required descriptor-relative filesystem APIs are absent."""
     supported = getattr(os, "supports_dir_fd", set())
-    required = (os.open, os.mkdir, os.stat, os.unlink, os.rmdir)
-    if any(function not in supported for function in required):
+    if any(function not in supported for function in _REQUIRED_DIR_FD_FUNCTIONS):
         raise ValueError("descriptor-relative output operations are unavailable")
     if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
         raise ValueError("descriptor-relative output operations are unavailable")
