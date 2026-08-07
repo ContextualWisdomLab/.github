@@ -8,12 +8,14 @@ on:
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
+      - scripts/ci/pr_review_autofix_context.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_git_executable.py
       - tests/test_pr_review_conflict_scope_ignored_paths.py
       - tests/test_pr_review_conflict_scope_symlink_targets.py
       - tests/test_pr_review_fix_hourly_contract.py
+      - tests/test_pr_review_fix_scheduler.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_nvidia_nim_contract.py
       - docs/automation/hourly-review-repair.md
@@ -26,12 +28,14 @@ on:
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
+      - scripts/ci/pr_review_autofix_context.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_git_executable.py
       - tests/test_pr_review_conflict_scope_ignored_paths.py
       - tests/test_pr_review_conflict_scope_symlink_targets.py
       - tests/test_pr_review_fix_hourly_contract.py
+      - tests/test_pr_review_fix_scheduler.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_nvidia_nim_contract.py
       - docs/automation/hourly-review-repair.md
@@ -78,22 +82,27 @@ jobs:
             tests/test_pr_review_conflict_scope_ignored_paths.py \
             tests/test_pr_review_conflict_scope_symlink_targets.py \
             tests/test_pr_review_fix_hourly_contract.py \
+            tests/test_pr_review_fix_scheduler.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
             tests/test_pr_review_autofix_nvidia_nim_contract.py \
             --cov=scripts.ci.pr_review_conflict_scope \
+            --cov=scripts.ci.pr_review_autofix_context \
             --cov-branch \
             --cov-fail-under=100
           python -m interrogate \
             --fail-under 100 \
-            scripts/ci/pr_review_conflict_scope.py
+            scripts/ci/pr_review_conflict_scope.py \
+            scripts/ci/pr_review_autofix_context.py
           python -m compileall -q \
             scripts/ci/pr_review_conflict_scope.py \
-            tests/test_hourly_autofix_context_quality_gate.py \
+            scripts/ci/pr_review_autofix_context.py \
             tests/test_pr_review_conflict_scope.py \
+            tests/test_hourly_autofix_context_quality_gate.py \
             tests/test_pr_review_conflict_scope_git_executable.py \
             tests/test_pr_review_conflict_scope_ignored_paths.py \
             tests/test_pr_review_conflict_scope_symlink_targets.py \
             tests/test_pr_review_fix_hourly_contract.py \
+            tests/test_pr_review_fix_scheduler.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
             tests/test_pr_review_autofix_nvidia_nim_contract.py
           git diff --check
