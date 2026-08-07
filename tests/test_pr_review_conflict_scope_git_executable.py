@@ -84,3 +84,19 @@ def test_untrusted_git_file_types_fail_closed(
 
     with pytest.raises(RuntimeError, match="regular executable"):
         scope._trusted_git_executable()
+
+
+@pytest.mark.parametrize("mode", [0o775, 0o757])
+def test_writable_trusted_git_executable_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: int,
+) -> None:
+    """Group- or world-writable executables cannot become the Git authority."""
+    candidate = tmp_path / "git"
+    candidate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    candidate.chmod(mode)
+    monkeypatch.setattr(scope, "_TRUSTED_GIT_EXECUTABLE", candidate)
+
+    with pytest.raises(RuntimeError, match="group- or world-writable"):
+        scope._trusted_git_executable()
