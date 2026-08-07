@@ -74,6 +74,10 @@ def _trusted_git_executable() -> str:
         raise RuntimeError("trusted Git executable is unavailable") from exc
     if not stat.S_ISREG(metadata.st_mode) or not os.access(candidate, os.X_OK):
         raise RuntimeError("trusted Git executable must be a regular executable")
+    if metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeError(
+            "trusted Git executable must not be group- or world-writable"
+        )
     return os.fspath(candidate)
 
 
