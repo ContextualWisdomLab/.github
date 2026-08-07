@@ -35,7 +35,7 @@ def test_writer_uses_supported_nvidia_mistral_small_with_high_reasoning() -> Non
     workflow = _workflow_text()
 
     assert f'"model": "{_TARGET_MODEL}"' in workflow
-    assert f'"mistralai/mistral-small-4-119b-2603": {{' in workflow
+    assert '"mistralai/mistral-small-4-119b-2603": {' in workflow
     assert workflow.count(f"MODEL: {_TARGET_MODEL}") == 2
     assert '"reasoningEffort": "high"' in workflow
     assert "nvidia-nim/mistralai/mistral-nemotron" not in workflow
