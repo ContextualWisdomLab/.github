@@ -826,15 +826,23 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
-def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> (
-    None
-):
+def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> None:
+    """Only exact-head HTTP 200 evidence may enable dependency review."""
     workflow = workflow_text("security-scan.yml")
+    support = workflow_step(workflow, "Check dependency review support")
 
-    assert "id: dependency_review_support" in workflow
-    assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
-    assert '"$status" = "403"' in workflow
-    assert '"$status" = "404"' in workflow
+    assert "id: dependency_review_support" in support
+    assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in support
+    assert "--connect-timeout 10" in support
+    assert "--max-time 30" in support
+    assert '-o /dev/null' in support
+    assert 'if [ "$status" != "200" ]; then' in support
+    assert "Failing closed" in support
+    assert "exit 1" in support
+    assert 'echo "supported=true"' in support
+    assert "supported=false" not in support
+    assert '"$status" = "403"' not in support
+    assert '"$status" = "404"' not in support
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
