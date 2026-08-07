@@ -249,6 +249,73 @@ def _lock_blob_sha(repo_root: pathlib.Path, revision_sha: str, lock_path: str) -
     return blob_sha.lower()
 
 
+def _npm_package_identity(
+    lock_path: str,
+    package_path: str,
+    candidate: pathlib.PurePosixPath,
+) -> str:
+    """Return the exact npm identity after the final ``node_modules`` segment."""
+    final_node_modules = max(
+        index for index, part in enumerate(candidate.parts) if part == "node_modules"
+    )
+    identity_parts = candidate.parts[final_node_modules + 1 :]
+    if (
+        len(identity_parts) == 1
+        and identity_parts[0]
+        and not identity_parts[0].startswith("@")
+    ):
+        return identity_parts[0]
+    if (
+        len(identity_parts) == 2
+        and identity_parts[0].startswith("@")
+        and len(identity_parts[0]) > 1
+        and identity_parts[1]
+        and not identity_parts[1].startswith("@")
+    ):
+        return "/".join(identity_parts)
+    raise ValueError(
+        f"current-head npm lock {lock_path} package {package_path} has a malformed npm package identity"
+    )
+
+
+def _validate_npm_registry_pin(
+    lock_path: str,
+    package_path: str,
+    resolved: Any,
+    integrity: Any,
+) -> None:
+    """Validate one exact public-registry tarball and SHA-512 integrity pair."""
+    if not isinstance(resolved, str) or not isinstance(integrity, str):
+        raise ValueError(
+            f"current-head npm lock {lock_path} package {package_path} must pin a registry tarball and SHA-512 integrity"
+        )
+    parsed = urllib.parse.urlsplit(resolved)
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            f"current-head npm lock {lock_path} package {package_path} has an invalid registry URL"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != NPM_REGISTRY_HOST
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed_port is not None
+        or parsed.query
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+        or not parsed.path.endswith(".tgz")
+    ):
+        raise ValueError(
+            f"current-head npm lock {lock_path} package {package_path} must resolve from https://{NPM_REGISTRY_HOST}/"
+        )
+    if not SHA512_SRI_RE.fullmatch(integrity):
+        raise ValueError(
+            f"current-head npm lock {lock_path} package {package_path} must use one SHA-512 integrity value"
+        )
+
+
 def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
     """Fail closed unless a changed HEAD npm lock is registry- and hash-bounded."""
     try:
@@ -274,6 +341,8 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
             f"current-head npm lock {lock_path} must contain an object-valued packages map"
         )
 
+    canonical_versions: dict[str, str] = {}
+    metadata_only_locations: list[tuple[str, str, str]] = []
     for package_path, metadata in sorted(packages.items()):
         if not isinstance(package_path, str) or not isinstance(metadata, dict):
             raise ValueError(
@@ -291,6 +360,7 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
         if not package_path or "node_modules" not in candidate.parts:
             continue
 
+        identity = _npm_package_identity(lock_path, package_path, candidate)
         resolved = metadata.get("resolved")
         if metadata.get("link") is True:
             if not isinstance(resolved, str) or not resolved or "\\" in resolved:
@@ -308,35 +378,46 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
                 )
             continue
 
-        integrity = metadata.get("integrity")
-        if not isinstance(resolved, str) or not isinstance(integrity, str):
+        version = metadata.get("version")
+        if not isinstance(version, str) or not version:
             raise ValueError(
-                f"current-head npm lock {lock_path} package {package_path} must pin a registry tarball and SHA-512 integrity"
+                f"current-head npm lock {lock_path} package {package_path} must declare a nonempty exact version"
             )
-        parsed = urllib.parse.urlsplit(resolved)
-        try:
-            parsed_port = parsed.port
-        except ValueError as exc:
+        has_resolved = "resolved" in metadata
+        has_integrity = "integrity" in metadata
+        if has_resolved != has_integrity:
             raise ValueError(
-                f"current-head npm lock {lock_path} package {package_path} has an invalid registry URL"
-            ) from exc
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname != NPM_REGISTRY_HOST
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed_port is not None
-            or parsed.query
-            or parsed.fragment
-            or not parsed.path.startswith("/")
-            or not parsed.path.endswith(".tgz")
-        ):
-            raise ValueError(
-                f"current-head npm lock {lock_path} package {package_path} must resolve from https://{NPM_REGISTRY_HOST}/"
+                f"current-head npm lock {lock_path} package {package_path} must not partially declare a registry tarball and SHA-512 integrity"
             )
-        if not SHA512_SRI_RE.fullmatch(integrity):
+
+        canonical_path = f"node_modules/{identity}"
+        is_canonical_root = package_path == canonical_path
+        if has_resolved:
+            _validate_npm_registry_pin(
+                lock_path,
+                package_path,
+                metadata.get("resolved"),
+                metadata.get("integrity"),
+            )
+            if is_canonical_root:
+                canonical_versions[identity] = version
+            continue
+
+        if is_canonical_root:
             raise ValueError(
-                f"current-head npm lock {lock_path} package {package_path} must use one SHA-512 integrity value"
+                f"current-head npm lock {lock_path} package {package_path} must be a complete canonical root pin"
+            )
+        metadata_only_locations.append((package_path, identity, version))
+
+    for package_path, identity, version in metadata_only_locations:
+        canonical_version = canonical_versions.get(identity)
+        if canonical_version is None:
+            raise ValueError(
+                f"current-head npm lock {lock_path} package {package_path} has no complete canonical root pin"
+            )
+        if canonical_version != version:
+            raise ValueError(
+                f"current-head npm lock {lock_path} package {package_path} must match the exact canonical version {canonical_version}"
             )
 
 
