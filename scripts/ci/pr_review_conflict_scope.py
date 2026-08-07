@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -31,6 +32,7 @@ _MAX_PATHS = 100_000
 _MAX_PATH_BYTES = 4_096
 _HASH_CHUNK_BYTES = 1024 * 1024
 _TRUSTED_GIT_EXECUTABLE = Path("/usr/bin/git")
+_SHA256_SEAL_RE = re.compile(r"[0-9a-f]{64}\n")
 
 
 def _validated_root(root: Path) -> Path:
@@ -278,12 +280,28 @@ def _load_snapshot(snapshot_path: Path) -> dict[str, Mapping[str, Any]]:
     return validated
 
 
+def _verify_optional_allowed_path_seal(path: Path, payload: bytes) -> None:
+    """Require a matching trusted SHA-256 seal when its sidecar is present."""
+    seal_path = Path(f"{path}.sha256")
+    try:
+        seal = seal_path.read_text(encoding="ascii")
+    except FileNotFoundError:
+        return
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("allowed-path seal could not be read") from exc
+    if _SHA256_SEAL_RE.fullmatch(seal) is None:
+        raise ValueError("allowed-path seal is malformed")
+    if seal[:-1] != hashlib.sha256(payload).hexdigest():
+        raise ValueError("allowed-path inventory does not match its trusted seal")
+
+
 def _read_allowed_paths(path: Path) -> tuple[str, ...]:
     """Read the NUL-delimited authoritative Git conflict-path allowlist."""
     try:
         payload = path.read_bytes()
     except OSError as exc:
         raise ValueError("allowed-path inventory could not be read") from exc
+    _verify_optional_allowed_path_seal(path, payload)
     raw_paths = [os.fsdecode(item) for item in payload.split(b"\0") if item]
     return _bounded_paths(raw_paths, source_name="allowed-path inventory")
 
