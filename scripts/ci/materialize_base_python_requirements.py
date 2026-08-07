@@ -88,7 +88,7 @@ TRUSTED_UV_ORIGIN_ERROR = (
 SECURE_DIRECTORY_OPEN_FLAGS = (
     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 )
-SECURE_FILE_OPEN_FLAGS = os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+SECURE_FILE_OPEN_FLAGS = os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
@@ -791,6 +791,8 @@ def _write_pinned_output_file(
         except OSError as exc:
             if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
                 raise ValueError("output files must not be symlinks") from exc
+            if exc.errno == errno.ENXIO:
+                raise ValueError("output files must be singly linked regular files") from exc
             raise
 
     try:
