@@ -423,6 +423,16 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
             )
 
 
+def _require_descriptor_relative_capabilities() -> None:
+    """Fail before mutation when required descriptor-relative filesystem APIs are absent."""
+    supported = getattr(os, "supports_dir_fd", set())
+    required = (os.open, os.mkdir, os.stat, os.unlink, os.rmdir)
+    if any(function not in supported for function in required):
+        raise ValueError("descriptor-relative output operations are unavailable")
+    if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
+        raise ValueError("descriptor-relative output operations are unavailable")
+
+
 def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
     """Reject existing symlink components before materialization writes begin."""
     candidate = output_dir.absolute()
@@ -444,30 +454,50 @@ def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
             )
 
 
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int]:
+    """Return one directory device/inode identity after validating its file type."""
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError("output directory binding changed during secure materialization")
+    return metadata.st_dev, metadata.st_ino
+
+
 def _open_output_directory(output_dir: pathlib.Path) -> tuple[int, tuple[int, int]]:
-    """Open one no-follow output directory and return its descriptor identity."""
+    """Open one no-follow output directory while detecting ancestor replacement races."""
     candidate = output_dir.absolute()
     _reject_symlinked_output_components(candidate)
     candidate.parent.mkdir(parents=True, exist_ok=True)
     candidate.mkdir(exist_ok=True)
     _reject_symlinked_output_components(candidate)
+
+    expected_parent = _directory_identity(
+        os.stat(candidate.parent, follow_symlinks=False)
+    )
+    expected_output = _directory_identity(os.stat(candidate, follow_symlinks=False))
     parent_fd = os.open(candidate.parent, _DIRECTORY_OPEN_FLAGS)
     try:
-        try:
-            output_fd = os.open(
-                candidate.name,
-                _DIRECTORY_OPEN_FLAGS,
-                dir_fd=parent_fd,
-            )
-        except OSError as exc:
+        if _directory_identity(os.fstat(parent_fd)) != expected_parent:
             raise ValueError(
-                "output directory must not be a symlink; "
-                f"path must not contain symlinks: {candidate}"
-            ) from exc
+                "output directory ancestor changed during secure materialization"
+            )
+        output_fd = os.open(
+            candidate.name,
+            _DIRECTORY_OPEN_FLAGS,
+            dir_fd=parent_fd,
+        )
+        try:
+            if _directory_identity(os.fstat(output_fd)) != expected_output:
+                raise ValueError(
+                    "output directory changed during secure materialization"
+                )
+            os.fsync(parent_fd)
+            os.fsync(output_fd)
+            metadata = os.fstat(output_fd)
+            return output_fd, (metadata.st_dev, metadata.st_ino)
+        except BaseException:
+            os.close(output_fd)
+            raise
     finally:
         os.close(parent_fd)
-    metadata = os.fstat(output_fd)
-    return output_fd, (metadata.st_dev, metadata.st_ino)
 
 
 def _verify_output_directory_binding(
@@ -505,15 +535,31 @@ def _safe_relative_parts(relative_path: str) -> tuple[str, ...]:
 
 
 def _open_relative_directory(root_fd: int, parts: tuple[str, ...]) -> int:
-    """Open or create trusted child directories relative to one pinned descriptor."""
+    """Open or create child directories and bind each name to its observed inode."""
     current_fd = os.dup(root_fd)
     try:
         for part in parts:
+            created = False
             try:
                 os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                created = True
             except FileExistsError:
                 pass
+            expected_identity = _directory_identity(
+                os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+            )
+            if created:
+                os.fsync(current_fd)
             next_fd = os.open(part, _DIRECTORY_OPEN_FLAGS, dir_fd=current_fd)
+            try:
+                if _directory_identity(os.fstat(next_fd)) != expected_identity:
+                    raise ValueError(
+                        "output directory binding changed during secure materialization"
+                    )
+                os.fsync(next_fd)
+            except BaseException:
+                os.close(next_fd)
+                raise
             os.close(current_fd)
             current_fd = next_fd
         return current_fd
@@ -523,18 +569,73 @@ def _open_relative_directory(root_fd: int, parts: tuple[str, ...]) -> int:
 
 
 def _create_project_directory(output_fd: int, directory: str) -> int:
-    """Create a fresh project directory beneath the pinned output descriptor."""
+    """Create and bind a fresh project directory beneath the pinned output descriptor."""
     try:
         os.mkdir(directory, mode=0o700, dir_fd=output_fd)
     except FileExistsError as exc:
         raise ValueError(
             f"generated output path must not pre-exist: {directory}"
         ) from exc
-    return os.open(directory, _DIRECTORY_OPEN_FLAGS, dir_fd=output_fd)
+    expected_identity = _directory_identity(
+        os.stat(directory, dir_fd=output_fd, follow_symlinks=False)
+    )
+    os.fsync(output_fd)
+    project_fd = os.open(directory, _DIRECTORY_OPEN_FLAGS, dir_fd=output_fd)
+    try:
+        if _directory_identity(os.fstat(project_fd)) != expected_identity:
+            raise ValueError(
+                "output directory binding changed during secure materialization"
+            )
+        os.fsync(project_fd)
+        return project_fd
+    except BaseException:
+        os.close(project_fd)
+        raise
+
+
+def _unlink_owned_file(
+    parent_fd: int,
+    filename: str,
+    identity: tuple[int, int],
+) -> None:
+    """Remove one failed file only when its published name still identifies our inode."""
+    try:
+        path_metadata = os.stat(filename, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return
+    if (path_metadata.st_dev, path_metadata.st_ino) != identity:
+        return
+    try:
+        os.unlink(filename, dir_fd=parent_fd)
+    except OSError:
+        return
+    os.fsync(parent_fd)
+
+
+def _remove_owned_empty_directory(
+    parent_fd: int,
+    directory: str,
+    identity: tuple[int, int],
+) -> None:
+    """Remove one empty generated directory only while its original inode is published."""
+    try:
+        path_metadata = os.stat(directory, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or (path_metadata.st_dev, path_metadata.st_ino) != identity
+    ):
+        return
+    try:
+        os.rmdir(directory, dir_fd=parent_fd)
+    except OSError:
+        return
+    os.fsync(parent_fd)
 
 
 def _write_new_file(parent_fd: int, filename: str, content: bytes) -> None:
-    """Create, synchronize, and revalidate one descriptor-pinned regular file."""
+    """Create, synchronize, revalidate, and clean up one descriptor-pinned file."""
     try:
         file_fd = os.open(
             filename,
@@ -546,8 +647,9 @@ def _write_new_file(parent_fd: int, filename: str, content: bytes) -> None:
         raise ValueError(
             f"generated output file must not pre-exist: {filename}"
         ) from exc
+    initial_metadata = os.fstat(file_fd)
+    identity = (initial_metadata.st_dev, initial_metadata.st_ino)
     try:
-        initial_metadata = os.fstat(file_fd)
         if not stat.S_ISREG(initial_metadata.st_mode) or initial_metadata.st_nlink != 1:
             raise ValueError(
                 "generated output files must be singly linked regular files"
@@ -572,6 +674,10 @@ def _write_new_file(parent_fd: int, filename: str, content: bytes) -> None:
             raise ValueError(
                 "generated output files must remain singly linked regular files"
             )
+        os.fsync(parent_fd)
+    except BaseException:
+        _unlink_owned_file(parent_fd, filename, identity)
+        raise
     finally:
         os.close(file_fd)
 
@@ -597,6 +703,7 @@ def materialize(
     head_sha: str | None = None,
 ) -> list[dict[str, str]]:
     """Write trusted base and bounded HEAD inputs under Docker-context-safe paths."""
+    _require_descriptor_relative_capabilities()
     output_fd, output_identity = _open_output_directory(output_dir)
     try:
         manifest: list[dict[str, str]] = []
@@ -650,9 +757,15 @@ def materialize(
         ) in enumerate(sorted(projects, key=lambda project: (project[0], project[3]))):
             directory = f"project-{index:03d}"
             project_fd = _create_project_directory(output_fd, directory)
+            project_metadata = os.fstat(project_fd)
+            project_identity = (project_metadata.st_dev, project_metadata.st_ino)
             try:
                 for relative_path, content in sorted(base_inputs.items()):
                     _write_relative_file(project_fd, relative_path, content)
+                os.fsync(project_fd)
+            except BaseException:
+                _remove_owned_empty_directory(output_fd, directory, project_identity)
+                raise
             finally:
                 os.close(project_fd)
             manifest.append(
@@ -669,6 +782,7 @@ def materialize(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8")
         _write_new_file(output_fd, "manifest.json", manifest_content)
+        os.fsync(output_fd)
         _verify_output_directory_binding(output_dir, output_fd, output_identity)
         return manifest
     finally:
