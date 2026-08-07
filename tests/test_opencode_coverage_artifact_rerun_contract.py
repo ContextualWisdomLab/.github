@@ -118,7 +118,7 @@ def test_coverage_source_requires_current_producer_attempt() -> None:
 
 
 def test_missing_or_expired_artifact_fails_with_bounded_recovery_guidance() -> None:
-    """Fail closed on absent exact evidence without searching earlier attempts."""
+    """Keep fail-closed recovery reachable after producer or download failures."""
     workflow = _workflow_text()
     evidence_job = _job_block(workflow, "coverage-evidence", "opencode-review-target")
     producer_failure = _step_block(
@@ -143,12 +143,16 @@ def test_missing_or_expired_artifact_fails_with_bounded_recovery_guidance() -> N
     )
 
     assert "if: needs.coverage-source-tree.result != 'success'" in producer_failure
-    assert "exit 1" in producer_failure
+    assert "exit 1" not in producer_failure
     assert "id: coverage_source_identity" in identity
+    assert "if: always()" in identity
     assert "continue-on-error: true" in identity
     assert "id: coverage_source_download" in download
     assert "continue-on-error: true" in download
-    assert "if: steps.coverage_source_identity.outcome == 'success'" in download
+    assert "needs.coverage-source-tree.result == 'success'" in download
+    assert "steps.coverage_source_identity.outcome == 'success'" in download
+    assert "if: always() && (" in recovery
+    assert "needs.coverage-source-tree.result != 'success'" in recovery
     assert "steps.coverage_source_identity.outcome != 'success'" in recovery
     assert "steps.coverage_source_download.outcome != 'success'" in recovery
     assert "failed-jobs-only rerun" in recovery
