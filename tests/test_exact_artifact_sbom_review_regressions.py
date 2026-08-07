@@ -26,6 +26,10 @@ def test_evidence_root_rejects_symlinked_ancestor(tmp_path: Path) -> None:
         source_sha="a" * 40,
         evidence_artifact_digest="sha256:" + ("b" * 64),
         evidence_root=str(linked_parent / "sealed-evidence"),
+        wheel_filename="example.whl",
+        wheel_sbom_filename="example-wheel.cdx.json",
+        sdist_filename="example.tar.gz",
+        sdist_sbom_filename="example-sdist.cdx.json",
     )
 
     with pytest.raises(verifier.EvidenceError, match="evidence root"):
