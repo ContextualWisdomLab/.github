@@ -236,7 +236,11 @@ jobs:
             "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
             "enabled_providers": ["nvidia-nim"],
             "permission": {
-              "edit": "allow",
+              "edit": {
+                "*": "allow",
+                ".git": "deny",
+                ".git/*": "deny"
+              },
               "bash": "deny",
               "read": "allow",
               "grep": "allow",
@@ -258,7 +262,11 @@ jobs:
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
                 "permission": {
-                  "edit": "allow",
+                  "edit": {
+                    "*": "allow",
+                    ".git": "deny",
+                    ".git/*": "deny"
+                  },
                   "bash": "deny",
                   "read": "allow",
                   "grep": "allow",
@@ -347,6 +355,27 @@ jobs:
           Do not delete, rename, or reformat unrelated files, even if they look stale or failing.
           Return a concise summary of changes made, or state that no safe change was made.
           EOF
+          allowed_paths_file="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.txt"
+          awk '
+            /^## Autofix Allowed Paths[[:space:]]*$/ { in_section=1; next }
+            /^## / { in_section=0 }
+            in_section && /^- `/ {
+              line=$0
+              sub(/^- `/, "", line)
+              sub(/`[[:space:]]*$/, "", line)
+              if (line != "") print line
+            }
+          ' "$RUNNER_TEMP/pr-review-autofix-context.md" | sort -u >"$allowed_paths_file"
+          allowed_paths_zlist="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.zlist"
+          : >"$allowed_paths_zlist"
+          while IFS= read -r allowed_path; do
+            [ -n "$allowed_path" ] || continue
+            printf '%s\0' "$allowed_path" >>"$allowed_paths_zlist"
+          done <"$allowed_paths_file"
+          ordinary_scope_snapshot="${RUNNER_TEMP}/opencode-autofix-workspace-before.json"
+          python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_conflict_scope.py" snapshot \
+            --root "$TARGET_WORKSPACE" \
+            --output "$ordinary_scope_snapshot"
           workspace_config_backup="${RUNNER_TEMP}/opencode-jsonc.backup"
           workspace_prompt_backup="${RUNNER_TEMP}/autofix-prompt.backup"
           had_workspace_config=0
@@ -383,6 +412,10 @@ jobs:
             --title "PR #${PR_NUMBER} review autofix"
           restore_workspace_config
           trap - EXIT
+          python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_conflict_scope.py" verify \
+            --root "$TARGET_WORKSPACE" \
+            --snapshot "$ordinary_scope_snapshot" \
+            --allowed-paths "$allowed_paths_zlist"
 
       - name: Validate changed files
         if: env.RESOLVE_CONFLICT != 'true'
@@ -441,9 +474,10 @@ jobs:
             echo "::error::PR head moved during autofix; refusing to push."
             exit 1
           fi
+          expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
           git add -A
-          git commit -m "fix(pr-${PR_NUMBER}): address review feedback"
-          git push origin "HEAD:${PR_HEAD_REF}"
+          git -c core.hooksPath=/dev/null commit -m "fix(pr-${PR_NUMBER}): address review feedback"
+          git -c core.hooksPath=/dev/null push "$expected_origin" "HEAD:${PR_HEAD_REF}"
 
       - name: Merge base branch and resolve conflicts with OpenCode
         if: env.RESOLVE_CONFLICT == 'true'
@@ -565,6 +599,7 @@ jobs:
             echo "::error::PR head moved during conflict resolution; refusing to push."
             exit 1
           fi
-          git commit --no-edit -m "merge(pr-${PR_NUMBER}): resolve conflicts with ${PR_BASE_REF}"
-          git push origin "HEAD:${PR_HEAD_REF}"
+          expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
+          git -c core.hooksPath=/dev/null commit --no-edit -m "merge(pr-${PR_NUMBER}): resolve conflicts with ${PR_BASE_REF}"
+          git -c core.hooksPath=/dev/null push "$expected_origin" "HEAD:${PR_HEAD_REF}"
           echo "Pushed conflict resolution; the new head will be re-reviewed and re-checked before merge."
