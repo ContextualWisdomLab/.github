@@ -11,7 +11,6 @@ on:
       - "scripts/ci/test_strix_quick_gate.sh"
       - "tests/test_strix_changed_path_policy.py"
       - "tests/test_strix_workflow_dependency_hashes.py"
-  workflow_dispatch:
 
 permissions:
   contents: read
