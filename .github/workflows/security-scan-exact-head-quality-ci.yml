@@ -38,6 +38,7 @@ jobs:
 
           checkout_contract.test_repository_scanners_checkout_the_literal_pull_request_head()
           checkout_contract.test_dependency_review_checkout_is_bound_to_the_same_exact_head()
+          checkout_contract.test_dependency_review_support_probe_fails_closed_unless_api_returns_200()
           sarif_contract.test_repository_scanner_sarif_is_attributed_to_the_literal_head()
           print("security scan exact-head contracts passed")
           PY
