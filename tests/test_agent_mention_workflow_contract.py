@@ -51,6 +51,22 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "agent_mention_sweep.py" in sweep
 
 
+def test_interactive_mentions_and_sweeps_have_independent_queue_contracts() -> None:
+    """Scheduled sweeps cannot replace a pending trusted comment invocation."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    header, jobs = text.split("\njobs:\n", 1)
+    local, sweep = jobs.split("\n  sweep-organization-agent-mentions:\n", 1)
+
+    assert "\nconcurrency:\n" not in header
+    assert "group: review-agent-mention-router-local-${{ github.repository }}" in local
+    assert "queue: max" in local
+    assert "cancel-in-progress:" not in local
+    assert "group: review-agent-mention-router-sweep-${{ github.repository }}" in sweep
+    assert "cancel-in-progress: false" in sweep
+    assert "queue: max" not in sweep
+
+
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:
     """Coverage includes the two script paths instead of treating paths as modules."""
 
