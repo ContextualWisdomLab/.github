@@ -21,11 +21,12 @@ fail-closed repair contract. Leaf repositories receive the behavior through the
 central reusable workflow and do not copy provider credentials or scheduler
 implementation.
 
-The central scheduler established by the baseline repair runs once per hour,
-dispatches at most one repair per invocation, and binds its scheduler
-implementation to the immutable called-workflow source. The NVIDIA migration
-changes only the model transport used by the write-capable autofix worker and
-hardens that worker's own default-branch source checkout.
+The central scheduler runs once per hour, dispatches at most one repair per
+invocation, and binds its implementation to the immutable called-workflow
+source. Clearfolio owns only its small product caller. Naruon,
+contextual-orchestrator, Inkspan, and other CWL services may adopt separate
+callers while retaining standalone operation and the same central security
+boundary.
 
 ## Immutable repository-dispatch worker source
 
@@ -46,31 +47,26 @@ Without the explicit `ref`, `actions/checkout` would resolve the repository's
 moving default branch at checkout time. A later default-branch push could then
 replace trusted scripts after GitHub had already selected the workflow run,
 creating a time-of-check/time-of-use gap around a job that receives OIDC and
-branch-write capability. The explicit SHA keeps the executed helper source
-aligned with the workflow revision selected for the dispatch.
+branch-write capability. The exact SHA keeps helper source aligned with the
+workflow revision selected for dispatch.
 
-The client payload remains untrusted metadata. It can identify the intended
-target PR only after the workflow re-reads live PR state and verifies exact base
-and head refs and SHAs.
+The client payload remains untrusted metadata. It identifies a target only after
+the worker re-reads live pull-request state and verifies the exact repository,
+open state, same-repository branch, base ref and SHA, and head ref and SHA.
 
 ## Provider contract
 
-The pinned OpenCode runtime is configured with one enabled provider,
-`nvidia-nim`, using the OpenAI-compatible adapter and NVIDIA hosted endpoint:
+The pinned OpenCode runtime enables only `nvidia-nim` through the
+OpenAI-compatible adapter and NVIDIA hosted endpoint:
 
 ```text
 https://integrate.api.nvidia.com/v1
 ```
 
 The primary repair model is `mistralai/mistral-nemotron`; the small model used
-for bounded helper work is `nvidia/nemotron-3-nano-30b-a3b`. NVIDIA documents
-both identifiers. Mistral-Nemotron supports tool calling for agentic workflows.
-Nemotron 3 Nano is used as a lower-active-parameter reasoning helper, not as a
-fallback provider.
-
-Only the `nvidia-nim` provider is enabled. GitHub Models configuration, model
-identifiers, base URLs, and model-auth fallbacks are absent from the scheduled
-autofix execution path.
+for bounded helper work is `nvidia/nemotron-3-nano-30b-a3b`. The helper is not a
+fallback provider. GitHub Models configuration, identifiers, base URLs, and
+model-auth fallbacks are absent from the scheduled autofix execution path.
 
 ## Credential boundary
 
@@ -81,190 +77,225 @@ NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
 ```
 
 It is present only on the two steps that execute OpenCode: ordinary
-review-feedback repair and merge-conflict repair. Earlier metadata collection,
-checkout, context preparation, validation, commit, and push steps do not receive
-the NVIDIA credential.
+review-feedback repair and merge-conflict repair. Metadata collection,
+checkout, context preparation, validation, commit, and push do not receive the
+NVIDIA credential. A missing key is a fatal configuration error rather than a
+signal to choose another provider.
 
-The workflow passes the key through an environment variable and OpenCode
-substitutes `{env:NVIDIA_API_KEY}` into provider configuration. The key is never
-written to repository files, command arguments, generated prompts, or logs. A
-missing secret is a fatal configuration error; the workflow does not fall back
-to `GITHUB_TOKEN`, a GitHub Models token, or another provider.
-
-The ordinary repair step no longer binds a GitHub write token at step scope. The
-conflict-repair shell retains GitHub credentials because the same shell must
-re-read the live PR and push a verified merge result after model execution. In
-both paths, the OpenCode child process is launched through:
+The ordinary repair step does not bind a GitHub write token at step scope. The
+conflict-repair shell retains GitHub credentials because the same reviewed shell
+must re-read the live head and publish a verified merge after model execution.
+Both model child processes run through:
 
 ```text
 env -u GITHUB_TOKEN -u GH_TOKEN \
   -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL
 ```
 
-Consequently, model-controlled file operations receive the NVIDIA model
-credential and non-secret execution controls, but cannot call GitHub APIs or
-mint an OIDC token. GitHub credentials remain available only to reviewed shell
-logic before or after the child process. This reduces the consequence of prompt
-injection without removing the worker's independently validated branch-update
-capability.
-
-GitHub documents that a missing secret expression resolves to an empty string
-and recommends delivering secrets through inputs or environment variables rather
-than embedding them in command lines. The explicit preflight prevents an
-ambiguous unauthenticated provider request and preserves fail-closed behavior.
+The child receives the NVIDIA model credential and non-secret execution
+controls, but cannot call GitHub APIs or mint an Actions OIDC token. GitHub
+credentials remain available only to reviewed shell logic before or after the
+child process. The key is never written to repository files, generated prompts,
+command arguments, or ordinary logs.
 
 ## OpenCode repair sandbox
 
-OpenCode permissions are permissive unless explicitly restricted. The workflow
-therefore denies every non-file interaction that is unnecessary for a bounded
-review repair in both the global permission map and the named `ci-autofix`
-agent:
+OpenCode permission rules use pattern matching and the last matching rule wins.
+Both the global permission map and the named `ci-autofix` agent therefore allow
+ordinary repository file edits first and then explicitly deny `.git` and
+`.git/*`. The simple wildcard contract means the catch-all may match nested
+paths, so the later Git-specific rules are required rather than descriptive
+comments.
 
-- `bash`
-- `task`
-- `skill`
-- `question`
-- `webfetch`
-- `websearch`
-- `lsp`
-- `external_directory`
-- `doom_loop`
+The worker also denies every non-file interaction unnecessary for bounded repair:
 
-The agent may read, search, list, and edit only the validated same-repository PR
+- `bash`;
+- `task`;
+- `skill`;
+- `question`;
+- `webfetch`;
+- `websearch`;
+- `lsp`;
+- `external_directory`; and
+- `doom_loop`.
+
+The agent may read, search, list, and edit the validated same-repository PR
 worktree. It receives an authoritative file allowlist derived from current
-file-scoped actionable review context. The workflow rejects any changed path
-outside that allowlist, syntax-checks changed Python, validates workflow files
-when `actionlint` is available, rechecks the live head before push, and refuses
-to publish unresolved merge markers.
+file-scoped actionable review context. An empty allowlist authorizes no change.
+The shell independently syntax-checks changed Python, validates changed workflow
+files when `actionlint` is present, rechecks the live head, and refuses unresolved
+merge markers.
 
-Explicitly denying `skill`, `question`, and `doom_loop` matters for unattended
-execution. OpenCode exposes these as independent permissions; omitted
-permissions are not implicitly denied. The worker must not load a broader skill,
-pause for interactive approval, or repeat an identical tool action beyond the
-bounded workflow contract.
+## Exact ordinary and conflict repair write boundary
 
+The ordinary and conflict repair modes use the same fail-closed model-write
+boundary. This closes a prior asymmetry in which conflict repair had a complete
+snapshot while ordinary repair depended only on a later visible Git diff.
 
-## Conflict-resolution model write boundary
+Before either model process starts, the worker creates:
 
-A merge-conflict repair begins by merging the exact validated base SHA into
-the exact PR head. Immediately after Git records the unresolved paths, the
-worker writes two immutable local inputs before OpenCode receives the task:
+1. a NUL-delimited authoritative allowlist of exact paths; and
+2. a deterministic snapshot of the complete pre-model worktree, including ignored
+   paths, tracked paths, non-ignored untracked paths, file modes, regular-file
+   SHA-256 values, sizes, and symbolic-link targets.
 
-1. a NUL-delimited allowlist produced by `git diff --name-only -z
-   --diff-filter=U`; and
-2. a deterministic snapshot of every tracked and non-ignored untracked
-   worktree path after the base merge.
+For conflict repair, Git supplies the allowlist through `git diff --name-only -z
+--diff-filter=U`. For ordinary repair, the context builder supplies current-head
+file-scoped actionable paths, which the workflow converts to a sorted
+NUL-delimited file. In both cases, temporary OpenCode configuration is installed
+only after the snapshot and restored before verification.
 
-The snapshot fingerprints regular-file content with SHA-256 and records file
-size, mode, symbolic-link target, deletion, and other entry types. This timing
-is deliberate: legitimate non-conflict changes introduced by the base merge
-are part of the pre-model baseline, while changes made later by the model are
-not.
+The trusted helper calls a fixed validated `/usr/bin/git`. Git's official
+`git-ls-files` contract is used twice: cached plus non-ignored other paths form
+the reviewable inventory, while `--others --ignored --exclude-standard` adds the
+ignored-path inventory. Combining both results prevents model-created cache,
+credential, build-output, or other ignored paths from escaping comparison merely
+because a later `git add -A` would normally omit them.
 
-After OpenCode exits, the workflow restores the repository's prior OpenCode
-configuration and compares the current worktree to that pre-model snapshot.
-Only paths in Git's NUL-delimited conflict allowlist may differ. A created,
-deleted, modified, mode-changed, or retargeted path outside that set fails the
-job before `git add -A`, commit, or push. Path inventories and path byte
-lengths are bounded, malformed snapshot data fails closed, and diagnostic
-output JSON-escapes path names rather than emitting them as workflow commands.
+The helper refuses noncanonical roots and paths, oversized inventories, malformed
+snapshot documents, unrecognized fingerprint schemas, and allowlist paths absent
+from the pre-model snapshot. Every symlink must resolve to a regular file inside
+the repository whose target is present in the reviewable Git inventory.
+External, ignored-target, dangling, directory-backed, and metadata-race links
+fail closed with bounded diagnostics that do not expose private filesystem
+exceptions.
 
-Ignored build caches are outside the comparison because `git add -A` does not
-publish them. Git metadata is outside the model's file-edit surface; the
-model process has no shell, GitHub token, or Actions OIDC credential. The
-later live-head, unresolved-marker, merge-tree, syntax, and push checks remain
-independent defenses.
+After OpenCode exits, the workflow restores any prior repository configuration
+and compares the current inventory with the snapshot. Created, deleted,
+modified, mode-changed, retargeted, ignored, dangling, directory-backed,
+external-link, metadata-race, or other out-of-scope writes reject the run before
+staging. Verification is not replaced by the ordinary later diff check; both
+remain independent defenses.
 
-## GitHub write boundary
+## Git metadata, hooks, and push destination
 
-The model transport change does not expand GitHub permissions. GitHub repository
-credentials and the NVIDIA model credential remain separate. The existing
-short-lived GitHub App/OIDC exchange and branch-write token chain are not used
-for model authentication. Conversely, `NVIDIA_NIM_API_KEY` is not used for
-GitHub reads or writes.
+Model-editable repository state must not control the privileged publication
+step. Both OpenCode permission objects deny `.git` and `.git/*`, but the reviewed
+shell also treats permission enforcement as defense in depth rather than proof.
+The full snapshot detects out-of-scope worktree changes, and every privileged
+commit and push invokes Git with `core.hooksPath=/dev/null`.
 
-Before editing, the workflow validates repository syntax, numeric PR identity,
-forty-character base and head SHAs, same-repository branch ownership, open PR
-state, and exact live base/head metadata. Before pushing, it re-reads the live
-head and fails if the branch moved. The scheduler and worker cannot approve
-their own changes, lower branch protection, convert queued checks into success,
-or publish a release.
+Git documents that hooks can execute at commit and push lifecycle points and that
+`core.hooksPath` selects their directory. Disabling hooks for these two commands
+prevents a repository-provided or model-created hook from executing with the
+post-model GitHub credential. The worker still performs explicit syntax,
+allowlist, marker, and live-head checks; hook suppression does not weaken those
+gates.
+
+Before push, the worker reconstructs an explicit revalidated repository URL from
+`GITHUB_SERVER_URL` and the exact live `TARGET_REPOSITORY`. It supplies that URL
+directly to `git push` instead of trusting model-mutable Git metadata such as
+`remote.origin.url` or a push URL. The branch ref and exact head are validated
+again immediately before publication.
+
+The repair worker cannot approve its own changes, lower branch protection,
+reinterpret queued or failed checks, manufacture independent review, merge a PR,
+or publish a release. Those decisions remain with separate protected workflows
+and repository policy.
 
 ## Independent review-agent boundary
 
-`.github/workflows/opencode-review-dispatch.yml` is not modified by this
-migration. The regression contract pins that workflow's Git blob SHA
-byte-for-byte rather than inferring independence from provider-name strings.
-This allows the existing reviewer to retain its own evolving, separately
-reviewed model-pool and credential design while proving that this autofix change
-did not alter it.
+`.github/workflows/opencode-review-dispatch.yml` is not modified by this slice.
+The regression contract pins that workflow's Git blob SHA byte-for-byte rather
+than inferring independence from provider-name strings. The existing reviewer
+retains its own separately reviewed identity, model pool, and credential chain.
 
-This is not cosmetic separation: review produces the verdict that gates merge,
-whereas autofix proposes branch changes. Keeping their credentials, workflow
-sources, and change histories independent limits the blast radius of either
-path.
+This is a control separation, not naming convention. Review produces a verdict
+that may gate merge; autofix proposes branch changes. Their credentials,
+workflow sources, and change histories remain independent.
+
+## Test-first evidence
+
+The ordinary write-scope defects were captured before production repair:
+
+- RED exact head `6db97138f93869d04bfac0aba935844323b20b50`;
+- focused run `31149695625` failed exactly the three new contracts for ordinary
+  snapshot verification, Git-control-file and hook isolation, and explicit push
+  destination while the pre-existing tests remained green;
+- production repair began at
+  `3e124301cc27e04f9f4d4daf079bc8cd32fa9757`;
+- the ordering regression was corrected without weakening the conflict boundary
+  at `b68c85cec8c14e226bf31e299571541826d89f50`; and
+- documentation RED head `3b0e3a9c8f17032b57263d162e52dfd3f239fa4b`
+  and run `31150267219` failed only the new public-record contract while 72
+  focused tests and complete production statement and branch coverage remained
+  green.
+
+Predecessor-head successes are historical TDD evidence, not merge evidence. The
+final integrated head must establish every required quality, security, review,
+and protection gate again.
 
 ## Verification contract
 
-Automated tests must prove all of the following:
+Automated tests prove:
 
-1. The repair scheduler retains the approved hourly cron expression.
-2. The OpenCode configuration enables only `nvidia-nim`.
-3. Primary and small model identifiers match NVIDIA's published identifiers.
-4. The provider uses the OpenAI-compatible package, NVIDIA base URL, and
-   environment substitution.
-5. Exactly two OpenCode execution steps receive `NVIDIA_API_KEY` from
-   `secrets.NVIDIA_NIM_API_KEY`.
-6. GitHub Models credentials, providers, model identifiers, base URLs, and
-   `USE_GITHUB_TOKEN` model-auth fallback are absent from the autofix workflow.
-7. The trusted autofix checkout is pinned to `${{ github.sha }}`, does not use
-   mutable `main`, and does not persist credentials.
-8. Both OpenCode permission maps explicitly deny every non-file interaction
-   listed in the sandbox section.
-9. Both OpenCode subprocesses explicitly remove GitHub and OIDC credentials;
-   the ordinary model step has no step-level GitHub token binding.
-10. The independent review workflow retains its exact reviewed Git blob SHA and
-    contains no coupling to the autofix event.
-11. A missing NVIDIA secret fails before either model process executes.
-12. The exact current head passes complete workflow, Python, security,
-    CodeRabbit, independent-review, unresolved-thread, and branch-protection
-    gates before merge.
+1. the caller retains its approved one-hour cadence;
+2. OpenCode enables only NVIDIA NIM and receives the model key only in its two
+   execution steps;
+3. missing model credentials fail closed and model children receive no GitHub or
+   OIDC write credential;
+4. trusted helper source is checked out at the immutable workflow-run SHA;
+5. ordinary and conflict repair both snapshot before model execution and verify
+   after temporary configuration restoration but before staging;
+6. tracked, untracked, and ignored-path inventories, symlink targets, mode
+   changes, deletions, creations, and metadata races are covered;
+7. both OpenCode permission maps deny `.git` and `.git/*` after the catch-all
+   edit rule;
+8. every privileged commit and push disables repository hooks through
+   `core.hooksPath=/dev/null`;
+9. every push uses the explicit target URL and never model-mutable `origin`;
+10. the independent review workflow retains its exact reviewed Git blob SHA;
+11. the production helper retains 100% statement and branch coverage and 100%
+    public docstrings; and
+12. exact-current-head security, automated review, independent approval,
+    unresolved-thread, and branch-protection gates pass before merge.
 
 ## Scheduling and activation
 
-The NVIDIA worker does not create a second scheduler. It is consumed by the
-hourly central review-fix scheduler established in the stacked baseline PR. The
-hourly production loop becomes active only after both the baseline and this
-migration are merged into the protected default branch. Draft or feature-branch
-workflow files are not represented as active organization automation.
+The NVIDIA worker does not create a second repair scheduler. It is consumed by
+the hourly central review-fix scheduler and product caller. Scheduled workflows
+run only from the protected default branch, so feature-branch checks do not make
+the heartbeat active. Activation requires protected integration and accepted-main
+verification.
 
 ## Rollback
 
-Rollback is a normal revert of the NVIDIA transport commit. A rollback must not
-reintroduce an implicit GitHub-token model-auth fallback, GitHub or OIDC
-credentials inside the model child process, a mutable trusted source checkout,
-permissive unattended-agent tools, or any change to the independent review-agent
-credential system. If NVIDIA NIM is unavailable, scheduled autofix must fail
-closed while review, checks, and manual maintenance remain available.
+Rollback must revert the NVIDIA transport, ordinary and conflict repair scope
+contracts, `.git` denial, ignored-path inventory, hook suppression, explicit push
+destination, tests, operator guidance, doctoring, and changelog as one reviewed
+change. A partial rollback that restores ordinary diff-only validation,
+model-mutable Git metadata, repository hooks, GitHub-token model authentication,
+or a mutable helper checkout is unsafe.
+
+If NVIDIA NIM is unavailable, scheduled repair must fail closed while read-only
+review, required checks, manual maintenance, and protected merge policy remain
+available. Rollback is not permission to bypass independent approval or release
+gates.
 
 ## References
 
+Git Project. (2026). *git-ls-files*. Retrieved August 7, 2026, from
+https://git-scm.com/docs/git-ls-files
+
+Git Project. (2026). *githooks*. Retrieved August 7, 2026, from
+https://git-scm.com/docs/githooks
+
 GitHub, Inc. (n.d.-a). *Events that trigger workflows*. GitHub Docs. Retrieved
-August 4, 2026, from
+August 7, 2026, from
 https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
-GitHub, Inc. (n.d.-b). *Secrets reference*. GitHub Docs. Retrieved August 4,
+GitHub, Inc. (n.d.-b). *Secrets reference*. GitHub Docs. Retrieved August 7,
 2026, from https://docs.github.com/en/actions/reference/security/secrets
 
 NVIDIA Corporation. (n.d.-a). *LLM APIs*. NVIDIA API Catalog. Retrieved August
-4, 2026, from https://docs.api.nvidia.com/nim/reference/llm-apis
+7, 2026, from https://docs.api.nvidia.com/nim/reference/llm-apis
 
 NVIDIA Corporation. (n.d.-b). *Mistralai / mistral-nemotron*. NVIDIA API
-Catalog. Retrieved August 4, 2026, from
+Catalog. Retrieved August 7, 2026, from
 https://docs.api.nvidia.com/nim/reference/mistralai-mistral-nemotron
 
 NVIDIA Corporation. (n.d.-c). *NVIDIA / nemotron-3-nano-30b-a3b*. NVIDIA API
-Catalog. Retrieved August 4, 2026, from
+Catalog. Retrieved August 7, 2026, from
 https://docs.api.nvidia.com/nim/re/reference/nvidia-nemotron-3-nano-30b-a3b
 
 OpenCode. (2026a). *Permissions*. https://opencode.ai/docs/permissions
