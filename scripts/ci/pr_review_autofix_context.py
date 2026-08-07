@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -135,30 +136,37 @@ def check_summary(status_rollup: list[dict[str, Any]] | None) -> list[str]:
 
 
 def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
-    """Return unique repository paths named by unresolved review threads."""
-    paths: list[str] = []
-    seen: set[str] = set()
+    """Return sorted repository paths safe for the rendered authority section."""
+    paths: set[str] = set()
     for thread in threads:
         for comment in (thread.get("comments") or {}).get("nodes") or []:
             path = str(comment.get("path") or "").strip()
             if (
                 not path
-                or "\0" in path
+                or any(delimiter in path for delimiter in ("\0", "\r", "\n", "`"))
                 or path.startswith("/")
                 or ".." in path.split("/")
             ):
                 continue
-            if path in seen:
-                continue
-            seen.add(path)
-            paths.append(path)
-    return paths
+            paths.add(path)
+    return sorted(paths)
+
+
+def _quote_untrusted_markdown(body: str) -> str:
+    """Render untrusted review prose without creating authoritative headings."""
+    bounded = body[:6000]
+    return "\n".join(f"> {line}" if line else ">" for line in bounded.splitlines())
 
 
 def _write_allowed_paths(paths: list[str], output: Path) -> None:
-    """Write exact review-thread paths as a deterministic NUL-delimited file."""
+    """Write a deterministic NUL inventory and its trusted SHA-256 seal."""
+    payload = b"".join(os.fsencode(path) + b"\0" for path in sorted(set(paths)))
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(b"".join(os.fsencode(path) + b"\0" for path in paths))
+    output.write_bytes(payload)
+    Path(f"{output}.sha256").write_text(
+        f"{hashlib.sha256(payload).hexdigest()}\n",
+        encoding="ascii",
+    )
 
 
 def write_context(
@@ -169,7 +177,7 @@ def write_context(
     *,
     allowed_paths_output: Path | None = None,
 ) -> None:
-    """Write bounded review text and an optional sealed path-authorization file."""
+    """Write bounded review text plus a separately sealed path authorization."""
     pr = pr_view(repo, number)
     if pr["headRefOid"] != head_sha:
         raise RuntimeError(f"live head {pr['headRefOid']} does not match expected {head_sha}")
@@ -177,8 +185,11 @@ def write_context(
     reviews = current_reviews(repo, number, head_sha)
     threads = review_threads(repo, number)
     paths = thread_paths(threads)
-    if allowed_paths_output is not None:
-        _write_allowed_paths(paths, allowed_paths_output)
+    if allowed_paths_output is None:
+        allowed_paths_output = output.with_name(
+            "pr-review-autofix-allowed-paths.zlist"
+        )
+    _write_allowed_paths(paths, allowed_paths_output)
 
     lines = [
         "# PR Review Autofix Context",
@@ -215,7 +226,7 @@ def write_context(
                 [
                     f"### {review.get('state')} by {login}",
                     "",
-                    body[:6000] if body else "(empty body)",
+                    _quote_untrusted_markdown(body) if body else "(empty body)",
                     "",
                 ]
             )
@@ -235,7 +246,7 @@ def write_context(
                     [
                         f"- {login} at {path}:{line}",
                         "",
-                        body[:6000] if body else "(empty body)",
+                        _quote_untrusted_markdown(body) if body else "(empty body)",
                         "",
                     ]
                 )
