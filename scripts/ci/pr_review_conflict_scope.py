@@ -133,11 +133,7 @@ def _validate_symlink_targets(root: Path, relative_paths: Sequence[str]) -> None
     symlinks: list[tuple[str, Path]] = []
     for relative_path in relative_paths:
         link_path = root / relative_path
-        try:
-            link_metadata = link_path.lstat()
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(link_metadata.st_mode):
+        if os.path.islink(link_path):
             symlinks.append((relative_path, link_path))
 
     if not symlinks:
