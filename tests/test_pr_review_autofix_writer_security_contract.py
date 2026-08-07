@@ -14,11 +14,20 @@ def _workflow_text() -> str:
     return _AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
 
 
+def _step(workflow: str, step_name: str) -> str:
+    """Return one named workflow step through the next step boundary."""
+    start = workflow.index(f"      - name: {step_name}")
+    next_start = workflow.find("\n      - name: ", start + 1)
+    if next_start == -1:
+        return workflow[start:]
+    return workflow[start:next_start]
+
+
 def _step_header(workflow: str, step_name: str) -> str:
     """Return one workflow step through its environment header, before script code."""
-    start = workflow.index(f"      - name: {step_name}")
-    run_start = workflow.index("        run: |", start)
-    return workflow[start:run_start]
+    step = _step(workflow, step_name)
+    run_start = step.index("        run: |")
+    return step[:run_start]
 
 
 def test_writer_uses_supported_nvidia_mistral_small_with_high_reasoning() -> None:
@@ -44,6 +53,25 @@ def test_mutation_steps_never_fall_back_to_read_only_github_token() -> None:
     for header in (ordinary_header, conflict_header):
         assert "steps.target_app_token.outputs.token" in header
         assert "github.token" not in header
+
+
+def test_mutation_steps_fail_closed_before_any_git_write() -> None:
+    """Reject missing explicit/app mutation credentials before commit or merge work."""
+    workflow = _workflow_text()
+    availability = (
+        "secrets.PR_REVIEW_MERGE_TOKEN != '' || "
+        "secrets.OPENCODE_APPROVE_TOKEN != '' || "
+        "steps.target_app_token.outputs.available == 'true'"
+    )
+
+    ordinary = _step(workflow, "Commit and push autofix")
+    conflict = _step(workflow, "Merge base branch and resolve conflicts with OpenCode")
+    for step in (ordinary, conflict):
+        assert "MUTATION_CREDENTIAL_AVAILABLE:" in step
+        assert availability in step
+        guard = 'if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then'
+        assert guard in step
+        assert step.index(guard) < step.index("git ")
 
 
 def test_read_only_fetch_may_use_workflow_token_without_expanding_write_scope() -> None:
