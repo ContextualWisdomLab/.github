@@ -150,9 +150,10 @@ def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     for thread in threads:
         for comment in (thread.get("comments") or {}).get("nodes") or []:
-            path = str(comment.get("path") or "").strip()
+            path = str(comment.get("path") or "")
             if (
                 not path
+                or path != path.strip()
                 or any(delimiter in path for delimiter in ("\0", "\r", "\n", "`"))
                 or path.startswith("/")
                 or ".." in path.split("/")
@@ -317,4 +318,6 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(  # pragma: no cover - credited through CLI integration tests.
+        main(sys.argv[1:])
+    )
