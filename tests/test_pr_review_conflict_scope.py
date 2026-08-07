@@ -315,12 +315,16 @@ def test_cli_reports_violation_and_success(
 def test_workflow_snapshots_after_merge_and_verifies_before_staging() -> None:
     """The conflict worker enforces its model-write boundary before git add."""
     workflow = _WORKFLOW.read_text(encoding="utf-8")
-    merge = workflow.index('git merge --no-commit --no-ff "$PR_BASE_SHA"')
-    snapshot = workflow.index("pr_review_conflict_scope.py\" snapshot")
-    model = workflow.index('title "PR #${PR_NUMBER} merge conflict resolution"')
-    verify = workflow.index("pr_review_conflict_scope.py\" verify")
-    conflict_add = workflow.index("# Fail closed: never push unresolved conflict markers.")
+    conflict_start = workflow.index(
+        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    )
+    conflict = workflow[conflict_start:]
+    merge = conflict.index('git merge --no-commit --no-ff "$PR_BASE_SHA"')
+    snapshot = conflict.index("pr_review_conflict_scope.py\" snapshot")
+    model = conflict.index('title "PR #${PR_NUMBER} merge conflict resolution"')
+    verify = conflict.index("pr_review_conflict_scope.py\" verify")
+    conflict_add = conflict.index("# Fail closed: never push unresolved conflict markers.")
 
     assert merge < snapshot < model < verify < conflict_add
-    assert 'git diff --name-only -z --diff-filter=U >"$conflicted_paths_file"' in workflow
-    assert '--allowed-paths "$conflicted_paths_file"' in workflow
+    assert 'git diff --name-only -z --diff-filter=U >"$conflicted_paths_file"' in conflict
+    assert '--allowed-paths "$conflicted_paths_file"' in conflict
