@@ -1,0 +1,13 @@
+diff --git a/.github/workflows/security-scan.yml b/.github/workflows/security-scan.yml
+--- a/.github/workflows/security-scan.yml
++++ b/.github/workflows/security-scan.yml
+@@ -278,7 +278,9 @@ jobs:
+           api_url="${GITHUB_API_URL:-https://api.github.com}"
+           status="$(
+-            curl -sS -o /dev/null -w '%{http_code}' \
++            curl -sS --connect-timeout 10 --max-time 30 \
++              -o /dev/null \
++              -w '%{http_code}' \
+               -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer ${GH_TOKEN}" \
+               -H "X-GitHub-Api-Version: 2022-11-28" \
