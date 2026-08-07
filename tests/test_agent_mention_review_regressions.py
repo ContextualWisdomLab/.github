@@ -36,6 +36,7 @@ def request(module: ModuleType, agents=("cwl-noema-review", "opencode-agent")):
         91,
         "maintainer",
         agents,
+        pull_request_base_sha="b" * 40,
     )
 
 
@@ -82,7 +83,7 @@ def test_actor_and_allowlist_validation_are_wrapper_compatible() -> None:
         "pull_request": {
             "state": "open",
             "head": {"sha": "a" * 40},
-            "base": {"ref": "main"},
+            "base": {"ref": "main", "sha": "b" * 40},
         },
     }
     with pytest.raises(ValueError, match="actor"):
