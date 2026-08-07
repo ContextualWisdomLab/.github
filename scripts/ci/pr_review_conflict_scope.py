@@ -1,16 +1,16 @@
 """Enforce the file boundary of OpenCode-assisted merge-conflict repair.
 
-The conflict worker snapshots every tracked and non-ignored untracked worktree
-path after Git has merged the protected base but before the model runs. After
-OpenCode exits and temporary configuration files are restored, this module
-compares the live worktree with that snapshot. Only paths that Git reported as
-unmerged conflict paths may differ; any other changed, created, deleted, or
-retargeted path fails closed before the workflow stages a commit.
+The conflict worker snapshots every tracked and untracked worktree path,
+including ignored paths, after Git has merged the protected base but before the
+model runs. After OpenCode exits and temporary configuration files are restored,
+this module compares the live worktree with that snapshot. Only paths that Git
+reported as unmerged conflict paths may differ; any other changed, created,
+deleted, or retargeted path fails closed before the workflow stages a commit.
 
 The module never executes pull-request code. It uses a fixed, validated system
 Git executable only to enumerate path names and hashes regular-file bytes
 directly with SHA-256. Every symbolic link must resolve to a regular file that
-is itself present in the same authoritative Git inventory, preventing links
+is itself present in Git's tracked-or-non-ignored inventory, preventing links
 from exposing external, ignored, dangling, or directory-backed write paths.
 """
 
@@ -86,8 +86,8 @@ def _trusted_git_executable() -> str:
     return os.fspath(candidate)
 
 
-def _git_paths(root: Path) -> tuple[str, ...]:
-    """Return tracked and non-ignored untracked worktree paths from Git."""
+def _git_ls_files(root: Path, *arguments: str) -> tuple[str, ...]:
+    """Return one NUL-delimited Git path listing decoded without loss."""
     completed = subprocess.run(
         [
             _trusted_git_executable(),
@@ -95,29 +95,56 @@ def _git_paths(root: Path) -> tuple[str, ...]:
             str(root),
             "ls-files",
             "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
+            *arguments,
         ],
         check=True,
         capture_output=True,
     )
-    raw_paths = [os.fsdecode(item) for item in completed.stdout.split(b"\0") if item]
-    return _bounded_paths(raw_paths, source_name="repository inventory")
+    return tuple(
+        os.fsdecode(item) for item in completed.stdout.split(b"\0") if item
+    )
+
+
+def _git_visible_paths(root: Path) -> tuple[str, ...]:
+    """Return tracked and non-ignored untracked paths from Git."""
+    return _bounded_paths(
+        _git_ls_files(root, "--cached", "--others", "--exclude-standard"),
+        source_name="reviewable repository inventory",
+    )
+
+
+def _git_paths(root: Path) -> tuple[str, ...]:
+    """Return every tracked or untracked worktree path, including ignored paths."""
+    visible_paths = _git_visible_paths(root)
+    ignored_paths = _git_ls_files(
+        root,
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+    )
+    return _bounded_paths(
+        (*visible_paths, *ignored_paths),
+        source_name="repository inventory",
+    )
 
 
 def _validate_symlink_targets(root: Path, relative_paths: Sequence[str]) -> None:
-    """Require every inventoried symlink to resolve to an inventoried regular file."""
-    inventory = frozenset(relative_paths)
+    """Require every symlink to resolve to a reviewable regular worktree file."""
+    symlinks: list[tuple[str, Path]] = []
     for relative_path in relative_paths:
         link_path = root / relative_path
         try:
             link_metadata = link_path.lstat()
         except FileNotFoundError:
             continue
-        if not stat.S_ISLNK(link_metadata.st_mode):
-            continue
+        if stat.S_ISLNK(link_metadata.st_mode):
+            symlinks.append((relative_path, link_path))
 
+    if not symlinks:
+        return
+
+    inventory = frozenset(_git_visible_paths(root))
+    for relative_path, link_path in symlinks:
         try:
             resolved_target = link_path.resolve(strict=True)
         except (OSError, RuntimeError) as exc:
