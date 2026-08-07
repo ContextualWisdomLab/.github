@@ -1,0 +1,166 @@
+pif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_preexisting_output_file_is_never_overwritten(tmp_path: Path) -> None:
++    """Exclusive creation preserves every pre-existing output entry."""
++    output = tmp_path / "output"
++    output.mkdir()
++    existing = output / "manifest.json"
++    existing.write_text("attacker\n", encoding="utf-8")
++    with SecureOutputTree(output) as tree:
++        with pytest.raises(FileExistsError):
++            tree.write_text("manifest.json", "trusted\n")
++    assert existing.read_text(encoding="utf-8") == "attacker\n"
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_preexisting_nested_directory_is_not_adopted(tmp_path: Path) -> None:
++    """A pre-existing descendant cannot be silently adopted into the owned tree."""
++    output = tmp_path / "output"
++    output.mkdir()
++    (output / "project-000").mkdir()
++    with SecureOutputTree(output) as tree:
++        with pytest.raises(FileExistsError):
++            tree.mkdir("project-000")
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_stalled_write_fails_and_removes_partial_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """A zero-progress write is an error and leaves no partial owned file."""
++    output = tmp_path / "output"
++    real_write = module.os.write
++
++    def stalled_write(file_descriptor: int, content: bytes) -> int:
++        del file_descriptor, content
++        return 0
++
++    monkeypatch.setattr(module.os, "write", stalled_write)
++    with SecureOutputTree(output) as tree:
++        with pytest.raises(OSError, match="no forward progress"):
++            tree.write_bytes("project-000/package.json", b"trusted")
++    monkeypatch.setattr(module.os, "write", real_write)
++    assert not (output / "project-000" / "package.json").exists()
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_failure_cleans_only_owned_entries(tmp_path: Path) -> None:
++    """An existing empty root survives while created descendants are removed."""
++    output = tmp_path / "output"
++    output.mkdir()
++    with pytest.raises(RuntimeError, match="boom"):
++        with SecureOutputTree(output) as tree:
++            tree.write_bytes("project-000/package.json", b"trusted")
++            raise RuntimeError("boom")
++    assert output.is_dir()
++    assert list(output.iterdir()) == []
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_failure_removes_owned_root_when_empty(tmp_path: Path) -> None:
++    """A root created by the helper is removed after owned partial cleanup."""
++    output = tmp_path / "output"
++    with pytest.raises(RuntimeError, match="boom"):
++        with SecureOutputTree(output) as tree:
++            tree.write_bytes("project-000/package.json", b"trusted")
++            raise RuntimeError("boom")
++    assert not output.exists()
++
++
++def test_missing_secure_capabilities_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """Unsupported runtimes never fall back to mutable pathname writes."""
++    monkeypatch.setattr(module, "_secure_primitives_available", lambda: False)
++    with pytest.raises(RuntimeError, match="requires POSIX"):
++        SecureOutputTree(tmp_path / "output")
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_missing_parent_component_fails_without_creating_ancestors(tmp_path: Path) -> None:
++    """Only the final output root may be created; missing ancestors fail closed."""
++    output = tmp_path / "missing" / "output"
++    with pytest.raises(ValueError, match="parent components"):
++        SecureOutputTree(output)
++    assert not (tmp_path / "missing").exists()
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_closed_tree_rejects_operations_and_close_is_idempotent(tmp_path: Path) -> None:
++    """Closed descriptors cannot be reused and repeated cleanup is harmless."""
++    tree = SecureOutputTree(tmp_path / "output")
++    tree.close()
++    tree.close()
++    tree.cleanup()
++    with pytest.raises(RuntimeError, match="closed"):
++        tree.mkdir("project-000")
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_output_root_and_parent_components_are_validated(tmp_path: Path) -> None:
++    """Parent traversal, root output, symbolic links, and regular files fail closed."""
++    with pytest.raises(ValueError, match="parent components"):
++        SecureOutputTree(Path("safe/../output"))
++    with pytest.raises(ValueError, match="filesystem root"):
++        SecureOutputTree(Path("/"))
++
++    attacker = tmp_path / "attacker"
++    attacker.mkdir()
++    symlink_parent = tmp_path / "link"
++    symlink_parent.symlink_to(attacker, target_is_directory=True)
++    with pytest.raises(ValueError, match="no-follow directory"):
++        SecureOutputTree(symlink_parent / "output")
++
++    regular_parent = tmp_path / "regular"
++    regular_parent.write_text("not a directory", encoding="utf-8")
++    with pytest.raises(ValueError, match="no-follow directory"):
++        SecureOutputTree(regular_parent / "output")
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_secure_tree_rejects_wrong_content_types_and_empty_paths(tmp_path: Path) -> None:
++    """Public write methods accept only declared types and nonempty paths."""
++    with SecureOutputTree(tmp_path / "output") as tree:
++        with pytest.raises(ValueError, match="must not be empty"):
++            tree.write_bytes("", b"x")
++        with pytest.raises(TypeError, match="must be bytes"):
++            tree.write_bytes("value.bin", "not-bytes")  # type: ignore[arg-type]
++        with pytest.raises(TypeError, match="must be a string"):
++            tree.write_text("value.txt", b"not-text")  # type: ignore[arg-type]
++        with pytest.raises(FileNotFoundError, match="unknown"):
++            descriptor = tree._open_directory(("unknown",), create=False)
++            os.close(descriptor)
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_constructor_reopen_race_cleans_created_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """Failure reopening a newly created root removes the directory and closes safely."""
++    output = tmp_path / "output"
++    real_open = module.os.open
++
++    def failing_reopen(path, flags, mode=0o777, *, dir_fd=None):
++        if path == "output" and output.exists():
++            raise OSError(5, "injected reopen failure")
++        return real_open(path, flags, mode, dir_fd=dir_fd)
++
++    monkeypatch.setattr(module, "_secure_primitives_available", lambda: True)
++    monkeypatch.setattr(module.os, "open", failing_reopen)
++    with pytest.raises(OSError, match="injected reopen"):
++        SecureOutputTree(output)
++    assert not output.exists()
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_constructor_propagates_non_path_os_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """Unexpected descriptor errors are propagated rather than recast as path validation."""
++    output = tmp_path / "output"
++    output.mkdir()
++    real_open = module.os.open
++
++    def denied_open(path, flags, mode=0o777, *, dir_fd=None):
++        if path == "output" and dir_fd is not None:
++            raise PermissionError(13, "injected denial")
++        return real_open(path, flags, mode, dir_fd=dir_fd)
++
++    monkeypatch.setattr(module, "_secure_primitives_available", lambda: True)
++    monkeypatch.setattr(module.os, "open", denied_open)
++    with pytest.raises(PermissionError, match="injected denial"):
++        SecureOutputTree(output)
++
++
++@pytest.mark.skipif(
