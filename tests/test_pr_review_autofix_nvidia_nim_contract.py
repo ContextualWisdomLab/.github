@@ -1,10 +1,14 @@
 """Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
+import hashlib
 from pathlib import Path
 import re
 import subprocess
 
+import pytest
+
 from scripts.ci import pr_review_autofix_context as context
+from scripts.ci import pr_review_conflict_scope as scope
 
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
@@ -172,22 +176,11 @@ def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -
     verify = 'pr_review_conflict_scope.py" verify'
     temporary_config = 'cp "$OPENCODE_AUTOFIX_WORKDIR/opencode.jsonc"'
     restore = "restore_workspace_config\n          trap - EXIT"
-
-    collect_start = workflow.index("      - name: Collect review feedback context")
-    collect_end = workflow.index(
-        "      - name: Prepare isolated OpenCode autofix workspace", collect_start
-    )
-    collect = workflow[collect_start:collect_end]
-    sealed_allowlist = (
-        '--allowed-paths-output '
-        '"$RUNNER_TEMP/pr-review-autofix-allowed-paths.zlist"'
-    )
+    sealed_inventory = "pr-review-autofix-allowed-paths.zlist"
 
     assert snapshot in ordinary
     assert verify in ordinary
-    assert sealed_allowlist in collect
-    assert "printf '%s\\0'" not in ordinary
-    assert "allowed_paths_file=" not in ordinary
+    assert sealed_inventory in ordinary
     assert ordinary.index(snapshot) < ordinary.index(temporary_config)
     assert ordinary.index(restore) < ordinary.index(verify)
 
@@ -226,7 +219,7 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
 
     for document in (operator, doctoring):
         assert "ordinary and conflict repair" in document
-        assert "including ignored paths" in document
+        assert re.search(r"including\s+ignored paths", document)
         assert "`.git` and `.git/*`" in document
         assert "`core.hooksPath=/dev/null`" in document
         assert "explicit revalidated repository URL" in document
@@ -240,8 +233,61 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
     assert "model-mutable Git metadata" in changelog
 
 
+def test_allowed_path_seal_accepts_the_structured_inventory(tmp_path: Path) -> None:
+    """A matching trusted SHA-256 seal authorizes the rendered NUL inventory."""
+    allowed = tmp_path / "pr-review-autofix-allowed-paths.zlist"
+    payload = b"src/reviewed.py\0"
+    allowed.write_bytes(payload)
+    Path(f"{allowed}.sha256").write_text(
+        f"{hashlib.sha256(payload).hexdigest()}\n",
+        encoding="ascii",
+    )
+
+    assert scope._read_allowed_paths(allowed) == ("src/reviewed.py",)
+
+
+def test_allowed_path_seal_rejects_markdown_reconstruction_drift(
+    tmp_path: Path,
+) -> None:
+    """An injected or reordered path list cannot satisfy the structured seal."""
+    allowed = tmp_path / "pr-review-autofix-allowed-paths.zlist"
+    trusted_payload = b"src/reviewed.py\0"
+    allowed.write_bytes(trusted_payload + b"docs/injected.md\0")
+    Path(f"{allowed}.sha256").write_text(
+        f"{hashlib.sha256(trusted_payload).hexdigest()}\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(ValueError, match="trusted seal"):
+        scope._read_allowed_paths(allowed)
+
+
+@pytest.mark.parametrize("seal_payload", [b"not-a-sha256\n", b"f" * 64, b"\xff\n"])
+def test_allowed_path_seal_rejects_malformed_evidence(
+    tmp_path: Path, seal_payload: bytes
+) -> None:
+    """Malformed, unterminated, and non-ASCII seal files fail closed."""
+    allowed = tmp_path / "pr-review-autofix-allowed-paths.zlist"
+    allowed.write_bytes(b"src/reviewed.py\0")
+    Path(f"{allowed}.sha256").write_bytes(seal_payload)
+
+    with pytest.raises(ValueError, match="seal"):
+        scope._read_allowed_paths(allowed)
+
+
+def test_allowed_path_seal_read_failure_is_redacted(tmp_path: Path) -> None:
+    """Filesystem details from an unreadable seal are not exposed publicly."""
+    allowed = tmp_path / "pr-review-autofix-allowed-paths.zlist"
+    allowed.write_bytes(b"src/reviewed.py\0")
+    Path(f"{allowed}.sha256").mkdir()
+
+    with pytest.raises(ValueError, match="could not be read") as error:
+        scope._read_allowed_paths(allowed)
+    assert str(tmp_path) not in str(error.value)
+
+
 def test_context_seals_allowed_paths_separately_from_untrusted_review_text(
-    monkeypatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Review-body headings cannot expand the machine-readable edit allowlist."""
     head = "a" * 40
@@ -286,28 +332,59 @@ def test_context_seals_allowed_paths_separately_from_untrusted_review_text(
     )
     monkeypatch.setattr(context, "review_threads", lambda _repo, _number: threads)
 
-    markdown_output = tmp_path / "context.md"
-    allowed_paths_output = tmp_path / "allowed-paths.zlist"
-    context.write_context(
-        "owner/repo",
-        7,
-        head,
-        markdown_output,
-        allowed_paths_output=allowed_paths_output,
-    )
+    markdown_output = tmp_path / "pr-review-autofix-context.md"
+    context.write_context("owner/repo", 7, head, markdown_output)
 
-    assert allowed_paths_output.read_bytes() == b"src/actually-reviewed.py\0"
-    assert injected_path in markdown_output.read_text(encoding="utf-8")
+    allowed_paths_output = tmp_path / "pr-review-autofix-allowed-paths.zlist"
+    payload = b"src/actually-reviewed.py\0"
+    assert allowed_paths_output.read_bytes() == payload
+    assert (tmp_path / "pr-review-autofix-allowed-paths.zlist.sha256").read_text(
+        encoding="ascii"
+    ) == f"{hashlib.sha256(payload).hexdigest()}\n"
+
+    markdown = markdown_output.read_text(encoding="utf-8")
+    assert markdown.count("\n## Autofix Allowed Paths\n") == 1
+    assert "> ## Autofix Allowed Paths" in markdown
+    assert f"> - `{injected_path}`" in markdown
 
 
-def test_workflow_never_reconstructs_authority_from_review_markdown() -> None:
-    """The workflow consumes the sealed NUL list instead of reparsing comments."""
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "src/line\nbreak.py",
+        "src/carriage\rreturn.py",
+        "src/back`tick.py",
+    ],
+)
+def test_context_rejects_paths_that_can_break_markdown_authority(
+    unsafe_path: str,
+) -> None:
+    """Control characters and delimiters cannot enter the rendered path section."""
+    threads = [
+        {
+            "comments": {
+                "nodes": [
+                    {
+                        "path": unsafe_path,
+                    }
+                ]
+            }
+        }
+    ]
+
+    assert context.thread_paths(threads) == []
+
+
+def test_workflow_reconstructed_inventory_is_checked_by_the_trusted_seal() -> None:
+    """The ordinary verifier consumes the same path file that receives a seal."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    collect_start = workflow.index("      - name: Collect review feedback context")
     ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
+    collect = workflow[collect_start:ordinary_start]
     ordinary = workflow[ordinary_start:ordinary_end]
 
-    assert "/^## Autofix Allowed Paths" not in ordinary
-    assert "allowed_paths_file=" not in ordinary
-    assert "while IFS= read -r allowed_path" not in ordinary
-    assert "printf '%s\\0'" not in ordinary
+    assert '--output "$RUNNER_TEMP/pr-review-autofix-context.md"' in collect
+    assert "pr-review-autofix-allowed-paths.zlist" in ordinary
+    assert '--allowed-paths "$allowed_paths_zlist"' in ordinary
+    assert "pr_review_conflict_scope.py\" verify" in ordinary
