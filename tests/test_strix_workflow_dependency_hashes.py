@@ -8,6 +8,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+SHELL_REGRESSION = ROOT / "scripts" / "ci" / "test_strix_quick_gate.sh"
 WORKFLOW_DISPATCH_KEY_RE = re.compile(
     r"(?m)^[ \t]+['\"]?workflow_dispatch['\"]?\s*:"
 )
@@ -72,3 +73,21 @@ def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
     assert '      - "scripts/ci/test_strix_quick_gate.sh"' in workflow
     assert "bash scripts/ci/test_strix_quick_gate.sh" in workflow
     assert "bash -n scripts/ci/strix_quick_gate.sh" in workflow
+
+
+def test_strix_workflow_budget_covers_bounded_shell_timeout_regressions() -> None:
+    """The job budget must not cancel the complete bounded Strix regression harness."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    shell_regression = SHELL_REGRESSION.read_text(encoding="utf-8")
+    timeout_match = re.search(r"(?m)^\s*timeout-minutes:\s*(\d+)\s*$", workflow)
+
+    assert timeout_match is not None
+    assert int(timeout_match.group(1)) >= 20
+    assert (
+        'TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"'
+        in shell_regression
+    )
+    assert (
+        'TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-60}"'
+        in shell_regression
+    )
