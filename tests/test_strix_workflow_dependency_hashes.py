@@ -32,3 +32,12 @@ def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert '      - "tests/test_strix_workflow_dependency_hashes.py"' in workflow
+
+
+def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
+    """Run and retrigger on the shell regressions that pytest cannot collect."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert '      - "scripts/ci/test_strix_quick_gate.sh"' in workflow
+    assert "bash scripts/ci/test_strix_quick_gate.sh" in workflow
+    assert "bash -n scripts/ci/strix_quick_gate.sh" in workflow
