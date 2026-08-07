@@ -121,6 +121,11 @@ def test_missing_or_expired_artifact_fails_with_bounded_recovery_guidance() -> N
     """Fail closed on absent exact evidence without searching earlier attempts."""
     workflow = _workflow_text()
     evidence_job = _job_block(workflow, "coverage-evidence", "opencode-review-target")
+    producer_failure = _step_block(
+        evidence_job,
+        "Report coverage source materialization failure",
+        "Verify coverage source identity for current workflow attempt",
+    )
     identity = _step_block(
         evidence_job,
         "Verify coverage source identity for current workflow attempt",
@@ -137,9 +142,10 @@ def test_missing_or_expired_artifact_fails_with_bounded_recovery_guidance() -> N
         "Prepare pull request merge tree for coverage measurement",
     )
 
+    assert "if: needs.coverage-source-tree.result != 'success'" in producer_failure
+    assert "exit 1" in producer_failure
     assert "id: coverage_source_identity" in identity
     assert "continue-on-error: true" in identity
-    assert "if: needs.coverage-source-tree.result == 'success'" in identity
     assert "id: coverage_source_download" in download
     assert "continue-on-error: true" in download
     assert "if: steps.coverage_source_identity.outcome == 'success'" in download
