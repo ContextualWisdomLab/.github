@@ -29,23 +29,21 @@ def test_clearfolio_caller_runs_once_each_hour() -> None:
     assert "NVIDIA_NIM_API_KEY" not in text
 
 
-def test_clearfolio_caller_scopes_write_permissions_to_reusable_job() -> None:
-    """Only the reusable scheduler job receives its required write permissions."""
+def test_clearfolio_caller_keeps_github_token_read_only() -> None:
+    """The hourly caller delegates with explicit secrets and no token elevation."""
     text = _read(_CLEARFOLIO_CALLER)
     workflow_scope, jobs_scope = text.split("\njobs:\n", maxsplit=1)
 
-    assert "actions: write" not in workflow_scope
-    assert "issues: write" not in workflow_scope
-    assert "contents: write" not in workflow_scope
-    assert "pull-requests: write" not in workflow_scope
-    assert "statuses: write" not in workflow_scope
     assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert "\n    permissions:\n" in jobs_scope
-    assert "      actions: write\n" in jobs_scope
-    assert "      contents: read\n" in jobs_scope
-    assert "      issues: write\n" in jobs_scope
-    assert "      pull-requests: read\n" in jobs_scope
-    assert "      statuses: read\n" in jobs_scope
+    for permission in (
+        "actions: write",
+        "issues: write",
+        "contents: write",
+        "pull-requests: write",
+        "statuses: write",
+    ):
+        assert permission not in text
+    assert "\n    permissions:\n" not in jobs_scope
 
 
 def test_reusable_scheduler_has_no_product_specific_timer() -> None:
@@ -64,7 +62,7 @@ def test_reusable_scheduler_has_no_product_specific_timer() -> None:
 
 
 def test_reusable_scheduler_declares_only_required_caller_secrets() -> None:
-    """The scheduled caller passes only the two established scheduler secrets."""
+    """The caller passes only established credentials without token fallback."""
     reusable = _read(_REUSABLE_WORKFLOW)
     caller = _read(_CLEARFOLIO_CALLER)
 
@@ -73,6 +71,30 @@ def test_reusable_scheduler_declares_only_required_caller_secrets() -> None:
     assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
     assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
     assert "secrets: inherit" not in caller
+    assert (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN }}"
+        in reusable
+    )
+    assert "|| github.token" not in reusable
+    assert "the scheduler never elevates github.token" in reusable
+
+
+def test_reusable_scheduler_keeps_workflow_token_read_only() -> None:
+    """Repository dispatch never depends on write-capable workflow permissions."""
+    text = _read(_REUSABLE_WORKFLOW)
+    workflow_scope, jobs_scope = text.split("\njobs:\n", maxsplit=1)
+
+    assert "\npermissions:\n  contents: read\n" in workflow_scope
+    assert "\n    permissions:\n" not in jobs_scope
+    for permission in (
+        "actions: write",
+        "issues: write",
+        "contents: write",
+        "pull-requests: write",
+        "statuses: write",
+    ):
+        assert permission not in text
 
 
 def test_review_fix_scheduler_retries_same_head_after_one_hour() -> None:
