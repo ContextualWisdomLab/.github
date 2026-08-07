@@ -13,12 +13,13 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  materialize-and-export:
+  repair-and-publish:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
       && github.ref == 'refs/heads/fix/opencode-attempt-scoped-coverage-artifact'
@@ -31,10 +32,52 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Exchange OpenCode app token for workflow-file repair
+        id: target_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::OpenCode app token exchange unavailable: OIDC request environment is missing."
+            exit 1
+          fi
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+          oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "::error::OpenCode app token exchange unavailable: OIDC token response was empty."
+            exit 1
+          fi
+          token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "::error::OpenCode app token exchange unavailable: app token response was empty."
+            exit 1
+          fi
+          echo "::add-mask::$app_token"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
       - name: Checkout exact repair head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 0
           ref: ${{ github.sha }}
 
       - name: Set up current stable Python
@@ -69,7 +112,6 @@ jobs:
           fi
 
       - name: Upload verified repair payload
-        id: repair_payload_upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: opencode-attempt-artifact-repair-payload-${{ github.run_attempt }}
@@ -78,3 +120,27 @@ jobs:
             CHANGELOG.md
           if-no-files-found: error
           retention-days: 1
+
+      - name: Commit verified repair and remove temporary materializers
+        env:
+          PUSH_TOKEN: ${{ steps.target_app_token.outputs.token }}
+          TARGET_BRANCH: fix/opencode-attempt-scoped-coverage-artifact
+        run: |
+          set -euo pipefail
+          if [ -z "${PUSH_TOKEN:-}" ]; then
+            echo "::error::OpenCode repository token is required to publish the verified repair."
+            exit 1
+          fi
+          echo "::add-mask::$PUSH_TOKEN"
+          rm .github/workflows/opencode-coverage-artifact-rerun-repair.yml
+          rm scripts/ci/prepare_opencode_attempt_artifact_patch.py
+          git config user.name "opencode-agent[bot]"
+          git config user.email "opencode-agent[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/opencode-review-dispatch.yml \
+            .github/workflows/opencode-coverage-artifact-rerun-repair.yml \
+            scripts/ci/prepare_opencode_attempt_artifact_patch.py \
+            CHANGELOG.md
+          git commit -m "fix(opencode): bind coverage source artifacts to attempts"
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
