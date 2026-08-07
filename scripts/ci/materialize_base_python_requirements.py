@@ -749,7 +749,7 @@ def _open_pinned_output_directory(
 
 
 def _validate_file_binding(directory_fd: int, name: str, file_fd: int) -> None:
-    """Prove that a generated name still references the pinned regular file."""
+    """Prove that a generated name still references one singly linked regular file."""
 
     try:
         path_metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
@@ -758,10 +758,13 @@ def _validate_file_binding(directory_fd: int, name: str, file_fd: int) -> None:
     descriptor_metadata = os.fstat(file_fd)
     if (
         not stat.S_ISREG(path_metadata.st_mode)
+        or not stat.S_ISREG(descriptor_metadata.st_mode)
         or (path_metadata.st_dev, path_metadata.st_ino)
         != (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
     ):
         raise ValueError("output file changed during secure materialization")
+    if path_metadata.st_nlink != 1 or descriptor_metadata.st_nlink != 1:
+        raise ValueError("output files must be singly linked regular files")
 
 
 def _write_pinned_output_file(
