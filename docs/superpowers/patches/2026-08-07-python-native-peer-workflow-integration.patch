@@ -1,0 +1,260 @@
+diff --git a/.github/workflows/opencode-review-dispatch.yml b/.github/workflows/opencode-review-dispatch.yml
+--- a/.github/workflows/opencode-review-dispatch.yml
++++ b/.github/workflows/opencode-review-dispatch.yml
+@@ -824,6 +824,7 @@ jobs:
+           summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
+           failures=0
+           r_peer_check_required=0
++          python_native_peer_check_required=0
+ 
+           append() {
+             printf '%s\n' "$*" >>"$summary_file"
+@@ -904,6 +905,93 @@ jobs:
+             rm -f "$log_file"
+           }
+ 
++          run_python_native_extension_classifier() {
++            local project_dir="$1"
++            local python_native_pytest_log="$2"
++            local python_native_changed_files="$3"
++
++            [ -f "$project_dir/pyproject.toml" ] || return 1
++            python3 -I "$GITHUB_WORKSPACE/scripts/ci/python_native_extension_peer_gate.py" \
++              classify-pytest \
++              --log "$python_native_pytest_log" \
++              --pyproject "$project_dir/pyproject.toml" \
++              --changed-files "$python_native_changed_files" \
++              --repo-root "$COVERAGE_SOURCE_WORKDIR"
++          }
++
++          run_python_test_and_capture() {
++            local label="$1"
++            local project_dir="$2"
++            shift 2
++            local python_native_pytest_log
++            local python_native_changed_files
++            local rc
++
++            python_native_pytest_log="$(mktemp)"
++            python_native_changed_files="$(mktemp)"
++            changed_files_for_coverage >"$python_native_changed_files"
++            chmod 0444 "$python_native_changed_files"
++
++            append "### ${label}"
++            append ""
++            append '```text'
++            append_command "$@"
++            set +e
++            timeout --kill-after=20 900 setpriv \
++              --reuid "$OPENCODE_SANDBOX_UID" \
++              --regid "$OPENCODE_SANDBOX_GID" \
++              --clear-groups \
++              env \
++              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
++              -u ACTIONS_ID_TOKEN_REQUEST_URL \
++              -u ACTIONS_RUNTIME_TOKEN \
++              -u GH_TOKEN \
++              -u GITHUB_TOKEN \
++              GITHUB_ENV=/dev/null \
++              GITHUB_PATH=/dev/null \
++              GITHUB_OUTPUT=/dev/null \
++              GITHUB_STEP_SUMMARY=/dev/null \
++              BASH_ENV=/dev/null \
++              UV_NO_BUILD=1 \
++              GIT_CONFIG_NOSYSTEM=1 \
++              GIT_CONFIG_GLOBAL=/dev/null \
++              GIT_CONFIG_COUNT=1 \
++              GIT_CONFIG_KEY_0=safe.directory \
++              GIT_CONFIG_VALUE_0=/work \
++              HOME=/work/.opencode-sandbox-home \
++              XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
++              CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
++              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
++              "$@" >"$python_native_pytest_log" 2>&1
++            rc=$?
++            set -e
++            emit_captured_log "$python_native_pytest_log"
++            append '```'
++            append ""
++
++            if [ "$rc" -eq 0 ]; then
++              append "- Result: PASS"
++            else
++              if run_python_native_extension_classifier \
++                "$project_dir" \
++                "$python_native_pytest_log" \
++                "$python_native_changed_files" >/dev/null 2>&1; then
++                append "### Python native-extension source-only deferral"
++                append ""
++                append "- Result: DEFERRED"
++                append "- Reason: the unchanged declared PyO3 module was unavailable in the source-only sandbox; exact-head Python, Rust/PyO3, and package CheckRuns must all complete successfully before approval."
++                append ""
++                python_native_peer_check_required=1
++              else
++                append "- Result: FAIL (exit ${rc})"
++                failures=$((failures + 1))
++              fi
++            fi
++            append ""
++            rm -f "$python_native_pytest_log" "$python_native_changed_files"
++          }
++
+           run_r_package_testthat() {
+             local package_name="$1"
+             local log_file rc classification description_snapshot
+@@ -1112,14 +1200,16 @@ jobs:
+               if [ -n "$configured_commands_json" ]; then
+                 while IFS= read -r configured_command_json; do
+                   [ -n "$configured_command_json" ] || continue
+-                  run_and_capture "Python configured CI test suite (${project_dir})" \
++                  run_python_test_and_capture \
++                    "Python configured CI test suite (${project_dir})" "$project_dir" \
+                     python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" execute \
+                       --project-dir "$project_dir" \
+                       --command-json "$configured_command_json"
+                 done <<<"$configured_commands_json"
+             else
+-              run_and_capture "Python coverage with missing-line report (${project_dir})" \
++              run_python_test_and_capture \
++                "Python coverage with missing-line report (${project_dir})" "$project_dir" \
+                 bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
+             fi
+             done < <(tracked_python_projects_with_tests)
+@@ -1994,6 +2084,9 @@ jobs:
+               if [ "$r_peer_check_required" -eq 1 ]; then
+                 append "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
+               fi
++              if [ "$python_native_peer_check_required" -eq 1 ]; then
++                append "- Python native-extension peer evidence: deferred source-only collection requires successful exact-head peer checks"
++              fi
+             fi
+           else
+             append "- Result: FAIL"
+@@ -7092,6 +7185,92 @@ jobs:
+             return 2
+           }
+ 
++          coverage_defers_to_python_native_peer_checks() {
++            printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" |
++              grep -Fq -- "- Python native-extension peer evidence: deferred source-only collection requires successful exact-head peer checks"
++          }
++
++          collect_successful_python_native_peer_check_evidence() {
++            local output_file="$1"
++            local owner="${GH_REPOSITORY%%/*}"
++            local name="${GH_REPOSITORY#*/}"
++            local graphql_file
++            graphql_file="$(mktemp)"
++
++            # Materialize trusted current-head GraphQL check-runs as the helper's
++            # bounded JSON contract. A stale PR head yields an empty list.
++            if ! timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
++              -f owner="$owner" \
++              -f name="$name" \
++              -F number="$PR_NUMBER" \
++              -f query='
++                query($owner:String!,$name:String!,$number:Int!) {
++                  repository(owner:$owner,name:$name) {
++                    pullRequest(number:$number) {
++                      headRefOid
++                      statusCheckRollup {
++                        contexts(first: 100) {
++                          nodes {
++                            __typename
++                            ... on CheckRun {
++                              name
++                              status
++                              conclusion
++                              checkSuite {
++                                workflowRun {
++                                  workflow {
++                                    name
++                                  }
++                                }
++                              }
++                            }
++                          }
++                        }
++                      }
++                    }
++                  }
++                }
++              ' >"$graphql_file"; then
++              rm -f "$graphql_file"
++              return 1
++            fi
++
++            jq --arg head_sha "$PR_HEAD_SHA" '
++              .data.repository.pullRequest as $pr
++              | if (($pr.headRefOid // "") != $head_sha) then
++                  []
++                else
++                  [
++                    ($pr.statusCheckRollup.contexts.nodes // [])[]
++                    | select(.__typename == "CheckRun")
++                    | {
++                        __typename: "CheckRun",
++                        workflow: (.checkSuite.workflowRun.workflow.name // ""),
++                        name: (.name // ""),
++                        head_sha: $head_sha,
++                        status: (.status // ""),
++                        conclusion: (.conclusion // "")
++                      }
++                  ]
++                end
++            ' "$graphql_file" >"$output_file"
++            rm -f "$graphql_file"
++
++            python3 "$GITHUB_WORKSPACE/scripts/ci/python_native_extension_peer_gate.py" \
++              require-checks \
++              --checks-json "$output_file" \
++              --head-sha "$PR_HEAD_SHA" \
++              --required-check "CI::python" \
++              --required-check "CI::rust" \
++              --required-check "CI::package" >/dev/null
++          }
++
++          require_python_native_peer_checks_for_deferred_coverage() {
++            local checks_file
++            if ! coverage_defers_to_python_native_peer_checks; then
++              return 0
++            fi
++            checks_file="$(mktemp)"
++            if collect_github_checks_with_retry \
++              collect_successful_python_native_peer_check_evidence "$checks_file"; then
++              rm -f "$checks_file"
++              printf 'Verified successful exact-head Python, Rust/PyO3, and package CheckRuns after bounded source-only native-extension deferral.\n'
++              return 0
++            fi
++            rm -f "$checks_file"
++            printf '::notice::Python native-extension source-only deferral cannot authorize approval without successful exact-head Python, Rust/PyO3, and package CheckRuns.\n'
++            return 1
++          }
++
+           coverage_defers_to_r_cmd_check() {
+             printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" |
+               grep -Fq -- "- R test evidence: deferred package-load failures require a successful current-head peer R CMD check"
+@@ -7268,6 +7447,10 @@ jobs:
+               return 0
+             fi
+ 
++            if ! require_python_native_peer_checks_for_deferred_coverage; then
++              return 1
++            fi
++
+             if ! require_r_cmd_check_for_deferred_coverage; then
+               return 1
+             fi
+@@ -7470,6 +7653,13 @@ jobs:
+           if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+             request_changes_for_coverage_evidence_failure
+           fi
++
++          if ! require_python_native_peer_checks_for_deferred_coverage; then
++            printf '::error::Python native-extension source-only coverage deferral is missing successful exact-head Python, Rust/PyO3, or package CheckRun evidence for head %s.\n' "$PR_HEAD_SHA"
++            echo "::endgroup::"
++            exit 1
++          fi
+ 
+           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
+           printf 'OpenCode model-pool outcome=%s model=%s; publish stage performs no duplicate model-catalog pass.\n' \
