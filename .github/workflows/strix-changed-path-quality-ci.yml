@@ -8,6 +8,7 @@ on:
       - "CHANGELOG.md"
       - "docs/doctoring/strix-legal-git-paths.md"
       - "scripts/ci/strix_quick_gate.sh"
+      - "scripts/ci/test_strix_quick_gate.sh"
       - "tests/test_strix_changed_path_policy.py"
       - "tests/test_strix_workflow_dependency_hashes.py"
 
@@ -58,6 +59,7 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          bash scripts/ci/test_strix_quick_gate.sh
           python -m coverage run -m pytest tests -q
           python -m compileall -q tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py
           bash -n scripts/ci/strix_quick_gate.sh
