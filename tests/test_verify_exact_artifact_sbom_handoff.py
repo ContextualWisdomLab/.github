@@ -550,3 +550,16 @@ def test_checksum_control_file_bounds_and_entrypoint_are_covered(
         runpy.run_path(str(verifier.__file__), run_name="__main__")
     assert exit_info.value.code == 0
     assert "sealed evidence verification passed" in capsys.readouterr().out
+
+
+def test_resealed_unexpected_predicate_is_rejected_before_signing(tmp_path: Path) -> None:
+    """Only the canonical CycloneDX predicate may reach credentialed attestation."""
+    arguments = _valid_handoff(tmp_path)
+    root = Path(arguments.evidence_root)
+    arguments.predicate_type = "https://example.invalid/predicate"
+    _write_json(root / "source-identity.json", _identity(arguments))
+    arguments.source_identity_sha256 = _digest(root / "source-identity.json")
+    _rewrite_checksums(root, arguments)
+
+    with pytest.raises(verifier.EvidenceError, match="canonical CycloneDX predicate"):
+        verifier.verify(arguments)
