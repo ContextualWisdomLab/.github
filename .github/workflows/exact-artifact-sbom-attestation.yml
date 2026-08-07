@@ -112,26 +112,43 @@ jobs:
           path: sealed-evidence
 
       - name: Verify sealed evidence as inert bounded data
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          EVIDENCE_ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+          WHEEL_FILENAME: ${{ inputs.wheel_filename }}
+          WHEEL_SHA256: ${{ inputs.wheel_sha256 }}
+          WHEEL_SBOM_FILENAME: ${{ inputs.wheel_sbom_filename }}
+          WHEEL_SBOM_SHA256: ${{ inputs.wheel_sbom_sha256 }}
+          SDIST_FILENAME: ${{ inputs.sdist_filename }}
+          SDIST_SHA256: ${{ inputs.sdist_sha256 }}
+          SDIST_SBOM_FILENAME: ${{ inputs.sdist_sbom_filename }}
+          SDIST_SBOM_SHA256: ${{ inputs.sdist_sbom_sha256 }}
+          SOURCE_IDENTITY_SHA256: ${{ inputs.source_identity_sha256 }}
+          CHECKSUM_SHA256: ${{ inputs.checksum_sha256 }}
+          PREDICATE_TYPE: ${{ inputs.predicate_type }}
+          CYCLONEDX_SCHEMA: ${{ inputs.cyclonedx_schema }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 -I trusted-intake/scripts/ci/verify_exact_artifact_sbom_handoff.py \
-            --source-repository '${{ inputs.source_repository }}' \
-            --source-sha '${{ inputs.source_sha }}' \
-            --evidence-artifact-name '${{ inputs.evidence_artifact_name }}' \
-            --evidence-artifact-digest '${{ inputs.evidence_artifact_digest }}' \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --evidence-artifact-name "$EVIDENCE_ARTIFACT_NAME" \
+            --evidence-artifact-digest "$EVIDENCE_ARTIFACT_DIGEST" \
             --evidence-root sealed-evidence \
-            --wheel-filename '${{ inputs.wheel_filename }}' \
-            --wheel-sha256 '${{ inputs.wheel_sha256 }}' \
-            --wheel-sbom-filename '${{ inputs.wheel_sbom_filename }}' \
-            --wheel-sbom-sha256 '${{ inputs.wheel_sbom_sha256 }}' \
-            --sdist-filename '${{ inputs.sdist_filename }}' \
-            --sdist-sha256 '${{ inputs.sdist_sha256 }}' \
-            --sdist-sbom-filename '${{ inputs.sdist_sbom_filename }}' \
-            --sdist-sbom-sha256 '${{ inputs.sdist_sbom_sha256 }}' \
-            --source-identity-sha256 '${{ inputs.source_identity_sha256 }}' \
-            --checksum-sha256 '${{ inputs.checksum_sha256 }}' \
-            --predicate-type '${{ inputs.predicate_type }}' \
-            --cyclonedx-schema '${{ inputs.cyclonedx_schema }}' \
+            --wheel-filename "$WHEEL_FILENAME" \
+            --wheel-sha256 "$WHEEL_SHA256" \
+            --wheel-sbom-filename "$WHEEL_SBOM_FILENAME" \
+            --wheel-sbom-sha256 "$WHEEL_SBOM_SHA256" \
+            --sdist-filename "$SDIST_FILENAME" \
+            --sdist-sha256 "$SDIST_SHA256" \
+            --sdist-sbom-filename "$SDIST_SBOM_FILENAME" \
+            --sdist-sbom-sha256 "$SDIST_SBOM_SHA256" \
+            --source-identity-sha256 "$SOURCE_IDENTITY_SHA256" \
+            --checksum-sha256 "$CHECKSUM_SHA256" \
+            --predicate-type "$PREDICATE_TYPE" \
+            --cyclonedx-schema "$CYCLONEDX_SCHEMA" \
             --output-manifest "${RUNNER_TEMP}/verified-intake.json"
 
   attest-exact-artifacts:
@@ -167,26 +184,43 @@ jobs:
           path: sealed-evidence
 
       - name: Reverify evidence inside the credentialed boundary
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          EVIDENCE_ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+          WHEEL_FILENAME: ${{ inputs.wheel_filename }}
+          WHEEL_SHA256: ${{ inputs.wheel_sha256 }}
+          WHEEL_SBOM_FILENAME: ${{ inputs.wheel_sbom_filename }}
+          WHEEL_SBOM_SHA256: ${{ inputs.wheel_sbom_sha256 }}
+          SDIST_FILENAME: ${{ inputs.sdist_filename }}
+          SDIST_SHA256: ${{ inputs.sdist_sha256 }}
+          SDIST_SBOM_FILENAME: ${{ inputs.sdist_sbom_filename }}
+          SDIST_SBOM_SHA256: ${{ inputs.sdist_sbom_sha256 }}
+          SOURCE_IDENTITY_SHA256: ${{ inputs.source_identity_sha256 }}
+          CHECKSUM_SHA256: ${{ inputs.checksum_sha256 }}
+          PREDICATE_TYPE: ${{ inputs.predicate_type }}
+          CYCLONEDX_SCHEMA: ${{ inputs.cyclonedx_schema }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 -I trusted-signer/scripts/ci/verify_exact_artifact_sbom_handoff.py \
-            --source-repository '${{ inputs.source_repository }}' \
-            --source-sha '${{ inputs.source_sha }}' \
-            --evidence-artifact-name '${{ inputs.evidence_artifact_name }}' \
-            --evidence-artifact-digest '${{ inputs.evidence_artifact_digest }}' \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --evidence-artifact-name "$EVIDENCE_ARTIFACT_NAME" \
+            --evidence-artifact-digest "$EVIDENCE_ARTIFACT_DIGEST" \
             --evidence-root sealed-evidence \
-            --wheel-filename '${{ inputs.wheel_filename }}' \
-            --wheel-sha256 '${{ inputs.wheel_sha256 }}' \
-            --wheel-sbom-filename '${{ inputs.wheel_sbom_filename }}' \
-            --wheel-sbom-sha256 '${{ inputs.wheel_sbom_sha256 }}' \
-            --sdist-filename '${{ inputs.sdist_filename }}' \
-            --sdist-sha256 '${{ inputs.sdist_sha256 }}' \
-            --sdist-sbom-filename '${{ inputs.sdist_sbom_filename }}' \
-            --sdist-sbom-sha256 '${{ inputs.sdist_sbom_sha256 }}' \
-            --source-identity-sha256 '${{ inputs.source_identity_sha256 }}' \
-            --checksum-sha256 '${{ inputs.checksum_sha256 }}' \
-            --predicate-type '${{ inputs.predicate_type }}' \
-            --cyclonedx-schema '${{ inputs.cyclonedx_schema }}' \
+            --wheel-filename "$WHEEL_FILENAME" \
+            --wheel-sha256 "$WHEEL_SHA256" \
+            --wheel-sbom-filename "$WHEEL_SBOM_FILENAME" \
+            --wheel-sbom-sha256 "$WHEEL_SBOM_SHA256" \
+            --sdist-filename "$SDIST_FILENAME" \
+            --sdist-sha256 "$SDIST_SHA256" \
+            --sdist-sbom-filename "$SDIST_SBOM_FILENAME" \
+            --sdist-sbom-sha256 "$SDIST_SBOM_SHA256" \
+            --source-identity-sha256 "$SOURCE_IDENTITY_SHA256" \
+            --checksum-sha256 "$CHECKSUM_SHA256" \
+            --predicate-type "$PREDICATE_TYPE" \
+            --cyclonedx-schema "$CYCLONEDX_SCHEMA" \
             --output-manifest "${RUNNER_TEMP}/verified-signer.json"
 
       - name: Attest exact wheel with its CycloneDX SBOM
@@ -212,6 +246,8 @@ jobs:
           PREDICATE_TYPE: ${{ inputs.predicate_type }}
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          WHEEL_FILENAME: ${{ inputs.wheel_filename }}
+          SDIST_FILENAME: ${{ inputs.sdist_filename }}
           WHEEL_BUNDLE: ${{ steps.attest-wheel.outputs.bundle-path }}
           SDIST_BUNDLE: ${{ steps.attest-sdist.outputs.bundle-path }}
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -221,7 +257,7 @@ jobs:
           install -m 0444 "$WHEEL_BUNDLE" offline-attestation-evidence/wheel-sbom-attestation.json
           install -m 0444 "$SDIST_BUNDLE" offline-attestation-evidence/sdist-sbom-attestation.json
           gh attestation trusted-root > offline-attestation-evidence/trusted_root.jsonl
-          for artifact in '${{ inputs.wheel_filename }}' '${{ inputs.sdist_filename }}'; do
+          for artifact in "$WHEEL_FILENAME" "$SDIST_FILENAME"; do
             gh attestation verify "sealed-evidence/${artifact}" \
               --repo "$SOURCE_REPOSITORY" \
               --signer-repo "$SIGNER_REPOSITORY" \
@@ -229,7 +265,7 @@ jobs:
               --source-digest "$SOURCE_SHA" \
               --predicate-type "$PREDICATE_TYPE"
           done
-          gh attestation verify 'sealed-evidence/${{ inputs.wheel_filename }}' \
+          gh attestation verify "sealed-evidence/${WHEEL_FILENAME}" \
             --repo "$SOURCE_REPOSITORY" \
             --bundle offline-attestation-evidence/wheel-sbom-attestation.json \
             --custom-trusted-root offline-attestation-evidence/trusted_root.jsonl \
@@ -237,7 +273,7 @@ jobs:
             --signer-workflow "$signer_workflow" \
             --source-digest "$SOURCE_SHA" \
             --predicate-type "$PREDICATE_TYPE"
-          gh attestation verify 'sealed-evidence/${{ inputs.sdist_filename }}' \
+          gh attestation verify "sealed-evidence/${SDIST_FILENAME}" \
             --repo "$SOURCE_REPOSITORY" \
             --bundle offline-attestation-evidence/sdist-sbom-attestation.json \
             --custom-trusted-root offline-attestation-evidence/trusted_root.jsonl \
@@ -245,7 +281,45 @@ jobs:
             --signer-workflow "$signer_workflow" \
             --source-digest "$SOURCE_SHA" \
             --predicate-type "$PREDICATE_TYPE"
-          cp "${RUNNER_TEMP}/verified-signer.json" offline-attestation-evidence/verified-handoff.json
+          install -m 0444 "${RUNNER_TEMP}/verified-signer.json" \
+            offline-attestation-evidence/verified-handoff.json
+          cat > offline-attestation-evidence/README.md <<'EOF'
+          # Offline SBOM attestation verification
+
+          This directory is data-only release evidence. It contains the exact
+          wheel and source-distribution Sigstore bundles, the GitHub trusted
+          root captured during signing, and the independently verified handoff
+          manifest. Verify `SHA256SUMS` before using any member.
+
+          Run `gh attestation verify` for each distribution with its matching
+          bundle, `trusted_root.jsonl`, exact source repository and SHA, exact
+          signer repository/workflow, and expected predicate type. A successful
+          signature does not prove that the SBOM is complete or that the
+          software is vulnerability-free.
+          EOF
+          {
+            printf '\n## Exact signed identity\n\n'
+            printf -- '- Source repository: `%s`\n' "$SOURCE_REPOSITORY"
+            printf -- '- Source SHA: `%s`\n' "$SOURCE_SHA"
+            printf -- '- Signer repository: `%s`\n' "$SIGNER_REPOSITORY"
+            printf -- '- Signer workflow: `%s`\n' "$signer_workflow"
+            printf -- '- Predicate type: `%s`\n' "$PREDICATE_TYPE"
+            printf -- '- Wheel: `%s`\n' "$WHEEL_FILENAME"
+            printf -- '- Source distribution: `%s`\n' "$SDIST_FILENAME"
+          } >> offline-attestation-evidence/README.md
+          (
+            cd offline-attestation-evidence
+            LC_ALL=C find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+              | LC_ALL=C sort \
+              | while IFS= read -r evidence_file; do
+                  sha256sum "$evidence_file"
+                done > SHA256SUMS
+          )
+          chmod 0444 \
+            offline-attestation-evidence/README.md \
+            offline-attestation-evidence/SHA256SUMS \
+            offline-attestation-evidence/trusted_root.jsonl \
+            offline-attestation-evidence/verified-handoff.json
 
       - name: Export beginner-readable offline verification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
