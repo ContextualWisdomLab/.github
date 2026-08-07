@@ -40,19 +40,22 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
     """Require the write-capable OpenCode autofix agent to use NVIDIA NIM only."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     required_fragments = (
-        '"model": "nvidia-nim/mistralai/mistral-nemotron"',
+        '"model": "nvidia-nim/mistralai/mistral-small-4-119b-2603"',
         '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
         '"enabled_providers": ["nvidia-nim"]',
         '"nvidia-nim": {',
+        '"mistralai/mistral-small-4-119b-2603": {',
+        '"reasoningEffort": "high"',
         '"npm": "@ai-sdk/openai-compatible"',
         '"baseURL": "https://integrate.api.nvidia.com/v1"',
         '"apiKey": "{env:NVIDIA_API_KEY}"',
         'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
-        'MODEL: nvidia-nim/mistralai/mistral-nemotron',
+        'MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603',
     )
     for fragment in required_fragments:
         assert fragment in workflow, fragment
     forbidden_fragments = (
+        'mistralai/mistral-nemotron',
         'STRIX_GITHUB_MODELS_TOKEN:',
         'MODEL: github-models/',
         'USE_GITHUB_TOKEN:',
