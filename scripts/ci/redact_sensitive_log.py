@@ -99,14 +99,17 @@ def _redact_assignments(text: str) -> str:
     """Redact sensitive key/value assignments without backtracking regexes."""
     output: list[str] = []
     cursor = 0
+    last_append = 0
     while cursor < len(text):
         match = _consume_sensitive_assignment(text, cursor)
         if match is None:
-            output.append(text[cursor])
             cursor += 1
             continue
+        output.append(text[last_append:cursor])
         replacement, cursor = match
         output.append(replacement)
+        last_append = cursor
+    output.append(text[last_append:])
     return "".join(output)
 
 
