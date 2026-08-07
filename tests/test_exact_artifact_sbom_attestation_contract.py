@@ -50,11 +50,23 @@ def _job_block(workflow: str, job_name: str) -> str:
 
 
 def _run_blocks(workflow: str) -> list[str]:
-    """Return every multiline shell body from one workflow source file."""
-    return re.findall(
-        r"(?ms)^        run: \|\n(?P<body>(?:^ {10}.*\n|^\s*\n)+)",
-        workflow,
-    )
+    """Return every indentation-bounded multiline shell body."""
+    lines = workflow.splitlines()
+    blocks: list[str] = []
+    index = 0
+    while index < len(lines):
+        if lines[index] != "        run: |":
+            index += 1
+            continue
+        index += 1
+        body: list[str] = []
+        while index < len(lines) and (
+            lines[index].startswith("          ") or lines[index] == ""
+        ):
+            body.append(lines[index])
+            index += 1
+        blocks.append("\n".join(body))
+    return blocks
 
 
 def test_reusable_workflow_is_call_only_with_explicit_handoff_inputs() -> None:
