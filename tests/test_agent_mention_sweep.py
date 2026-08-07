@@ -92,7 +92,7 @@ def live_pull(state: str = "open") -> dict:
     return {
         "state": state,
         "head": {"sha": "b" * 40},
-        "base": {"ref": "main"},
+        "base": {"ref": "main", "sha": "c" * 40},
     }
 
 
@@ -264,6 +264,7 @@ def test_build_requests_ignores_receipt_markers_and_skips_closed_pulls() -> None
         ("opencode-agent",),
         ("cwl-noema-review",),
     ]
+    assert {request.pull_request_base_sha for request in requests} == {"c" * 40}
     closed = FakeClient(
         {comments_endpoint: [comments], pull_endpoint: live_pull("closed")}
     )
@@ -295,6 +296,7 @@ def mention_request(number: int, comment_id: int, agent: str):
         comment_id,
         "maintainer",
         (agent,),
+        pull_request_base_sha="b" * 40,
     )
 
 
