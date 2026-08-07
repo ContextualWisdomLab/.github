@@ -48,6 +48,11 @@ and representative shell punctuation. The dedicated workflow runs the complete
 repository test suite through coverage.py and pytest whenever code or either
 authoritative contract document changes.
 
+The complete shell regression is also part of the permanent quality job.
+`scripts/ci/test_strix_quick_gate.sh` exercises the executable shell boundary,
+and the workflow's path filter includes that script so a change cannot bypass
+the suite merely because pytest does not collect shell files.
+
 ## Workflow dependency integrity
 
 The exact-head policy workflow downloads its Python test runner from PyPI, so
@@ -72,6 +77,32 @@ package or runner-platform change must update the package version, PyPI wheel
 digest, regression contract, and this record together. A digest mismatch must
 fail closed; do not disable hash checking to restore availability.
 
+## Trusted workflow-source boundary
+
+A review suggestion proposed `workflow_dispatch` so operators could rerun this
+quality job manually. That isolated suggestion conflicts with the stronger
+central automation boundary: GitHub's manual workflow UI and API allow the
+caller to select a branch or tag, and the selected revision supplies the
+workflow definition before any in-workflow checkout or source validation can
+run. A credentialed central workflow must therefore not expose branch-selected
+manual execution unless a separate protected-default-branch dispatcher first
+validates immutable target metadata.
+
+The conflict was captured rather than silently ignored. Exact-head run
+`31156812291`, job `92798043647`, executed the complete central suite after
+`workflow_dispatch` was added and failed the organization contract
+`test_no_central_workflow_exposes_branch_selected_manual_dispatch` with
+`1 failed, 969 passed`. The workflow now remains pull-request-triggered only,
+and `tests/test_strix_workflow_dependency_hashes.py` permanently rejects
+reintroduction of branch-selected manual source. The valid parts of the review
+remain implemented: the shell regression is a trigger path and is executed by
+the permanent exact-head job.
+
+A future operator/API rerun must be a separately designed default-branch-only
+entrypoint that treats target repository, pull-request number, and exact head
+SHA as untrusted bounded data. It must never execute a caller-selected workflow
+revision or receive broader credentials merely to improve convenience.
+
 ## Rollback and incident response
 
 Roll back the allowlist and regression together only if a downstream call is
@@ -85,10 +116,20 @@ the last known-good fully versioned wheel only when its exact hash is recorded i
 the workflow, regression contract, and this document. Never replace
 `--require-hashes` with an unhashed install.
 
+Do not restore `workflow_dispatch` to this executable central workflow as an
+availability workaround. Use a new pull-request event, a protected-main change,
+or a separately reviewed immutable-target dispatcher.
+
 ## References
 
 Batchelder, N., & contributors. (2026). *coverage.py 7.15.2* [Computer
 software]. Python Package Index. https://pypi.org/project/coverage/7.15.2/
+
+GitHub. (2026). *Manually running a workflow*. GitHub Docs.
+https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow
+
+GitHub. (2026). *Events that trigger workflows*. GitHub Docs.
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
 Git Project. (2026). *Git index format*. https://git-scm.com/docs/index-format
 
