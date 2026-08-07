@@ -8,12 +8,14 @@ conventional `requirements*.txt` and `requirements.lock` names, it recognizes a
 `.txt` file that is a **direct child** of a directory named `requirements`, such
 as `requirements/ci.txt` or `services/scoring_service/requirements/package.txt`.
 
-The path rule grants candidate status only. The existing content boundary still
-requires nonempty hash-pinned logical requirements, records the exact trusted
-source path in the manifest, and preflights each candidate as an independently
-installable `pip --require-hashes` closure. Unpinned notes, input files, nested
-descendants, symbolic links, pull-request-only files, and malformed Git tree
-entries remain excluded.
+The path rule grants candidate status only. A global `--require-hashes`
+directive is not trust evidence by itself: every non-directive logical
+requirement must still carry an inline hash or a bounded requirement include.
+The existing content boundary records the exact trusted source path in the
+manifest and preflights each candidate as an independently installable
+`pip --require-hashes` closure. Unpinned notes, directive-only files, input
+files, nested descendants, symbolic links, pull-request-only files, and
+malformed Git tree entries remain excluded.
 
 ## Operational reason
 
@@ -29,6 +31,8 @@ failure measures the coverage image rather than the changed production code.
 - Direct `requirements/*.txt` and nested-service equivalents are accepted.
 - A deeper `requirements/nested/ci.txt` path and unrelated `docs/ci.txt` remain
   ineligible.
+- A global `--require-hashes` directive combined with an unpinned requirement is
+  rejected rather than promoted into the networked coverage image.
 - Only the hash-pinned candidate is emitted from a realistic temporary Git base;
   unpinned `.in` and human-readable `.txt` files remain absent.
 - The focused materializer suite, complete central suite, statement and branch
