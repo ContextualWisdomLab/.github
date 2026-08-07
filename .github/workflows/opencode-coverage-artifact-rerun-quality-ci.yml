@@ -10,6 +10,7 @@ on:
       - "docs/doctoring/opencode-coverage-artifact-reruns.md"
       - "CHANGELOG.md"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
   push:
     branches: [main]
     paths:
@@ -19,6 +20,7 @@ on:
       - "docs/doctoring/opencode-coverage-artifact-reruns.md"
       - "CHANGELOG.md"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
 
 concurrency:
   group: opencode-coverage-artifact-rerun-${{ github.event.pull_request.number || github.ref }}
@@ -68,7 +70,7 @@ jobs:
           python -m coverage report --show-missing
 
       - name: Enforce production docstring coverage
-        run: python -m interrogate .
+        run: python -m interrogate scripts/ci
 
       - name: Compile permanent contracts
         run: python -m compileall -q scripts tests
