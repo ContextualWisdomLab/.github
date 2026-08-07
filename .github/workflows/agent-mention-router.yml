@@ -1,0 +1,185 @@
+name: Review Agent Mention Router
+
+on:
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: review-agent-mention-router-${{ github.repository }}
+  cancel-in-progress: false
+
+# Organization required-workflow rules do not propagate issue_comment events
+# into sibling repositories. Keep the workflow default read-only; each bounded
+# job declares only the writes it actually needs.
+permissions:
+  contents: read
+
+jobs:
+  route-local-agent-mention:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.type != 'Bot'
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      && (
+        contains(github.event.comment.body, '@cwl-noema-review')
+        || contains(github.event.comment.body, '@opencode-agent')
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY_TOKEN: ${{ github.token }}
+      AGENT_DISPATCH_TOKEN: ${{ github.token }}
+      OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+    steps:
+      - name: Check out trusted default-branch router
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Resolve immutable pull-request head
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          SOURCE_EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq \
+            --argjson pull_request "$pr_json" \
+            '. + {pull_request: $pull_request}' \
+            "$SOURCE_EVENT_PATH" >"${RUNNER_TEMP}/agent-mention-event.json"
+
+      - name: Route trusted local agent mention
+        run: >-
+          python3 scripts/ci/agent_mention_router.py
+          --event-path "${RUNNER_TEMP}/agent-mention-event.json"
+
+  sweep-organization-agent-mentions:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+      LOOKBACK_HOURS: ${{ vars.AGENT_MENTION_LOOKBACK_HOURS || '168' }}
+      MAX_DISPATCHES: ${{ vars.AGENT_MENTION_MAX_DISPATCHES || '20' }}
+      DRY_RUN: "false"
+    steps:
+      - name: Exchange OpenCode app token for sibling-repository comments
+        id: sweep_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+          USER_TOKEN_CONFIGURED: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+          if [ "$USER_TOKEN_CONFIGURED" = "true" ]; then
+            echo "A configured cross-repository user token takes precedence."
+            mark_unavailable
+            exit 0
+          fi
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+          if ! oidc_response="$(
+            curl -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+          if ! token_response="$(
+            curl -fsS --connect-timeout 10 --max-time 30 \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+          echo "::add-mask::$app_token"
+          echo "available=true" >>"$GITHUB_OUTPUT"
+          echo "SWEEP_APP_TOKEN=$app_token" >>"$GITHUB_ENV"
+
+      - name: Check out trusted central router
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Sweep recent organization PR comments
+        env:
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+          AGENT_DISPATCH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then
+            TARGET_REPOSITORY_TOKEN="$PR_REVIEW_MERGE_TOKEN"
+            TARGET_REPOSITORY_SOURCE="organization"
+          elif [ -n "$OPENCODE_APPROVE_TOKEN" ]; then
+            TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"
+            TARGET_REPOSITORY_SOURCE="organization"
+          else
+            TARGET_REPOSITORY_TOKEN="${SWEEP_APP_TOKEN:-}"
+            TARGET_REPOSITORY_SOURCE="${TARGET_REPOSITORY_TOKEN:+installation}"
+          fi
+          export TARGET_REPOSITORY_TOKEN
+          if [ -z "$TARGET_REPOSITORY_TOKEN" ] || [ -z "$TARGET_REPOSITORY_SOURCE" ]; then
+            echo "::error::Agent mention sweep requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app token exchange."
+            exit 1
+          fi
+          args=(
+            --organization ContextualWisdomLab
+            --repository-source "$TARGET_REPOSITORY_SOURCE"
+            --lookback-hours "$LOOKBACK_HOURS"
+            --max-dispatches "$MAX_DISPATCHES"
+          )
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 scripts/ci/agent_mention_sweep.py "${args[@]}"
