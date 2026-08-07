@@ -11,6 +11,7 @@ on:
       - "scripts/ci/test_strix_quick_gate.sh"
       - "tests/test_strix_changed_path_policy.py"
       - "tests/test_strix_workflow_dependency_hashes.py"
+      - "tests/test_strix_quality_timeout_fixture_budget.py"
 
 permissions:
   contents: read
@@ -56,11 +57,14 @@ jobs:
             -r "${RUNNER_TEMP}/strix-quality-requirements.txt"
 
       - name: Verify exact-head path policy and syntax
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: "3"
+          STRIX_TEST_FAKE_SLEEP_SECONDS: "5"
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           python -m coverage run -m pytest tests -q
           bash scripts/ci/test_strix_quick_gate.sh
-          python -m compileall -q tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py
+          python -m compileall -q tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py tests/test_strix_quality_timeout_fixture_budget.py
           bash -n scripts/ci/strix_quick_gate.sh
           git diff --exit-code
