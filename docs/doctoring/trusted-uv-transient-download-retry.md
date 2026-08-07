@@ -34,7 +34,7 @@ The base-commit reader resolves `git` with `shutil.which("git", path=os.defpath)
 
 The generated-lock output path is treated as an untrusted namespace rather than as a stable object. Every directory component is created or opened relative to an already-open parent descriptor with `O_DIRECTORY`, `O_NOFOLLOW`, and `O_CLOEXEC`. The materializer compares the path entry's device and inode to the pinned descriptor immediately after open and again before reporting success. Removing, replacing, or redirecting the output pathname therefore fails closed; subsequent writes never re-resolve that mutable pathname.
 
-Generated requirements and manifests are opened relative to the pinned output directory. A new file requires `O_CREAT | O_EXCL | O_NOFOLLOW`; a rerun may reopen only an existing singly linked regular file. Symbolic links, hard links, directories, FIFOs, and other special files are rejected before truncation. Each write is bounded by forward-progress checks, synchronized with `fsync`, and revalidated against the pinned file descriptor before the directory itself is synchronized and revalidated.
+Generated requirements and manifests are opened relative to the pinned output directory. A new file requires `O_CREAT | O_EXCL | O_NOFOLLOW`; a rerun may reopen only an existing singly linked regular file. Symbolic links, hard links, directories, FIFOs, and other special files are rejected before truncation. Each write is bounded by forward-progress checks and synchronized with `fsync`. After synchronization, both the published path and the pinned file descriptor must still identify the same singly linked regular inode; a hard link introduced during the write window therefore fails closed before success. The directory is then synchronized and revalidated.
 
 This contract intentionally uses the POSIX descriptor-relative interface represented by `openat()` and Python's `dir_fd` operations. It prevents the check-then-use gap reported against the earlier `Path.exists()`/`Path.is_symlink()` followed by `Path.mkdir()` sequence. The central GitHub runner is Linux; a platform that does not provide the required no-follow descriptor flags fails at import or execution rather than silently falling back to pathname-based writes.
 
@@ -45,6 +45,8 @@ Central OpenCode coverage run `31002427460` for `ContextualWisdomLab/newsdom-api
 The same failure class later blocked exact-head OpenCode coverage for `ContextualWisdomLab/pg-llm-batch#53` in central workflow run `31022108085`. Repository-local CI, security, and SAST checks passed on that exact product head, while trusted uv archive materialization failed before PR-controlled tests ran.
 
 Exact-head Strix run `31076540331` for organization control-plane PR `ContextualWisdomLab/.github#790` identified a medium-severity time-of-check/time-of-use race between output-directory symlink inspection and directory creation. The finding was valid rather than stale or infrastructure-only. Test-first commit `a1dcc679c1767f7e806793d7c0225a1342a9a875` captured intermediate symlink, pathname removal and replacement, generated-file symlink and hard-link, post-open swap, zero-progress write, and root-output regressions before descriptor-pinned production remediation.
+
+A later exact-head independent review found a second valid race: a concurrent writer could add a hard link after the initial `st_nlink == 1` check while the descriptor remained bound to the same inode. RED commit `dc78b919e36011fa0f56e3ce9e334d3b1cb2261e` proved the existing implementation accepted that condition. The production fix revalidates regular-file type, device/inode identity, and single-link state after `fsync`, so the same race now fails closed.
 
 ## Verification contract
 
@@ -60,6 +62,7 @@ Permanent tests require:
 - every output path component is opened without following symlinks and remains bound to the pinned descriptor;
 - output-path removal or inode replacement fails closed after descriptor-relative writes;
 - generated-file symlinks and multiply linked files are rejected before mutation;
+- a hard link introduced after the initial file check but before final validation fails closed after the synchronized write;
 - a singly linked regular generated file can be safely refreshed on a rerun;
 - a post-open generated-file path swap and a zero-progress descriptor write fail closed; and
 - the no-proxy opener, redirect rejection, final-origin validation, repeated bounded reads, maximum size, checksum, archive member, executable version, Python compatibility, offline export, full SHA-256 grammar, 100% statement and branch coverage, and production docstrings remain unchanged.
@@ -74,7 +77,7 @@ This retry and output hardening belong to the organization-owned coverage contro
 
 Rollback of the transport slice removes the retry constants and loop while retaining every immutable-source, no-proxy, no-redirect, bounded-read, checksum, archive, executable-version, and offline-export control. Operators may also set the delay tuple to empty in a reviewed change to restore one attempt. Increasing attempts, delays, or the closed classifier requires a separate availability, security, and runner-budget review.
 
-The output-binding remediation must not be rolled back to pathname prechecks. A safe rollback may stop materialization entirely or replace the implementation with an independently reviewed descriptor-relative or private-directory publication design that preserves no-follow opening, inode validation, regular-file validation, and fail-closed behavior.
+The output-binding remediation must not be rolled back to pathname prechecks. A safe rollback may stop materialization entirely or replace the implementation with an independently reviewed descriptor-relative or private-directory publication design that preserves no-follow opening, inode validation, regular-file validation, single-link validation before and after writes, and fail-closed behavior.
 
 ## References
 
