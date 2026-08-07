@@ -61,7 +61,7 @@ def event(
         "pull_request": {
             "state": "open",
             "head": {"sha": "a" * 40},
-            "base": {"ref": "develop"},
+            "base": {"ref": "develop", "sha": "b" * 40},
         },
     }
 
@@ -106,6 +106,7 @@ def test_exact_mentions_and_parse_event() -> None:
     assert request.agents == ("cwl-noema-review", "opencode-agent")
     assert request.pull_request_head_sha == "a" * 40
     assert request.pull_request_base_branch == "develop"
+    assert request.pull_request_base_sha == "b" * 40
     assert module.exact_mentions("@opencode-agent-evil @cwl-noema-review2") == ()
 
 
@@ -153,6 +154,7 @@ def test_untrusted_receipt_marker_cannot_suppress_invocation() -> None:
         (("comment", "id"), 0, "comment id"),
         (("pull_request", "head", "sha"), "bad", "head SHA"),
         (("pull_request", "base", "ref"), "-bad", "base branch"),
+        (("pull_request", "base", "sha"), "bad", "base SHA"),
         (("comment", "user", "login"), "", "actor"),
     ],
 )
@@ -215,9 +217,11 @@ def test_eligible_agents_and_payloads() -> None:
     noema = module.noema_payload(request)
     assert noema["event_type"] == "agent-mention-noema"
     assert noema["client_payload"]["pr_head_sha"] == "a" * 40
+    assert noema["client_payload"]["pr_base_sha"] == "b" * 40
     opencode = module.opencode_payload(request)
     assert opencode["event_type"] == "agent-mention-opencode"
     assert opencode["client_payload"]["base_branch"] == "develop"
+    assert opencode["client_payload"]["pr_base_sha"] == "b" * 40
     assert opencode["client_payload"]["merge_mode"] == "disabled"
     assert opencode["client_payload"]["enable_auto_merge"] is False
     assert opencode["client_payload"]["update_branches"] is False
