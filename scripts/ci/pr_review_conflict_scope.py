@@ -269,7 +269,6 @@ def verify_snapshot(
         raise ValueError("allowed path is absent from the pre-model snapshot")
 
     current_paths = _git_paths(canonical_root)
-    _validate_symlink_targets(canonical_root, current_paths)
     current = {
         relative_path: _fingerprint(canonical_root, relative_path)
         for relative_path in current_paths
@@ -282,7 +281,11 @@ def verify_snapshot(
         and before.get(relative_path, {"kind": "missing"})
         != current.get(relative_path, {"kind": "missing"})
     )
-    return violations
+    if violations:
+        return violations
+
+    _validate_symlink_targets(canonical_root, current_paths)
+    return ()
 
 
 def _parser() -> argparse.ArgumentParser:
