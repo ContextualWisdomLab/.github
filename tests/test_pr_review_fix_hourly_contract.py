@@ -73,12 +73,14 @@ def test_reusable_scheduler_declares_only_required_caller_secrets() -> None:
     assert "secrets: inherit" not in caller
     assert "Exchange OpenCode app token for scheduler mutations" in reusable
     assert "OIDC_AUDIENCE: opencode-github-action" in reusable
-    assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || "
-        "github.token }}"
-        in reusable
+    mutation_token_line = next(
+        line.strip() for line in reusable.splitlines() if line.strip().startswith("GH_TOKEN:")
     )
+    assert mutation_token_line == (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}"
+    )
+    assert "github.token" not in mutation_token_line
     assert (
         "MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || "
         "secrets.OPENCODE_APPROVE_TOKEN != '' || "
