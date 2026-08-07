@@ -98,7 +98,7 @@ def _rewrite_checksums(
 def _valid_handoff(tmp_path: Path) -> argparse.Namespace:
     """Create one complete exact six-file handoff and its CLI arguments."""
     root = tmp_path / "evidence"
-    root.mkdir()
+    root.mkdir(parents=True)
     wheel = root / "example-1.0.0-py3-none-any.whl"
     sdist = root / "example-1.0.0.tar.gz"
     wheel.write_bytes(b"wheel-bytes\x00")
@@ -429,3 +429,33 @@ def test_main_converts_validation_errors_to_system_exit(tmp_path: Path) -> None:
         argv.extend(("--" + name.replace("_", "-"), str(value)))
     with pytest.raises(SystemExit, match="sealed evidence verification failed"):
         verifier.main(argv)
+
+def test_checksum_control_file_bounds_and_entrypoint_are_covered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Cover bounded checksum decoding and the real module entrypoint."""
+    checksum = tmp_path / "checksums.sha256"
+    checksum.write_text(("0" * 64) + "  payload.bin\n", encoding="utf-8")
+    monkeypatch.setattr(verifier, "_MAX_CONTROL_BYTES", 4)
+    with pytest.raises(verifier.EvidenceError, match="size limit"):
+        verifier._parse_checksums(checksum)
+
+    monkeypatch.setattr(verifier, "_MAX_CONTROL_BYTES", 1024)
+    checksum.write_bytes(b"\xff")
+    with pytest.raises(verifier.EvidenceError, match="strict UTF-8"):
+        verifier._parse_checksums(checksum)
+
+    import runpy
+    import sys
+
+    arguments = _valid_handoff(tmp_path / "entrypoint")
+    argv: list[str] = []
+    for name, value in vars(arguments).items():
+        argv.extend(("--" + name.replace("_", "-"), str(value)))
+    monkeypatch.setattr(sys, "argv", [str(verifier.__file__), *argv])
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_path(str(verifier.__file__), run_name="__main__")
+    assert exit_info.value.code == 0
+    assert "sealed evidence verification passed" in capsys.readouterr().out
