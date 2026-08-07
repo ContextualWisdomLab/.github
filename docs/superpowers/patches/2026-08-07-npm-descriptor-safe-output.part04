@@ -1,0 +1,123 @@
+os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_descendant_open_propagates_unexpected_os_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """An unexpected descendant open error closes its current descriptor and propagates."""
++    output = tmp_path / "output"
++    tree = SecureOutputTree(output)
++    tree.mkdir("project-000")
++    real_open = module.os.open
++
++    def denied_open(path, flags, mode=0o777, *, dir_fd=None):
++        if path == "project-000" and dir_fd is not None:
++            raise PermissionError(13, "injected descendant denial")
++        return real_open(path, flags, mode, dir_fd=dir_fd)
++
++    monkeypatch.setattr(module, "_secure_primitives_available", lambda: True)
++    monkeypatch.setattr(module.os, "open", denied_open)
++    try:
++        with pytest.raises(PermissionError, match="injected descendant denial"):
++            tree.write_bytes("project-000/package.json", b"trusted")
++    finally:
++        tree.close()
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_failed_write_tolerates_cleanup_unlink_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """The original write error remains authoritative when best-effort unlink also fails."""
++    output = tmp_path / "output"
++    monkeypatch.setattr(module, "_secure_primitives_available", lambda: True)
++    monkeypatch.setattr(module.os, "write", lambda _fd, _content: 0)
++    monkeypatch.setattr(
++        module.os,
++        "unlink",
++        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("unlink denied")),
++    )
++    with SecureOutputTree(output) as tree:
++        with pytest.raises(OSError, match="no forward progress"):
++            tree.write_bytes("project-000/package.json", b"trusted")
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_cleanup_skips_replaced_parents_without_following_them(tmp_path: Path) -> None:
++    """Cleanup skips files and nested directories whose owned parent was replaced."""
++    output = tmp_path / "output"
++    attacker = tmp_path / "attacker"
++    attacker.mkdir()
++    tree = SecureOutputTree(output)
++    tree.write_bytes("project-000/sub/package.json", b"trusted")
++    (output / "project-000").rename(output / "project-moved")
++    (output / "project-000").symlink_to(attacker, target_is_directory=True)
++    try:
++        tree.cleanup()
++    finally:
++        tree.close()
++    assert not (attacker / "sub" / "package.json").exists()
++    assert (output / "project-moved" / "sub" / "package.json").read_bytes() == b"trusted"
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_cleanup_tolerates_unlink_and_rmdir_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """Cleanup never deletes unowned data and tolerates operating-system cleanup refusal."""
++    output = tmp_path / "output"
++    tree = SecureOutputTree(output)
++    tree.write_bytes("project-000/package.json", b"trusted")
++    monkeypatch.setattr(
++        module.os,
++        "unlink",
++        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("unlink denied")),
++    )
++    monkeypatch.setattr(
++        module.os,
++        "rmdir",
++        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("rmdir denied")),
++    )
++    try:
++        tree.cleanup()
++    finally:
++        tree.close()
++
++
++def test_open_known_parent_returns_none_after_close(tmp_path: Path) -> None:
++    """Cleanup lookup treats a closed descriptor as unavailable rather than reopening paths."""
++    if os.name != "posix":
++        pytest.skip("secure writer is intentionally POSIX-only")
++    tree = SecureOutputTree(tmp_path / "output")
++    tree.close()
++    assert tree._open_known_parent(()) is None
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_constructor_reopen_race_tolerates_root_cleanup_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """The original reopen error survives a best-effort newly-created-root cleanup failure."""
++    output = tmp_path / "output"
++    real_open = module.os.open
++
++    def failing_reopen(path, flags, mode=0o777, *, dir_fd=None):
++        if path == "output" and output.exists():
++            raise OSError(5, "injected reopen failure")
++        return real_open(path, flags, mode, dir_fd=dir_fd)
++
++    monkeypatch.setattr(module, "_secure_primitives_available", lambda: True)
++    monkeypatch.setattr(module.os, "open", failing_reopen)
++    monkeypatch.setattr(
++        module.os,
++        "rmdir",
++        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("cleanup denied")),
++    )
++    with pytest.raises(OSError, match="injected reopen"):
++        SecureOutputTree(output)
++
++
++@pytest.mark.skipif(os.name != "posix", reason="secure writer is intentionally POSIX-only")
++def test_constructor_failure_before_first_descendant_open_closes_anchor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    """A first-component failure exercises the unowned-current-descriptor cleanup path."""
++    real_open = module.os.open
++
++    def denied_first_component(path, flags, mode=0o777, *, dir_fd=None):
++        if path == "tmp" and dir_fd is not None:
++            raise PermissionError(13, "injected first-component denial")
++        return real_open(path, flags, mode, dir_fd=dir_fd)
++
++    monkeypatch.setattr(module, "_secure_primitives_available", lambda: True)
++    monkeypatch.setattr(module.os, "open", denied_first_component)
++    with pytest.raises(PermissionError, match="first-component denial"):
++        SecureOutputTree(tmp_path / "output")
