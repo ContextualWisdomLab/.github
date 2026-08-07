@@ -9,7 +9,7 @@ The boundary has two jobs:
 1. `verify-evidence-artifact` has only `actions: read` and `contents: read`. It confirms the exact artifact ID, name, digest, workflow-run ID, expiry state, source repository, source SHA, six-file cardinality, SHA-256 handoff, strict JSON, CycloneDX specification 1.7 identity, and root distribution binding.
 2. `attest-exact-artifacts` receives `id-token: write`, `attestations: write`, `artifact-metadata: write`, and `contents: read` only after the first job succeeds. It downloads the same immutable artifact ID, repeats the data-only verification, and signs the exact wheel and source distribution separately.
 
-Both jobs load the verifier from `${{ job.workflow_repository }}` at `${{ job.workflow_sha }}` with persisted Git credentials disabled. Caller-controlled source is never checked out in the signing boundary. Downloaded files are treated as inert bytes: the workflow does not import, install, build, test, execute, source, or unpack them.
+Both jobs load the verifier from `${{ job.workflow_repository }}` at `${{ job.workflow_sha }}` with persisted Git credentials disabled. Caller-controlled source is never checked out in the signing boundary. Downloaded files are treated as inert bytes: the workflow does not import, install, build, test, execute, source, or unpack them. Caller inputs enter shell steps only through explicitly named environment variables; they are never interpolated directly into a shell program.
 
 The handoff contains exactly:
 
@@ -20,7 +20,7 @@ The handoff contains exactly:
 - `source-identity.json`; and
 - `checksums.sha256`.
 
-The checksum file binds the other five files. Externally supplied digests bind all six files, including the checksum file itself. Each SBOM root component must name the exact distribution and include its exact SHA-256 digest.
+The checksum file binds the other five files. Externally supplied digests bind all six files, including the checksum file itself. Each SBOM is strict RFC 8259 JSON: duplicate names, non-finite numbers, malformed UTF-8, and oversized control data fail closed. Each CycloneDX document must have integer document version `1`, a deterministic RFC 4122 UUIDv5 serial derived from the exact filename and SHA-256 digest, and one root component of type `file`. That root component must name the exact distribution, carry exactly one `cwl:artifact:filename` property, and contain exactly one canonical SHA-256 hash record with no alternate algorithm or unreviewed fields.
 
 ## Exact-head lifecycle
 
@@ -35,7 +35,8 @@ flowchart LR
     F --> H[Online signer/predicate/source verification]
     G --> H
     H --> I[Sigstore bundles and trusted root export]
-    I --> J[Offline verification artifact]
+    I --> J[README and deterministic SHA256SUMS]
+    J --> K[Offline verification artifact]
 ```
 
 A caller must pass its exact `source_repository`, 40-character `source_sha`, same-run artifact ID, artifact name, artifact digest, filenames, SHA-256 digests, CycloneDX schema URI, and SBOM predicate type. The workflow rejects a caller repository or source SHA that does not match the live GitHub run context.
@@ -44,7 +45,9 @@ The verifier emits deterministic compact JSON containing the verified source ide
 
 ## Offline verification
 
-The signing job preserves both Sigstore bundles, a fresh `trusted_root.jsonl`, and the deterministic verified-handoff manifest. An operator imports the distribution, its matching bundle, the trusted root, and GitHub CLI into the offline environment, then runs:
+The signing job preserves both Sigstore bundles, a fresh `trusted_root.jsonl`, the deterministic verified-handoff manifest, a beginner-readable `README.md`, and a lexicographically ordered `SHA256SUMS` covering every offline-evidence file except the checksum manifest itself. Verify `SHA256SUMS` before passing any member to GitHub CLI.
+
+An operator imports the distribution, its matching bundle, the trusted root, and GitHub CLI into the offline environment, then runs:
 
 ```bash
 gh attestation verify path/to/distribution \
@@ -62,8 +65,8 @@ Generate a new trusted root whenever new signed material enters an offline envir
 ## Incident recovery and rollback
 
 1. Disable the caller release workflow without changing or deleting existing evidence.
-2. Preserve the failed run ID, artifact ID, artifact digest, source SHA, verification output, and attestation bundles.
-3. Determine whether the defect is in build output, SBOM generation, the sealed handoff, trusted verification, or signing.
+2. Preserve the failed run ID, artifact ID, artifact digest, source SHA, verification output, attestation bundles, README, trusted root, and checksum manifest.
+3. Determine whether the defect is in build output, SBOM generation, the sealed handoff, trusted verification, signing, or offline packaging.
 4. Revoke or delete an invalid GitHub attestation only after preserving a forensic copy and documenting affected consumers.
 5. Correct the source or workflow through a protected pull request. Never overwrite a distribution while retaining its old filename or digest claim.
 6. Rebuild from a new exact source SHA, generate new artifacts and SBOMs, and rerun the complete verification and attestation lifecycle.
@@ -74,7 +77,7 @@ Rollback means restoring a previously reviewed workflow version and producing ne
 ## Claims deliberately not made
 
 - An SBOM attestation does not prove that the software is vulnerability-free, malware-free, correct, safe, or fit for a particular purpose.
-- This workflow does not claim SLSA Build Lx (v1.2). It supplies a narrow SBOM authenticity and exact-subject binding control, not a complete build provenance level.
+- This workflow does not claim SLSA Build L3 (v1.2). It supplies a narrow SBOM authenticity and exact-subject binding control, not a complete build provenance level.
 - CycloneDX conformance does not prove that the component inventory is complete or semantically correct.
 - A valid signature does not make caller-provided predicate content trustworthy by itself; the trusted reusable workflow and verifier are the policy boundary.
 - Offline verification cannot detect revocation or trusted-root rotation that happened after the trusted root was exported.
@@ -89,6 +92,8 @@ GitHub. (2026). *Using artifact attestations to establish provenance for builds*
 GitHub. (2026). *Verifying attestations offline*. GitHub Docs. https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline
 
 GitHub. (2026). *actions/attest* (Version 4.1.0) [Computer software]. https://github.com/actions/attest
+
+Internet Engineering Task Force. (2005). *A universally unique identifier (UUID) URN namespace* (RFC 4122). RFC Editor. https://www.rfc-editor.org/rfc/rfc4122
 
 Open Source Security Foundation. (2025). *SLSA specification version 1.2*. https://slsa.dev/spec/v1.2/
 
