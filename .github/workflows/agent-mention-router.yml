@@ -130,10 +130,8 @@ jobs:
           if ! token_response="$(
             curl -fsS --connect-timeout 10 --max-time 30 \
               -X POST \
-              -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${oidc_token}" \
-              --data "$(jq -cn --arg target_repository "$TARGET_REPOSITORY" '{target_repository:$target_repository}')" \
-              "${TOKEN_EXCHANGE_URL}"
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
           )"; then
             echo "OpenCode app token exchange unavailable: app token request did not complete."
             mark_unavailable
