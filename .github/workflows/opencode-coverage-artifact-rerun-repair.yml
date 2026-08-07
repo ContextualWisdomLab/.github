@@ -9,7 +9,7 @@ on:
 
 concurrency:
   group: opencode-coverage-artifact-rerun-repair-pr812
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
+          fetch-depth: 4
           persist-credentials: false
 
       - name: Refuse stale or widened trigger lineage
@@ -48,7 +48,8 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_RED_HEAD"
+          git merge-base --is-ancestor "$EXPECTED_RED_HEAD" "$GITHUB_SHA"
+          test "$(git rev-list --count "$EXPECTED_RED_HEAD..$GITHUB_SHA")" -le 2
           changed="$(git diff --name-only "$EXPECTED_RED_HEAD" "$GITHUB_SHA")"
           test "$changed" = "$REPAIR_WORKFLOW"
 
@@ -81,73 +82,116 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          def action_expression(value: str) -> str:
+              return "$" + "{{ " + value + " }}"
+
+          def unique_index(
+              lines: list[str],
+              needle: str,
+              *,
+              start: int = 0,
+              end: int | None = None,
+              label: str,
+          ) -> int:
+              stop = len(lines) if end is None else end
+              matches = [index for index in range(start, stop) if lines[index] == needle]
+              if len(matches) != 1:
+                  raise SystemExit(f"Expected one {label}, found {len(matches)}")
+              return matches[0]
+
           workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
-          source = workflow_path.read_text(encoding='utf-8')
+          lines = workflow_path.read_text(encoding='utf-8').splitlines(keepends=True)
+          producer_start = unique_index(lines, "  coverage-source-tree:\n", label="coverage source job")
+          consumer_start = unique_index(lines, "  coverage-evidence:\n", label="coverage evidence job")
 
-          old_outputs = '''    outputs:
-              coverage_source_artifact_id: ${{ steps.coverage_source_upload.outputs.artifact-id }}
-            env:
-          '''
-          new_outputs = '''    outputs:
-              coverage_source_artifact_id: ${{ steps.coverage_source_upload.outputs.artifact-id }}
-              coverage_source_run_attempt: ${{ steps.coverage_source_attempt.outputs.run_attempt }}
-            env:
-          '''
-          if source.count(old_outputs) != 1:
-              raise SystemExit('coverage-source-tree output anchor changed')
-          source = source.replace(old_outputs, new_outputs, 1)
+          artifact_output = (
+              "      coverage_source_artifact_id: "
+              + action_expression("steps.coverage_source_upload.outputs.artifact-id")
+              + "\n"
+          )
+          output_index = unique_index(
+              lines,
+              artifact_output,
+              start=producer_start,
+              end=consumer_start,
+              label="artifact ID job output",
+          )
+          attempt_output = (
+              "      coverage_source_run_attempt: "
+              + action_expression("steps.coverage_source_attempt.outputs.run_attempt")
+              + "\n"
+          )
+          if attempt_output in lines[producer_start:consumer_start]:
+              raise SystemExit("coverage attempt output unexpectedly already present")
+          lines.insert(output_index + 1, attempt_output)
 
-          upload_anchor = '''      - name: Upload materialized pull request merge tree
-                id: coverage_source_upload
-          '''
-          attempt_step = '''      - name: Record coverage source workflow attempt
-                id: coverage_source_attempt
-                env:
-                  GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-                shell: bash --noprofile --norc -e -o pipefail {0}
-                run: |
-                  printf 'run_attempt=%s\\n' "$GITHUB_RUN_ATTEMPT" >>"$GITHUB_OUTPUT"
+          producer_start = unique_index(lines, "  coverage-source-tree:\n", label="coverage source job after output")
+          consumer_start = unique_index(lines, "  coverage-evidence:\n", label="coverage evidence job after output")
+          upload_index = unique_index(
+              lines,
+              "      - name: Upload materialized pull request merge tree\n",
+              start=producer_start,
+              end=consumer_start,
+              label="coverage source upload step",
+          )
+          attempt_step = [
+              "      - name: Record coverage source workflow attempt\n",
+              "        id: coverage_source_attempt\n",
+              "        env:\n",
+              "          GITHUB_RUN_ATTEMPT: " + action_expression("github.run_attempt") + "\n",
+              "        shell: bash --noprofile --norc -e -o pipefail {0}\n",
+              "        run: |\n",
+              "          printf 'run_attempt=%s\\n' \"$GITHUB_RUN_ATTEMPT\" >>\"$GITHUB_OUTPUT\"\n",
+              "\n",
+          ]
+          if "        id: coverage_source_attempt\n" in lines[producer_start:consumer_start]:
+              raise SystemExit("coverage attempt step unexpectedly already present")
+          lines[upload_index:upload_index] = attempt_step
 
-              - name: Upload materialized pull request merge tree
-                id: coverage_source_upload
-          '''
-          if source.count(upload_anchor) != 1:
-              raise SystemExit('coverage source upload anchor changed')
-          source = source.replace(upload_anchor, attempt_step, 1)
-
-          download_anchor = '''      - name: Download current-attempt materialized pull request merge tree
-                id: coverage_source_download
-          '''
-          attempt_guard = '''      - name: Verify coverage source was produced in current workflow attempt
-                env:
-                  COVERAGE_SOURCE_RUN_ATTEMPT: ${{ needs.coverage-source-tree.outputs.coverage_source_run_attempt }}
-                  CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
-                shell: bash --noprofile --norc -e -o pipefail {0}
-                run: |
-                  if [ -z "$COVERAGE_SOURCE_RUN_ATTEMPT" ] || [ "$COVERAGE_SOURCE_RUN_ATTEMPT" != "$CURRENT_RUN_ATTEMPT" ]; then
-                    echo "::error::Coverage source evidence was not produced in current workflow run attempt ${CURRENT_RUN_ATTEMPT}; producer attempt was ${COVERAGE_SOURCE_RUN_ATTEMPT:-missing}."
-                    echo "::error::A failed-jobs-only rerun cannot reuse prior-attempt source evidence; use a full rerun or a fresh repository dispatch."
-                    exit 1
-                  fi
-
-              - name: Download current-attempt materialized pull request merge tree
-                id: coverage_source_download
-          '''
-          if source.count(download_anchor) != 1:
-              raise SystemExit('coverage source download anchor changed')
-          workflow_path.write_text(source.replace(download_anchor, attempt_guard, 1), encoding='utf-8')
+          consumer_start = unique_index(lines, "  coverage-evidence:\n", label="coverage evidence job before guard")
+          review_start = unique_index(
+              lines,
+              "  opencode-review-target:\n",
+              start=consumer_start,
+              label="OpenCode review target job",
+          )
+          download_index = unique_index(
+              lines,
+              "      - name: Download current-attempt materialized pull request merge tree\n",
+              start=consumer_start,
+              end=review_start,
+              label="coverage source download step",
+          )
+          guard_step = [
+              "      - name: Verify coverage source was produced in current workflow attempt\n",
+              "        env:\n",
+              "          COVERAGE_SOURCE_RUN_ATTEMPT: "
+              + action_expression("needs.coverage-source-tree.outputs.coverage_source_run_attempt")
+              + "\n",
+              "          CURRENT_RUN_ATTEMPT: " + action_expression("github.run_attempt") + "\n",
+              "        shell: bash --noprofile --norc -e -o pipefail {0}\n",
+              "        run: |\n",
+              "          if [ -z \"$COVERAGE_SOURCE_RUN_ATTEMPT\" ] || [ \"$COVERAGE_SOURCE_RUN_ATTEMPT\" != \"$CURRENT_RUN_ATTEMPT\" ]; then\n",
+              "            echo \"::error::Coverage source evidence was not produced in current workflow run attempt ${CURRENT_RUN_ATTEMPT}; producer attempt was ${COVERAGE_SOURCE_RUN_ATTEMPT:-missing}.\"\n",
+              "            echo \"::error::A failed-jobs-only rerun cannot reuse prior-attempt source evidence; use a full rerun or a fresh repository dispatch.\"\n",
+              "            exit 1\n",
+              "          fi\n",
+              "\n",
+          ]
+          if "      - name: Verify coverage source was produced in current workflow attempt\n" in lines[consumer_start:review_start]:
+              raise SystemExit("coverage attempt guard unexpectedly already present")
+          lines[download_index:download_index] = guard_step
+          workflow_path.write_text("".join(lines), encoding='utf-8')
 
           doctoring_path = Path('docs/doctoring/opencode-coverage-artifact-reruns.md')
           doctoring = doctoring_path.read_text(encoding='utf-8')
-          decision_anchor = (
-              'The source artifact retains the existing one-day retention period. '
-          )
+          decision_anchor = "The source artifact retains the existing one-day retention period. "
           decision_insert = (
-              'The producer also records the literal workflow attempt in a step output, and '
-              'the consumer compares that producer-attested value with its own current '
-              '`github.run_attempt` before any artifact download. An immutable artifact ID '
-              'proves which upload is selected; the separate attempt marker proves when the '
-              'producer actually executed.\n\n'
+              "The producer also records the literal workflow attempt in a step output, and "
+              "the consumer compares that producer-attested value with its own current "
+              "`github.run_attempt` before any artifact download. An immutable artifact ID "
+              "proves which upload is selected; the separate attempt marker proves when the "
+              "producer actually executed.\n\n"
               + decision_anchor
           )
           if doctoring.count(decision_anchor) != 1:
@@ -155,59 +199,61 @@ jobs:
           doctoring = doctoring.replace(decision_anchor, decision_insert, 1)
 
           bullet_anchor = (
-              '- The upload step exports the immutable `artifact-id`; the consumer downloads '
-              'with `artifact-ids` rather than `name`.\n'
+              "- The upload step exports the immutable `artifact-id`; the consumer downloads "
+              "with `artifact-ids` rather than `name`.\n"
           )
           bullet_insert = bullet_anchor + (
-              '- The producer exports its step-recorded run attempt; the consumer rejects an '
-              'empty or mismatched producer attempt before artifact download, so selective '
-              'reruns cannot reuse prior-attempt source evidence while it is still retained.\n'
+              "- The producer exports its step-recorded run attempt; the consumer rejects an "
+              "empty or mismatched producer attempt before artifact download, so selective "
+              "reruns cannot reuse prior-attempt source evidence while it is still retained.\n"
           )
           if doctoring.count(bullet_anchor) != 1:
               raise SystemExit('doctoring contract bullet anchor changed')
           doctoring = doctoring.replace(bullet_anchor, bullet_insert, 1)
 
           table_old = (
-              '| Failed-jobs-only rerun while producer is omitted | No current-attempt producer '
-              'output exists | Fails closed with recovery guidance | Expected failure |'
+              "| Failed-jobs-only rerun while producer is omitted | No current-attempt producer "
+              "output exists | Fails closed with recovery guidance | Expected failure |"
           )
           table_new = (
-              '| Failed-jobs-only rerun while producer is omitted | Producer attempt marker is '
-              'missing or belongs to the earlier attempt | Rejects the attempt mismatch before '
-              'artifact download | Expected failure |'
+              "| Failed-jobs-only rerun while producer is omitted | Producer attempt marker is "
+              "missing or belongs to the earlier attempt | Rejects the attempt mismatch before "
+              "artifact download | Expected failure |"
           )
           if doctoring.count(table_old) != 1:
               raise SystemExit('doctoring rerun table anchor changed')
           doctoring = doctoring.replace(table_old, table_new, 1)
 
           rationale_anchor = (
-              'The producer\'s exact `artifact-id` closes that ambiguity. Attempt-qualified '
-              'naming remains useful for diagnostics, while ID-based selection is the '
-              'authoritative binding.\n'
+              "The producer's exact `artifact-id` closes that ambiguity. Attempt-qualified "
+              "naming remains useful for diagnostics, while ID-based selection is the "
+              "authoritative binding.\n"
           )
           rationale_new = (
-              'The producer\'s exact `artifact-id` closes the upload-selection ambiguity, while '
-              'the producer step\'s literal attempt output closes the execution-attempt '
-              'ambiguity. Attempt-qualified naming remains useful for diagnostics; exact ID '
-              'selection and the producer-attempt equality check are both required.\n'
+              "The producer's exact `artifact-id` closes the upload-selection ambiguity, while "
+              "the producer step's literal attempt output closes the execution-attempt "
+              "ambiguity. Attempt-qualified naming remains useful for diagnostics; exact ID "
+              "selection and the producer-attempt equality check are both required.\n"
           )
           if doctoring.count(rationale_anchor) != 1:
               raise SystemExit('doctoring rationale anchor changed')
           doctoring = doctoring.replace(rationale_anchor, rationale_new, 1)
 
-          verification_old = '''1. attempt-scoped artifact naming and immutable `artifact-id` producer output;
-          2. exact-ID download by the consumer;
-          3. actionable failure for a missing current-attempt artifact;
-          4. one-day retention; and
-          5. absence of repository, OIDC, secret, and review-write credentials from `coverage-evidence`.
-          '''
-          verification_new = '''1. attempt-scoped artifact naming and immutable `artifact-id` producer output;
-          2. producer-attested workflow attempt output and pre-download current-attempt equality;
-          3. exact-ID download by the consumer;
-          4. actionable failure for missing or prior-attempt evidence;
-          5. one-day retention; and
-          6. absence of repository, OIDC, secret, and review-write credentials from `coverage-evidence`.
-          '''
+          verification_old = (
+              "1. attempt-scoped artifact naming and immutable `artifact-id` producer output;\n"
+              "2. exact-ID download by the consumer;\n"
+              "3. actionable failure for a missing current-attempt artifact;\n"
+              "4. one-day retention; and\n"
+              "5. absence of repository, OIDC, secret, and review-write credentials from `coverage-evidence`.\n"
+          )
+          verification_new = (
+              "1. attempt-scoped artifact naming and immutable `artifact-id` producer output;\n"
+              "2. producer-attested workflow attempt output and pre-download current-attempt equality;\n"
+              "3. exact-ID download by the consumer;\n"
+              "4. actionable failure for missing or prior-attempt evidence;\n"
+              "5. one-day retention; and\n"
+              "6. absence of repository, OIDC, secret, and review-write credentials from `coverage-evidence`.\n"
+          )
           if doctoring.count(verification_old) != 1:
               raise SystemExit('doctoring verification anchor changed')
           doctoring_path.write_text(doctoring.replace(verification_old, verification_new, 1), encoding='utf-8')
@@ -215,16 +261,16 @@ jobs:
           changelog_path = Path('CHANGELOG.md')
           changelog = changelog_path.read_text(encoding='utf-8')
           old_entry = (
-              '- Bound OpenCode coverage source artifacts to one workflow attempt and immutable '
-              'artifact ID, retained one-day source evidence, and made failed-jobs-only reruns '
-              'fail closed with full-rerun or fresh-dispatch guidance instead of searching for '
-              'expired or prior-attempt artifacts.\n'
+              "- Bound OpenCode coverage source artifacts to one workflow attempt and immutable "
+              "artifact ID, retained one-day source evidence, and made failed-jobs-only reruns "
+              "fail closed with full-rerun or fresh-dispatch guidance instead of searching for "
+              "expired or prior-attempt artifacts.\n"
           )
           new_entry = (
-              '- Bound OpenCode coverage source artifacts to one immutable artifact ID and a '
-              'producer-attested workflow-attempt marker, retained one-day source evidence, and '
-              'made failed-jobs-only reruns fail closed before download when the producer did not '
-              'run in the current attempt, with full-rerun or fresh-dispatch guidance.\n'
+              "- Bound OpenCode coverage source artifacts to one immutable artifact ID and a "
+              "producer-attested workflow-attempt marker, retained one-day source evidence, and "
+              "made failed-jobs-only reruns fail closed before download when the producer did not "
+              "run in the current attempt, with full-rerun or fresh-dispatch guidance.\n"
           )
           if changelog.count(old_entry) != 1:
               raise SystemExit('CHANGELOG attempt-artifact entry anchor changed')
