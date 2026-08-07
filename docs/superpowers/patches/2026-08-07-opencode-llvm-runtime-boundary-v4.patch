@@ -1,0 +1,27 @@
+diff --git a/.github/workflows/opencode-review-dispatch.yml b/.github/workflows/opencode-review-dispatch.yml
+--- a/.github/workflows/opencode-review-dispatch.yml
++++ b/.github/workflows/opencode-review-dispatch.yml
+@@ -748,6 +748,8 @@ jobs:
+               --env RUNNER_TEMP=/secure-output \
+               --env GITHUB_OUTPUT=/secure-output/github-output \
+               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
++              --env LLVM_COV=/usr/bin/llvm-cov-19 \
++              --env LLVM_PROFDATA=/usr/bin/llvm-profdata-19 \
+               "$coverage_tool_image" \
+               /bin/bash /trusted-measure-step.sh || sandbox_status=$?
+@@ -814,6 +816,15 @@ jobs:
+           umask 077
+           cd "$COVERAGE_SOURCE_WORKDIR"
+ 
++          if [ "${OPENCODE_COVERAGE_SANDBOXED:-0}" = "1" ]; then
++            if [ "$LLVM_COV" != "/usr/bin/llvm-cov-19" ] ||
++              [ "$LLVM_PROFDATA" != "/usr/bin/llvm-profdata-19" ] ||
++              [ ! -x "$LLVM_COV" ] || [ ! -x "$LLVM_PROFDATA" ]; then
++              echo "::error::Trusted LLVM 19 coverage tools are missing or rebound inside the isolated runtime."
++              exit 1
++            fi
++          fi
++
+           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
+           summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
+           failures=0
