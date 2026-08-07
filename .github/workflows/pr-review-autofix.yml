@@ -233,7 +233,7 @@ jobs:
           EOF
           jq -n --arg workspace "$TARGET_WORKSPACE" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "nvidia-nim/mistralai/mistral-nemotron",
+            "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
             "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
             "enabled_providers": ["nvidia-nim"],
             "permission": {
@@ -260,6 +260,8 @@ jobs:
               "ci-autofix": {
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
+                "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
+                "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
                 "permission": {
@@ -293,9 +295,13 @@ jobs:
                   "apiKey": "{env:NVIDIA_API_KEY}"
                 },
                 "models": {
-                  "mistralai/mistral-nemotron": {
-                    "name": "Mistral Nemotron",
+                  "mistralai/mistral-small-4-119b-2603": {
+                    "name": "Mistral Small 4 119B 2603",
                     "tool_call": true,
+                    "reasoning": true,
+                    "options": {
+                      "reasoningEffort": "high"
+                    },
                     "limit": {
                       "context": 128000,
                       "output": 4096
@@ -319,7 +325,7 @@ jobs:
         if: env.RESOLVE_CONFLICT != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          MODEL: nvidia-nim/mistralai/mistral-nemotron
+          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -464,9 +470,14 @@ jobs:
       - name: Commit and push autofix
         if: env.RESOLVE_CONFLICT != 'true'
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
+          MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
         run: |
           set -euo pipefail
+          if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then
+            echo "::error::Autofix mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
+            exit 1
+          fi
           cd "$TARGET_WORKSPACE"
           if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
             echo "No autofix changes produced."
@@ -486,15 +497,20 @@ jobs:
         if: env.RESOLVE_CONFLICT == 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
-          MODEL: nvidia-nim/mistralai/mistral-nemotron
+          GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
+          MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
+          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
+          if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then
+            echo "::error::Conflict-resolution mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
+            exit 1
+          fi
           if [ -z "${NVIDIA_API_KEY:-}" ]; then
             echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
             exit 1
