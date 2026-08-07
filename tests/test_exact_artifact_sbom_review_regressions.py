@@ -30,6 +30,7 @@ def test_evidence_root_rejects_symlinked_ancestor(tmp_path: Path) -> None:
         wheel_sbom_filename="example-wheel.cdx.json",
         sdist_filename="example.tar.gz",
         sdist_sbom_filename="example-sdist.cdx.json",
+        predicate_type="https://cyclonedx.org/bom",
     )
 
     with pytest.raises(verifier.EvidenceError, match="evidence root"):
