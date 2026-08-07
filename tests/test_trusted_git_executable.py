@@ -6,7 +6,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import pytest
 
@@ -22,6 +22,15 @@ class _CompletedGitCommand:
     stderr: bytes = b""
 
 
+@pytest.fixture(autouse=True)
+def _clear_trusted_git_cache() -> Iterator[None]:
+    """Isolate cached Git resolution before and after every regression test."""
+
+    materializer._trusted_git_executable.cache_clear()
+    yield
+    materializer._trusted_git_executable.cache_clear()
+
+
 def test_git_ignores_process_path_and_uses_absolute_default_path_executable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -31,7 +40,6 @@ def test_git_ignores_process_path_and_uses_absolute_default_path_executable(
     malicious_directory = tmp_path / "malicious-bin"
     malicious_directory.mkdir()
     monkeypatch.setenv("PATH", str(malicious_directory))
-    materializer._trusted_git_executable.cache_clear()
 
     which_calls: list[tuple[str, str | None]] = []
     subprocess_calls: list[tuple[list[str], dict[str, Any]]] = []
@@ -69,7 +77,6 @@ def test_git_fails_closed_when_default_path_has_no_absolute_executable(
 ) -> None:
     """Missing or relative Git resolution cannot fall back to the process PATH."""
 
-    materializer._trusted_git_executable.cache_clear()
     monkeypatch.setattr(
         materializer.shutil,
         "which",
