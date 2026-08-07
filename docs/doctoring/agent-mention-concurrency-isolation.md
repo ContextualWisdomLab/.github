@@ -101,7 +101,9 @@ The repair supports availability and processing-integrity control evidence witho
 | Incident response | This doctoring record, fail-first run identifiers, rollout checks, and rollback constraints |
 | Privacy | Architectural data minimization; the router needs metadata, not business payloads or PII |
 
-The alternative to PII masking is separation: this automation path does not read business payloads at all. It uses purpose-bound metadata, encrypted GitHub transport and storage, role-based repository access, and bounded artifact retention.
+The alternative to PII masking is separation: this automation path does not read business payloads at all. It uses purpose-bound metadata, encrypted GitHub transport and storage, role-based repository access, and **30-day artifact retention** (`retention-days: 30`) for the bounded invocation ledger.
+
+Operators inspect ledger liveness and expiry through GitHub's *REST API endpoints for GitHub Actions artifacts*. Upload and retention behavior follows *Store and share data with workflow artifacts*. The ledger contains bounded invocation metadata, not comment bodies, model output, credentials, or business data.
 
 ## Monitoring and acceptance
 
@@ -132,6 +134,10 @@ GitHub. (2026b). *Control the concurrency of workflows and jobs*. GitHub Docs. h
 GitHub. (2026c). *Events that trigger workflows*. GitHub Docs. https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
 GitHub. (2026d). *Troubleshooting workflows*. GitHub Docs. https://docs.github.com/en/actions/how-tos/troubleshoot-workflows
+
+GitHub. (2026e). *REST API endpoints for GitHub Actions artifacts*. GitHub Docs. https://docs.github.com/en/rest/actions/artifacts
+
+GitHub. (2026f). *Store and share data with workflow artifacts*. GitHub Docs. https://docs.github.com/en/actions/tutorials/store-and-share-data
 
 Korea Internet & Security Agency. (2025). *2025 cloud service security assurance program guide*. https://isms.kisa.or.kr/main/csap/notice
 
