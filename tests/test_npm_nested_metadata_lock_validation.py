@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -161,3 +162,74 @@ def test_rejects_untrusted_metadata_only_nested_locations(
 
     with pytest.raises(ValueError, match=message):
         materializer.validate_head_npm_lock("package-lock.json", _lock(packages))
+
+
+def test_regular_base_path_filter_covers_every_rejection_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tree parsing ignores trees, symlinks, absolute paths, and traversal paths."""
+
+    def git_stub(_repo_root: Path, *args: str) -> bytes:
+        assert args[:4] == ("ls-tree", "-r", "-z", "--full-tree")
+        return b"".join(
+            (
+                b"040000 tree " + (b"0" * 40) + b"\tdirectory\0",
+                b"120000 blob " + (b"1" * 40) + b"\tsymlink\0",
+                b"100644 blob " + (b"2" * 40) + b"\t/absolute\0",
+                b"100644 blob " + (b"3" * 40) + b"\t../escape\0",
+                b"100644 blob " + (b"4" * 40) + b"\tpackage.json\0",
+            )
+        )
+
+    monkeypatch.setattr(materializer, "_git", git_stub)
+    assert materializer._regular_base_paths(tmp_path, "a" * 40) == {"package.json"}
+
+
+@pytest.mark.parametrize(
+    "lock_document",
+    [
+        {"lockfileVersion": 3},
+        {
+            "lockfileVersion": 3,
+            "packages": {"packages/missing": {"version": "1.0.0"}},
+        },
+    ],
+)
+def test_base_npm_materialization_covers_optional_workspace_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lock_document: dict[str, object],
+) -> None:
+    """Missing packages maps and absent workspace manifests stay non-fatal."""
+
+    monkeypatch.setattr(
+        materializer,
+        "_regular_base_paths",
+        lambda _repo_root, _base_sha: {"package.json", "package-lock.json"},
+    )
+
+    def git_stub(_repo_root: Path, *args: str) -> bytes:
+        assert args[0] == "show"
+        target = args[1].split(":", 1)[1]
+        if target == "package.json":
+            return b'{"name":"fixture"}\n'
+        if target == "package-lock.json":
+            return json.dumps(lock_document).encode("utf-8")
+        raise AssertionError(target)
+
+    monkeypatch.setattr(materializer, "_git", git_stub)
+    projects = materializer.base_npm_projects(tmp_path, "a" * 40)
+    assert len(projects) == 1
+    assert set(projects[0][2]) == {"package.json", "package-lock.json"}
+
+
+def test_registry_pin_rejects_non_string_metadata() -> None:
+    """Registry provenance fields must be exact strings before URL parsing."""
+
+    with pytest.raises(ValueError, match="must pin a registry tarball"):
+        materializer._validate_npm_registry_pin(
+            "package-lock.json",
+            "node_modules/react",
+            123,
+            _VALID_INTEGRITY,
+        )
