@@ -62,7 +62,7 @@ def test_reusable_scheduler_has_no_product_specific_timer() -> None:
 
 
 def test_reusable_scheduler_declares_only_required_caller_secrets() -> None:
-    """The caller passes only established credentials without token fallback."""
+    """The caller forwards only established secrets; OIDC supplies the app fallback."""
     reusable = _read(_REUSABLE_WORKFLOW)
     caller = _read(_CLEARFOLIO_CALLER)
 
@@ -71,21 +71,31 @@ def test_reusable_scheduler_declares_only_required_caller_secrets() -> None:
     assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
     assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
     assert "secrets: inherit" not in caller
+    assert "Exchange OpenCode app token for scheduler mutations" in reusable
+    assert "OIDC_AUDIENCE: opencode-github-action" in reusable
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN }}"
+        "secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || "
+        "github.token }}"
         in reusable
     )
-    assert "|| github.token" not in reusable
-    assert "the scheduler never elevates github.token" in reusable
+    assert (
+        "MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || "
+        "secrets.OPENCODE_APPROVE_TOKEN != '' || "
+        "steps.scheduler_app_token.outputs.available == 'true' }}"
+        in reusable
+    )
+    assert 'if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then' in reusable
+    assert "github.token remains read-only and is never accepted as the mutation authority" in reusable
 
 
 def test_reusable_scheduler_keeps_workflow_token_read_only() -> None:
-    """Repository dispatch never depends on write-capable workflow permissions."""
+    """Repository dispatch never depends on write-capable workflow-token permissions."""
     text = _read(_REUSABLE_WORKFLOW)
     workflow_scope, jobs_scope = text.split("\njobs:\n", maxsplit=1)
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
+    assert "\n  id-token: write\n" in workflow_scope
     assert "\n    permissions:\n" not in jobs_scope
     for permission in (
         "actions: write",
