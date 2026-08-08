@@ -1,0 +1,59 @@
+name: Export PR 782 RCA scheduler source
+
+on:
+  push:
+    branches:
+      - tmp/export-pr782-rca-source-20260808
+    paths:
+      - .github/workflows/export-pr782-rca-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact branch source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Materialize source bundle
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          bundle="$RUNNER_TEMP/pr782-rca-source"
+          mkdir -p \
+            "$bundle/workflows" \
+            "$bundle/tests" \
+            "$bundle/docs/automation" \
+            "$bundle/docs/doctoring"
+          cp .github/workflows/pr-review-autofix.yml "$bundle/workflows/pr-review-autofix.yml"
+          cp .github/workflows/pr-review-fix-scheduler.yml "$bundle/workflows/pr-review-fix-scheduler.yml"
+          cp tests/test_pr_review_autofix_nvidia_nim_contract.py "$bundle/tests/test_pr_review_autofix_nvidia_nim_contract.py"
+          cp tests/test_hourly_autofix_context_quality_gate.py "$bundle/tests/test_hourly_autofix_context_quality_gate.py"
+          cp docs/automation/hourly-review-repair.md "$bundle/docs/automation/hourly-review-repair.md"
+          cp docs/doctoring/hourly-nvidia-nim-autofix.md "$bundle/docs/doctoring/hourly-nvidia-nim-autofix.md"
+          cp CHANGELOG.md "$bundle/CHANGELOG.md"
+          {
+            printf 'source_head=%s\n' "$GITHUB_SHA"
+            find "$bundle" -type f ! -name MANIFEST.sha256 -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          } >"$bundle/MANIFEST.sha256"
+
+      - name: Upload source bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr782-rca-source-${{ github.sha }}
+          path: ${{ runner.temp }}/pr782-rca-source
+          if-no-files-found: error
+          retention-days: 1
