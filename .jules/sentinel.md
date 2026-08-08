@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-08-08 - Prevent 410 GitHub Models Brownouts from Failing CI
+**Vulnerability:** Workflow CI Security Bypass / Log-Only Severity Markers
+**Learning:** GitHub Models is retiring certain models and introduces intermittent 410 (Gone) brownouts for them. `strix_quick_gate.sh` did not identify `Error code: 410` and `github_models_retirement_brownout` as an unavailable provider model error, meaning Strix treated the 410 output as anomalous/failed output instead of seamlessly falling back to the next model.
+**Prevention:** Updated `is_github_models_unavailable_model_error` to catch 410 responses and the explicit `github_models_retirement_brownout` identifier, preserving the correct fallback-exhaustion logic.
