@@ -8,6 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added an exact-head OpenCode decision envelope that keeps semantic source verdicts independent from coverage, checks, approval, and branch-protection merge readiness; emits path-free infrastructure blockers; fails closed on stale or malformed evidence; and preserves 100% production statement, branch, and public-docstring evidence.
 - Added deterministic exact-head corpus sampling and blinded two-expert-plus-adjudicator gold-freeze tooling, with strict JSON, immutable evidence receipts, hard language/size/risk/defect coverage, atomic outputs, stable failure classes, and permanent 100% production statement/branch/docstring evidence.
 - Added an empirical OpenCode review-quality benchmark, fail-closed scorer, exact-head quality workflow, and APA 7th doctoring that keep lifecycle-yield evidence separate from head-matched expert-gold precision and recall, require Wilson-bound non-inferiority before any CodeRabbit-parity claim, and preserve 100% production statement/branch/docstring evidence.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
