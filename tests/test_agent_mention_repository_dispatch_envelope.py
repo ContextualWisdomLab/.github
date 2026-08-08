@@ -207,23 +207,25 @@ def test_wrapper_executes_the_validated_envelope_as_the_exact_second_hop(
 
 
 @pytest.mark.parametrize(
-    "mutation",
+    ("mutation", "error_fragment"),
     [
-        "extra-envelope-field",
-        "missing-claim-field",
-        "wrong-boolean-type",
-        "altered-bound-field",
-        "unsupported-schema",
-        "policy-violating-claim",
-        "invalid-repository",
-        "invalid-head-sha",
-        "invalid-base-branch",
-        "invalid-actor",
+        ("extra-envelope-field", "invalid OpenCode invocation envelope"),
+        ("missing-claim-field", "invalid OpenCode invocation claim fields"),
+        ("wrong-boolean-type", "invalid enable_auto_merge flag"),
+        ("altered-bound-field", "invocation key does not match canonical payload"),
+        ("unsupported-schema", "unsupported OpenCode invocation schema"),
+        ("policy-violating-claim", "violates review-only policy"),
+        ("invalid-repository", "invalid repository"),
+        ("invalid-head-sha", "invalid head SHA"),
+        ("invalid-base-sha", "invalid base SHA"),
+        ("invalid-base-branch", "invalid base branch"),
+        ("invalid-actor", "invalid actor"),
     ],
 )
 def test_wrapper_rejects_malformed_or_unbound_envelopes_before_materialization(
     tmp_path: Path,
     mutation: str,
+    error_fragment: str,
 ) -> None:
     """Unknown, malformed, or key-mismatched claims fail before ledger access."""
 
@@ -241,21 +243,28 @@ def test_wrapper_rejects_malformed_or_unbound_envelopes_before_materialization(
         payload["schema"] = "cwl.agent-invocation/v3"
     elif mutation == "policy-violating-claim":
         payload["claim"]["update_branches"] = True
-        _rebind_invocation_key(payload)
     elif mutation == "invalid-repository":
         payload["claim"]["repository"] = "OtherOrg/example"
-        _rebind_invocation_key(payload)
     elif mutation == "invalid-head-sha":
-        payload["claim"]["head_sha"] = "not-a-sha"
-        _rebind_invocation_key(payload)
+        payload["claim"]["head_sha"] = "z" * 40
+    elif mutation == "invalid-base-sha":
+        payload["claim"]["base_sha"] = "z" * 40
     elif mutation == "invalid-base-branch":
         payload["claim"]["base_branch"] = "-main"
-        _rebind_invocation_key(payload)
     elif mutation == "invalid-actor":
-        payload["claim"]["actor"] = "invalid actor"
-        _rebind_invocation_key(payload)
+        payload["claim"]["actor"] = "invalid_actor"
     else:  # pragma: no cover - the parameter list is exhaustive
         raise AssertionError(mutation)
+
+    if mutation in {
+        "policy-violating-claim",
+        "invalid-repository",
+        "invalid-head-sha",
+        "invalid-base-sha",
+        "invalid-base-branch",
+        "invalid-actor",
+    }:
+        _rebind_invocation_key(payload)
 
     workflow = WRAPPER_WORKFLOW.read_text(encoding="utf-8")
     code = _python_heredoc(
@@ -276,6 +285,7 @@ def test_wrapper_rejects_malformed_or_unbound_envelopes_before_materialization(
     )
 
     assert completed.returncode != 0
+    assert error_fragment in completed.stderr
     assert not (tmp_path / "agent-review-scheduler-request.json").exists()
 
 
@@ -373,6 +383,14 @@ def test_agent_mention_quality_gate_covers_the_downstream_scheduler_contract() -
     for path in (
         '.github/workflows/pr-review-merge-scheduler.yml',
         'scripts/ci/pr_review_merge_scheduler.py',
+        'scripts/ci/pr_review_fix_scheduler.py',
         'tests/test_pr_review_merge_scheduler.py',
     ):
         assert workflow.count(f'      - "{path}"') == 2
+
+    coverage_config = workflow.split("[run]\n", 1)[1].split("[report]\n", 1)[0]
+    assert "scripts/ci/pr_review_merge_scheduler.py" in coverage_config
+    interrogate = workflow.split("python -m interrogate --fail-under=100", 1)[1].split(
+        "python -m compileall", 1
+    )[0]
+    assert "scripts/ci/pr_review_merge_scheduler.py" in interrogate

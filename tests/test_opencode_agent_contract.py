@@ -850,6 +850,89 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
         assert expected_reason in rejected.stdout
 
 
+def test_opencode_repository_dispatch_rejects_stale_snapshot_before_downstream(
+    tmp_path: Path,
+):
+    """A delayed old-head dispatch cannot pass live metadata binding ahead of B."""
+
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    validate_step = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata\n",
+        1,
+    )[1].split("\n\n  coverage-source-tree:", 1)[0]
+    shell = textwrap.dedent(validate_step.split("        run: |\n", 1)[1])
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$LIVE_PR_JSON\"\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+
+    live_head = "b" * 40
+    live_base = "c" * 40
+    live_pr = {
+        "state": "open",
+        "base": {
+            "ref": "main",
+            "sha": live_base,
+            "repo": {
+                "full_name": "ContextualWisdomLab/example",
+                "private": False,
+            },
+        },
+        "head": {
+            "ref": "feature",
+            "sha": live_head,
+            "repo": {"full_name": "ContextualWisdomLab/example"},
+        },
+    }
+    output_file = tmp_path / "github-output"
+    base_env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "LIVE_PR_JSON": json.dumps(live_pr),
+        "GITHUB_OUTPUT": str(output_file),
+        "EVENT_NAME": "repository_dispatch",
+        "DISPATCH_ACTOR": "github-actions[bot]",
+        "DISPATCH_SENDER": "github-actions[bot]",
+        "ALLOWED_DISPATCH_ACTOR": "github-actions[bot]",
+        "ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/example",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+        "PR_NUMBER": "17",
+        "SUPPLIED_BASE_REF": "main",
+        "SUPPLIED_BASE_SHA": live_base,
+        "SUPPLIED_HEAD_REF": "feature",
+    }
+
+    stale = subprocess.run(
+        ["bash", "-c", shell],
+        env={**base_env, "SUPPLIED_HEAD_SHA": "a" * 40},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stale.returncode == 1
+    assert "metadata does not match the live pull request: head_sha" in stale.stdout
+    assert not output_file.exists()
+
+    current = subprocess.run(
+        ["bash", "-c", shell],
+        env={**base_env, "SUPPLIED_HEAD_SHA": live_head},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert current.returncode == 0, current.stderr
+    outputs = output_file.read_text(encoding="utf-8")
+    assert f"base_sha={live_base}" in outputs
+    assert f"head_sha={live_head}" in outputs
+
+
 def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     """Do not broaden workflow permissions for a recursive review dispatch."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -1271,9 +1354,13 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "permissions:", 1
     )[0]
     assert "opencode-review-repository-dispatch-" in concurrency_contract
-    assert "github.run_id" in concurrency_contract
-    assert "github.event.client_payload.pr_number" not in concurrency_contract
+    assert "github.event.sender.id" in concurrency_contract
+    assert "github.event.client_payload.target_repository" in concurrency_contract
+    assert "github.event.client_payload.pr_number" in concurrency_contract
+    assert "format('sender-{0}-{1}-pr-{2}'" in concurrency_contract
+    assert "format('invalid-{0}', github.run_id)" in concurrency_contract
     assert "cancel-in-progress: false" in concurrency_contract
+    assert "queue: max" in concurrency_contract
     assert "github.event.pull_request" not in concurrency_contract
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(

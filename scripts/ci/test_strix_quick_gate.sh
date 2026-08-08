@@ -513,9 +513,15 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	if awk '/^  required-workflow-bootstrap:$/,/^[^ ]/' "$bootstrap_file" | grep -q '^[[:space:]]*if:'; then
 		record_failure "opencode required workflow bootstrap must not depend on required-workflow event payload fields"
 	fi
-	assert_file_contains "$workflow_file" 'group: opencode-review-repository-dispatch-${{ github.run_id }}' "opencode isolates every dispatch until live snapshot validation"
+	assert_file_contains "$workflow_file" 'opencode-review-repository-dispatch-${{' "opencode defines a bounded repository-dispatch concurrency group"
+	assert_file_contains "$workflow_file" 'github.event.sender.id' "opencode isolates pre-validation queues by immutable dispatch sender"
+	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository' "opencode serializes valid dispatches by target repository"
+	assert_file_contains "$workflow_file" 'github.event.client_payload.pr_number' "opencode serializes valid dispatches by pull request"
+	assert_file_contains "$workflow_file" "format('sender-{0}-{1}-pr-{2}'" "opencode derives the validated sender/repository/PR queue key"
+	assert_file_contains "$workflow_file" "format('invalid-{0}', github.run_id)" "opencode isolates payloads missing pre-validation queue keys"
 	assert_file_contains "$workflow_file" 'cancel-in-progress: false' "opencode prevents stale pre-validation dispatches from cancelling newer valid work"
-	assert_file_contains "$workflow_file" "Run-id scope" "opencode documents stale dispatch isolation"
+	assert_file_contains "$workflow_file" 'queue: max' "opencode preserves valid pending dispatches instead of replacing them"
+	assert_file_contains "$workflow_file" "preserves pending runs" "opencode documents stale dispatch queue preservation"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "opencode pull_request coverage execution materializes the exact base/head merge tree"
 	assert_file_contains "$workflow_file" "stale OpenCode run: event head=" "opencode review side effects are skipped for stale heads"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name" "opencode never treats a same-repository pull_request_target head as authorization to execute PR-controlled code"

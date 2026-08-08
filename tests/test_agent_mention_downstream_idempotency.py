@@ -107,3 +107,4 @@ def test_quality_gate_runs_full_suite_for_docs_and_exact_diff() -> None:
     coverage_config = text.split("[run]\n", 1)[1].split("[report]\n", 1)[0]
     assert "scripts/ci/agent_mention_router.py" in coverage_config
     assert "scripts/ci/agent_mention_sweep.py" in coverage_config
+    assert "scripts/ci/pr_review_merge_scheduler.py" in coverage_config

@@ -3558,7 +3558,12 @@ def test_snapshot_bound_review_covers_every_fail_closed_decision_boundary(monkey
             "wait",
             "workflow action required",
         ),
-        (make_pr(test_behind=2), {}, "wait", "cannot update"),
+        (
+            make_pr(test_behind=2),
+            {},
+            "wait",
+            "current head has no OpenCode approval; snapshot-bound review cannot update",
+        ),
         (make_pr(test_merge_state="UNKNOWN"), {}, "wait", "still being calculated"),
         (make_pr(test_approved=True), {}, "wait", "review-only"),
         (make_pr(test_opencode="running"), {}, "wait", "already in progress"),
@@ -3653,6 +3658,14 @@ def test_snapshot_bound_review_covers_every_fail_closed_decision_boundary(monkey
         decision = decide(pr, **kwargs)
         assert decision.action == action
         assert reason in decision.reason
+
+    approved_behind = decide(make_pr(test_behind=2, test_approved=True))
+    assert approved_behind == sched.Decision(
+        1,
+        "wait",
+        "current head is approved; snapshot-bound review cannot update an outdated branch",
+    )
+    assert "no OpenCode approval" not in approved_behind.reason
 
     monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
     fallback = decide(make_pr(test_fallback=True))

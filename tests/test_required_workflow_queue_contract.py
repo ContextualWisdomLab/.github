@@ -240,6 +240,9 @@ def test_strix_isolates_repository_dispatch_runs_from_stale_event_cancellation()
     assert "cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}" in workflow
     assert "default-branch repository_dispatch evidence cannot cancel" in workflow
     assert "run-id scope prevents an out-of-order stale dispatch" in workflow
+    assert "default pending-run replacement could discard newer valid evidence" in workflow
+    assert "queue: max cannot be combined with the pull-request cancellation policy" in workflow
+    assert "\n  queue: max\n" not in concurrency_contract
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"
         in workflow
@@ -295,6 +298,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     strix_workflow = workflow_text("strix.yml")
     assert "cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}" in strix_workflow
     assert "run-id scope prevents an out-of-order stale dispatch" in strix_workflow
+    assert "default pending-run replacement could discard newer valid evidence" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:

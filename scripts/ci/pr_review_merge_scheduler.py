@@ -2328,10 +2328,15 @@ def inspect_snapshot_bound_review(
 
     behind_by = branch_outdated_by_base(pr, merge_state)
     if behind_by and trigger_reviews:
+        approval_state = (
+            "current head is approved"
+            if current_head_approved
+            else "current head has no OpenCode approval"
+        )
         return Decision(
             number,
             "wait",
-            "current head has no OpenCode approval; snapshot-bound review cannot update an outdated branch",
+            f"{approval_state}; snapshot-bound review cannot update an outdated branch",
         )
     if merge_state == "UNKNOWN":
         return Decision(

@@ -12,10 +12,21 @@ on:
     types: [opencode-review]
 
 concurrency:
-  # A repository_dispatch is validated only after queue admission. Run-id scope
-  # prevents an out-of-order stale dispatch from cancelling newer valid work.
-  group: opencode-review-repository-dispatch-${{ github.run_id }}
+  # Serialize valid dispatches per sender and target PR without dropping an
+  # already-pending newer head when a delayed stale event arrives. queue:max
+  # preserves pending runs; payloads missing queue-key fields get isolated by run
+  # id, and cancel:false lets live metadata validation reject stale snapshots.
+  group: >-
+    opencode-review-repository-dispatch-${{
+    github.event.sender.id &&
+    github.event.client_payload.target_repository &&
+    github.event.client_payload.pr_number &&
+    format('sender-{0}-{1}-pr-{2}', github.event.sender.id,
+    github.event.client_payload.target_repository,
+    github.event.client_payload.pr_number) ||
+    format('invalid-{0}', github.run_id) }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read

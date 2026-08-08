@@ -71,6 +71,10 @@ concurrency:
   # the required pull_request_target Strix context that branch protection reads.
   # Repository-dispatch run-id scope prevents an out-of-order stale dispatch from
   # cancelling newer valid evidence before live metadata validation can reject it.
+  # A shared PR-only dispatch group is unsafe here.
+  # default pending-run replacement could discard newer valid evidence.
+  # queue: max cannot be combined with the pull-request cancellation policy used
+  # by this mixed-event workflow.
   group: >-
     strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
