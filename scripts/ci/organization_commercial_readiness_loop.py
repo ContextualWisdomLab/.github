@@ -363,22 +363,28 @@ class GitHubClient:
             page += 1
 
     def list_active_runs(self, repository: str) -> tuple[RunRecord, ...]:
-        """Return queued and running workflow evidence for writer lease detection."""
+        """Return all queued and running workflow evidence for writer lease detection."""
         records: list[RunRecord] = []
         for status in ("queued", "in_progress", "waiting", "pending", "requested"):
-            result = self.request(
-                f"/repos/{repository}/actions/runs?status={status}&per_page=100&page=1"
-            )
-            for raw in list((result or {}).get("workflow_runs") or []):
-                records.append(
-                    RunRecord(
-                        run_id=int(raw.get("id") or 0),
-                        name=str(raw.get("name") or ""),
-                        path=str(raw.get("path") or ""),
-                        status=str(raw.get("status") or status),
-                        head_sha=str(raw.get("head_sha") or ""),
-                    )
+            page = 1
+            while True:
+                result = self.request(
+                    f"/repos/{repository}/actions/runs?status={status}&per_page=100&page={page}"
                 )
+                batch = list((result or {}).get("workflow_runs") or [])
+                for raw in batch:
+                    records.append(
+                        RunRecord(
+                            run_id=int(raw.get("id") or 0),
+                            name=str(raw.get("name") or ""),
+                            path=str(raw.get("path") or ""),
+                            status=str(raw.get("status") or status),
+                            head_sha=str(raw.get("head_sha") or ""),
+                        )
+                    )
+                if len(batch) < 100:
+                    break
+                page += 1
         return tuple(records)
 
     def list_open_pulls(self, repository: str) -> tuple[PullRequestRecord, ...]:
