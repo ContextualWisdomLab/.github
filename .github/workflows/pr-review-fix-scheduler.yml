@@ -60,7 +60,10 @@ on:
 
 concurrency:
   group: central-pr-review-fix-scheduler-${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
-  cancel-in-progress: false
+  # Queue scans are short and read-only. Cancel only a superseded scan; the
+  # separately dispatched per-PR OpenCode worker keeps non-cancelling
+  # concurrency so a legitimate long-running RCA is not discarded.
+  cancel-in-progress: true
 
 # Keep the workflow-generated token read-only. Cross-repository mutation is
 # authorized only by the two explicitly forwarded established credentials or
