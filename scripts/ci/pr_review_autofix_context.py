@@ -58,17 +58,32 @@ def pr_view(repo: str, number: int) -> dict[str, Any]:
 
 
 def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any]]:
-    """Return exact-current-head approval or change-request reviews."""
+    """Return exact-head decisions plus fail-closed malformed change requests."""
     pages = run_json(
         ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"]
     )
     reviews = [review for page in pages for review in page]
     current: list[dict[str, Any]] = []
     for review in reviews:
+        state = str(review.get("state") or "").upper()
         commit_id = str(review.get("commit_id") or "")
         if commit_id != head_sha:
+            if (
+                state == "CHANGES_REQUESTED"
+                and commit_id
+                and not SHA_RE.fullmatch(commit_id)
+            ):
+                current.append(
+                    {
+                        **review,
+                        "body": (
+                            "Review commit binding is malformed; treating this as a "
+                            "blocking diagnostic only and ignoring the review body."
+                        ),
+                    }
+                )
             continue
-        if str(review.get("state") or "").upper() not in {
+        if state not in {
             "CHANGES_REQUESTED",
             "APPROVED",
         }:
