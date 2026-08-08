@@ -117,6 +117,26 @@ def test_context_rejects_leading_and_trailing_space_paths() -> None:
     assert context.thread_paths(threads) == []
 
 
+def test_context_rejects_review_authenticated_control_plane_paths() -> None:
+    """Untrusted review threads must never authorize autonomous writer controls."""
+    threads = [
+        {
+            "comments": {
+                "nodes": [
+                    {"path": ".github/workflows/pr-review-autofix.yml"},
+                    {"path": ".github/actions/trusted/action.yml"},
+                    {"path": ".github/CODEOWNERS"},
+                    {"path": "scripts/ci/pr_review_autofix_context.py"},
+                    {"path": "scripts/ci/pr_review_conflict_scope.py"},
+                    {"path": "src/reviewed.py"},
+                ]
+            }
+        }
+    ]
+
+    assert context.thread_paths(threads) == ["src/reviewed.py"]
+
+
 def test_context_script_main_guard_completes_on_valid_cli_input(
     monkeypatch, tmp_path: Path
 ) -> None:
