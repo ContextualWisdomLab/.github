@@ -35,6 +35,15 @@ def object_value(value: Any, path: str) -> Mapping[str, Any]:
     return value
 
 
+def require_exact_fields(
+    value: Mapping[str, Any], path: str, allowed_fields: set[str]
+) -> None:
+    """Reject unreviewed object fields so every schema layer stays fail closed."""
+    unknown_fields = sorted(set(value) - allowed_fields)
+    if unknown_fields:
+        reject(f"{path} has unknown fields: {', '.join(unknown_fields)}")
+
+
 def array_value(value: Any, path: str) -> list[Any]:
     """Return a list or reject a schema-shape mismatch."""
     if not isinstance(value, list):
@@ -103,6 +112,20 @@ def validate_finding(
 ) -> dict[str, Any]:
     """Validate one reviewer-emitted finding and its evidence attributes."""
     value = object_value(raw_value, path)
+    require_exact_fields(
+        value,
+        path,
+        {
+            "finding_id",
+            "gold_finding_id",
+            "severity",
+            "actionable",
+            "source_backed",
+            "line_anchored",
+            "has_fix_direction",
+            "has_regression_test_direction",
+        },
+    )
     finding_id = unique_text(value.get("finding_id"), f"{path}.finding_id", seen)
     gold_id = value.get("gold_finding_id")
     if gold_id is not None:
@@ -142,6 +165,19 @@ def validate_reviewer(
 ) -> dict[str, Any]:
     """Validate one reviewer's attempts, blockers, duplicates, and findings."""
     value = object_value(raw_value, path)
+    require_exact_fields(
+        value,
+        path,
+        {
+            "triggered_attempts",
+            "completed_attempts",
+            "rate_limited_attempts",
+            "infrastructure_only_reviews",
+            "duplicate_reviews",
+            "reviewed_head_sha",
+            "findings",
+        },
+    )
     fields = {
         name: count_value(value.get(name), f"{path}.{name}")
         for name in (
@@ -182,6 +218,18 @@ def validate_reviewer(
 def validate_benchmark(raw_value: Any) -> dict[str, Any]:
     """Validate and normalize the benchmark schema without external packages."""
     value = object_value(raw_value, "benchmark")
+    require_exact_fields(
+        value,
+        "benchmark",
+        {
+            "schema_version",
+            "benchmark_id",
+            "evaluation_mode",
+            "limitations",
+            "parity_policy",
+            "cases",
+        },
+    )
     if value.get("schema_version") != "1.0":
         reject("schema_version must equal '1.0'")
     benchmark_id = text_value(value.get("benchmark_id"), "benchmark_id")
@@ -195,6 +243,18 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
     if not limitations:
         reject("limitations must not be empty")
     policy_value = object_value(value.get("parity_policy"), "parity_policy")
+    require_exact_fields(
+        policy_value,
+        "parity_policy",
+        {
+            "candidate_reviewer",
+            "reference_reviewer",
+            "minimum_head_matched_cases",
+            "minimum_gold_findings",
+            "non_inferiority_margin",
+            "required_critical_high_recall",
+        },
+    )
     policy = {
         "candidate_reviewer": text_value(
             policy_value.get("candidate_reviewer"), "parity_policy.candidate_reviewer"
@@ -229,6 +289,22 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
     for case_index, raw_case in enumerate(array_value(value.get("cases"), "cases")):
         path = f"cases[{case_index}]"
         case = object_value(raw_case, path)
+        require_exact_fields(
+            case,
+            path,
+            {
+                "case_id",
+                "repository",
+                "pull_request_number",
+                "head_match",
+                "base_sha",
+                "head_sha",
+                "diff_size_bucket",
+                "primary_language",
+                "gold_findings",
+                "reviewers",
+            },
+        )
         case_id = unique_text(case.get("case_id"), f"{path}.case_id", seen_cases)
         repository = text_value(case.get("repository"), f"{path}.repository")
         if not REPOSITORY_RE.fullmatch(repository):
@@ -254,6 +330,7 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
         ):
             gold_path = f"{path}.gold_findings[{gold_index}]"
             gold = object_value(raw_gold, gold_path)
+            require_exact_fields(gold, gold_path, {"finding_id", "severity"})
             severity = text_value(
                 gold.get("severity"), f"{gold_path}.severity"
             ).casefold()
@@ -286,6 +363,11 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
                 head_match,
                 head_sha if head_match else None,
             )
+        if head_match and (
+            policy["candidate_reviewer"] not in reviewers
+            or policy["reference_reviewer"] not in reviewers
+        ):
+            reject(f"{path} candidate or reference reviewer is absent")
         cases.append(
             {
                 "case_id": case_id,
@@ -407,7 +489,7 @@ def score_reviewer(name: str, benchmark: Mapping[str, Any]) -> dict[str, Any]:
     for finding in findings:
         gold_id = finding["gold_finding_id"]
         key = (finding["case_id"], gold_id) if gold_id is not None else None
-        if key is None or key in matched:
+        if key is None or key in matched or not finding["source_backed"]:
             false_positive += 1
         else:
             matched.add(key)
