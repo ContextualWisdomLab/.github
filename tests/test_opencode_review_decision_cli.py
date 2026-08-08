@@ -122,3 +122,13 @@ def test_public_production_callables_have_docstrings() -> None:
         and not getattr(value, "__doc__", None)
     ]
     assert missing == []
+
+
+def test_load_json_wraps_syntax_and_filesystem_errors(tmp_path: Path) -> None:
+    """Malformed or unavailable evidence files must produce bounded stable errors."""
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{", encoding="utf-8")
+    with pytest.raises(decision.DecisionValidationError, match="cannot load"):
+        decision.load_json(malformed)
+    with pytest.raises(decision.DecisionValidationError, match="cannot load"):
+        decision.load_json(tmp_path / "absent.json")

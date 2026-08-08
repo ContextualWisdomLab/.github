@@ -8,6 +8,8 @@ on:
     paths:
       - ".github/workflows/opencode-review-decision-quality-ci.yml"
       - "scripts/ci/opencode_review_decision.py"
+      - "scripts/ci/opencode_review_decision_primitives.py"
+      - "scripts/ci/opencode_review_decision_validation.py"
       - "tests/opencode_review_decision_test_support.py"
       - "tests/test_opencode_review_decision_*.py"
       - "docs/doctoring/opencode-review-decision-envelope.md"
@@ -70,11 +72,13 @@ jobs:
             tests/test_opencode_review_decision_cli.py \
             -q
           python -m coverage report \
-            --include='scripts/ci/opencode_review_decision.py' \
+            --include='scripts/ci/opencode_review_decision.py,scripts/ci/opencode_review_decision_primitives.py,scripts/ci/opencode_review_decision_validation.py' \
             --fail-under=100 \
             --show-missing
           python -m compileall -q \
             scripts/ci/opencode_review_decision.py \
+            scripts/ci/opencode_review_decision_primitives.py \
+            scripts/ci/opencode_review_decision_validation.py \
             tests/opencode_review_decision_test_support.py \
             tests/test_opencode_review_decision_channels.py \
             tests/test_opencode_review_decision_validation.py \

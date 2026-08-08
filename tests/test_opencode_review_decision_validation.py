@@ -122,3 +122,28 @@ def test_duplicate_finding_and_check_names_are_rejected() -> None:
 
     with pytest.raises(decision.DecisionValidationError, match="check name"):
         decision.build_decision(envelope(checks=[check("CI"), check("ci")]))
+
+
+def test_validation_helpers_reject_remaining_invalid_shapes_and_scalars() -> None:
+    """Primitive schema helpers must reject unsupported JSON shapes and scalar values."""
+    with pytest.raises(decision.DecisionValidationError, match="must be an array"):
+        decision.array_value({}, "array")
+    with pytest.raises(decision.DecisionValidationError, match="non-empty text"):
+        decision.text_value(" ", "text")
+    with pytest.raises(decision.DecisionValidationError, match="must be boolean"):
+        decision.bool_value(1, "flag")
+    with pytest.raises(decision.DecisionValidationError, match="commit SHA"):
+        decision.commit_sha_value("main", "head")
+
+
+def test_top_level_schema_and_repository_coordinates_are_strict() -> None:
+    """Decision identity must use the exact schema version and owner/name repository form."""
+    wrong_version = envelope()
+    wrong_version["schema_version"] = "2.0"
+    with pytest.raises(decision.DecisionValidationError, match="schema_version"):
+        decision.build_decision(wrong_version)
+
+    invalid_repository = envelope()
+    invalid_repository["repository"] = "missing-slash"
+    with pytest.raises(decision.DecisionValidationError, match="owner/name"):
+        decision.build_decision(invalid_repository)
