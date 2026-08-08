@@ -58,12 +58,13 @@ def pr_view(repo: str, number: int) -> dict[str, Any]:
 
 
 def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any]]:
-    """Return exact-head decisions plus fail-closed malformed change requests."""
+    """Return bounded exact-head decisions plus fail-closed malformed blockers."""
     pages = run_json(
         ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"]
     )
     reviews = [review for page in pages for review in page]
-    current: list[dict[str, Any]] = []
+    malformed: list[dict[str, Any]] = []
+    exact_head: list[dict[str, Any]] = []
     for review in reviews:
         state = str(review.get("state") or "").upper()
         commit_id = str(review.get("commit_id") or "")
@@ -73,7 +74,7 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
                 and commit_id
                 and not SHA_RE.fullmatch(commit_id)
             ):
-                current.append(
+                malformed.append(
                     {
                         **review,
                         "body": (
@@ -88,8 +89,8 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
             "APPROVED",
         }:
             continue
-        current.append(review)
-    return current[-8:]
+        exact_head.append(review)
+    return [*malformed[-8:], *exact_head[-8:]]
 
 
 def review_threads(repo: str, number: int) -> list[dict[str, Any]]:
