@@ -108,6 +108,37 @@ Both OpenCode permission objects allow ordinary file repair but explicitly deny
 credentials nor Actions OIDC request credentials. These permission controls are
 defense in depth; the complete pre/post snapshot remains authoritative.
 
+## RCA and remediation-feasibility gate
+
+Every failed check, unresolved actionable review, merge conflict, or scheduler
+error is first treated as evidence to diagnose, not as a reason to guess at a
+patch. Before editing, the worker establishes the root cause from the exact
+current PR head and base, then lists the smallest plausible remediation
+candidates.
+
+A candidate is feasible only when all of the following are true:
+
+- the current worker has repository-writer authority for the target repository;
+- every required edit is inside the sealed allowed paths;
+- credential and protected-setting requirements can be satisfied without
+  weakening branch protection, tests, review independence, or secret isolation;
+- stack and dependency order permit the change on the current branch;
+- a focused test or exact-head check can verify the result; and
+- the action actually changes the root cause rather than only restating the
+  blocker, rerunning unchanged evidence, or manufacturing a passing status.
+
+The worker implements only the smallest candidate that passes this gate. When no
+repository edit is feasible within the worker's authority, it leaves the tree
+unchanged and records the concrete failed feasibility condition. The parent
+queue scan must then continue with the next eligible bounded PR or buyer-visible
+product gap instead of ending the productive portion of the hourly run.
+
+Queued reviews or checks remain merge blockers, but their latency does not make
+an unrelated code edit realistic. The scheduler may inspect another independent
+PR, strengthen non-conflicting tests or documentation, or select one bounded
+product slice; it must not claim an external approval, runner capacity, billing
+change, or protected-setting mutation that it cannot actually perform.
+
 ## Privileged Git publication
 
 Every reviewed commit and push runs with `core.hooksPath=/dev/null`, preventing a
@@ -174,6 +205,9 @@ Permanent tests prove:
   stripping, live-head guards, and independent reviewer identity remain intact;
 - ordinary and conflict repair share the complete ignored-inclusive snapshot and
   NUL-delimited allowlist boundary;
+- the RCA and remediation-feasibility gate prevents speculative or
+  authority-incompatible edits while allowing the queue to continue productive
+  non-conflicting work;
 - `.git` edits, repository hooks, and model-mutable push destinations cannot
   control privileged publication; and
 - the production verifier retains 100% statement and branch coverage and 100%
