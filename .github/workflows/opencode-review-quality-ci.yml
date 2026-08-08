@@ -70,7 +70,7 @@ jobs:
             --fail-under=100 \
             --show-missing
           python scripts/ci/opencode_review_quality_score.py \
-            benchmarks/opencode_review/pilot_baseline_v1.json \
+            --input benchmarks/opencode_review/pilot_baseline_v1.json \
             --json-output "${RUNNER_TEMP}/opencode-review-quality.json" \
             --markdown-output "${RUNNER_TEMP}/opencode-review-quality.md"
           python -m json.tool "${RUNNER_TEMP}/opencode-review-quality.json" >/dev/null
