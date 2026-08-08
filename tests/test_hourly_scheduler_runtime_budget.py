@@ -14,18 +14,18 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_queue_scanner_has_a_bounded_non_cancelling_runtime() -> None:
-    """An hourly heartbeat never discards an in-flight scan and cannot run forever."""
+def test_queue_scanner_has_a_bounded_superseding_runtime() -> None:
+    """A fresh read-only scan supersedes a stale scan and cannot run forever."""
     reusable = _read(REUSABLE)
     job = reusable.split("  dispatch-review-fixes:\n", maxsplit=1)[1]
 
-    assert "cancel-in-progress: false" in reusable
-    assert "cancel-in-progress: true" not in reusable
+    assert "cancel-in-progress: true" in reusable
     assert "    timeout-minutes: 35\n" in job
+    assert "separately dispatched per-PR OpenCode worker" in reusable
 
 
 def test_product_callers_do_not_cancel_an_in_flight_rca() -> None:
-    """Clearfolio and DiskSage preserve the same non-cancelling lease behavior."""
+    """Clearfolio and DiskSage preserve the non-cancelling product lease."""
     for caller_path in (CLEARFOLIO, DISKSAGE):
         caller = _read(caller_path)
         assert "cancel-in-progress: false" in caller
