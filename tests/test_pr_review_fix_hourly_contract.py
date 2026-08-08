@@ -1,8 +1,11 @@
-"""Static contracts for the central hourly PR review-fix scheduler."""
+"""Static and behavioral contracts for the hourly PR review-repair scheduler."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+from scripts.ci import pr_review_fix_scheduler as scheduler
 
 
 _REUSABLE_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
@@ -15,6 +18,32 @@ _AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 def _read(path: Path) -> str:
     """Return one canonical workflow or guide as UTF-8 text."""
     return path.read_text(encoding="utf-8")
+
+
+def _current_head_change_request(body: str) -> dict[str, object]:
+    """Build one same-repository exact-head OpenCode change request."""
+    head_sha = "a" * 40
+    return {
+        "number": 7,
+        "isDraft": False,
+        "baseRefName": "main",
+        "baseRefOid": "b" * 40,
+        "headRefName": "feature",
+        "headRefOid": head_sha,
+        "headRepository": {"nameWithOwner": "owner/repo"},
+        "mergeStateStatus": "CLEAN",
+        "reviews": {
+            "nodes": [
+                {
+                    "state": "CHANGES_REQUESTED",
+                    "author": {"login": "opencode-agent"},
+                    "commit": {"oid": head_sha},
+                    "body": body,
+                }
+            ]
+        },
+        "reviewThreads": {"nodes": []},
+    }
 
 
 def test_clearfolio_caller_runs_once_each_hour() -> None:
@@ -182,3 +211,62 @@ def test_hourly_loop_continues_productive_work_around_external_latency() -> None
     assert sentence in workflow
     assert "RCA and remediation-feasibility gate" in guide
     assert "continue with the next eligible bounded PR or buyer-visible product gap" in guide
+
+
+def test_failed_check_review_is_dispatched_to_rca_mode() -> None:
+    """A source-backed failed-check blocker reaches the RCA worker instead of stopping."""
+    pr = _current_head_change_request(
+        "Failed check evidence shows coverage-evidence failed on the exact current head."
+    )
+
+    assert scheduler.needs_rca_repair(pr) == (
+        True,
+        ("current-head failed-check blocker requires RCA",),
+    )
+
+
+def test_external_review_wait_is_not_invented_into_a_code_repair() -> None:
+    """Provider exhaustion and missing approval remain external waits, not patch prompts."""
+    for body in (
+        "OpenCode could not establish approval sufficiency because the model pool exhausted.",
+        "Independent approval is still required for this exact head.",
+    ):
+        assert scheduler.needs_rca_repair(_current_head_change_request(body)) == (
+            False,
+            (),
+        )
+
+
+def test_rca_dispatch_carries_an_explicit_worker_mode(monkeypatch) -> None:
+    """The exact-head dispatch distinguishes failed-check RCA from ordinary review repair."""
+    captured: dict[str, str | None] = {}
+
+    def fake_run(args: list[str], *, stdin: str | None = None) -> str:
+        captured["stdin"] = stdin
+        return ""
+
+    monkeypatch.setattr(scheduler, "run", fake_run)
+    pr = _current_head_change_request("Failed check evidence reports Strix failed.")
+
+    scheduler.dispatch_autofix(
+        "owner/repo",
+        pr,
+        workflow="pr-review-autofix.yml",
+        workflow_repository="ContextualWisdomLab/.github",
+        dry_run=False,
+        repair_mode="rca",
+    )
+
+    payload = json.loads(captured["stdin"] or "{}")
+    assert payload["client_payload"]["repair_mode"] == "rca"
+
+
+def test_rca_worker_collects_failed_check_evidence_before_editing() -> None:
+    """RCA mode receives redacted logs and a separately sealed edit scope."""
+    workflow = _read(_AUTOFIX_WORKFLOW)
+
+    assert "REPAIR_MODE" in workflow
+    assert "collect_failed_check_evidence.sh" in workflow
+    assert "pr-review-autofix-failed-check-evidence.md" in workflow
+    assert "--repair-mode \"$REPAIR_MODE\"" in workflow
+    assert "--failed-check-evidence" in workflow
