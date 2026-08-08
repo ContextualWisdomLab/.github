@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -181,6 +182,7 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         "state": "open",
         "base": {
             "ref": "develop",
+            "sha": "b" * 40,
             "repo": {"full_name": "ContextualWisdomLab/naruon"},
         },
         "head": {
@@ -193,6 +195,14 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
+        "DISPATCH_CLIENT_PAYLOAD_JSON": json.dumps(
+            {
+                "target_repository": "ContextualWisdomLab/naruon",
+                "pr_number": 1179,
+                "base_branch": "develop",
+            }
+        ),
+        "GITHUB_EVENT_ACTION": "merge-scheduler",
         "GITHUB_EVENT_NAME": "repository_dispatch",
         "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
         "GITHUB_OUTPUT": str(output),
@@ -200,6 +210,9 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         "TARGET_REPOSITORY_INPUT": "ContextualWisdomLab/naruon",
         "TARGET_PR_NUMBER": "1179",
         "TARGET_BASE_BRANCH_INPUT": "develop",
+        "TARGET_EXPECTED_BASE_BRANCH_INPUT": "",
+        "TARGET_HEAD_SHA_INPUT": "",
+        "TARGET_BASE_SHA_INPUT": "",
         "ALLOWED_TARGET_REPOSITORIES": (
             "ContextualWisdomLab/.github, ContextualWisdomLab/naruon"
         ),
@@ -218,7 +231,11 @@ printf '%s\\n' "$FAKE_PULL_JSON"
     assert output.read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
         "base_branch=develop",
+        f"base_sha={'b' * 40}",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
+        "expected_base_sha=",
+        "expected_head_sha=",
+        "expected_base_branch=",
     ]
 
     output.unlink()
@@ -263,3 +280,82 @@ printf '%s\\n' "$FAKE_PULL_JSON"
     assert cross_repo.returncode == 1
     assert "cross-repository" in cross_repo.stdout
     assert not output.exists()
+
+    claim = {
+        "actor": "maintainer",
+        "agent": "opencode-agent",
+        "base_branch": "develop",
+        "base_sha": "b" * 40,
+        "comment_id": 91,
+        "enable_auto_merge": False,
+        "head_sha": "4afd4af7ad343660356791873d940aa2846f40c2",
+        "merge_mode": "disabled",
+        "pr_number": 1179,
+        "repository": "ContextualWisdomLab/naruon",
+        "review_dispatch_limit": "1",
+        "trigger_reviews": True,
+        "update_branches": False,
+    }
+    canonical = json.dumps(
+        claim,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    envelope = {
+        "schema": "cwl.agent-invocation/v2",
+        "claim": claim,
+        "agent_invocation_key": hashlib.sha256(canonical).hexdigest(),
+    }
+    v2_env = {
+        **env,
+        "DISPATCH_CLIENT_PAYLOAD_JSON": json.dumps(envelope),
+        "GITHUB_EVENT_ACTION": "merge-scheduler-agent-review-v2",
+        "TARGET_EXPECTED_BASE_BRANCH_INPUT": "develop",
+        "TARGET_HEAD_SHA_INPUT": claim["head_sha"],
+        "TARGET_BASE_SHA_INPUT": claim["base_sha"],
+    }
+    accepted_v2 = subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=v2_env,
+    )
+
+    assert accepted_v2.returncode == 0, accepted_v2.stderr
+    assert output.read_text(encoding="utf-8").splitlines()[-3:] == [
+        f"expected_base_sha={'b' * 40}",
+        "expected_head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
+        "expected_base_branch=develop",
+    ]
+
+    drift_cases = [
+        ({**pull, "state": "closed"}, "closed"),
+        (
+            {**pull, "base": {**pull["base"], "ref": "release"}},
+            "base branch does not match",
+        ),
+        (
+            {**pull, "base": {**pull["base"], "sha": "c" * 40}},
+            "base SHA changed",
+        ),
+        (
+            {**pull, "head": {**pull["head"], "sha": "d" * 40}},
+            "head SHA changed",
+        ),
+    ]
+    for drifted_pull, message in drift_cases:
+        output.unlink(missing_ok=True)
+        rejected_v2 = subprocess.run(
+            [bash],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**v2_env, "FAKE_PULL_JSON": json.dumps(drifted_pull)},
+        )
+        assert rejected_v2.returncode == 1
+        assert message in rejected_v2.stdout
+        assert not output.exists()

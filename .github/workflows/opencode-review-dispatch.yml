@@ -12,13 +12,10 @@ on:
     types: [opencode-review]
 
 concurrency:
-  # PR-number scope keeps stale dispatches replaced for the current head.
-  group: >-
-    opencode-review-repository-dispatch-${{
-    github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number) ||
-    github.run_id }}
-  cancel-in-progress: true
+  # A repository_dispatch is validated only after queue admission. Run-id scope
+  # prevents an out-of-order stale dispatch from cancelling newer valid work.
+  group: opencode-review-repository-dispatch-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

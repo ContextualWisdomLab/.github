@@ -1,7 +1,7 @@
 name: Agent Mention OpenCode Dispatch
 run-name: >-
-  Agent Mention OpenCode ${{ github.event.client_payload.target_repository }}#${{
-  github.event.client_payload.pr_number }} [cwl-agent-invocation:${{
+  Agent Mention OpenCode ${{ github.event.client_payload.claim.repository }}#${{
+  github.event.client_payload.claim.pr_number }} [cwl-agent-invocation:${{
   github.event.client_payload.agent_invocation_key }}]
 
 on:
@@ -26,40 +26,15 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      REQUESTED_AGENT: "opencode-agent"
-      PAYLOAD_AGENT: ${{ github.event.client_payload.requested_agent || '' }}
+      CLIENT_PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
+      PAYLOAD_SCHEMA: ${{ github.event.client_payload.schema || '' }}
       INVOCATION_KEY: ${{ github.event.client_payload.agent_invocation_key || '' }}
-      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || '' }}
-      PR_NUMBER: ${{ github.event.client_payload.pr_number || '' }}
-      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
-      PR_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
-      BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}
-      REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
-      SOURCE_COMMENT_ID: ${{ github.event.client_payload.source_comment_id || '' }}
-      TRIGGER_REVIEWS: ${{ github.event.client_payload.trigger_reviews }}
-      REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || '' }}
-      ENABLE_AUTO_MERGE: ${{ github.event.client_payload.enable_auto_merge }}
-      UPDATE_BRANCHES: ${{ github.event.client_payload.update_branches }}
-      MERGE_MODE: ${{ github.event.client_payload.merge_mode || '' }}
     steps:
-      - name: Validate exact invocation payload
+      - name: Validate exact invocation payload and prepare scheduler request
         run: |
           set -euo pipefail
-          if [ "$PAYLOAD_AGENT" != "$REQUESTED_AGENT" ] ||
-            ! [[ "$INVOCATION_KEY" =~ ^[0-9a-f]{64}$ ]] ||
-            ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
-            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-            ! [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-            ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] ||
-            [[ "$BASE_BRANCH" == -* ]] ||
-            ! [[ "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] ||
-            [ "$TRIGGER_REVIEWS" != "true" ] ||
-            [ "$REVIEW_DISPATCH_LIMIT" != "1" ] ||
-            [ "$ENABLE_AUTO_MERGE" != "false" ] ||
-            [ "$UPDATE_BRANCHES" != "false" ] ||
-            [ "$MERGE_MODE" != "disabled" ] ||
-            ! [[ "$REQUESTED_BY" =~ ^[A-Za-z0-9-]+$ ]]; then
+          if [ "$PAYLOAD_SCHEMA" != "cwl.agent-invocation/v2" ] ||
+            ! [[ "$INVOCATION_KEY" =~ ^[0-9a-f]{64}$ ]]; then
             echo "::error::Rejected malformed or mismatched OpenCode agent invocation payload."
             exit 1
           fi
@@ -69,23 +44,85 @@ jobs:
           import hmac
           import json
           import os
+          from pathlib import Path
+          import re
+
+          envelope = json.loads(os.environ["CLIENT_PAYLOAD_JSON"])
+          envelope_keys = {"schema", "claim", "agent_invocation_key"}
+          claim_keys = {
+              "actor",
+              "agent",
+              "base_branch",
+              "base_sha",
+              "comment_id",
+              "enable_auto_merge",
+              "head_sha",
+              "merge_mode",
+              "pr_number",
+              "repository",
+              "review_dispatch_limit",
+              "trigger_reviews",
+              "update_branches",
+          }
+          if not isinstance(envelope, dict) or set(envelope) != envelope_keys:
+              raise SystemExit("invalid OpenCode invocation envelope")
+          claim = envelope["claim"]
+          if not isinstance(claim, dict):
+              raise SystemExit("OpenCode invocation claim must be an object")
+          if envelope["schema"] != "cwl.agent-invocation/v2":
+              raise SystemExit("unsupported OpenCode invocation schema")
+          if envelope["schema"] != os.environ["PAYLOAD_SCHEMA"]:
+              raise SystemExit("OpenCode invocation schema context mismatch")
+          if envelope["agent_invocation_key"] != os.environ["INVOCATION_KEY"]:
+              raise SystemExit("OpenCode invocation key context mismatch")
+          if set(claim) != claim_keys:
+              raise SystemExit("invalid OpenCode invocation claim fields")
+
+          text_fields = {
+              "actor",
+              "agent",
+              "base_branch",
+              "base_sha",
+              "head_sha",
+              "merge_mode",
+              "repository",
+              "review_dispatch_limit",
+          }
+          if any(not isinstance(claim[field], str) for field in text_fields):
+              raise SystemExit("OpenCode invocation claim has a non-string text field")
+          if type(claim["comment_id"]) is not int or claim["comment_id"] < 1:
+              raise SystemExit("OpenCode invocation claim has an invalid comment id")
+          if type(claim["pr_number"]) is not int or claim["pr_number"] < 1:
+              raise SystemExit("OpenCode invocation claim has an invalid pull request number")
+          for field in ("enable_auto_merge", "trigger_reviews", "update_branches"):
+              if type(claim[field]) is not bool:
+                  raise SystemExit(f"OpenCode invocation claim has an invalid {field} flag")
+          if not re.fullmatch(r"ContextualWisdomLab/[A-Za-z0-9_.-]+", claim["repository"]):
+              raise SystemExit("OpenCode invocation claim has an invalid repository")
+          if not re.fullmatch(r"[0-9a-f]{40}", claim["head_sha"]):
+              raise SystemExit("OpenCode invocation claim has an invalid head SHA")
+          if not re.fullmatch(r"[0-9a-f]{40}", claim["base_sha"]):
+              raise SystemExit("OpenCode invocation claim has an invalid base SHA")
+          if (
+              not re.fullmatch(r"[A-Za-z0-9._/-]+", claim["base_branch"])
+              or claim["base_branch"].startswith("-")
+          ):
+              raise SystemExit("OpenCode invocation claim has an invalid base branch")
+          if not re.fullmatch(r"[A-Za-z0-9-]+", claim["actor"]):
+              raise SystemExit("OpenCode invocation claim has an invalid actor")
+          expected_policy = {
+              "agent": "opencode-agent",
+              "enable_auto_merge": False,
+              "merge_mode": "disabled",
+              "review_dispatch_limit": "1",
+              "trigger_reviews": True,
+              "update_branches": False,
+          }
+          if any(claim[field] != value for field, value in expected_policy.items()):
+              raise SystemExit("OpenCode invocation claim violates review-only policy")
 
           canonical = json.dumps(
-              {
-                  "actor": os.environ["REQUESTED_BY"],
-                  "agent": os.environ["REQUESTED_AGENT"],
-                  "base_branch": os.environ["BASE_BRANCH"],
-                  "base_sha": os.environ["PR_BASE_SHA"],
-                  "comment_id": int(os.environ["SOURCE_COMMENT_ID"]),
-                  "enable_auto_merge": os.environ["ENABLE_AUTO_MERGE"] == "true",
-                  "head_sha": os.environ["PR_HEAD_SHA"],
-                  "merge_mode": os.environ["MERGE_MODE"],
-                  "pr_number": int(os.environ["PR_NUMBER"]),
-                  "repository": os.environ["TARGET_REPOSITORY"],
-                  "review_dispatch_limit": os.environ["REVIEW_DISPATCH_LIMIT"],
-                  "trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true",
-                  "update_branches": os.environ["UPDATE_BRANCHES"] == "true",
-              },
+              claim,
               ensure_ascii=True,
               separators=(",", ":"),
               sort_keys=True,
@@ -93,6 +130,41 @@ jobs:
           expected = hashlib.sha256(canonical).hexdigest()
           if not hmac.compare_digest(expected, os.environ["INVOCATION_KEY"]):
               raise SystemExit("invocation key does not match canonical payload")
+
+          scheduler_request = {
+              "event_type": "merge-scheduler-agent-review-v2",
+              "client_payload": envelope,
+          }
+          encoded_request = json.dumps(
+              scheduler_request,
+              ensure_ascii=True,
+              separators=(",", ":"),
+              sort_keys=True,
+          ).encode("utf-8")
+          if len(envelope) > 10 or len(encoded_request) > 65_535:
+              raise SystemExit("scheduler repository dispatch exceeds GitHub limits")
+
+          request_path = Path(os.environ["RUNNER_TEMP"]) / "agent-review-scheduler-request.json"
+          request_path.write_bytes(encoded_request)
+          exports = {
+              "BASE_BRANCH": claim["base_branch"],
+              "ENABLE_AUTO_MERGE": str(claim["enable_auto_merge"]).lower(),
+              "MERGE_MODE": claim["merge_mode"],
+              "PR_BASE_SHA": claim["base_sha"],
+              "PR_HEAD_SHA": claim["head_sha"],
+              "PR_NUMBER": str(claim["pr_number"]),
+              "REQUESTED_AGENT": claim["agent"],
+              "REQUESTED_BY": claim["actor"],
+              "REVIEW_DISPATCH_LIMIT": claim["review_dispatch_limit"],
+              "SCHEDULER_REQUEST_FILE": str(request_path),
+              "SOURCE_COMMENT_ID": str(claim["comment_id"]),
+              "TARGET_REPOSITORY": claim["repository"],
+              "TRIGGER_REVIEWS": str(claim["trigger_reviews"]).lower(),
+              "UPDATE_BRANCHES": str(claim["update_branches"]).lower(),
+          }
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              for name, value in exports.items():
+                  handle.write(f"{name}={value}\n")
           PYTHON
 
       - name: Inspect exact-name Actions artifact ledger
@@ -189,33 +261,6 @@ jobs:
         if: steps.ledger.outputs.claim == 'true'
         run: |
           set -euo pipefail
-          jq -n \
-            --arg target_repository "$TARGET_REPOSITORY" \
-            --argjson pr_number "$PR_NUMBER" \
-            --arg pr_head_sha "$PR_HEAD_SHA" \
-            --arg pr_base_sha "$PR_BASE_SHA" \
-            --arg base_branch "$BASE_BRANCH" \
-            --arg requested_agent "$REQUESTED_AGENT" \
-            --arg agent_invocation_key "$INVOCATION_KEY" \
-            --arg requested_by "$REQUESTED_BY" \
-            --argjson source_comment_id "$SOURCE_COMMENT_ID" \
-            '{
-              event_type: "merge-scheduler",
-              client_payload: {
-                target_repository: $target_repository,
-                pr_number: $pr_number,
-                pr_head_sha: $pr_head_sha,
-                pr_base_sha: $pr_base_sha,
-                base_branch: $base_branch,
-                trigger_reviews: true,
-                review_dispatch_limit: "1",
-                enable_auto_merge: false,
-                update_branches: false,
-                merge_mode: "disabled",
-                requested_agent: $requested_agent,
-                agent_invocation_key: $agent_invocation_key,
-                requested_by: $requested_by,
-                source_comment_id: $source_comment_id
-              }
-            }' \
-            | gh api "repos/${GITHUB_REPOSITORY}/dispatches" -X POST --input -
+          gh api "repos/${GITHUB_REPOSITORY}/dispatches" \
+            -X POST \
+            --input "$SCHEDULER_REQUEST_FILE"

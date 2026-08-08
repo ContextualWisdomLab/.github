@@ -37,6 +37,7 @@ def request(module: ModuleType):
         12345,
         "maintainer",
         ("cwl-noema-review", "opencode-agent"),
+        "b" * 40,
     )
 
 
@@ -194,15 +195,20 @@ def test_payloads_carry_exact_agent_invocation_identity() -> None:
     assert noema["agent_invocation_key"] == module.agent_invocation_key(
         mention_request, "cwl-noema-review"
     )
-    assert opencode["requested_agent"] == "opencode-agent"
+    assert opencode["schema"] == "cwl.agent-invocation/v2"
+    assert opencode["claim"]["agent"] == "opencode-agent"
     assert opencode["agent_invocation_key"] == module.agent_invocation_key(
         mention_request, "opencode-agent"
     )
-    for payload in (noema, opencode):
-        assert payload["target_repository"] == mention_request.repository
-        assert payload["pr_number"] == mention_request.pull_request_number
-        assert payload["pr_head_sha"] == mention_request.pull_request_head_sha
-        assert payload["source_comment_id"] == mention_request.comment_id
+    assert noema["target_repository"] == mention_request.repository
+    assert noema["pr_number"] == mention_request.pull_request_number
+    assert noema["pr_head_sha"] == mention_request.pull_request_head_sha
+    assert noema["source_comment_id"] == mention_request.comment_id
+    assert opencode["claim"]["repository"] == mention_request.repository
+    assert opencode["claim"]["pr_number"] == mention_request.pull_request_number
+    assert opencode["claim"]["head_sha"] == mention_request.pull_request_head_sha
+    assert opencode["claim"]["base_sha"] == mention_request.pull_request_base_sha
+    assert opencode["claim"]["comment_id"] == mention_request.comment_id
 
 
 def test_existing_artifacts_are_per_agent_durable_evidence() -> None:

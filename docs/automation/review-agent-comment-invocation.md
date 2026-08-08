@@ -1,6 +1,6 @@
 # Review-agent comment invocation
 
-Updated: 2026-08-06
+Updated: 2026-08-08
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Trusted ContextualWisdomLab maintainers can invoke the existing review planes fr
 - `@cwl-noema-review` requests the independent Noema review.
 - `@opencode-agent` requests a bounded current-head OpenCode review only; the invocation itself disables branch updates, automatic merge, and direct merge.
 
-The router never checks out or executes pull-request-controlled code. It reads live PR metadata, binds the request to the current head SHA and base branch, and dispatches the already deployed central workflows in `ContextualWisdomLab/.github`.
+The router never checks out or executes pull-request-controlled code. It reads live PR metadata, binds the request to the current head SHA, base SHA, and base branch, and dispatches the already deployed central workflows in `ContextualWisdomLab/.github`.
 
 ## Architecture
 
@@ -20,7 +20,9 @@ The implementation uses two bounded paths:
 1. **Local fast path.** Comments on `ContextualWisdomLab/.github` trigger `issue_comment` immediately.
 2. **Organization sweep.** Every five minutes, the central workflow enumerates repositories visible to its cross-repository credential, finds recently updated open PRs and recent comments, validates trusted exact mentions, and consults the central exact-name Actions artifact ledger before queuing work.
 
-Each requested agent receives a deterministic invocation key containing the target repository, PR number, exact head SHA, base branch, requested agent, source comment ID, and requesting actor. Each agent-specific wrapper reconstructs the same canonical JSON from its validated payload, hashes it with SHA-256, and compares the result in constant time with the supplied key. Altering any bound field while retaining a syntactically valid key therefore fails closed.
+Each requested agent receives a deterministic invocation key containing the target repository, PR number, exact head SHA, exact base SHA, base branch, requested agent, source comment ID, and requesting actor. Each agent-specific wrapper reconstructs the same canonical JSON from its validated payload, hashes it with SHA-256, and compares the result in constant time with the supplied key. Altering any bound field while retaining a syntactically valid key therefore fails closed.
+
+OpenCode uses the versioned `cwl.agent-invocation/v2` envelope at both central dispatch hops. Its `client_payload` has exactly three top-level properties: `schema`, the complete canonical `claim`, and `agent_invocation_key`. The wrapper strictly rejects missing, extra, mistyped, policy-changing, or key-mismatched fields, materializes the complete downstream `merge-scheduler-agent-review-v2` request, and verifies GitHub's ten-property and 65,535-character limits before claiming the immutable ledger artifact. The downstream scheduler revalidates the same envelope and compares the live open PR repository, number, head SHA, base SHA, and base branch with the claim. Its CLI then performs two fresh exact-snapshot reads before entering a dedicated review-only path that cannot cancel workflow runs, clean up reviews, update branches, enable or disable auto-merge, or merge. A different-head active run suppresses the stale dispatch, v2 scheduler concurrency is invocation-scoped, and the downstream OpenCode/Strix receivers isolate pre-validation dispatches by run ID, so an out-of-order stale event cannot cancel newer valid work. Schema-free legacy `merge-scheduler` requests remain a separate explicit compatibility path and cannot accept a versioned claim.
 
 The exact-name Actions artifact ledger uses `cwl-agent-invocation-<SHA-256 key>` as the artifact name. The router queries GitHub's repository artifact endpoint with the server-side exact `name` filter, validates the complete response, and treats any live exact-name artifact as durable dispatch evidence. This avoids depending on filtered workflow-run enumeration, which GitHub caps at 1,000 results even when pagination is requested.
 
@@ -45,8 +47,8 @@ This preserves the central MSA boundary without copying privileged workflow code
 - `contents: write` is intentionally retained only on jobs that call GitHub's create-repository-dispatch endpoint. GitHub documents that endpoint as requiring Contents repository permission at write level. Removing it would disable the bounded central dispatch path; broad workflow-default write access is not granted.
 - The organization sweep uses the established cross-repository credential chain for reading target comments, while the central repository's own short-lived job token dispatches the central workflows.
 - OpenCode dispatch is restricted to the exact `OPENCODE_REPOSITORY_DISPATCH_TARGETS` allowlist.
-- An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are explicit in the dispatch payload.
-- Every dispatch is bound to live PR number, current head SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch.
+- An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are explicit in the canonical claim and are forced again by the dedicated scheduler event.
+- Every dispatch is bound to live open PR number, current head SHA, current base SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch. The scheduler CLI re-fetches and repeats all snapshot comparisons immediately before its mutation-free review-only decision path. If another-head run appears after that read, the scheduler suppresses the POST; if drift occurs after the active-run lookup, run-isolated receiver concurrency lets live-metadata validation reject the stale work without cancelling the newer run.
 - Router jobs use the fixed `ubuntu-24.04` runner and an immutable `actions/checkout` v7.0.1 commit pin; checkout credentials are not persisted.
 - A branch-selectable `workflow_dispatch` trigger is intentionally absent. This prevents a repository writer from choosing an unreviewed branch version of the central router while the job holds dispatch permissions.
 
@@ -67,7 +69,7 @@ The permanent quality workflow runs the deterministic router, sweep, exact-name 
 
 The router is inactive until its workflows and helper code are merged into the protected default branch. A materialization, predecessor, cancelled, queued, or stale-head run is not activation evidence. Production activation requires the exact final head to pass the permanent quality workflow, security and supply-chain checks, current-head automated review, an independent approval, unresolved-thread policy, and branch protection without bypass.
 
-Rollback is deletion of the four mention-router workflows, the two Python helpers, and their focused tests. Existing Noema and OpenCode review workflows remain independently invocable and authoritative; the router does not own reviewer identity, credentials, verdict acceptance, approval, merge, or release.
+Rollback of the OpenCode v2 transport removes the dedicated `merge-scheduler-agent-review-v2` trigger and its expected-ref CLI guards together with the OpenCode mention wrapper/router path; the schema-free legacy scheduler path remains unchanged. A full router rollback also deletes the mention-router workflows, the two mention Python helpers, and their focused tests. Existing Noema and OpenCode review workflows remain independently invocable and authoritative; the router does not own reviewer identity, credentials, verdict acceptance, approval, merge, or release.
 
 ## References
 

@@ -69,12 +69,13 @@ on:
 concurrency:
   # Include the event name so default-branch repository_dispatch evidence cannot cancel
   # the required pull_request_target Strix context that branch protection reads.
-  # PR-number scope keeps the queue on the current HEAD within each event class.
+  # Repository-dispatch run-id scope prevents an out-of-order stale dispatch from
+  # cancelling newer valid evidence before live metadata validation can reject it.
   group: >-
     strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
-    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) || github.ref }}
-  cancel-in-progress: true
+    github.event_name == 'repository_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
