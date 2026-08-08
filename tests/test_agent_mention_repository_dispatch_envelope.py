@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -73,7 +74,9 @@ def _python_heredoc(step: str) -> str:
     return textwrap.dedent(step[start:end])
 
 
-def _run_python_contract(code: str, environment: dict[str, str]) -> subprocess.CompletedProcess:
+def _run_python_contract(
+    code: str, environment: dict[str, str]
+) -> subprocess.CompletedProcess:
     """Execute one extracted workflow validator with an isolated environment."""
 
     return subprocess.run(
@@ -83,6 +86,18 @@ def _run_python_contract(code: str, environment: dict[str, str]) -> subprocess.C
         check=False,
         env={**os.environ, **environment},
     )
+
+
+def _rebind_invocation_key(payload: dict[str, object]) -> None:
+    """Recompute the canonical claim digest after an intentional claim mutation."""
+
+    canonical = json.dumps(
+        payload["claim"],
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    payload["agent_invocation_key"] = hashlib.sha256(canonical).hexdigest()
 
 
 def test_router_emits_three_key_versioned_envelope_without_changing_claim_key() -> None:
@@ -135,7 +150,7 @@ def test_wrapper_validates_and_reuses_the_same_bounded_envelope_before_ledger() 
 
     assert "github.event.client_payload.claim.repository" in workflow
     assert "github.event.client_payload.claim.pr_number" in workflow
-    assert f'PAYLOAD_SCHEMA: ${{{{ github.event.client_payload.schema || \'\' }}}}' in workflow
+    assert "PAYLOAD_SCHEMA: ${{ github.event.client_payload.schema || '' }}" in workflow
     assert "set(envelope)" in validate
     for key in sorted(ENVELOPE_KEYS):
         assert f'"{key}"' in validate
@@ -199,6 +214,11 @@ def test_wrapper_executes_the_validated_envelope_as_the_exact_second_hop(
         "wrong-boolean-type",
         "altered-bound-field",
         "unsupported-schema",
+        "policy-violating-claim",
+        "invalid-repository",
+        "invalid-head-sha",
+        "invalid-base-branch",
+        "invalid-actor",
     ],
 )
 def test_wrapper_rejects_malformed_or_unbound_envelopes_before_materialization(
@@ -219,6 +239,21 @@ def test_wrapper_rejects_malformed_or_unbound_envelopes_before_materialization(
         payload["claim"]["head_sha"] = "c" * 40
     elif mutation == "unsupported-schema":
         payload["schema"] = "cwl.agent-invocation/v3"
+    elif mutation == "policy-violating-claim":
+        payload["claim"]["update_branches"] = True
+        _rebind_invocation_key(payload)
+    elif mutation == "invalid-repository":
+        payload["claim"]["repository"] = "OtherOrg/example"
+        _rebind_invocation_key(payload)
+    elif mutation == "invalid-head-sha":
+        payload["claim"]["head_sha"] = "not-a-sha"
+        _rebind_invocation_key(payload)
+    elif mutation == "invalid-base-branch":
+        payload["claim"]["base_branch"] = "-main"
+        _rebind_invocation_key(payload)
+    elif mutation == "invalid-actor":
+        payload["claim"]["actor"] = "invalid actor"
+        _rebind_invocation_key(payload)
     else:  # pragma: no cover - the parameter list is exhaustive
         raise AssertionError(mutation)
 
