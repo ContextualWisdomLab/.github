@@ -159,13 +159,17 @@ def test_workflow_and_doctoring_contracts() -> None:
     assert "cancel-in-progress: false" in workflow_source
     assert 'MAX_REVIEW_DISPATCHES: "1"' in workflow_source
     assert 'MAX_DEVELOPMENT_DISPATCHES: "1"' in workflow_source
-    assert "PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN" in workflow_source
+    assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in workflow_source
+    assert "OPENCODE_APPROVE_TOKEN" not in workflow_source
+    assert "workflow_dispatch:" not in workflow_source
     assert "|| github.token" not in workflow_source
     assert "NVIDIA_NIM_API_KEY" not in workflow_source
     assert "COPILOT_GITHUB_TOKEN" not in workflow_source
     assert "github.run_number" in workflow_source
     assert "persist-credentials: false" in workflow_source
     assert "--branch" in quality and "--fail-under=100" in quality
+    assert "--import-mode=importlib" in quality
+    assert "organization_commercial_readiness_fixtures.py" in quality
     assert "github.event.pull_request.head.sha" in quality
     assert "disabled workflow does not hold a lease" in doctoring
     assert "manual-only, explicitly marked" in doctoring
