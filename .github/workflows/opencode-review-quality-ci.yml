@@ -8,6 +8,7 @@ on:
       - "benchmarks/opencode_review/**"
       - "scripts/ci/opencode_review_quality_score.py"
       - "tests/test_opencode_review_quality_score.py"
+      - "tests/test_opencode_review_quality_evidence_contract.py"
       - "docs/doctoring/opencode-review-quality-evaluation.md"
       - "docs/superpowers/specs/2026-08-08-opencode-review-quality.md"
       - "docs/superpowers/plans/2026-08-08-opencode-review-quality.md"
@@ -64,7 +65,10 @@ jobs:
           python -m coverage run \
             --branch \
             --source=scripts/ci \
-            -m pytest tests/test_opencode_review_quality_score.py -q
+            -m pytest \
+            tests/test_opencode_review_quality_score.py \
+            tests/test_opencode_review_quality_evidence_contract.py \
+            -q
           python -m coverage report \
             --include='scripts/ci/opencode_review_quality_score.py' \
             --fail-under=100 \
@@ -80,5 +84,6 @@ jobs:
           cat "${RUNNER_TEMP}/opencode-review-quality.md" >>"$GITHUB_STEP_SUMMARY"
           python -m compileall -q \
             scripts/ci/opencode_review_quality_score.py \
-            tests/test_opencode_review_quality_score.py
+            tests/test_opencode_review_quality_score.py \
+            tests/test_opencode_review_quality_evidence_contract.py
           git diff --exit-code
