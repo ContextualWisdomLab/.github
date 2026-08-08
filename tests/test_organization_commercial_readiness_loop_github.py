@@ -34,7 +34,7 @@ def test_client_requires_explicit_token_and_decodes_requests(
 
     def fake_run(args: list[str], **kwargs: Any) -> Completed:
         calls.append(args)
-        assert kwargs["env"]["GH_TOKEN"] == "token"
+        assert kwargs["env"]["GH_TOKEN"] == "token"  # noqa: S105
         return responses.pop(0)
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -148,6 +148,9 @@ def test_run_and_pull_inventories_cover_live_fields_and_pages(
         del method, payload
         if "actions/runs" in path:
             status = path.split("status=")[1].split("&")[0]
+            page = int(path.split("&page=")[1].split("&")[0])
+            if page > 1:
+                return {"workflow_runs": []}
             return {
                 "workflow_runs": [{
                     "id": len(status),
