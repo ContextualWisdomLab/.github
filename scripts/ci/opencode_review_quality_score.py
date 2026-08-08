@@ -16,6 +16,7 @@ VALID_MODES = {"historical_lifecycle", "head_matched_gold"}
 VALID_BUCKETS = {"small", "medium", "large"}
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class BenchmarkValidationError(ValueError):
@@ -83,6 +84,16 @@ def unique_text(value: Any, path: str, seen: set[str]) -> str:
     return result
 
 
+def commit_sha_value(value: Any, path: str, *, required: bool) -> str | None:
+    """Return one lowercase full commit SHA or reject missing/malformed evidence."""
+    if value is None and not required:
+        return None
+    result = text_value(value, path)
+    if not COMMIT_SHA_RE.fullmatch(result):
+        reject(f"{path} must be a 40-character lowercase commit SHA")
+    return result
+
+
 def validate_finding(
     raw_value: Any,
     path: str,
@@ -123,7 +134,11 @@ def validate_finding(
 
 
 def validate_reviewer(
-    raw_value: Any, path: str, gold_ids: set[str], head_match: bool
+    raw_value: Any,
+    path: str,
+    gold_ids: set[str],
+    head_match: bool,
+    expected_head_sha: str | None,
 ) -> dict[str, Any]:
     """Validate one reviewer's attempts, blockers, duplicates, and findings."""
     value = object_value(raw_value, path)
@@ -146,11 +161,21 @@ def validate_reviewer(
         reject(f"{path}.infrastructure_only_reviews exceeds completed_attempts")
     if fields["duplicate_reviews"] > completed:
         reject(f"{path}.duplicate_reviews exceeds completed_attempts")
+    reviewed_head_sha = commit_sha_value(
+        value.get("reviewed_head_sha"),
+        f"{path}.reviewed_head_sha",
+        required=expected_head_sha is not None,
+    )
+    if expected_head_sha is not None and reviewed_head_sha != expected_head_sha:
+        reject(f"{path}.reviewed_head_sha must equal the case head_sha")
     seen: set[str] = set()
     fields["findings"] = [
         validate_finding(item, f"{path}.findings[{index}]", seen, gold_ids, head_match)
         for index, item in enumerate(array_value(value.get("findings"), f"{path}.findings"))
     ]
+    if fields["findings"] and completed == 0:
+        reject(f"{path}.findings require at least one completed review attempt")
+    fields["reviewed_head_sha"] = reviewed_head_sha
     return fields
 
 
@@ -211,6 +236,12 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
         head_match = bool_value(case.get("head_match"), f"{path}.head_match")
         if mode == "head_matched_gold" and not head_match:
             reject(f"{path}.head_match must be true in head_matched_gold mode")
+        base_sha = commit_sha_value(
+            case.get("base_sha"), f"{path}.base_sha", required=head_match
+        )
+        head_sha = commit_sha_value(
+            case.get("head_sha"), f"{path}.head_sha", required=head_match
+        )
         bucket = text_value(
             case.get("diff_size_bucket"), f"{path}.diff_size_bucket"
         ).casefold()
@@ -236,18 +267,25 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
                     "severity": severity,
                 }
             )
+        if gold_findings and not head_match:
+            reject(f"{path}.gold_findings require head_match=true")
         reviewers_value = object_value(case.get("reviewers"), f"{path}.reviewers")
         if not reviewers_value:
             reject(f"{path}.reviewers must not be empty")
-        reviewers = {
-            text_value(name, f"{path}.reviewer").casefold(): validate_reviewer(
+        reviewers: dict[str, dict[str, Any]] = {}
+        reviewer_names: set[str] = set()
+        for name, reviewer in reviewers_value.items():
+            normalized_name = text_value(name, f"{path}.reviewer").casefold()
+            if normalized_name in reviewer_names:
+                reject(f"{path}.reviewer name duplicates {normalized_name!r}")
+            reviewer_names.add(normalized_name)
+            reviewers[normalized_name] = validate_reviewer(
                 reviewer,
                 f"{path}.reviewers.{name}",
                 gold_seen,
                 head_match,
+                head_sha if head_match else None,
             )
-            for name, reviewer in reviewers_value.items()
-        }
         cases.append(
             {
                 "case_id": case_id,
@@ -258,6 +296,8 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
                     positive=True,
                 ),
                 "head_match": head_match,
+                "base_sha": base_sha,
+                "head_sha": head_sha,
                 "diff_size_bucket": bucket,
                 "primary_language": text_value(
                     case.get("primary_language"), f"{path}.primary_language"
@@ -425,14 +465,23 @@ def parity_gate(
     assert candidate_metrics is not None and reference_metrics is not None
     candidate_precision_interval = candidate_metrics["precision_interval_95"]
     candidate_recall_interval = candidate_metrics["recall_interval_95"]
-    if candidate_precision_interval is None or candidate_recall_interval is None:
+    reference_precision = reference_metrics["precision"]
+    reference_recall = reference_metrics["recall"]
+    if (
+        candidate_precision_interval is None
+        or candidate_recall_interval is None
+        or reference_precision is None
+        or reference_recall is None
+    ):
         return {
             "status": "INSUFFICIENT_EVIDENCE",
-            "reasons": ["precision or recall denominator is zero"],
+            "reasons": [
+                "candidate or reference precision or recall denominator is zero"
+            ],
         }
     margin = policy["non_inferiority_margin"]
-    precision_pass = candidate_precision_interval[0] >= reference_metrics["precision"] - margin
-    recall_pass = candidate_recall_interval[0] >= reference_metrics["recall"] - margin
+    precision_pass = candidate_precision_interval[0] >= reference_precision - margin
+    recall_pass = candidate_recall_interval[0] >= reference_recall - margin
     high_recall = candidate_metrics["critical_high_recall"]
     high_pass = high_recall is not None and high_recall >= policy["required_critical_high_recall"]
     return {
