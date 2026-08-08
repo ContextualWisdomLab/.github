@@ -222,7 +222,7 @@ def test_reviewer_names_and_completed_review_evidence_fail_closed() -> None:
 
 
 def test_parity_refuses_small_missing_or_zero_denominator_evidence() -> None:
-    """Parity must remain unavailable for underpowered or missing-reviewer data."""
+    """Parity must remain unavailable for underpowered or invalid reviewer evidence."""
     report = quality.score_benchmark(benchmark("head_matched_gold", 2))
     assert report["parity_gate"]["status"] == "INSUFFICIENT_EVIDENCE"
     assert len(report["parity_gate"]["reasons"]) == 2
@@ -230,9 +230,10 @@ def test_parity_refuses_small_missing_or_zero_denominator_evidence() -> None:
     value = benchmark("head_matched_gold", 100)
     for case in value["cases"]:
         del case["reviewers"]["coderabbit"]
-    assert quality.score_benchmark(value)["parity_gate"]["reasons"] == [
-        "candidate or reference reviewer is absent"
-    ]
+    with pytest.raises(
+        quality.BenchmarkValidationError, match="candidate or reference reviewer"
+    ):
+        quality.validate_benchmark(value)
 
     value = benchmark("head_matched_gold", 100)
     for case in value["cases"]:
