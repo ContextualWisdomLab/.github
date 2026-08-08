@@ -21,7 +21,6 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       ORGANIZATION: ContextualWisdomLab
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
       ROTATION_SEED: ${{ github.run_number }}
       MAX_REPOSITORIES: "200"
       MAX_REVIEW_DISPATCHES: "1"
@@ -49,6 +48,8 @@ jobs:
           python-version: "3.14"
 
       - name: Coordinate one bounded fleet pass
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           if [ -z "${GH_TOKEN:-}" ]; then
