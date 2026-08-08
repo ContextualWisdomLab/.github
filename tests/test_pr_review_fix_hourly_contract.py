@@ -153,7 +153,7 @@ def test_review_fix_scheduler_retries_same_head_after_one_hour() -> None:
 
 
 def test_review_fix_scheduler_remains_bounded_and_single_flight() -> None:
-    """Higher cadence never expands mutation volume or cancels an in-flight scan."""
+    """Higher cadence keeps one mutation and supersedes only a stale queue scan."""
     reusable = _read(_REUSABLE_WORKFLOW)
     caller = _read(_CLEARFOLIO_CALLER)
 
@@ -161,7 +161,8 @@ def test_review_fix_scheduler_remains_bounded_and_single_flight() -> None:
         "target_repository:", maxsplit=1
     )[0]
     assert 'default: "1"' in dispatch_block
-    assert "cancel-in-progress: false" in reusable
+    assert "cancel-in-progress: true" in reusable
+    assert "separately dispatched per-PR OpenCode worker" in reusable
     assert "MAX_DISPATCHES" in reusable
     assert "cancel-in-progress: false" in caller
 
