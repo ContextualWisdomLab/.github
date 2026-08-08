@@ -10,7 +10,7 @@ The coordinator may dispatch at most one review-repair workflow and one product-
 
 A single workflow cannot safely write every repository merely because it runs in the organization `.github` repository. GitHub's default `GITHUB_TOKEN` is scoped to the repository containing the workflow; cross-repository Actions dispatch therefore requires an explicitly provisioned user or GitHub App credential with the required repository and Actions permissions. This control does not make every repository directly writable. It only considers repositories the live API reports as organization-owned, non-fork, enabled, non-archived, default-branch-bearing, and writable by the authenticated installation.
 
-The central job therefore refuses a repository-scoped token fallback. It requires `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`, while the coordinator itself receives neither `NVIDIA_NIM_API_KEY` nor `COPILOT_GITHUB_TOKEN`. Model credentials remain inside separately reviewed repository-local or central workers.
+The central job therefore refuses both repository-scoped and reviewer-scoped token fallbacks. It requires the maintainer-scoped `PR_REVIEW_MERGE_TOKEN`; `OPENCODE_APPROVE_TOKEN` remains isolated to the reviewer credential chain and `GITHUB_TOKEN` is not accepted for cross-repository coordination. The coordinator itself receives neither `NVIDIA_NIM_API_KEY` nor `COPILOT_GITHUB_TOKEN`. Model credentials remain inside separately reviewed repository-local or central workers.
 
 ## Dynamic repository-writer lease
 
@@ -42,7 +42,9 @@ The repository-local entrypoint remains responsible for its own bounded editable
 
 ## Failure and operations
 
-The schedule runs at minute 7 rather than minute 0 to reduce exposure to the documented start-of-hour GitHub Actions load spike. Scheduled execution occurs only from the default branch. Organization and repository inventories are paginated. One inaccessible repository is recorded as an inspection error while other independently safe repositories continue.
+The schedule runs at minute 7 rather than minute 0 to reduce exposure to the documented start-of-hour GitHub Actions load spike. The central workflow has no `workflow_dispatch` entrypoint, so branch-selected coordinator source cannot be executed; scheduled execution occurs only from protected default `main`. Local operators may use the script's `--dry-run` mode from a reviewed checkout without adding a central manual workflow entrypoint.
+
+Organization and repository inventories are paginated. One inaccessible repository is recorded as an inspection error while other independently safe repositories continue.
 
 No queued, pending, skipped-required, cancelled, absent, stale-head, predecessor-head, synthetic-merge-only, or failed check is converted to passing evidence. The coordinator's successful dispatch means only that exact state was revalidated and a bounded downstream workflow was accepted by GitHub.
 
