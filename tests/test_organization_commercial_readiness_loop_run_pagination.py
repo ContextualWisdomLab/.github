@@ -18,7 +18,7 @@ def test_active_writer_inventory_paginates_every_status(
         del method, payload
         requested_paths.append(path)
         status = path.split("status=")[1].split("&")[0]
-        page = int(path.split("page=")[1])
+        page = int(path.rsplit("page=", maxsplit=1)[1])
         if status == "queued" and page == 1:
             return {
                 "workflow_runs": [
