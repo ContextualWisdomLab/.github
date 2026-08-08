@@ -16,6 +16,7 @@ from typing import Any
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_AUTOFIX_CONTROL_PREFIXES = (".github/", "scripts/ci/")
 
 
 def run_json(args: list[str]) -> Any:
@@ -144,8 +145,13 @@ def check_summary(status_rollup: list[dict[str, Any]] | None) -> list[str]:
     return lines
 
 
+def _is_autofix_control_path(path: str) -> bool:
+    """Return whether ``path`` can change the autonomous writer or CI control plane."""
+    return path.startswith(_AUTOFIX_CONTROL_PREFIXES)
+
+
 def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
-    """Return unique safe repository paths in first-seen review order."""
+    """Return unique safe non-control repository paths in first-seen review order."""
     paths: list[str] = []
     seen: set[str] = set()
     for thread in threads:
@@ -157,6 +163,7 @@ def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
                 or any(delimiter in path for delimiter in ("\0", "\r", "\n", "`"))
                 or path.startswith("/")
                 or ".." in path.split("/")
+                or _is_autofix_control_path(path)
                 or path in seen
             ):
                 continue
