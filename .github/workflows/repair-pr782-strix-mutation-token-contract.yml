@@ -1,0 +1,88 @@
+name: Repair PR 782 Strix mutation-token contract
+
+on:
+  push:
+    branches:
+      - fix/hourly-nvidia-nim-review-repair-main
+    paths:
+      - .github/workflows/repair-pr782-strix-mutation-token-contract.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr782-strix-mutation-token-contract
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/fix/hourly-nvidia-nim-review-repair-main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact trigger without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Replace the stale workflow-token fallback assertion
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/ci/test_strix_quick_gate.sh')
+          text = path.read_text(encoding='utf-8')
+          old = "\tassert_file_contains \"$fix_workflow_file\" 'GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}' \"fix scheduler uses central mutation credentials before falling back to the workflow token\"\n"
+          new = (
+              "\tassert_file_contains \"$fix_workflow_file\" 'GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}' \"fix scheduler uses explicit central mutation credentials or the exchanged OpenCode app token\"\n"
+              "\tassert_file_not_contains \"$fix_workflow_file\" 'GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}' \"fix scheduler never treats the read-only workflow token as mutation authority\"\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one stale Strix mutation-token assertion, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          bash -n scripts/ci/test_strix_quick_gate.sh
+          git diff --check
+
+      - name: Re-run the authoritative Strix quick-gate contract
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: '3'
+          STRIX_TEST_FAKE_SLEEP_SECONDS: '5'
+        run: bash scripts/ci/test_strix_quick_gate.sh
+
+      - name: Publish only the verified exact-head repair
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: fix/hourly-nvidia-nim-review-repair-main
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          rm .github/workflows/repair-pr782-strix-mutation-token-contract.yml
+          git add scripts/ci/test_strix_quick_gate.sh .github/workflows/repair-pr782-strix-mutation-token-contract.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'test(security): align Strix with explicit scheduler mutation authority'
+          test -n "$PUSH_TOKEN"
+          auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${SOURCE_BRANCH}"
