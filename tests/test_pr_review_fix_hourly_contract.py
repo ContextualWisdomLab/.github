@@ -6,12 +6,14 @@ from pathlib import Path
 
 
 _REUSABLE_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
+_AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 _CLEARFOLIO_CALLER = Path(".github/workflows/clearfolio-hourly-review-repair.yml")
 _CONTRACT_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+_AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 
 
 def _read(path: Path) -> str:
-    """Return one canonical workflow as UTF-8 text."""
+    """Return one canonical workflow or guide as UTF-8 text."""
     return path.read_text(encoding="utf-8")
 
 
@@ -140,3 +142,43 @@ def test_contract_workflow_tracks_the_product_caller() -> None:
     text = _read(_CONTRACT_WORKFLOW)
 
     assert text.count(".github/workflows/clearfolio-hourly-review-repair.yml") == 2
+
+
+def test_autofix_agent_performs_rca_before_selecting_a_remediation() -> None:
+    """The writer must diagnose the exact-head cause before it edits the tree."""
+    text = _read(_AUTOFIX_WORKFLOW)
+
+    assert "Establish the root cause from exact current-head evidence before editing." in text
+    assert "List the smallest plausible remediation candidates" in text
+    assert "Do not call a remediation feasible merely because it sounds reasonable." in text
+
+
+def test_autofix_agent_proves_remediation_feasibility_before_writing() -> None:
+    """A candidate action is executable only inside the sealed authority boundary."""
+    text = _read(_AUTOFIX_WORKFLOW)
+
+    for requirement in (
+        "current repository-writer authority",
+        "sealed allowed paths",
+        "credential and protected-setting requirements",
+        "stack and dependency order",
+        "focused test or exact-head check can verify the result",
+        "actually changes the root cause rather than only restating the blocker",
+    ):
+        assert requirement in text
+    assert "If no repository edit is feasible within this worker's authority" in text
+    assert "leave the tree unchanged" in text
+
+
+def test_hourly_loop_continues_productive_work_around_external_latency() -> None:
+    """Pending external gates block merge, not unrelated bounded progress."""
+    workflow = _read(_AUTOFIX_WORKFLOW)
+    guide = _read(_AUTOMATION_GUIDE)
+
+    sentence = (
+        "Queued reviews or checks remain merge blockers, but their latency is not a reason "
+        "to invent a code change or stop the broader scheduler from processing other eligible work."
+    )
+    assert sentence in workflow
+    assert "RCA and remediation-feasibility gate" in guide
+    assert "continue with the next eligible bounded PR or buyer-visible product gap" in guide
