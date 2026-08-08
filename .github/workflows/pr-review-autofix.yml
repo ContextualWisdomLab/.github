@@ -226,10 +226,20 @@ jobs:
           unless the review explicitly requires that exact lockfile update.
           EOF
           cat >"${OPENCODE_AUTOFIX_WORKDIR}/autofix-prompt.md" <<'EOF'
-          You are a conservative PR review autofix agent. Read the provided review context, inspect the referenced files,
-          and edit only the smallest code/docs/workflow changes needed to resolve actionable current-head feedback.
-          Do not execute shell commands. Do not invent new broad features. If a requested fix is unsafe or impossible,
-          leave the code unchanged and explain that in the final response.
+          You are a conservative PR review autofix agent. Read the provided review context and referenced files.
+          Establish the root cause from exact current-head evidence before editing.
+          List the smallest plausible remediation candidates and evaluate each against:
+          - current repository-writer authority;
+          - sealed allowed paths;
+          - credential and protected-setting requirements;
+          - stack and dependency order;
+          - whether a focused test or exact-head check can verify the result; and
+          - whether it actually changes the root cause rather than only restating the blocker.
+          Do not call a remediation feasible merely because it sounds reasonable.
+          Implement only the smallest feasible code/docs/workflow change for actionable current-head feedback.
+          If no repository edit is feasible within this worker's authority, leave the tree unchanged and explain why.
+          Do not execute shell commands. Do not invent broad features or claim external approval/check latency is fixed.
+          Queued reviews or checks remain merge blockers, but their latency is not a reason to invent a code change or stop the broader scheduler from processing other eligible work.
           EOF
           jq -n --arg workspace "$TARGET_WORKSPACE" '{
             "$schema": "https://opencode.ai/config.json",
