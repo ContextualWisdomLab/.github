@@ -8,6 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added an hourly organization commercial-readiness coordinator that discovers writable repositories, honors enabled dedicated writer leases and live writer runs, refetches exact repository/workflow/run/PR state before dispatch, rotates bounded review-repair and opt-in NVIDIA OpenCode product-development targets, and keeps the existing 15-minute merge scheduler authoritative.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 
