@@ -15,6 +15,7 @@ on:
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
       - "scripts/ci/pr_review_merge_scheduler.py"
+      - "scripts/ci/pr_review_fix_scheduler.py"
       - "scripts/ci/test_strix_quick_gate.sh"
       - "tests/test_agent_mention_*.py"
       - "tests/test_opencode_agent_contract.py"
@@ -37,6 +38,7 @@ on:
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
       - "scripts/ci/pr_review_merge_scheduler.py"
+      - "scripts/ci/pr_review_fix_scheduler.py"
       - "scripts/ci/test_strix_quick_gate.sh"
       - "tests/test_agent_mention_*.py"
       - "tests/test_opencode_agent_contract.py"
@@ -117,6 +119,7 @@ jobs:
           include =
               scripts/ci/agent_mention_router.py
               scripts/ci/agent_mention_sweep.py
+              scripts/ci/pr_review_merge_scheduler.py
           [report]
           fail_under = 100
           show_missing = True
@@ -127,6 +130,7 @@ jobs:
           python -m coverage report --fail-under=100
           python -m interrogate --fail-under=100 \
             scripts/ci/agent_mention_router.py \
-            scripts/ci/agent_mention_sweep.py
+            scripts/ci/agent_mention_sweep.py \
+            scripts/ci/pr_review_merge_scheduler.py
           python -m compileall -q scripts/ci tests
           git diff --check "$CHANGE_DIFF_RANGE"
