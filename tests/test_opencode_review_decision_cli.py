@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import json
 import runpy
+import sys
 from pathlib import Path
 
 import pytest
+
+TEST_DIR = Path(__file__).resolve().parent
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
 
 from opencode_review_decision_test_support import MODULE_PATH, decision, envelope, finding
 

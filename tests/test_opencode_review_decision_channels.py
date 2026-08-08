@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import copy
+import sys
+from pathlib import Path
+
+TEST_DIR = Path(__file__).resolve().parent
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
 
 from opencode_review_decision_test_support import check, decision, envelope, finding
 
