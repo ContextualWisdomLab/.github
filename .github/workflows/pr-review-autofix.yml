@@ -32,6 +32,7 @@ jobs:
       PR_HEAD_REF: ${{ github.event.client_payload.pr_head_ref }}
       PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
       RESOLVE_CONFLICT: ${{ github.event.client_payload.resolve_conflict || 'false' }}
+      REPAIR_MODE: ${{ github.event.client_payload.repair_mode || 'review' }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -138,6 +139,28 @@ jobs:
             echo "::error::resolve_conflict must be exactly true or false."
             exit 1
           fi
+          # Preserve compatibility with predecessor conflict dispatches that did
+          # not yet send repair_mode, while keeping the effective mode explicit
+          # for all later steps.
+          if [ "$RESOLVE_CONFLICT" = "true" ] && [ "$REPAIR_MODE" = "review" ]; then
+            REPAIR_MODE="conflict"
+            echo "REPAIR_MODE=conflict" >>"$GITHUB_ENV"
+          fi
+          case "$REPAIR_MODE" in
+            review|rca|conflict) ;;
+            *)
+              echo "::error::repair_mode must be exactly review, rca, or conflict."
+              exit 1
+              ;;
+          esac
+          if [ "$RESOLVE_CONFLICT" = "true" ] && [ "$REPAIR_MODE" != "conflict" ]; then
+            echo "::error::resolve_conflict=true requires repair_mode=conflict."
+            exit 1
+          fi
+          if [ "$RESOLVE_CONFLICT" = "false" ] && [ "$REPAIR_MODE" = "conflict" ]; then
+            echo "::error::repair_mode=conflict requires resolve_conflict=true."
+            exit 1
+          fi
 
           live_pr_json="$(gh api -X GET "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(jq -r '.state // empty' <<<"$live_pr_json")"
@@ -204,12 +227,25 @@ jobs:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
-          python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_autofix_context.py" \
-            --repo "$TARGET_REPOSITORY" \
-            --pr-number "$PR_NUMBER" \
-            --head-sha "$PR_HEAD_SHA" \
-            --output "$RUNNER_TEMP/pr-review-autofix-context.md" \
+          failed_check_evidence="$RUNNER_TEMP/pr-review-autofix-failed-check-evidence.md"
+          context_args=(
+            --repo "$TARGET_REPOSITORY"
+            --pr-number "$PR_NUMBER"
+            --head-sha "$PR_HEAD_SHA"
+            --repair-mode "$REPAIR_MODE"
+            --output "$RUNNER_TEMP/pr-review-autofix-context.md"
             --allowed-paths-output "$RUNNER_TEMP/pr-review-autofix-allowed-paths.zlist"
+          )
+          if [ "$REPAIR_MODE" = "rca" ]; then
+            GH_REPOSITORY="$TARGET_REPOSITORY" \
+              PR_NUMBER="$PR_NUMBER" \
+              HEAD_SHA="$PR_HEAD_SHA" \
+              bash "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/collect_failed_check_evidence.sh" \
+                "$failed_check_evidence"
+            context_args+=(--failed-check-evidence "$failed_check_evidence")
+          fi
+          python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_autofix_context.py" \
+            "${context_args[@]}"
 
       - name: Prepare isolated OpenCode autofix workspace
         env:
