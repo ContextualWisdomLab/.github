@@ -41,14 +41,15 @@ def finding(identifier: str, gold_identifier: str) -> dict[str, Any]:
     }
 
 
-def reviewer(identifier: str, gold_identifier: str) -> dict[str, Any]:
-    """Build one completed semantic review fixture."""
+def reviewer(identifier: str, gold_identifier: str, head_sha: str) -> dict[str, Any]:
+    """Build one completed semantic review fixture bound to the exact case head."""
     return {
         "triggered_attempts": 1,
         "completed_attempts": 1,
         "rate_limited_attempts": 0,
         "infrastructure_only_reviews": 0,
         "duplicate_reviews": 0,
+        "reviewed_head_sha": head_sha,
         "findings": [finding(identifier, gold_identifier)],
     }
 
@@ -58,6 +59,7 @@ def benchmark(count: int = 50) -> dict[str, Any]:
     cases: list[dict[str, Any]] = []
     for index in range(count):
         gold_identifier = f"gold-{index}"
+        head_sha = f"{index:040x}"
         cases.append(
             {
                 "case_id": f"case-{index}",
@@ -65,15 +67,19 @@ def benchmark(count: int = 50) -> dict[str, Any]:
                 "pull_request_number": index + 1,
                 "head_match": True,
                 "base_sha": "a" * 40,
-                "head_sha": f"{index:040x}",
+                "head_sha": head_sha,
                 "diff_size_bucket": ("small", "medium", "large")[index % 3],
                 "primary_language": ("python", "rust", "typescript")[index % 3],
                 "gold_findings": [
                     {"finding_id": gold_identifier, "severity": "high"}
                 ],
                 "reviewers": {
-                    "opencode": reviewer(f"opencode-{index}", gold_identifier),
-                    "coderabbit": reviewer(f"coderabbit-{index}", gold_identifier),
+                    "opencode": reviewer(
+                        f"opencode-{index}", gold_identifier, head_sha
+                    ),
+                    "coderabbit": reviewer(
+                        f"coderabbit-{index}", gold_identifier, head_sha
+                    ),
                 },
             }
         )
