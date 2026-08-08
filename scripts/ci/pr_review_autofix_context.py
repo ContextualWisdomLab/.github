@@ -58,16 +58,15 @@ def pr_view(repo: str, number: int) -> dict[str, Any]:
 
 
 def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any]]:
-    """Return current-head approval or change-request reviews."""
+    """Return exact-current-head approval or change-request reviews."""
     pages = run_json(
         ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"]
     )
     reviews = [review for page in pages for review in page]
     current: list[dict[str, Any]] = []
     for review in reviews:
-        body = str(review.get("body") or "")
         commit_id = str(review.get("commit_id") or "")
-        if commit_id != head_sha and head_sha not in body:
+        if commit_id != head_sha:
             continue
         if str(review.get("state") or "").upper() not in {
             "CHANGES_REQUESTED",
