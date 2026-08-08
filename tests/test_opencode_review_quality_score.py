@@ -16,6 +16,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/opencode_review_quality_score.py"
 PILOT_PATH = ROOT / "benchmarks/opencode_review/pilot_baseline_v1.json"
+BASE_SHA = "1" * 40
+HEAD_SHA = "2" * 40
 
 
 def load_module() -> ModuleType:
@@ -44,9 +46,12 @@ def finding(identifier: str, gold_id: str | None = None, actionable: bool = True
     }
 
 
-def reviewer(findings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def reviewer(
+    findings: list[dict[str, Any]] | None = None,
+    reviewed_head_sha: str | None = None,
+) -> dict[str, Any]:
     """Build one successful reviewer-run fixture."""
-    return {
+    value = {
         "triggered_attempts": 1,
         "completed_attempts": 1,
         "rate_limited_attempts": 0,
@@ -54,6 +59,9 @@ def reviewer(findings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         "duplicate_reviews": 0,
         "findings": findings or [],
     }
+    if reviewed_head_sha is not None:
+        value["reviewed_head_sha"] = reviewed_head_sha
+    return value
 
 
 def benchmark(mode: str = "historical_lifecycle", count: int = 1) -> dict[str, Any]:
@@ -82,12 +90,21 @@ def benchmark(mode: str = "historical_lifecycle", count: int = 1) -> dict[str, A
                 "repository": "ContextualWisdomLab/example",
                 "pull_request_number": index + 1,
                 "head_match": head_match,
+                **({"base_sha": BASE_SHA, "head_sha": HEAD_SHA} if head_match else {}),
                 "diff_size_bucket": ("small", "medium", "large")[index % 3],
                 "primary_language": ("python", "rust", "typescript", "go")[index % 4],
                 "gold_findings": ([{"finding_id": gold_id, "severity": "high"}] if head_match else []),
                 "reviewers": {
-                    "opencode": reviewer([finding(f"opencode-{index}", gold_id)] if head_match else [finding(f"opencode-{index}")]),
-                    "coderabbit": reviewer([finding(f"coderabbit-{index}", gold_id)] if head_match else []),
+                    "opencode": reviewer(
+                        [finding(f"opencode-{index}", gold_id)]
+                        if head_match
+                        else [finding(f"opencode-{index}")],
+                        HEAD_SHA if head_match else None,
+                    ),
+                    "coderabbit": reviewer(
+                        [finding(f"coderabbit-{index}", gold_id)] if head_match else [],
+                        HEAD_SHA if head_match else None,
+                    ),
                 },
             }
         )
@@ -160,6 +177,50 @@ def test_duplicate_and_unmatched_findings_count_as_false_positives() -> None:
     assert metrics["precision"] == 0.980392
 
 
+def test_head_matched_evidence_requires_exact_matching_shas() -> None:
+    """Gold metrics must bind every reviewer to one immutable PR head."""
+    value = benchmark("head_matched_gold", 100)
+    del value["cases"][0]["base_sha"]
+    with pytest.raises(quality.BenchmarkValidationError, match="base_sha"):
+        quality.validate_benchmark(value)
+
+    value = benchmark("head_matched_gold", 100)
+    value["cases"][0]["head_sha"] = "not-a-sha"
+    with pytest.raises(quality.BenchmarkValidationError, match="head_sha"):
+        quality.validate_benchmark(value)
+
+    value = benchmark("head_matched_gold", 100)
+    value["cases"][0]["reviewers"]["opencode"]["reviewed_head_sha"] = "3" * 40
+    with pytest.raises(quality.BenchmarkValidationError, match="reviewed_head_sha"):
+        quality.validate_benchmark(value)
+
+
+def test_reference_zero_denominator_returns_insufficient_evidence() -> None:
+    """A reference with no actionable findings must not cause arithmetic failure."""
+    value = benchmark("head_matched_gold", 100)
+    for case in value["cases"]:
+        case["reviewers"]["coderabbit"]["findings"] = []
+    assert quality.score_benchmark(value)["parity_gate"] == {
+        "status": "INSUFFICIENT_EVIDENCE",
+        "reasons": ["candidate or reference precision or recall denominator is zero"],
+    }
+
+
+def test_reviewer_names_and_completed_review_evidence_fail_closed() -> None:
+    """Case-fold collisions and findings without a completed review are invalid."""
+    value = benchmark()
+    value["cases"][0]["reviewers"]["OpenCode"] = copy.deepcopy(
+        value["cases"][0]["reviewers"]["opencode"]
+    )
+    with pytest.raises(quality.BenchmarkValidationError, match="reviewer name duplicates"):
+        quality.validate_benchmark(value)
+
+    value = benchmark()
+    value["cases"][0]["reviewers"]["opencode"]["completed_attempts"] = 0
+    with pytest.raises(quality.BenchmarkValidationError, match="findings require"):
+        quality.validate_benchmark(value)
+
+
 def test_parity_refuses_small_missing_or_zero_denominator_evidence() -> None:
     """Parity must remain unavailable for underpowered or missing-reviewer data."""
     report = quality.score_benchmark(benchmark("head_matched_gold", 2))
@@ -178,7 +239,7 @@ def test_parity_refuses_small_missing_or_zero_denominator_evidence() -> None:
         case["reviewers"]["opencode"]["findings"] = []
         case["reviewers"]["coderabbit"]["findings"] = []
     assert quality.score_benchmark(value)["parity_gate"]["reasons"] == [
-        "precision or recall denominator is zero"
+        "candidate or reference precision or recall denominator is zero"
     ]
 
 
@@ -263,6 +324,12 @@ def _duplicate_finding(value: dict[str, Any]) -> dict[str, Any]:
 
 def test_gold_validation_and_head_match_contracts() -> None:
     """Gold mode must reject stale heads, invalid severities, and duplicate gold IDs."""
+    value = benchmark()
+    value["cases"][0]["gold_findings"] = [
+        {"finding_id": "unmatched-gold", "severity": "high"}
+    ]
+    with pytest.raises(quality.BenchmarkValidationError, match="head_match=true"):
+        quality.validate_benchmark(value)
     value = benchmark("head_matched_gold")
     value["cases"][0]["head_match"] = False
     with pytest.raises(quality.BenchmarkValidationError, match="head_match"):
