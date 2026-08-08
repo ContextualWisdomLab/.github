@@ -52,11 +52,22 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
 
 
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:
-    """Coverage includes the two script paths instead of treating paths as modules."""
+    """Coverage and docstring gates include every changed production helper."""
 
     text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+    trigger_block = text.split("\nconcurrency:\n", 1)[0]
     coverage_config = text.split("[run]\n", 1)[1].split("[report]\n", 1)[0]
+    interrogate_block = text.split(
+        "python -m interrogate --fail-under=100 \\\n", 1
+    )[1].split("\n          python -m compileall", 1)[0]
+
     assert "include =" in coverage_config
     assert "source =" not in coverage_config
-    assert "scripts/ci/agent_mention_router.py" in coverage_config
-    assert "scripts/ci/agent_mention_sweep.py" in coverage_config
+    for production_path in (
+        "scripts/ci/agent_mention_router.py",
+        "scripts/ci/agent_mention_sweep.py",
+        "scripts/ci/pr_review_merge_scheduler.py",
+    ):
+        assert production_path in coverage_config
+        assert production_path in interrogate_block
+    assert trigger_block.count('"scripts/ci/pr_review_fix_scheduler.py"') == 2
