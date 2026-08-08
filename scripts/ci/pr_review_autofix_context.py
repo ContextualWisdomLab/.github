@@ -90,7 +90,7 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
         }:
             continue
         exact_head.append(review)
-    return [*malformed[-8:], *exact_head[-8:]]
+    return [*exact_head[-8:], *malformed[-8:]]
 
 
 def review_threads(repo: str, number: int) -> list[dict[str, Any]]:
