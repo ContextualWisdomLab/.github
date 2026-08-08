@@ -63,9 +63,9 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
         ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"]
     )
     reviews = [review for page in pages for review in page]
-    malformed: list[dict[str, Any]] = []
-    exact_head: list[dict[str, Any]] = []
-    for review in reviews:
+    malformed: list[tuple[int, dict[str, Any]]] = []
+    exact_head: list[tuple[int, dict[str, Any]]] = []
+    for position, review in enumerate(reviews):
         state = str(review.get("state") or "").upper()
         commit_id = str(review.get("commit_id") or "")
         if commit_id != head_sha:
@@ -75,13 +75,16 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
                 and not SHA_RE.fullmatch(commit_id)
             ):
                 malformed.append(
-                    {
-                        **review,
-                        "body": (
-                            "Review commit binding is malformed; treating this as a "
-                            "blocking diagnostic only and ignoring the review body."
-                        ),
-                    }
+                    (
+                        position,
+                        {
+                            **review,
+                            "body": (
+                                "Review commit binding is malformed; treating this as a "
+                                "blocking diagnostic only and ignoring the review body."
+                            ),
+                        },
+                    )
                 )
             continue
         if state not in {
@@ -89,8 +92,10 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
             "APPROVED",
         }:
             continue
-        exact_head.append(review)
-    return [*exact_head[-8:], *malformed[-8:]]
+        exact_head.append((position, review))
+    selected = [*malformed[-8:], *exact_head[-8:]]
+    selected.sort(key=lambda item: item[0])
+    return [review for _, review in selected]
 
 
 def review_threads(repo: str, number: int) -> list[dict[str, Any]]:
