@@ -7,7 +7,7 @@ on:
       - ".github/workflows/organization-commercial-readiness-loop.yml"
       - ".github/workflows/organization-commercial-readiness-loop-quality-ci.yml"
       - "scripts/ci/organization_commercial_readiness_loop.py"
-      - "tests/organization_commercial_readiness_fixtures.py"
+      - "organization_commercial_readiness_fixtures.py"
       - "tests/test_organization_commercial_readiness_loop*.py"
       - "docs/doctoring/organization-commercial-readiness-loop.md"
       - "CHANGELOG.md"
@@ -60,14 +60,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           python -m coverage run \
             --branch \
-            --include='scripts/ci/organization_commercial_readiness_loop.py' \
-            -m pytest tests/test_organization_commercial_readiness_loop*.py -q
+            -m pytest --import-mode=importlib tests/test_organization_commercial_readiness_loop*.py -q
           python -m coverage report \
             --include='scripts/ci/organization_commercial_readiness_loop.py' \
             --show-missing \
             --fail-under=100
           python -m compileall -q \
             scripts/ci/organization_commercial_readiness_loop.py \
-            tests/organization_commercial_readiness_fixtures.py \
+            organization_commercial_readiness_fixtures.py \
             tests/test_organization_commercial_readiness_loop*.py
           git diff --exit-code
