@@ -314,7 +314,7 @@ class GitHubClient:
         return sha.lower()
 
     def list_workflows(self, repository: str, exact_ref: str) -> tuple[WorkflowRecord, ...]:
-        """Return active and disabled workflow metadata with exact-ref source evidence."""
+        """Return workflow metadata and exact source only for writer candidates."""
         workflows: list[WorkflowRecord] = []
         page = 1
         while True:
@@ -329,7 +329,11 @@ class GitHubClient:
                 state = str(raw.get("state") or "unknown")
                 content: str | None = None
                 content_sha = ""
-                if path and not path.startswith("dynamic/"):
+                if (
+                    path
+                    and not path.startswith("dynamic/")
+                    and _writer_signal(name, path)
+                ):
                     encoded_path = quote(path, safe="/")
                     try:
                         source = self.request(
@@ -734,8 +738,8 @@ def run_once(
     )
 
 
-def _positive_int(value: str) -> int:
-    """Parse one positive integer command-line bound."""
+def _non_negative_int(value: str) -> int:
+    """Parse one non-negative integer command-line bound."""
     parsed = int(value)
     if parsed < 0:
         raise argparse.ArgumentTypeError("value must be zero or greater")
@@ -747,9 +751,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--organization", default=DEFAULT_ORGANIZATION)
     parser.add_argument("--rotation-seed", type=int, default=0)
-    parser.add_argument("--max-repositories", type=_positive_int, default=200)
-    parser.add_argument("--max-review-dispatches", type=_positive_int, default=1)
-    parser.add_argument("--max-development-dispatches", type=_positive_int, default=1)
+    parser.add_argument("--max-repositories", type=_non_negative_int, default=200)
+    parser.add_argument("--max-review-dispatches", type=_non_negative_int, default=1)
+    parser.add_argument("--max-development-dispatches", type=_non_negative_int, default=1)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-output", type=Path)
     return parser
@@ -794,7 +798,13 @@ def main(
     if summary_path:
         with Path(summary_path).open("a", encoding="utf-8") as handle:
             handle.write(report.to_markdown())
-    return 0
+    all_selected_inspections_failed = (
+        report.inspected_repositories == 0 and bool(report.inspection_errors)
+    )
+    all_planned_dispatches_failed = bool(report.actions) and all(
+        action.status == "dispatch_failed" for action in report.actions
+    )
+    return 1 if all_selected_inspections_failed or all_planned_dispatches_failed else 0
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through main()
