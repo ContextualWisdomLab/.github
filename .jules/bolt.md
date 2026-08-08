@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2026-07-28 - Regex Pre-compilation and Index Advancing for Character-by-Character Scanning
+**Learning:** In Python, character-by-character scanning inside a loop (`while cursor < len(text): cursor += 1`) can cause severe O(N) overhead for large strings, especially when a complex function is called at every index (like `_consume_sensitive_assignment` in `scripts/ci/redact_sensitive_log.py`).
+**Action:** When searching for substrings or patterns in a large string, prefer using a pre-compiled regex `.search(text, cursor)` to jump efficiently to the next potential match location rather than iterating manually.

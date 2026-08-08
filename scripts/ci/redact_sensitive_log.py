@@ -101,14 +101,36 @@ def _redact_assignments(text: str) -> str:
     cursor = 0
     last_append = 0
     while cursor < len(text):
-        match = _consume_sensitive_assignment(text, cursor)
+        m = SENSITIVE_KEY_RE.search(text, cursor)
+        if not m:
+            break
+
+        pos = m.start()
+        start = pos
+        while start > cursor and text[start - 1] in KEY_CHARS:
+            start -= 1
+
+        earliest_start = start
+        if earliest_start > cursor and text[earliest_start - 1] in "\"'":
+            earliest_start -= 1
+
+        match = None
+        for try_start in range(earliest_start, pos + 1):
+            match = _consume_sensitive_assignment(text, try_start)
+            if match is not None:
+                start = try_start
+                break
+
         if match is None:
-            cursor += 1
+            cursor = pos + 1
             continue
-        output.append(text[last_append:cursor])
-        replacement, cursor = match
+
+        output.append(text[last_append:start])
+        replacement, next_cursor = match
         output.append(replacement)
-        last_append = cursor
+        last_append = next_cursor
+        cursor = next_cursor
+
     output.append(text[last_append:])
     return "".join(output)
 
