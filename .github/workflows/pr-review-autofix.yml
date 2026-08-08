@@ -115,7 +115,7 @@ jobs:
 
       - name: Fetch and checkout PR head
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           if ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -201,7 +201,7 @@ jobs:
 
       - name: Collect review feedback context
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_autofix_context.py" \
