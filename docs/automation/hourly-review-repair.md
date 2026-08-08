@@ -129,9 +129,7 @@ A candidate is feasible only when all of the following are true:
 
 The worker implements only the smallest candidate that passes this gate. When no
 repository edit is feasible within the worker's authority, it leaves the tree
-unchanged and records the concrete failed feasibility condition. The parent
-queue scan must then continue with the next eligible bounded PR or buyer-visible
-product gap instead of ending the productive portion of the hourly run.
+unchanged and records the concrete failed feasibility condition. The parent queue scan must then continue with the next eligible bounded PR or buyer-visible product gap instead of ending the productive portion of the hourly run.
 
 Queued reviews or checks remain merge blockers, but their latency does not make
 an unrelated code edit realistic. The scheduler may inspect another independent
