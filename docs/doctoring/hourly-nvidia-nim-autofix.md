@@ -139,6 +139,14 @@ The worker also denies every non-file interaction unnecessary for bounded repair
 The agent may read, search, list, and edit the validated same-repository PR
 worktree. It receives an authoritative file allowlist derived from current
 file-scoped actionable review context. An empty allowlist authorizes no change.
+Review-thread text is untrusted authorization input, so paths beneath `.github/`
+or `scripts/ci/` are categorically excluded from the ordinary review-derived
+allowlist. A reviewer therefore cannot turn an inline comment on a workflow,
+CODEOWNERS file, action, scheduler, or CI helper into permission for the
+autonomous writer to modify its own control plane. Such changes require a
+separately scoped, independently reviewed control-plane change rather than the
+review-autofix path.
+
 The shell independently syntax-checks changed Python, validates changed workflow
 files when `actionlint` is present, rechecks the live head, and refuses unresolved
 merge markers.
@@ -158,9 +166,10 @@ Before either model process starts, the worker creates:
 
 For conflict repair, Git supplies the allowlist through `git diff --name-only -z
 --diff-filter=U`. For ordinary repair, the context builder supplies current-head
-file-scoped actionable paths, which the workflow converts to a sorted
-NUL-delimited file. In both cases, temporary OpenCode configuration is installed
-only after the snapshot and restored before verification.
+file-scoped actionable paths after rejecting control-plane paths beneath
+`.github/` and `scripts/ci/`; the workflow converts the remaining paths to a
+sorted NUL-delimited file. In both cases, temporary OpenCode configuration is
+installed only after the snapshot and restored before verification.
 
 The trusted helper calls a fixed validated `/usr/bin/git`. Git's official
 `git-ls-files` contract is used twice: cached plus non-ignored other paths form
@@ -238,6 +247,17 @@ The ordinary write-scope defects were captured before production repair:
   focused tests and complete production statement and branch coverage remained
   green.
 
+A later Strix security review found that the review-derived allowlist still
+accepted control-plane paths. The finding was reproduced test-first at
+`4ab7693ae2fe5ed93c59ca84f93a757bed1477bd` with a regression covering workflows,
+actions, CODEOWNERS, and CI helpers. Production head
+`a8b7663580bba108a6d2186658b5acae478d2fc8` then rejected `.github/` and
+`scripts/ci/` paths while retaining ordinary product-source repair. Its focused
+quality run executed 1,075 tests plus 16 subtests and measured 100% statement and
+branch coverage for both autofix production helpers, with 100% public docstrings.
+That exact-head evidence is historical after any later documentation commit and
+must be re-established on the new current head.
+
 The later writer-model and mutation-authority hardening was likewise captured by
 permanent RED contracts before the implementation changed. Those contracts pin
 the exact NVIDIA Mistral Small 4 writer, high reasoning, absence of the obsolete
@@ -259,19 +279,21 @@ Automated tests prove:
    secrets or the exchanged OpenCode app token, never `github.token`, and fail
    closed before Git writes when no mutation authority exists;
 5. trusted helper source is checked out at the immutable workflow-run SHA;
-6. ordinary and conflict repair both snapshot before model execution and verify
+6. ordinary review-thread authorization rejects `.github/` and `scripts/ci/`
+   control-plane paths before producing the sealed allowlist;
+7. ordinary and conflict repair both snapshot before model execution and verify
    after temporary configuration restoration but before staging;
-7. tracked, untracked, and ignored-path inventories, symlink targets, mode
+8. tracked, untracked, and ignored-path inventories, symlink targets, mode
    changes, deletions, creations, and metadata races are covered;
-8. both OpenCode permission maps deny `.git` and `.git/*` after the catch-all
+9. both OpenCode permission maps deny `.git` and `.git/*` after the catch-all
    edit rule;
-9. every privileged commit and push disables repository hooks through
+10. every privileged commit and push disables repository hooks through
    `core.hooksPath=/dev/null`;
-10. every push uses the explicit target URL and never model-mutable `origin`;
-11. the independent review workflow retains its exact reviewed Git blob SHA;
-12. the production helper retains 100% statement and branch coverage and 100%
+11. every push uses the explicit target URL and never model-mutable `origin`;
+12. the independent review workflow retains its exact reviewed Git blob SHA;
+13. the production helper retains 100% statement and branch coverage and 100%
     public docstrings; and
-13. exact-current-head security, automated review, independent approval,
+14. exact-current-head security, automated review, independent approval,
     unresolved-thread, and branch-protection gates pass before merge.
 
 ## Scheduling and activation
@@ -285,11 +307,12 @@ verification.
 ## Rollback
 
 Rollback must revert the NVIDIA transport, ordinary and conflict repair scope
-contracts, `.git` denial, ignored-path inventory, hook suppression, explicit push
-destination, tests, operator guidance, doctoring, and changelog as one reviewed
-change. A partial rollback that restores ordinary diff-only validation,
-model-mutable Git metadata, repository hooks, GitHub-token model authentication,
-or a mutable helper checkout is unsafe.
+contracts, review-derived control-plane path exclusion, `.git` denial, ignored-path
+inventory, hook suppression, explicit push destination, tests, operator guidance,
+doctoring, and changelog as one reviewed change. A partial rollback that restores
+review-thread authority over `.github/` or `scripts/ci/`, ordinary diff-only
+validation, model-mutable Git metadata, repository hooks, GitHub-token model
+authentication, or a mutable helper checkout is unsafe.
 
 If NVIDIA NIM is unavailable, scheduled repair must fail closed while read-only
 review, required checks, manual maintenance, and protected merge policy remain
