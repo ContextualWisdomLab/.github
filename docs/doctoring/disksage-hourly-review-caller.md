@@ -36,15 +36,17 @@ The replacement therefore enforces these transitions:
    another eligible pull request can be considered by a later heartbeat.
 
 A queued or pending check remains a merge blocker but is not itself a code
-finding. Independent non-author approval remains an external authorization gate
-and is never synthesized by the repair worker.
+finding. The independent non-author approval remains an external authorization
+gate and is never synthesized by the repair worker.
 
 ## Cadence and concurrency
 
 The caller uses a single concurrency group and `cancel-in-progress: false`.
 This preserves an in-flight bounded RCA instead of discarding its evidence when
-the next hourly heartbeat arrives. The central scheduler and per-PR worker keep
-their own exact-head leases and mutation limits.
+the next hourly heartbeat arrives. The reusable scheduler cancels only its own
+superseded short queue scan; the separately dispatched per-PR repair worker and
+this product caller remain non-cancelling. The central scheduler and per-PR
+worker also retain exact-head leases and mutation limits.
 
 The caller sets a **two-hour same-head retry floor**. Central OpenCode and
 NVIDIA NIM work can legitimately approach two hours, so an hourly redispatch of
