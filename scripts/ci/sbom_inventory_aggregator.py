@@ -328,7 +328,7 @@ def write_inventory(inventory: dict[str, Any], markdown: str, output_dir: Path) 
 
 def _run(args: Sequence[str]) -> str:  # pragma: no cover - thin subprocess wrapper
     """Run a command and return stdout, raising on failure."""
-    process = subprocess.run(list(args), capture_output=True, text=True, check=True)
+    process = subprocess.run(list(args), capture_output=True, text=True, check=True, shell=False)  # nosec B603
     return process.stdout
 
 
