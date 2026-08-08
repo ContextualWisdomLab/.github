@@ -158,6 +158,24 @@ def test_every_exact_head_case_requires_both_compared_reviewers() -> None:
         quality.validate_benchmark(value)
 
 
+def test_lifecycle_missing_candidate_remains_insufficient_evidence() -> None:
+    """Lifecycle evidence may be sparse but must never imply reviewer parity."""
+    value = benchmark(count=1)
+    case = value["cases"][0]
+    value["evaluation_mode"] = "historical_lifecycle"
+    case["head_match"] = False
+    del case["base_sha"]
+    del case["head_sha"]
+    case["gold_findings"] = []
+    del case["reviewers"]["opencode"]
+    case["reviewers"]["coderabbit"]["findings"] = []
+    report = quality.score_benchmark(value)
+    assert report["parity_gate"]["status"] == "INSUFFICIENT_EVIDENCE"
+    assert "candidate or reference reviewer is absent" in report["parity_gate"][
+        "reasons"
+    ]
+
+
 def test_gold_match_without_source_contract_is_not_a_true_positive() -> None:
     """Mapped but unsupported comments must count as noise and leave a miss."""
     value = benchmark()
