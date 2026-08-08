@@ -75,7 +75,7 @@ def test_mutation_steps_fail_closed_before_any_git_write() -> None:
 
 
 def test_read_only_fetch_may_use_workflow_token_without_expanding_write_scope() -> None:
-    """Keep workflow-token fallback confined to a demonstrably read-only fetch step."""
+    """Keep workflow-token fallback confined to demonstrably read-only steps."""
     workflow = _workflow_text()
     fetch_header = _step_header(workflow, "Fetch and checkout PR head")
 
@@ -83,3 +83,14 @@ def test_read_only_fetch_may_use_workflow_token_without_expanding_write_scope() 
     assert "contents: read" in workflow
     assert "contents: write" not in workflow
     assert "pull-requests: write" not in workflow
+
+
+def test_read_only_steps_do_not_prefer_mutation_credentials() -> None:
+    """Use target-app or workflow read authority without exposing mutation secrets."""
+    workflow = _workflow_text()
+
+    for step_name in ("Fetch and checkout PR head", "Collect review feedback context"):
+        header = _step_header(workflow, step_name)
+        assert "steps.target_app_token.outputs.token || github.token" in header
+        assert "PR_REVIEW_MERGE_TOKEN" not in header
+        assert "OPENCODE_APPROVE_TOKEN" not in header
