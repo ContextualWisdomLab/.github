@@ -25,9 +25,10 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
 
+DEFAULT_ORGANIZATION = "ContextualWisdomLab"
 ORGANIZATION_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ENTRYPOINT_MARKER = "# cwl-org-commercial-entrypoint: v1"
-CENTRAL_REPOSITORY = "ContextualWisdomLab/.github"
+CENTRAL_REPOSITORY = f"{DEFAULT_ORGANIZATION}/.github"
 CENTRAL_REPAIR_EVENT = "pr-review-fix-scheduler"
 ACTIVE_RUN_STATES = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 WRITER_SIGNAL_RE = re.compile(
@@ -618,6 +619,10 @@ def run_once(
     dry_run: bool = False,
 ) -> RunReport:
     """Inspect the organization, revalidate targets, and dispatch bounded work."""
+    if organization != DEFAULT_ORGANIZATION:
+        raise GitHubError(
+            f"organization must be {DEFAULT_ORGANIZATION}; foreign control planes are not supported"
+        )
     raw_repositories = client.list_repositories(organization)
     eligible = sorted(
         (
@@ -740,7 +745,7 @@ def _positive_int(value: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     """Build the command-line parser used by workflow and local dry runs."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--organization", default="ContextualWisdomLab")
+    parser.add_argument("--organization", default=DEFAULT_ORGANIZATION)
     parser.add_argument("--rotation-seed", type=int, default=0)
     parser.add_argument("--max-repositories", type=_positive_int, default=200)
     parser.add_argument("--max-review-dispatches", type=_positive_int, default=1)
