@@ -17,6 +17,7 @@ from typing import Any
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _AUTOFIX_CONTROL_PREFIXES = (".github/", "scripts/ci/")
+_REPAIR_MODES = ("review", "rca", "conflict")
 _RCA_REVIEW_MARKERS = (
     "failed check",
     "failed-check",
@@ -293,6 +294,17 @@ def collect_failed_check_evidence(
     ]
 
 
+def _read_failed_check_evidence(output: Path) -> str:
+    """Return one trusted pre-collected, bounded failed-check evidence file."""
+    if not output.is_file() or output.is_symlink():
+        raise RuntimeError(
+            "pre-collected failed-check evidence is missing or not a regular file"
+        )
+    return output.read_text(encoding="utf-8", errors="replace")[
+        :_MAX_FAILED_CHECK_EVIDENCE_CHARS
+    ]
+
+
 def write_context(
     repo: str,
     number: int,
@@ -300,6 +312,8 @@ def write_context(
     output: Path,
     *,
     allowed_paths_output: Path | None = None,
+    repair_mode: str | None = None,
+    failed_check_evidence_path: Path | None = None,
 ) -> None:
     """Write bounded evidence plus a separately sealed path authorization."""
     pr = pr_view(repo, number)
@@ -310,17 +324,35 @@ def write_context(
 
     reviews = current_reviews(repo, number, head_sha)
     threads = review_threads(repo, number)
-    rca_mode = review_requires_rca(reviews)
+    detected_rca_mode = review_requires_rca(reviews)
+    if repair_mode is None:
+        rca_mode = detected_rca_mode
+    elif (repair_mode == "rca") != detected_rca_mode:
+        raise RuntimeError(
+            "requested repair mode does not match exact-head review evidence"
+        )
+    else:
+        rca_mode = detected_rca_mode
+    if failed_check_evidence_path is not None and not rca_mode:
+        raise RuntimeError(
+            "failed-check evidence is accepted only for exact-head RCA repair"
+        )
+
     paths = thread_paths(threads)
     failed_check_evidence = ""
     if rca_mode:
         paths = _unique_safe_paths([*paths, *pr_changed_paths(repo, number)])
-        failed_check_evidence = collect_failed_check_evidence(
-            repo,
-            number,
-            head_sha,
-            output.with_name("pr-review-autofix-failed-check-evidence.md"),
-        )
+        if failed_check_evidence_path is None:
+            failed_check_evidence = collect_failed_check_evidence(
+                repo,
+                number,
+                head_sha,
+                output.with_name("pr-review-autofix-failed-check-evidence.md"),
+            )
+        else:
+            failed_check_evidence = _read_failed_check_evidence(
+                failed_check_evidence_path
+            )
     if allowed_paths_output is None:
         allowed_paths_output = output.with_name(
             "pr-review-autofix-allowed-paths.zlist"
@@ -425,6 +457,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--pr-number", type=int, required=True)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--repair-mode", choices=_REPAIR_MODES)
+    parser.add_argument("--failed-check-evidence", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allowed-paths-output", type=Path)
     args = parser.parse_args(argv)
@@ -436,27 +470,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--pr-number must be positive")
     if not SHA_RE.fullmatch(args.head_sha):
         parser.error("--head-sha must be a 40-character git SHA")
+    if args.failed_check_evidence is not None and args.repair_mode != "rca":
+        parser.error("--failed-check-evidence requires --repair-mode rca")
+    if args.repair_mode == "rca" and args.failed_check_evidence is None:
+        parser.error("--repair-mode rca requires --failed-check-evidence")
     return args
 
 
 def main(argv: list[str]) -> int:
     """Run the context writer."""
     args = parse_args(argv)
-    if args.allowed_paths_output is None:
-        write_context(
-            args.repo,
-            args.pr_number,
-            args.head_sha,
-            args.output,
-        )
-    else:
-        write_context(
-            args.repo,
-            args.pr_number,
-            args.head_sha,
-            args.output,
-            allowed_paths_output=args.allowed_paths_output,
-        )
+    kwargs: dict[str, Any] = {}
+    if args.allowed_paths_output is not None:
+        kwargs["allowed_paths_output"] = args.allowed_paths_output
+    if args.repair_mode is not None:
+        kwargs["repair_mode"] = args.repair_mode
+    if args.failed_check_evidence is not None:
+        kwargs["failed_check_evidence_path"] = args.failed_check_evidence
+    write_context(
+        args.repo,
+        args.pr_number,
+        args.head_sha,
+        args.output,
+        **kwargs,
+    )
     return 0
 
 
