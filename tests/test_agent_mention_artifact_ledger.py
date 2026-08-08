@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 NOEMA_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-noema-dispatch.yml"
 OPENCODE_WORKFLOW = ROOT / ".github" / "workflows" / "agent-mention-opencode-dispatch.yml"
-DOC = ROOT / "docs" / "automation" / "review-agent-comment-invocation.md"
+DOC = ROOT / "docs" / "doctoring" / "agent-mention-concurrency-isolation.md"
 UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
