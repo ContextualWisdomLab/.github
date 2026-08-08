@@ -14,6 +14,11 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci.redact_sensitive_log import redact_text
+
 
 DEFAULT_IGNORE = (
     ".git",
@@ -169,8 +174,10 @@ def timeout_output_text(value: str | bytes | None) -> str:
     if value is None:
         return ""
     if isinstance(value, bytes):
-        return value.decode(errors="replace")
-    return value
+        text = value.decode(errors="replace")
+    else:
+        text = value
+    return redact_text(text)
 
 
 def emit_result(
@@ -219,9 +226,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_command(args.command, copied_repo, env, args.timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
             stdout = timeout_output_text(exc.stdout)
