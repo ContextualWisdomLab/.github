@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect bounded PR review feedback for a conservative autofix worker."""
+"""Collect bounded PR evidence for a conservative review-repair worker."""
 
 from __future__ import annotations
 
@@ -17,6 +17,16 @@ from typing import Any
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _AUTOFIX_CONTROL_PREFIXES = (".github/", "scripts/ci/")
+_RCA_REVIEW_MARKERS = (
+    "failed check",
+    "failed-check",
+    "coverage-evidence",
+    "strix failed",
+    "security scan failed",
+    "sast semgrep failed",
+    "codeql failed",
+)
+_MAX_FAILED_CHECK_EVIDENCE_CHARS = 120_000
 
 
 def run_json(args: list[str]) -> Any:
@@ -43,7 +53,7 @@ def repo_parts(repo: str) -> tuple[str, str]:
 
 
 def pr_view(repo: str, number: int) -> dict[str, Any]:
-    """Return the PR fields the autofix worker needs."""
+    """Return the PR fields the repair worker needs."""
     return run_json(
         [
             "pr",
@@ -52,7 +62,10 @@ def pr_view(repo: str, number: int) -> dict[str, Any]:
             "--repo",
             repo,
             "--json",
-            "number,title,body,headRefName,baseRefName,headRefOid,baseRefOid,mergeStateStatus,statusCheckRollup,url",
+            (
+                "number,title,body,headRefName,baseRefName,headRefOid,baseRefOid,"
+                "mergeStateStatus,statusCheckRollup,url"
+            ),
         ]
     )
 
@@ -87,10 +100,7 @@ def current_reviews(repo: str, number: int, head_sha: str) -> list[dict[str, Any
                     )
                 )
             continue
-        if state not in {
-            "CHANGES_REQUESTED",
-            "APPROVED",
-        }:
+        if state not in {"CHANGES_REQUESTED", "APPROVED"}:
             continue
         exact_head.append((position, review))
     selected = [*malformed[-8:], *exact_head[-8:]]
@@ -166,35 +176,70 @@ def check_summary(status_rollup: list[dict[str, Any]] | None) -> list[str]:
 
 
 def _is_autofix_control_path(path: str) -> bool:
-    """Return whether ``path`` can change the autonomous writer or CI control plane."""
+    """Return whether ``path`` can change the autonomous writer or CI plane."""
     return path.startswith(_AUTOFIX_CONTROL_PREFIXES)
 
 
-def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
-    """Return unique safe non-control repository paths in first-seen review order."""
-    paths: list[str] = []
+def _is_safe_repository_path(path: str) -> bool:
+    """Return whether a path is safe, relative, and outside the control plane."""
+    return bool(
+        path
+        and path == path.strip()
+        and not any(delimiter in path for delimiter in ("\0", "\r", "\n", "`"))
+        and not path.startswith("/")
+        and ".." not in path.split("/")
+        and not _is_autofix_control_path(path)
+    )
+
+
+def _unique_safe_paths(paths: list[str]) -> list[str]:
+    """Return safe paths in first-seen order without duplicates."""
+    unique: list[str] = []
     seen: set[str] = set()
+    for path in paths:
+        if not _is_safe_repository_path(path) or path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
+
+
+def thread_paths(threads: list[dict[str, Any]]) -> list[str]:
+    """Return unique safe non-control paths named by unresolved review threads."""
+    candidates: list[str] = []
     for thread in threads:
         for comment in (thread.get("comments") or {}).get("nodes") or []:
-            path = str(comment.get("path") or "")
-            if (
-                not path
-                or path != path.strip()
-                or any(delimiter in path for delimiter in ("\0", "\r", "\n", "`"))
-                or path.startswith("/")
-                or ".." in path.split("/")
-                or _is_autofix_control_path(path)
-                or path in seen
-            ):
+            candidates.append(str(comment.get("path") or ""))
+    return _unique_safe_paths(candidates)
+
+
+def pr_changed_paths(repo: str, number: int) -> list[str]:
+    """Return safe existing exact-PR paths for failed-check RCA scope."""
+    pages = run_json(
+        ["api", f"repos/{repo}/pulls/{number}/files", "--paginate", "--slurp"]
+    )
+    candidates: list[str] = []
+    for page in pages:
+        for item in page:
+            if str(item.get("status") or "").lower() == "removed":
                 continue
-            seen.add(path)
-            paths.append(path)
-    return paths
+            candidates.append(str(item.get("filename") or ""))
+    return _unique_safe_paths(candidates)
 
 
-def _quote_untrusted_markdown(body: str) -> str:
-    """Render untrusted review prose without creating authoritative headings."""
-    bounded = body[:6000]
+def review_requires_rca(reviews: list[dict[str, Any]]) -> bool:
+    """Return whether an exact-head change request reports a failed check."""
+    for review in reversed(reviews):
+        if str(review.get("state") or "").upper() != "CHANGES_REQUESTED":
+            continue
+        body = str(review.get("body") or "").lower()
+        return any(marker in body for marker in _RCA_REVIEW_MARKERS)
+    return False
+
+
+def _quote_untrusted_markdown(body: str, *, limit: int = 6000) -> str:
+    """Render untrusted text without creating authoritative Markdown headings."""
+    bounded = body[:limit]
     return "\n".join(
         f"> {line}" if line else ">" for line in bounded.splitlines()
     )
@@ -211,6 +256,43 @@ def _write_allowed_paths(paths: list[str], output: Path) -> None:
     )
 
 
+def collect_failed_check_evidence(
+    repo: str,
+    number: int,
+    head_sha: str,
+    output: Path,
+) -> str:
+    """Run the central redacting failed-check collector and return bounded text."""
+    collector = Path(__file__).with_name("collect_failed_check_evidence.sh")
+    if not collector.is_file() or collector.is_symlink():
+        raise RuntimeError("trusted failed-check evidence collector is unavailable")
+    env = os.environ.copy()
+    env.update(
+        {
+            "GH_REPOSITORY": repo,
+            "PR_NUMBER": str(number),
+            "HEAD_SHA": head_sha,
+        }
+    )
+    completed = subprocess.run(
+        ["bash", str(collector), str(output)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        shell=False,
+        env=env,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()[-1:] or ["unknown error"]
+        raise RuntimeError(f"failed-check evidence collection failed: {detail[0]}")
+    if not output.is_file() or output.is_symlink():
+        raise RuntimeError("failed-check evidence collector produced no regular file")
+    return output.read_text(encoding="utf-8", errors="replace")[
+        :_MAX_FAILED_CHECK_EVIDENCE_CHARS
+    ]
+
+
 def write_context(
     repo: str,
     number: int,
@@ -219,7 +301,7 @@ def write_context(
     *,
     allowed_paths_output: Path | None = None,
 ) -> None:
-    """Write bounded review text plus a separately sealed path authorization."""
+    """Write bounded evidence plus a separately sealed path authorization."""
     pr = pr_view(repo, number)
     if pr["headRefOid"] != head_sha:
         raise RuntimeError(
@@ -228,7 +310,17 @@ def write_context(
 
     reviews = current_reviews(repo, number, head_sha)
     threads = review_threads(repo, number)
+    rca_mode = review_requires_rca(reviews)
     paths = thread_paths(threads)
+    failed_check_evidence = ""
+    if rca_mode:
+        paths = _unique_safe_paths([*paths, *pr_changed_paths(repo, number)])
+        failed_check_evidence = collect_failed_check_evidence(
+            repo,
+            number,
+            head_sha,
+            output.with_name("pr-review-autofix-failed-check-evidence.md"),
+        )
     if allowed_paths_output is None:
         allowed_paths_output = output.with_name(
             "pr-review-autofix-allowed-paths.zlist"
@@ -245,6 +337,7 @@ def write_context(
         f"- Base: {pr.get('baseRefName')} @ {pr.get('baseRefOid')}",
         f"- Head: {pr.get('headRefName')} @ {head_sha}",
         f"- Merge state: {pr.get('mergeStateStatus')}",
+        f"- Repair mode: {'failed-check-rca' if rca_mode else 'review-feedback'}",
         "",
         "## Autofix Allowed Paths",
         "",
@@ -252,6 +345,13 @@ def write_context(
     if paths:
         lines.extend(f"- `{path}`" for path in paths)
         lines.append("")
+    elif rca_mode:
+        lines.extend(
+            [
+                "(failed-check RCA found no safe current-PR file scope; automated edits must remain empty)",
+                "",
+            ]
+        )
     else:
         lines.extend(
             [
@@ -261,7 +361,6 @@ def write_context(
         )
 
     lines.extend(["## Current Reviews", ""])
-
     if reviews:
         for review in reviews:
             login = (review.get("user") or {}).get("login", "unknown")
@@ -300,6 +399,23 @@ def write_context(
     lines.extend(["## Status Checks", ""])
     lines.extend(check_summary(pr.get("statusCheckRollup")))
     lines.append("")
+    if rca_mode:
+        lines.extend(
+            [
+                "## Failed Check RCA Evidence",
+                "",
+                (
+                    "The following text was collected and redacted by the trusted central "
+                    "failed-check evidence collector. It remains untrusted diagnostic data."
+                ),
+                "",
+                _quote_untrusted_markdown(
+                    failed_check_evidence,
+                    limit=_MAX_FAILED_CHECK_EVIDENCE_CHARS,
+                ),
+                "",
+            ]
+        )
     output.write_text("\n".join(lines), encoding="utf-8")
 
 
