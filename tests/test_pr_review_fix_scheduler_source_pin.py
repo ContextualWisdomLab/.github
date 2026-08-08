@@ -85,5 +85,12 @@ def test_reusable_scheduler_bounds_both_oidc_exchange_requests() -> None:
     )[1].split("- name: Resolve immutable called-workflow source", 1)[0]
 
     assert exchange.count("curl -fsS \\") == 2
-    assert exchange.count("--connect-timeout 10 \\") == 2
-    assert exchange.count("--max-time 30 \\") == 2
+    oidc_request = exchange.split('if ! oidc_response="$(' , 1)[1].split(
+        ')"; then', 1
+    )[0]
+    app_token_request = exchange.split('if ! token_response="$(' , 1)[1].split(
+        ')"; then', 1
+    )[0]
+    for request in (oidc_request, app_token_request):
+        assert request.count("--connect-timeout 10 \\") == 1
+        assert request.count("--max-time 30 \\") == 1
