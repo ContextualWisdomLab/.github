@@ -1,13 +1,6 @@
 name: Organization Commercial Readiness Loop
 
 on:
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Revalidate the fleet and report actions without dispatching work
-        required: false
-        default: false
-        type: boolean
   schedule:
     - cron: "7 * * * *"
 
@@ -28,12 +21,11 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       ORGANIZATION: ContextualWisdomLab
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
       ROTATION_SEED: ${{ github.run_number }}
       MAX_REPOSITORIES: "200"
       MAX_REVIEW_DISPATCHES: "1"
       MAX_DEVELOPMENT_DISPATCHES: "1"
-      DRY_RUN: ${{ inputs.dry_run || false }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.13.2
@@ -60,22 +52,17 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN is required; the repository-scoped GITHUB_TOKEN is not accepted."
+            echo "::error::PR_REVIEW_MERGE_TOKEN is required; neither the reviewer credential nor repository-scoped GITHUB_TOKEN is accepted."
             exit 1
           fi
           echo "::add-mask::$GH_TOKEN"
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
-          args=(
-            --organization "$ORGANIZATION"
-            --rotation-seed "$ROTATION_SEED"
-            --max-repositories "$MAX_REPOSITORIES"
-            --max-review-dispatches "$MAX_REVIEW_DISPATCHES"
-            --max-development-dispatches "$MAX_DEVELOPMENT_DISPATCHES"
+          python scripts/ci/organization_commercial_readiness_loop.py \
+            --organization "$ORGANIZATION" \
+            --rotation-seed "$ROTATION_SEED" \
+            --max-repositories "$MAX_REPOSITORIES" \
+            --max-review-dispatches "$MAX_REVIEW_DISPATCHES" \
+            --max-development-dispatches "$MAX_DEVELOPMENT_DISPATCHES" \
             --json-output "$RUNNER_TEMP/organization-commercial-readiness-loop.json"
-          )
-          if [ "$DRY_RUN" = "true" ]; then
-            args+=(--dry-run)
-          fi
-          python scripts/ci/organization_commercial_readiness_loop.py "${args[@]}"
           python -m json.tool "$RUNNER_TEMP/organization-commercial-readiness-loop.json" >/dev/null
