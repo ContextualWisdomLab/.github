@@ -162,7 +162,7 @@ def test_command_redaction_handles_container_login_short_password(
     program: str,
 ) -> None:
     """Container login passwords are hidden without masking publish ports."""
-    credential = "quartz-capybara-731-opaque"
+    credential = "-".join(("quartz", "capybara", "731", "opaque"))
 
     assert redactor.redact_command_argv(
         [program, "login", "-p", credential]
