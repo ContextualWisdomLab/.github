@@ -145,6 +145,32 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     sandboxed_web_e2e.stop_service(slow_service)
     assert len(killed) == 2
 
+    class NeverStops:
+        pid = 54321
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("opaque-cleanup-command", timeout)
+
+    never_stops = sandboxed_web_e2e.Service(
+        "stuck",
+        "opaque-cleanup-command",
+        NeverStops(),
+        tmp_path / "stuck.log",
+    )
+    sandboxed_web_e2e.stop_service(never_stops)
+
+    class UnreadablePath:
+        def exists(self):
+            return True
+
+        def read_text(self, **_kwargs):
+            raise OSError("opaque-unreadable-log-detail")
+
+    assert sandboxed_web_e2e.tail_text(UnreadablePath()) == "[REDACTED]"
+
     killed.clear()
     slow_service = sandboxed_web_e2e.Service("slow", "sleep", SlowProcess(), tmp_path / "slow.log")
     monkeypatch.setattr(sandboxed_web_e2e.os, "killpg", lambda pid, sig: killed.append((pid, sig)), raising=False)
@@ -226,6 +252,63 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 10, service) is True
     assert len(attempts) == 2
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
+
+
+def test_service_tail_redacts_multiline_values_before_selecting_final_lines(tmp_path):
+    """Tail selection cannot expose a clipped fragment of a multiline allowed value."""
+    multiline_secret = "private-first-line\nprivate-second-line"
+    log_path = tmp_path / "service.log"
+    log_path.write_text(
+        f"header\n{multiline_secret}\nordinary final line\n",
+        encoding="utf-8",
+    )
+
+    cleaned = sandboxed_web_e2e.tail_text(
+        log_path,
+        max_lines=2,
+        sensitive_values=(multiline_secret,),
+    )
+
+    assert "private-first-line" not in cleaned
+    assert "private-second-line" not in cleaned
+    assert "ordinary final line" in cleaned
+
+
+def test_web_result_marker_remains_valid_json_after_command_redaction(tmp_path, capsys):
+    """Credential-shaped command arguments are redacted without corrupting marker JSON."""
+    args = sandboxed_web_e2e.parse_args(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--backend-cmd",
+            "serve --token opaque-backend-secret",
+            "--frontend-cmd",
+            "serve --label=opaque-env-secret",
+            "--e2e-cmd",
+            "test --password opaque-e2e-secret",
+            "--allow-env",
+            "GITHUB_TOKEN",
+        ]
+    )
+
+    sandboxed_web_e2e.emit_result(
+        args=args,
+        copied_repo=tmp_path / "repo",
+        sandbox_root=tmp_path,
+        backend_ready=True,
+        frontend_ready=True,
+        exit_code=0,
+        elapsed_seconds=0.1,
+        sensitive_values=("opaque-env-secret",),
+    )
+    output = capsys.readouterr().out
+    result_line = output.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
+    payload = json.loads(result_line)
+
+    assert payload["allowed_env"] == ["GITHUB_TOKEN"]
+    assert "opaque-backend-secret" not in payload["backend_cmd"]
+    assert "opaque-env-secret" not in payload["frontend_cmd"]
+    assert "opaque-e2e-secret" not in payload["e2e_cmd"]
 
 
 def test_no_redirect_handler_raises_httperror_without_following():
@@ -426,6 +509,135 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
     assert "e2e-out" in captured.out
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 3s" in captured.err
+
+
+def test_main_redacts_allowed_value_when_workspace_setup_fails(monkeypatch, tmp_path, capsys):
+    """A pre-copy web setup failure cannot expose allowed values in result commands."""
+    secret = "opaque-web-precopy-credential-731"
+    monkeypatch.setenv("CWL_TEST_CREDENTIAL", secret)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(tmp_path / "missing"),
+            "--backend-cmd",
+            secret,
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            secret,
+            "--allow-env",
+            "CWL_TEST_CREDENTIAL",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "repo root is not a directory" in captured.err
+    result_line = [
+        line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
+    ][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["backend_cmd"] == "'[REDACTED]'"
+    assert payload["e2e_cmd"] == "'[REDACTED]'"
+    assert payload["exit_code"] == 126
+
+
+@pytest.mark.parametrize("failure_stage", ["backend", "frontend", "e2e"])
+def test_main_redacts_launch_exceptions_at_each_web_stage(
+    failure_stage,
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    """Backend, frontend, and E2E spawn failures stay inside the redaction boundary."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secret = "opaque-web-launch-credential-731"
+    monkeypatch.setenv("CWL_TEST_CREDENTIAL", secret)
+
+    class DoneProcess:
+        def poll(self):
+            return 0
+
+    def fake_start(label, command, cwd, env, logs_dir):
+        if label == failure_stage:
+            raise FileNotFoundError(secret)
+        return sandboxed_web_e2e.Service(
+            label,
+            command,
+            DoneProcess(),
+            logs_dir / f"{label}.log",
+        )
+
+    def fake_run_shell(command, cwd, env, timeout):
+        if failure_stage == "e2e":
+            raise FileNotFoundError(secret)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
+    monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+            "--allow-env",
+            "CWL_TEST_CREDENTIAL",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "execution failed" in captured.err
+
+
+def test_main_rejects_short_allowed_values_before_web_startup(monkeypatch, tmp_path, capsys):
+    """Web execution rejects ambiguous short allowed values before starting services."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CWL_TEST_CREDENTIAL", "a")
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "start_service",
+        lambda *args, **kwargs: pytest.fail("short allowed value reached startup"),
+    )
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--backend-cmd",
+            "backend a",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e a",
+            "--allow-env",
+            "CWL_TEST_CREDENTIAL",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert "at least 8 characters" in captured.err
+    result_line = [
+        line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
+    ][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["backend_cmd"] == "'b[REDACTED]ckend' '[REDACTED]'"
+    assert payload["e2e_cmd"] == "e2e '[REDACTED]'"
 
 
 @POSIX_PROCESS_GROUPS

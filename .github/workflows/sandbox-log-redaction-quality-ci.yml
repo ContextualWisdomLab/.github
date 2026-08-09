@@ -7,8 +7,10 @@ on:
       - ".github/workflows/sandbox-log-redaction-quality-ci.yml"
       - "CHANGELOG.md"
       - "docs/doctoring/sandbox-log-redaction.md"
+      - "scripts/ci/redact_sensitive_log.py"
       - "scripts/ci/sandboxed_verify.py"
       - "scripts/ci/sandboxed_web_e2e.py"
+      - "tests/test_opencode_security_boundaries.py"
       - "tests/test_sandboxed_verify.py"
       - "tests/test_sandboxed_web_e2e.py"
       - "tests/test_sandboxed_log_redaction_regression.py"
@@ -64,12 +66,13 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           python -m coverage run --branch -m pytest \
+            tests/test_opencode_security_boundaries.py \
             tests/test_sandboxed_verify.py \
             tests/test_sandboxed_web_e2e.py \
             tests/test_sandboxed_log_redaction_regression.py \
             -q
           python -m coverage report \
-            --include='scripts/ci/sandboxed_verify.py,scripts/ci/sandboxed_web_e2e.py' \
+            --include='scripts/ci/redact_sensitive_log.py,scripts/ci/sandboxed_verify.py,scripts/ci/sandboxed_web_e2e.py' \
             --fail-under=100
           python - <<'PY'
           import ast
@@ -77,6 +80,7 @@ jobs:
 
           missing = []
           for filename in (
+              "scripts/ci/redact_sensitive_log.py",
               "scripts/ci/sandboxed_verify.py",
               "scripts/ci/sandboxed_web_e2e.py",
           ):
@@ -91,8 +95,10 @@ jobs:
           python -m pytest tests -q
           bash scripts/ci/test_strix_quick_gate.sh
           python -m compileall -q \
+            scripts/ci/redact_sensitive_log.py \
             scripts/ci/sandboxed_verify.py \
             scripts/ci/sandboxed_web_e2e.py \
+            tests/test_opencode_security_boundaries.py \
             tests/test_sandboxed_verify.py \
             tests/test_sandboxed_web_e2e.py \
             tests/test_sandboxed_log_redaction_regression.py
