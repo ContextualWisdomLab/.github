@@ -92,6 +92,22 @@ def test_sandboxed_verify_redacts_timeout_bytes(monkeypatch, tmp_path, capsys):
     assert "ordinary timeout stderr" in captured.err
 
 
+def test_sandboxed_verify_timeout_without_captured_streams(monkeypatch, tmp_path, capsys):
+    """A timeout with no captured streams preserves the empty-output branches."""
+    _bind_verify_workspace(monkeypatch, tmp_path)
+
+    def timeout(*_args):
+        raise subprocess.TimeoutExpired(cmd=["fake"], timeout=1, output=None, stderr=None)
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", timeout)
+
+    assert sandboxed_verify.main(["--repo-root", str(tmp_path), "--timeout", "1", "--", "fake"]) == 124
+    captured = capsys.readouterr()
+
+    assert "[REDACTED]" not in captured.out
+    assert "command timed out after 1s" in captured.err
+
+
 def test_sandboxed_verify_handles_empty_completed_streams(monkeypatch, tmp_path, capsys):
     """Redaction does not invent output when a completed command emits no streams."""
     _bind_verify_workspace(monkeypatch, tmp_path)
@@ -198,6 +214,38 @@ def test_sandboxed_web_e2e_redacts_timeout_bytes(monkeypatch, tmp_path, capsys):
     assert "ordinary e2e timeout stderr" in captured.err
 
 
+def test_sandboxed_web_e2e_timeout_without_captured_streams(monkeypatch, tmp_path, capsys):
+    """E2E timeout with no captured streams preserves the empty-output branches."""
+    _bind_e2e_services(monkeypatch, tmp_path, log_text="")
+
+    def timeout(*_args):
+        raise subprocess.TimeoutExpired(cmd=["fake-e2e"], timeout=1, output=None, stderr=None)
+
+    monkeypatch.setattr(sandboxed_web_e2e, "run_shell", timeout)
+
+    assert (
+        sandboxed_web_e2e.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--backend-cmd",
+                "backend",
+                "--frontend-cmd",
+                "frontend",
+                "--e2e-cmd",
+                "e2e",
+                "--e2e-timeout",
+                "1",
+            ]
+        )
+        == 124
+    )
+    captured = capsys.readouterr()
+
+    assert "[REDACTED]" not in captured.out
+    assert "e2e command timed out after 1s" in captured.err
+
+
 def test_sandboxed_web_e2e_handles_empty_completed_streams(monkeypatch, tmp_path, capsys):
     """E2E redaction preserves the no-output branch for successful commands."""
     _bind_e2e_services(monkeypatch, tmp_path, log_text="")
@@ -235,6 +283,7 @@ def test_sandboxed_web_e2e_handles_empty_completed_streams(monkeypatch, tmp_path
 
 def test_wait_for_url_retries_nonready_http_status(monkeypatch, tmp_path):
     """A non-ready HTTP status follows the existing bounded polling path."""
+
     class RunningProcess:
         def poll(self):
             return None
