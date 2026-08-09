@@ -31,14 +31,41 @@ REQUIRED_DOCS = (
     "OPERABILITY.md",
     "INCIDENT_RUNBOOK.md",
     "TRACEABILITY.md",
+    "DOCUMENTATION_AUDIT.md",
 )
-REQUIRED_ADRS = tuple(f"{number:04d}-" for number in range(1, 9))
+REQUIRED_ADRS = tuple(f"{number:04d}-" for number in range(1, 11))
 WORKFLOW_REFERENCES = (
     ".github/workflows/opencode-review.yml",
     ".github/workflows/opencode-review-dispatch.yml",
     ".github/workflows/pr-review-merge-scheduler.yml",
     ".github/workflows/pr-auto-rebase.yml",
 )
+CONTINUATION_TERMS = {
+    "PRD.md": (
+        "user-visible status",
+        "same invocation",
+        "conversation",
+    ),
+    "TRD.md": (
+        "continuation_handoff",
+        "external automation",
+        "double exit sweep",
+    ),
+    "ARCHITECTURE.md": (
+        "External orchestration plane",
+        "GitHub execution and evidence plane",
+        "canonical documentation",
+    ),
+    "DATA_MODEL.md": (
+        "execution_lane",
+        "deferred_item",
+        "continuation_handoff",
+    ),
+    "UML.md": (
+        "Continuation and handoff state machine",
+        "Conversation-to-repository reconciliation",
+    ),
+}
 
 
 class AutomationDocumentationContract(unittest.TestCase):
@@ -86,6 +113,13 @@ class AutomationDocumentationContract(unittest.TestCase):
         for workflow in WORKFLOW_REFERENCES:
             self.assertTrue((ROOT / workflow).is_file(), workflow)
             self.assertIn(workflow, traceability, workflow)
+
+    def test_continuation_and_conversation_handoff_are_canonical(self) -> None:
+        """No-report continuation and chat-to-GitHub handoff stay explicit in core docs."""
+        for relative_path, required_terms in CONTINUATION_TERMS.items():
+            text = (DOC_ROOT / relative_path).read_text(encoding="utf-8")
+            for required_term in required_terms:
+                self.assertIn(required_term, text, f"{relative_path}: {required_term}")
 
 
 if __name__ == "__main__":
