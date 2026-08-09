@@ -1,6 +1,7 @@
 import json
 import runpy
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -29,6 +30,7 @@ def test_scrubbed_env_uses_sandbox_paths_and_drops_secrets(monkeypatch, tmp_path
 
 def test_scrubbed_env_allows_named_credentials_without_printing_values(monkeypatch, tmp_path, capsys):
     """Allowed secret names are recorded, but secret values are not printed."""
+    escaped_secret = 'violet"\\capybara\n731'
     monkeypatch.setenv("GITHUB_TOKEN", "secret-value")
     monkeypatch.setenv("OTHER_TOKEN", "other-secret")
 
@@ -38,7 +40,13 @@ def test_scrubbed_env_allows_named_credentials_without_printing_values(monkeypat
     assert "OTHER_TOKEN" not in env
 
     sandboxed_verify.emit_result(
-        command=["true"],
+        command=[
+            "tool",
+            "--token=opaque-command-secret",
+            "--password",
+            "opaque-separated-secret",
+            f"--label={escaped_secret}",
+        ],
         copied_repo=tmp_path / "repo",
         sandbox_root=tmp_path,
         exit_code=0,
@@ -47,14 +55,27 @@ def test_scrubbed_env_allows_named_credentials_without_printing_values(monkeypat
         allowed_env=["GITHUB_TOKEN"],
         network="required",
         evidence_note="fetch private dependency",
+        sensitive_values=(escaped_secret,),
     )
     output = capsys.readouterr().out
+    result_line = output.removeprefix(sandboxed_verify.RESULT_MARKER).strip()
+    payload = json.loads(result_line)
 
     assert "GITHUB_TOKEN" in output
     assert "required" in output
     assert "fetch private dependency" in output
     assert "secret-value" not in output
     assert "other-secret" not in output
+    assert "violet" not in output
+    assert "capybara" not in output
+    assert payload["allowed_env"] == ["GITHUB_TOKEN"]
+    assert payload["command"] == [
+        "tool",
+        "--token=[REDACTED]",
+        "--password",
+        "[REDACTED]",
+        "--label=[REDACTED]\n",
+    ]
 
 
 def test_copy_workspace_excludes_default_noise_and_keeps_sources(tmp_path):
@@ -173,6 +194,164 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     assert payload["evidence_note"] == "needs private dependency"
     assert payload["sandbox"] != "(removed)"
     shutil.rmtree(payload["sandbox"], ignore_errors=True)
+
+
+def test_main_redacts_allowed_value_when_workspace_setup_fails(monkeypatch, tmp_path, capsys):
+    """A pre-copy failure cannot expose allowed values in result metadata or a traceback."""
+    secret = "opaque-precopy-credential-731"
+    monkeypatch.setenv("CWL_TEST_CREDENTIAL", secret)
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(tmp_path / "missing"),
+            "--allow-env",
+            "CWL_TEST_CREDENTIAL",
+            "--",
+            "tool",
+            secret,
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "repo root is not a directory" in captured.err
+    result_line = [
+        line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)
+    ][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    assert payload["command"] == ["tool", sandboxed_verify.redact_text(secret, sensitive_values=(secret,))]
+    assert payload["exit_code"] == 126
+
+
+def test_main_redacts_missing_executable_exception(monkeypatch, tmp_path, capsys):
+    """A process-spawn exception is reported without a raw secret-bearing traceback."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secret = "opaque-missing-executable-731"
+    monkeypatch.setenv("CWL_TEST_CREDENTIAL", secret)
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--allow-env",
+            "CWL_TEST_CREDENTIAL",
+            "--",
+            secret,
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "execution failed" in captured.err
+    assert "[REDACTED]" in captured.out + captured.err
+
+
+def test_main_rejects_short_allowed_values_without_changing_result_schema(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    """Ambiguous short values fail before execution and cannot rename result fields."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CWL_TEST_CREDENTIAL", "a")
+    monkeypatch.setattr(
+        sandboxed_verify,
+        "run_command",
+        lambda *args, **kwargs: pytest.fail("short allowed value reached execution"),
+    )
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--allow-env",
+            "CWL_TEST_CREDENTIAL",
+            "--",
+            "tool",
+            "a",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert "at least 8 characters" in captured.err
+    result_line = [
+        line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)
+    ][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    assert set(payload) == {
+        "allowed_env",
+        "command",
+        "cwd",
+        "elapsed_seconds",
+        "evidence_note",
+        "exit_code",
+        "network",
+        "sandbox",
+        "sandboxed",
+    }
+    assert payload["command"] == ["tool", "[REDACTED]"]
+
+
+def test_main_redacts_whitespace_in_allowed_values_without_changing_execution(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    """Whitespace-bearing allowed values execute unchanged but never enter evidence."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secret = "opaque credential material 731"
+    monkeypatch.setenv("CWL_TEST_CREDENTIAL", secret)
+
+    def fake_run_command(command, cwd, env, timeout):
+        assert command == ["tool", secret]
+        assert env["CWL_TEST_CREDENTIAL"] == secret
+        return subprocess.CompletedProcess(command, 0, stdout=f"{secret}\n", stderr="")
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", fake_run_command)
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--allow-env",
+            "CWL_TEST_CREDENTIAL",
+            "--",
+            "tool",
+            secret,
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert secret not in captured.out + captured.err
+    assert sandboxed_verify.REDACTION_MARKER in captured.out
+    result_line = [
+        line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)
+    ][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    assert payload["command"] == ["tool", sandboxed_verify.REDACTION_MARKER]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["REDACTED", "SANDBOXED_VERIFY_RESULT", "CWL_TEST_CREDENTIAL"],
+)
+def test_allowed_env_validation_rejects_evidence_collisions(value):
+    """Allowed values cannot collide with markers, schema text, or public env names."""
+    with pytest.raises(sandboxed_verify.UnsafeAllowedEnvValueError):
+        sandboxed_verify.validate_allowed_env_values(
+            ["CWL_TEST_CREDENTIAL"],
+            {"CWL_TEST_CREDENTIAL": value},
+        )
 
 
 def test_parse_args_rejects_invalid_inputs():
