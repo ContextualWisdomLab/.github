@@ -200,32 +200,6 @@ def emit_result(
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
 
 
-def _execute_and_print_output(args: argparse.Namespace, copied_repo: Path, env: dict[str, str]) -> int:
-    """Execute the command and print stdout/stderr, returning the exit code."""
-    print(f"sandboxed-verify: cwd={copied_repo}")
-    print(f"sandboxed-verify: command={' '.join(args.command)}")
-    if args.allow_env:
-        print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
-    if args.network != "default":
-        print(f"sandboxed-verify: network={args.network}")
-    try:
-        completed = run_command(args.command, copied_repo, env, args.timeout)
-        if completed.stdout:
-            print(completed.stdout, end="")
-        if completed.stderr:
-            print(completed.stderr, end="", file=sys.stderr)
-        return completed.returncode
-    except subprocess.TimeoutExpired as exc:
-        stdout = timeout_output_text(exc.stdout)
-        stderr = timeout_output_text(exc.stderr)
-        if stdout:
-            print(stdout, end="" if stdout.endswith("\n") else "\n")
-        if stderr:
-            print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-        print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
-        return 124
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return the verification command exit code."""
     args = parse_args(argv)
@@ -236,7 +210,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = scrubbed_env(sandbox, args.allow_env)
-        exit_code = _execute_and_print_output(args, copied_repo, env)
+        print(f"sandboxed-verify: cwd={copied_repo}")
+        print(f"sandboxed-verify: command={' '.join(args.command)}")
+        if args.allow_env:
+            print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
+        if args.network != "default":
+            print(f"sandboxed-verify: network={args.network}")
+        try:
+            completed = run_command(args.command, copied_repo, env, args.timeout)
+            if completed.stdout:
+                print(completed.stdout, end="")
+            if completed.stderr:
+                print(completed.stderr, end="", file=sys.stderr)
+            exit_code = completed.returncode
+        except subprocess.TimeoutExpired as exc:
+            stdout = timeout_output_text(exc.stdout)
+            stderr = timeout_output_text(exc.stderr)
+            if stdout:
+                print(stdout, end="" if stdout.endswith("\n") else "\n")
+            if stderr:
+                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+            print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
+            exit_code = 124
         return exit_code
     finally:
         elapsed = time.monotonic() - start
