@@ -104,7 +104,6 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
     log_file = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         shlex.split(command),
-        shell=False,  # nosec B603
         cwd=cwd,
         env=env,
         text=True,
@@ -140,7 +139,6 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
     """Run a shell command and capture its output."""
     return subprocess.run(
         shlex.split(command),
-        shell=False,  # nosec B603
         cwd=cwd,
         env=env,
         text=True,
