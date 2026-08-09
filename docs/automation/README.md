@@ -2,7 +2,9 @@
 
 Status: active_pr
 
-This directory is the canonical documentation graph for the organization automation control plane. It separates shipped behavior, active work, accepted architecture, plans, research, superseded decisions, and out-of-scope proposals. Pull-request bodies and conversational history are evidence inputs, not the durable specification.
+This directory is the canonical documentation graph for the organization automation control plane. It separates shipped behavior, active work, accepted architecture, plans, research, superseded decisions, and out-of-scope proposals. Pull-request bodies, conversational history, automation prompts, and downloadable planning artifacts are evidence inputs, not the durable specification.
+
+The control plane spans three distinct authorities: external scheduled agent/orchestrator state, GitHub execution/evidence/policy state, and this canonical documentation graph. A durable decision is reconciled here only after live implementation and active ownership are refetched; product-specific specifications remain in their owning repositories.
 
 ## Canonical documents
 
@@ -17,6 +19,7 @@ This directory is the canonical documentation graph for the organization automat
 - [Operability](OPERABILITY.md)
 - [Incident runbook](INCIDENT_RUNBOOK.md)
 - [Traceability](TRACEABILITY.md)
+- [Documentation fitness audit](DOCUMENTATION_AUDIT.md)
 - [Architecture decision records](adr/README.md)
 
 ## Status vocabulary
@@ -33,4 +36,6 @@ Every canonical document declares exactly one status:
 
 ## Change discipline
 
-A behavioral change updates requirements, architecture, security, tests, operations, traceability, and affected ADRs in the same integration line. Exact commit identities belong in dated evidence or pull-request records, not timeless architecture. Operational incidents close only after protected-main consumer evidence proves the repaired boundary.
+A behavioral change updates requirements, architecture, security, tests, operations, traceability, documentation fitness, and affected ADRs in the same integration line. Exact commit identities belong in dated evidence or pull-request records, not timeless architecture. Operational incidents close only after protected-main consumer evidence proves the repaired boundary.
+
+A prompt update or documentation update is not run completion when another safe executable lane exists. After canonical documentation mutation, the authoritative writer returns to the live executable queue and applies the continuation/exit-sweep contract in ADR-0003 and ADR-0010.
