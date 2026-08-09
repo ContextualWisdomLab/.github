@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -23,24 +24,54 @@ from scripts.ci import safe_pytest_command as safe_pytest
 
 def _synthetic_jwt() -> str:
     """Build JWT-shaped fixture text without committing secret-looking literals."""
-    return ".".join(("header", "payload", "signature"))
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(b'{"sub":"fixture-user"}').rstrip(b"=").decode()
+    return ".".join((header, payload, "signaturefixture"))
 
 
 def test_sensitive_log_redaction_handles_json_credentials_and_jwts() -> None:
     """Structured credentials and provider-independent JWTs never survive evidence redaction."""
     jwt_fixture = _synthetic_jwt()
     secrets = {
+        "apikey": "fixture-joined-api-key",
         "token": jwt_fixture,
         "jwt": jwt_fixture,
         "oidc_token": jwt_fixture,
+        "oidctoken": "fixture-joined-oidc-token",
         "api_credential": "fixture-api-credential",
         "client_secret": "fixture-client-secret",
+        "client_secret_b64": "fixture-client-secret-base64",
+        "clientsecrethash": "fixture-joined-client-secret-hash",
+        "connection_string": "fixture-connection-string",
+        "credential_data": "fixture-credential-data",
+        "credentials_json": "fixture-credentials-json",
+        "database_url": "fixture-database-url",
+        "encryption_key": "fixture-encryption-key",
+        "githubtoken": "fixture-joined-github-token",
+        "myservicecredential": "fixture-joined-service-credential",
         "MY_SERVICE_TOKEN": "fixture-service-token",
+        "password_hash": "fixture-password-hash",
+        "private_key_data": "fixture-private-key-data",
+        "private_key_pem": "fixture-private-key-pem",
+        "refreshtoken": "fixture-joined-refresh-token",
+        "secret_key": "fixture-secret-key",
+        "secret_material": "fixture-secret-material",
+        "servicepasswordhash": "fixture-joined-service-password-hash",
+        "signing_key": "fixture-signing-key",
+        "token_response": "fixture-token-response",
     }
     cleaned = redactor.redact_text(json.dumps({"nested": secrets}))
 
     assert all(value not in cleaned for value in secrets.values())
     assert set(json.loads(cleaned)["nested"].values()) == {redactor.REDACTED}
+
+    key_collision = json.loads(
+        redactor.redact_text(
+            json.dumps({"password": "second-credential-material-731"}),
+            sensitive_values=("password",),
+        )
+    )
+    assert key_collision == {redactor.REDACTED: redactor.REDACTED}
 
 
 def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
@@ -56,6 +87,133 @@ def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     assert "abc.def.ghi" not in cleaned
     assert "opaque_service_value_123456789" not in cleaned
     assert cleaned.count(redactor.REDACTED) >= 2
+
+
+def test_sensitive_log_redaction_handles_auth_headers_urls_and_command_values() -> None:
+    """Common registry, URL-userinfo, and separated curl credential forms are removed."""
+    opaque_secret = "opaque-auth-material-123456789"
+    source = (
+        f"Authorization: token {opaque_secret}\n"
+        f"Proxy-Authorization: Custom {opaque_secret}\n"
+        f"registry https://alice:{opaque_secret}@registry.example.test/image\n"
+        f"cache redis://:{opaque_secret}@cache.internal:6379/0\n"
+        f"auth={opaque_secret}\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+    structured = json.loads(
+        redactor.redact_text(
+            json.dumps(
+                {
+                    "detail": (
+                        f'Authorization: Custom "{opaque_secret}"\n'
+                        "ordinary structured diagnostic"
+                    )
+                }
+            )
+        )
+    )
+    command = redactor.redact_command_argv(
+        [
+            "curl",
+            "--user",
+            f"alice:{opaque_secret}",
+            "-H",
+            f"Authorization: token {opaque_secret}",
+        ]
+    )
+    inline_command = redactor.redact_command_argv(
+        ["curl", f"--user=alice:{opaque_secret}", "-u", f"alice:{opaque_secret}"]
+    )
+    proxy_command = redactor.redact_command_argv(
+        [
+            "curl",
+            "--proxy-user",
+            f"alice:{opaque_secret}",
+            "--oauth2-bearer",
+            opaque_secret,
+        ]
+    )
+
+    assert opaque_secret not in cleaned
+    assert opaque_secret not in structured["detail"]
+    assert "ordinary structured diagnostic" in structured["detail"]
+    assert "alice:" not in cleaned
+    assert opaque_secret not in " ".join(command)
+    assert command[2] == redactor.REDACTED
+    assert command[4].endswith(redactor.REDACTED)
+    assert inline_command == [
+        "curl",
+        f"--user={redactor.REDACTED}",
+        "-u",
+        redactor.REDACTED,
+    ]
+    assert proxy_command == [
+        "curl",
+        "--proxy-user",
+        redactor.REDACTED,
+        "--oauth2-bearer",
+        redactor.REDACTED,
+    ]
+
+
+@pytest.mark.parametrize("program", ["docker", "podman", "/usr/bin/docker"])
+def test_command_redaction_handles_container_login_short_password(
+    program: str,
+) -> None:
+    """Container login passwords are hidden without masking publish ports."""
+    credential = "-".join(("quartz", "capybara", "731", "opaque"))
+
+    assert redactor.redact_command_argv(
+        [program, "login", "-p", credential]
+    ) == [program, "login", "-p", redactor.REDACTED]
+    assert redactor.redact_command_argv(
+        [program, "login", f"-p={credential}"]
+    ) == [program, "login", f"-p={redactor.REDACTED}"]
+    assert redactor.redact_command_argv(
+        [program, "login", f"--password={credential}"]
+    ) == [program, "login", f"--password={redactor.REDACTED}"]
+    assert redactor.redact_command_argv(
+        [program, "run", "-p", "8080:80", "image"]
+    ) == [program, "run", "-p", "8080:80", "image"]
+
+
+def test_command_redaction_preserves_unrelated_short_port_option() -> None:
+    """Program-aware password handling cannot consume an SSH port."""
+    assert redactor.redact_command_argv(
+        ["ssh", "-p", "22", "host"]
+    ) == ["ssh", "-p", "22", "host"]
+
+
+def test_sensitive_log_redaction_removes_multiline_private_key_blocks() -> None:
+    """Credential assignments cannot expose later lines of a PEM private key block."""
+    begin_private_key = "-----BEGIN " + "PRIVATE KEY-----"
+    end_private_key = "-----END " + "PRIVATE KEY-----"
+    begin_pgp_private_key = "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end_pgp_private_key = "-----END PGP " + "PRIVATE KEY BLOCK-----"
+    source = (
+        f"PRIVATE_KEY={begin_private_key}\n"
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\n"
+        f"{end_private_key}\n"
+        f"PGP_PRIVATE_KEY={begin_pgp_private_key}\n"
+        "xcLYBFfixturePrivatePacketBody731\n"
+        f"{end_pgp_private_key}\n"
+        "ordinary diagnostic after\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+    structured_cleaned = json.loads(
+        redactor.redact_text(json.dumps({"detail": source}))
+    )["detail"]
+
+    assert "BEGIN PRIVATE KEY" not in cleaned
+    assert "MIIEvQ" not in cleaned
+    assert "END PRIVATE KEY" not in cleaned
+    assert "fixturePrivatePacketBody" not in cleaned
+    assert "MIIEvQ" not in structured_cleaned
+    assert "fixturePrivatePacketBody" not in structured_cleaned
+    assert "ordinary diagnostic after" in cleaned
+    assert cleaned.count("\n") == source.count("\n")
 
 
 def test_sensitive_log_redaction_handles_adversarial_quoted_values() -> None:
@@ -110,6 +268,39 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
     assert cleaned.count(redactor.REDACTED) == 5
 
 
+def test_sensitive_log_redaction_distinguishes_jwts_from_diagnostic_domains() -> None:
+    """JWT recognition preserves provider hostnames used by failed-check classification."""
+    jwt_fixture = _synthetic_jwt()
+    non_jose_header = base64.urlsafe_b64encode(b'{"typ":"diagnostic"}').rstrip(b"=").decode()
+    dotted_diagnostic = f"{non_jose_header}.payload.signature"
+    source = (
+        f"provider api.deepseek.com failed\n"
+        f"dotted diagnostic {dotted_diagnostic}\n"
+        f"opaque jwt {jwt_fixture}\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert "api.deepseek.com" in cleaned
+    assert dotted_diagnostic in cleaned
+    assert jwt_fixture not in cleaned
+    assert cleaned.count(redactor.REDACTED) == 1
+
+
+def test_sensitive_log_redaction_falls_back_safely_for_excessive_json_nesting() -> None:
+    """Pathological structured diagnostics cannot abort the shared evidence collector."""
+    provider_token = "ghp_" + ("N" * 24)
+    source = "[" * 2000 + json.dumps(provider_token) + "]" * 2000
+
+    cleaned = redactor.redact_text(source)
+
+    assert provider_token not in cleaned
+    assert redactor.REDACTED in cleaned
+
+    excessive_integer = "9" * 5000
+    assert redactor.redact_text(excessive_integer) == excessive_integer
+
+
 def test_sensitive_log_redaction_handles_lists_empty_input_and_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     """Recursive lists, empty input, and the streaming CLI share the same scrubber."""
     source = '{"values":[{"ok":1,"api_key":"secret-value"},2]}\n'
@@ -132,6 +323,289 @@ def test_sensitive_log_redaction_handles_lists_empty_input_and_cli(monkeypatch: 
     with pytest.raises(SystemExit) as exc:
         runpy.run_path("scripts/ci/redact_sensitive_log.py", run_name="__main__")
     assert exc.value.code == 0
+
+
+def test_sensitive_log_redaction_scans_opaque_json_values_without_hiding_metadata() -> None:
+    """Opaque JSON values are scrubbed while benign token and password metadata remains useful."""
+    provider_token = "ghp_" + ("A" * 24)
+    source = json.dumps(
+        {
+            "build_status": "failed",
+            "diagnostic": provider_token,
+            "nested": [{"detail": f"Bearer {provider_token}"}],
+            "authorization_failure_reason": "missing repository scope",
+            "credential_rotation_status": "current",
+            "jwt_decode_error": "signature expired",
+            "notsecret": "ordinary negative assertion",
+            "password_policy": "minimum 14 characters",
+            "password_policy_status": "compliant",
+            "retoken": "retry label",
+            "secret_scan_count": 0,
+            "token_budget": 4096,
+            "token_count": 512,
+            "token_expires_at": "2026-08-09T00:00:00Z",
+            "token_type": "Bearer",
+            "token_usage": {"input": 256, "output": 128},
+        }
+    )
+
+    cleaned = json.loads(redactor.redact_text(source))
+
+    assert cleaned["build_status"] == "failed"
+    assert cleaned["diagnostic"] == redactor.REDACTED
+    assert cleaned["nested"] == [{"detail": f"Bearer {redactor.REDACTED}"}]
+    assert cleaned["authorization_failure_reason"] == "missing repository scope"
+    assert cleaned["credential_rotation_status"] == "current"
+    assert cleaned["jwt_decode_error"] == "signature expired"
+    assert cleaned["notsecret"] == "ordinary negative assertion"
+    assert cleaned["password_policy"] == "minimum 14 characters"
+    assert cleaned["password_policy_status"] == "compliant"
+    assert cleaned["retoken"] == "retry label"
+    assert cleaned["secret_scan_count"] == 0
+    assert cleaned["token_budget"] == 4096
+    assert cleaned["token_count"] == 512
+    assert cleaned["token_expires_at"] == "2026-08-09T00:00:00Z"
+    assert cleaned["token_type"] == "Bearer"
+    assert cleaned["token_usage"] == {"input": 256, "output": 128}
+
+
+def test_sensitive_log_redaction_removes_ansi_bypasses_but_preserves_visible_diagnostics() -> None:
+    """Terminal control sequences cannot split credential keys or provider-token signatures."""
+    opaque_secret = "-".join(("opaque", "fixture", "secret", "123456"))
+    provider_body = "B" * 24
+    source = (
+        "ordinary build failure\n"
+        f"to\x1b[31mken\x1b[0m={opaque_secret}\n"
+        f"to\x1b(Bken={opaque_secret}\n"
+        f"to\x1b7ken={opaque_secret}\n"
+        f"to\x9b31mken={opaque_secret}\n"
+        f"provider ghp_\x1b[32m{provider_body}\x1b[0m\n"
+        + json.dumps(
+            {
+                f"to\x1b[31mken": opaque_secret,
+                "ghp_" + provider_body: "provider key diagnostic",
+                f"{redactor.REDACTED}#2": "existing suffixed marker key",
+                redactor.REDACTED: "existing marker key",
+            }
+        )
+        + "\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert opaque_secret not in cleaned
+    assert provider_body not in cleaned
+    assert "ordinary build failure" in cleaned
+    assert "\x1b" not in cleaned
+    assert "\x9b" not in cleaned
+    structured = json.loads(cleaned.splitlines()[-1])
+    assert len(structured) == 4
+    assert sorted(structured.values()) == [
+        redactor.REDACTED,
+        "existing marker key",
+        "existing suffixed marker key",
+        "provider key diagnostic",
+    ]
+    assert all("ghp_" not in key for key in structured)
+
+
+def test_sensitive_log_redaction_fails_closed_for_terminal_overwrite_controls() -> None:
+    """Backspace, cursor motion, and invisible format controls cannot reconstruct secrets."""
+    opaque_secret = "opaque-rendered-secret-123456"
+    provider_body = "R" * 24
+    source = (
+        "ordinary diagnostic before\n"
+        f"toX\bken={opaque_secret}\n"
+        f"toX\x1b[1Dken={opaque_secret}\n"
+        f"to\u200bken={opaque_secret}\n"
+        f"to\u034fken={opaque_secret}\n"
+        f"to\ufe0fken={opaque_secret}\n"
+        f"provider ghp_X\b{provider_body}\n"
+        + json.dumps({f"toX\bken": opaque_secret})
+        + "\nordinary diagnostic after\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert opaque_secret not in cleaned
+    assert provider_body not in cleaned
+    assert "\b" not in cleaned
+    assert "\x1b" not in cleaned
+    assert "\u200b" not in cleaned
+    assert "ordinary diagnostic before" in cleaned
+    assert "ordinary diagnostic after" in cleaned
+    assert cleaned.count(redactor.REDACTED) >= 7
+    assert (
+        redactor.redact_json_value(f"toX\x1b[1Dken={opaque_secret}")
+        == redactor.REDACTED
+    )
+
+
+def test_sensitive_log_redaction_fails_closed_for_multiline_terminal_sequences() -> None:
+    """Secrets inside multiline OSC/DCS control payloads cannot escape line-local checks."""
+    opaque_secret = "opaque-multiline-terminal-secret-731"
+    source = (
+        "ordinary diagnostic before\n"
+        f"\x1b]0;title-prefix\n{opaque_secret}\ntitle-suffix\x07\n"
+        "ordinary diagnostic after\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert opaque_secret not in cleaned
+    assert "\x1b" not in cleaned
+    assert "\x07" not in cleaned
+    assert "ordinary diagnostic before" in cleaned
+    assert "ordinary diagnostic after" in cleaned
+    assert cleaned.count("\n") == source.count("\n")
+
+    unterminated = f"\x1b]0;title-prefix\n{opaque_secret}\ntitle-suffix"
+    unterminated_cleaned = redactor.redact_text(unterminated)
+    assert opaque_secret not in unterminated_cleaned
+    assert unterminated_cleaned.count("\n") == unterminated.count("\n")
+
+
+def test_sensitive_log_redaction_accepts_explicit_literal_secrets() -> None:
+    """Caller-supplied opaque and multiline credential values are removed exactly."""
+    opaque_secret = "-".join(("opaque", "allow", "env", "fixture", "123456"))
+    multiline_secret = "private-line-one\nprivate-line-two"
+    ansi_secret = "violet\x1b[31m-capybara-731"
+    source = f"ordinary diagnostic\n{opaque_secret}\n{multiline_secret}\n{ansi_secret}\n"
+
+    cleaned = redactor.redact_text(
+        source,
+        sensitive_values=(
+            opaque_secret,
+            multiline_secret,
+            ansi_secret,
+            "",
+            opaque_secret,
+        ),
+    )
+
+    assert opaque_secret not in cleaned
+    assert "private-line-one" not in cleaned
+    assert "private-line-two" not in cleaned
+    assert "violet-capybara-731" not in cleaned
+    assert "ordinary diagnostic" in cleaned
+    assert cleaned.count(redactor.REDACTED) == 3
+    assert cleaned.count("\n") == source.count("\n")
+
+    escaped = repr(multiline_secret)
+    escaped_cleaned = redactor.redact_text(
+        f"FileNotFoundError: {escaped}",
+        sensitive_values=(multiline_secret,),
+    )
+    assert "private-line-one\\nprivate-line-two" not in escaped_cleaned
+
+
+def test_sensitive_literal_redaction_preserves_leading_and_unicode_line_separators() -> None:
+    """Opaque multiline values keep every separator at its original relative position."""
+    leading_secret = "\nprivate-leading-value"
+    unicode_secret = "private-unicode-one\u2028private-unicode-two"
+    source = f"prefix{leading_secret} suffix\n{unicode_secret} tail"
+
+    cleaned = redactor.redact_text(
+        source,
+        sensitive_values=(leading_secret, unicode_secret),
+    )
+
+    assert cleaned == (
+        f"prefix\n{redactor.REDACTED} suffix\n"
+        f"{redactor.REDACTED}\u2028 tail"
+    )
+
+
+def test_sensitive_log_redaction_preserves_all_supported_line_boundaries() -> None:
+    """Line separators remain boundaries rather than unsafe inline controls."""
+    source = "before\vafter\fnext\x1cunit\x85unicode\u2028paragraph\u2029last"
+
+    assert redactor.redact_text(source) == source
+
+
+def test_sensitive_literal_redaction_preserves_json_types_and_its_own_marker() -> None:
+    """Opaque values redact string evidence without corrupting JSON or prior markers."""
+    source = json.dumps(
+        {
+            "enabled": True,
+            "literal": "true",
+            "marker_word": "REDACTED",
+            "opaque": "fixture-secret-long",
+            "token_count": 512,
+        }
+    )
+
+    cleaned_text = redactor.redact_text(
+        source,
+        sensitive_values=("fixture-secret-long", "REDACTED", "true"),
+    )
+    cleaned = json.loads(cleaned_text)
+
+    assert cleaned["enabled"] is True
+    assert cleaned["literal"] == redactor.REDACTED
+    assert cleaned["marker_word"] == redactor.REDACTED
+    assert cleaned["opaque"] == redactor.REDACTED
+    assert cleaned["token_count"] == 512
+    assert "[[REDACTED]]" not in cleaned_text
+
+
+def test_sensitive_literal_redaction_does_not_rewrite_existing_markers() -> None:
+    """Literal substrings inside an existing marker are never scanned as credentials."""
+    source = "prior [REDACTED] evidence and plain REDACTED value"
+
+    cleaned = redactor.redact_text(
+        source,
+        sensitive_values=("RED", "REDACTED"),
+    )
+
+    assert cleaned == "prior [REDACTED] evidence and plain [REDACTED] value"
+    assert redactor.redact_text(
+        "prior [REDACTED] evidence",
+        sensitive_values=("[REDACTE",),
+    ) == "prior [REDACTED] evidence"
+
+
+def test_command_redaction_fails_closed_for_malformed_sensitive_quoting() -> None:
+    """Malformed shell quoting hides sensitive option evidence but preserves benign text."""
+    assert (
+        redactor.redact_command_text("tool --token 'unterminated")
+        == redactor.REDACTED
+    )
+    assert redactor.redact_command_text("tool 'unterminated") == "tool 'unterminated"
+
+
+def test_sensitive_log_redaction_processes_long_key_like_diagnostics_within_budget() -> None:
+    """A modest non-secret key-like line cannot trigger quadratic CI redaction work."""
+    source = (
+        "from scripts.ci.redact_sensitive_log import redact_text; "
+        "value = 'a' * 10000; assert redact_text(value) == value"
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=Path.cwd(),
+        check=True,
+        shell=False,
+        timeout=2,
+    )
+
+
+def test_sensitive_log_redaction_processes_many_lines_and_values_within_budget() -> None:
+    """Many opaque values cannot multiply work independently for every log line."""
+    source = (
+        "from scripts.ci.redact_sensitive_log import redact_text; "
+        "text = 'ordinary diagnostic\\n' * 20000; "
+        "values = tuple(f'opaque-{index:03d}-fixture-value' for index in range(100)); "
+        "assert redact_text(text, sensitive_values=values) == text"
+    )
+
+    subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=Path.cwd(),
+        check=True,
+        shell=False,
+        timeout=2,
+    )
 
 
 @pytest.mark.parametrize(
