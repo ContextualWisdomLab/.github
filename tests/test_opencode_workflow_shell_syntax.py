@@ -1,3 +1,4 @@
+import pytest
 import json
 import os
 import shutil
@@ -147,14 +148,15 @@ def test_merge_scheduler_targeted_dispatch_run_block_is_valid_bash():
     assert result.returncode == 0, result.stderr
 
 
-def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
-    """Only an allowlisted same-repository open PR reaches scheduler outputs."""
+
+@pytest.fixture
+def dispatch_env(tmp_path):
     if sys.platform == "win32":
-        return
+        pytest.skip("Not supported on Windows")
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     if bash is None or jq is None:
-        return
+        pytest.skip("bash or jq not available")
 
     workflow_text = (
         REPO_ROOT / ".github/workflows/pr-review-merge-scheduler.yml"
@@ -171,7 +173,7 @@ def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
 set -euo pipefail
 test "$1" = api
 test "$2" = repos/ContextualWisdomLab/naruon/pulls/1179
-printf '%s\\n' "$FAKE_PULL_JSON"
+printf '%s\n' "$FAKE_PULL_JSON"
 """,
         encoding="utf-8",
     )
@@ -204,31 +206,43 @@ printf '%s\\n' "$FAKE_PULL_JSON"
             "ContextualWisdomLab/.github, ContextualWisdomLab/naruon"
         ),
     }
+    return {
+        "bash": bash,
+        "script": script,
+        "env": env,
+        "output": output,
+        "pull": pull
+    }
 
+
+def test_merge_scheduler_targeted_dispatch_accepts_allowlisted_same_repo_pr(dispatch_env):
+    """Only an allowlisted same-repository open PR reaches scheduler outputs."""
     accepted = subprocess.run(
-        [bash],
-        input=script,
+        [dispatch_env["bash"]],
+        input=dispatch_env["script"],
         text=True,
         capture_output=True,
         check=False,
-        env=env,
+        env=dispatch_env["env"],
     )
 
     assert accepted.returncode == 0, accepted.stderr
-    assert output.read_text(encoding="utf-8").splitlines() == [
+    assert dispatch_env["output"].read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
         "base_branch=develop",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
     ]
 
-    output.unlink()
+
+def test_merge_scheduler_targeted_dispatch_rejects_unlisted_repo(dispatch_env):
+    """Rejects a PR if its repository is absent from the exact allowlist."""
     rejected_env = {
-        **env,
+        **dispatch_env["env"],
         "ALLOWED_TARGET_REPOSITORIES": "ContextualWisdomLab/.github",
     }
     rejected = subprocess.run(
-        [bash],
-        input=script,
+        [dispatch_env["bash"]],
+        input=dispatch_env["script"],
         text=True,
         capture_output=True,
         check=False,
@@ -237,23 +251,25 @@ printf '%s\\n' "$FAKE_PULL_JSON"
 
     assert rejected.returncode == 1
     assert "absent from the configured exact allowlist" in rejected.stdout
-    assert not output.exists()
+    assert not dispatch_env["output"].exists()
 
-    output.unlink(missing_ok=True)
+
+def test_merge_scheduler_targeted_dispatch_rejects_cross_repo_pr(dispatch_env):
+    """Rejects a cross-repository pull request even if the target is allowlisted."""
     cross_repo_pull = {
-        **pull,
+        **dispatch_env["pull"],
         "head": {
-            **pull["head"],
+            **dispatch_env["pull"]["head"],
             "repo": {"full_name": "outside/fork"},
         },
     }
     cross_repo_env = {
-        **env,
+        **dispatch_env["env"],
         "FAKE_PULL_JSON": json.dumps(cross_repo_pull),
     }
     cross_repo = subprocess.run(
-        [bash],
-        input=script,
+        [dispatch_env["bash"]],
+        input=dispatch_env["script"],
         text=True,
         capture_output=True,
         check=False,
@@ -262,4 +278,4 @@ printf '%s\\n' "$FAKE_PULL_JSON"
 
     assert cross_repo.returncode == 1
     assert "cross-repository" in cross_repo.stdout
-    assert not output.exists()
+    assert not dispatch_env["output"].exists()
