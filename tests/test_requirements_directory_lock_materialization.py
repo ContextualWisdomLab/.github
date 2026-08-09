@@ -95,6 +95,62 @@ def test_global_hash_directive_does_not_replace_per_requirement_trust(
     assert materializer._is_hash_pinned(content) is expected
 
 
+@pytest.mark.parametrize(
+    "unsafe_content",
+    (
+        b"demo>=1 --hash=sha256:" + (b"a" * 64) + b"\n",
+        b"demo==1 --hash=sha256:not-a-complete-digest\n",
+        b"--index-url https://packages.example.invalid/simple --hash=sha256:"
+        + (b"a" * 64)
+        + b"\n",
+        b"-r /tmp/absolute.txt\n",
+        b"--requirement ../parent.txt\n",
+        b"-r nested/../../escape.txt\n",
+        b"--requirement other.txt --hash=sha256:" + (b"a" * 64) + b"\n",
+    ),
+)
+def test_unsafe_requirement_lines_are_rejected_before_materialization(
+    unsafe_content: bytes,
+) -> None:
+    """Unsafe package and include syntax never gains trusted candidate status."""
+    assert not materializer._is_hash_pinned(unsafe_content)
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    (
+        "demo>=1 --hash=sha256:" + ("a" * 64) + "\n",
+        "demo==1 --hash=sha256:not-a-complete-digest\n",
+        "--index-url https://packages.example.invalid/simple --hash=sha256:"
+        + ("a" * 64)
+        + "\n",
+        "-r /tmp/absolute.txt\n",
+        "--requirement ../parent.txt\n",
+    ),
+)
+def test_unsafe_requirements_directory_candidate_is_excluded_from_manifest(
+    tmp_path: Path,
+    unsafe_text: str,
+) -> None:
+    """Unsafe direct-child content is excluded before entering the build context."""
+    repo = tmp_path / "repo"
+    requirements_dir = repo / "requirements"
+    requirements_dir.mkdir(parents=True)
+    _git(repo, "init")
+    _git(repo, "config", "user.name", "Test")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    (requirements_dir / "ci.txt").write_text(unsafe_text, encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert manifest == []
+    assert (output / "manifest.json").read_text(encoding="utf-8") == "[]\n"
+
+
 def test_rejects_global_hash_directive_with_unpinned_requirement(
     tmp_path: Path,
 ) -> None:
