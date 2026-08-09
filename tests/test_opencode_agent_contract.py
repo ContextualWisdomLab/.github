@@ -1,3 +1,4 @@
+"""Tests for OpenCode agent and review workflow contracts."""
 import json
 import os
 import re
@@ -334,6 +335,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         assert f'"{model_name}": {{' in workflow
 
     def is_reasoning_capable(model_name: str) -> bool:
+        """Check if model is reasoning capable."""
         return (
             model_name.startswith("gpt-5")
             or model_name.startswith("openai/gpt-5")
@@ -498,6 +500,16 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in coverage_job
     )
 
+    target_start = workflow.index("  opencode-review-target:\n")
+    target_job = workflow[target_start:]
+    target_condition = target_job.split("    runs-on:", 1)[0]
+    assert "github.event_name == 'repository_dispatch'" in target_condition
+    assert "github.event_name == 'pull_request_target'" not in target_condition
+
+
+def test_opencode_coverage_merge_tree_materialization_is_secure():
+    """Verify the coverage merge tree step uses strict authentication and refs."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
     start = workflow.index(
         "      - name: Materialize pull request merge tree for coverage measurement\n"
     )
@@ -525,14 +537,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "Coverage merge tree could not be materialized" in step
     assert "PR_HEAD_SHA:" in step
 
-    measure_start = workflow.index(
-        "      - name: Measure test and docstring evidence\n"
-    )
-    measure_end = workflow.index("\n      - name:", measure_start + 1)
-    measure_step = workflow[measure_start:measure_end]
-    assert "GH_TOKEN:" not in measure_step
-    assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
-    assert "secrets." not in measure_step
+
+def test_opencode_coverage_measure_javascript_environment():
+    """Verify JavaScript package materialization in the coverage measurement step."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
+
     assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
     assert (
         'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
@@ -540,6 +549,17 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "member.isfile() or member.isdir()" in workflow
     assert 'bundle.extractall(destination, members=members, filter="data")' in workflow
     assert 'tar -xf "$COVERAGE_SOURCE_ARCHIVE"' not in workflow
+
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
+    assert "GH_TOKEN:" not in measure_step
+    assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
+    assert "secrets." not in measure_step
+
     assert "docker.io/library/python:3.14-slim@sha256:" in measure_step
     assert "apt-get install --no-install-recommends -y" in measure_step
     assert (
@@ -602,6 +622,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'chmod -R u+rwX,go-rwx "$destination"' in measure_step
     assert '--cache "$writable_npm_cache_dir"' in measure_step
     assert "npm offline ci" in measure_step
+
     npm_install_case = (
         measure_step.split("install_package_dependencies() {", 1)[1]
         .split("npm)", 1)[1]
@@ -648,6 +669,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert '--store-dir "$writable_pnpm_store_dir"' in measure_step
     assert "pnpm offline install" in measure_step
     assert "--offline" in measure_step
+
     coverage_function_start = measure_step.index(
         "          check_javascript_coverage_thresholds() {\n"
     )
@@ -666,6 +688,17 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "javascript_coverage_ran_any=1" in measure_step
     assert measure_step.count("check_javascript_coverage_thresholds") == 2
     assert "--require-hashes" in measure_step
+
+
+def test_opencode_coverage_measure_sandbox_environment():
+    """Verify Docker sandbox setup in the coverage measurement step."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
@@ -678,9 +711,6 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "docker run --rm --init --network=none"
     )
     assert "--cap-drop ALL" in measure_step
-    # Docker already creates a private PID namespace by default. Passing the
-    # unsupported literal `private` makes hosted-runner Docker exit 125 before
-    # any coverage evidence can run.
     assert "--pid private" not in measure_step
     assert "--pid host" not in measure_step
     assert "Docker's default private PID namespace" in measure_step
@@ -710,6 +740,23 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'setpriv \\\n              --reuid "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'pkill -KILL -u "$OPENCODE_SANDBOX_UID"' in measure_step
     assert 'chmod 0444 "$implementation_changed_files"' in measure_step
+    assert "docker run --rm --init --network=none" in measure_step
+
+    sandbox_runtime = measure_step.split(
+        "          export OPENCODE_SANDBOX_UID=65532", 1
+    )[1]
+    assert "apt-get" not in sandbox_runtime
+
+
+def test_opencode_coverage_measure_toolchains():
+    """Verify toolchains like Python, Rust, and Tauri in the coverage step."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
     assert "verify_trusted_python_test_toolchain()" in measure_step
     assert "import coverage, interrogate, pytest, pytest_cov" in measure_step
     assert "python3 -I -c 'import pytest_cov'" in measure_step
@@ -718,13 +765,13 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
-    assert "docker run --rm --init --network=none" in measure_step
+
     sandbox_runtime = measure_step.split(
         "          export OPENCODE_SANDBOX_UID=65532", 1
     )[1]
-    assert "apt-get" not in sandbox_runtime
     assert "cargo install" not in sandbox_runtime
     assert "command -v cargo-llvm-cov" in sandbox_runtime
+
     assert (
         'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
         in measure_step
@@ -749,6 +796,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "uv run --no-project" not in measure_step
     assert "uv run --no-build" not in measure_step
     assert "python3 -m coverage run -m pytest tests" in measure_step
+
     trusted_requirements = Path(
         "requirements-opencode-review-ci-hashes.txt"
     ).read_text(encoding="utf-8")
@@ -759,6 +807,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "scripts/ci/compile_opencode_review_lock.sh"
     ).read_text(encoding="utf-8")
     normalized_compile_script = " ".join(compile_script.replace("\\\n", " ").split())
+
     assert "pytest-cov==7.1.0" in trusted_requirements
     assert '"--dry-run"' in base_python_installer
     assert '"--ignore-installed"' in base_python_installer
@@ -779,14 +828,6 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "1bb93c2aa61d2a5b38f1526546d95cf4132cb681e541a337bf8dfd092be816e5"
         in trusted_requirements
     )
-
-    target_start = workflow.index("  opencode-review-target:\n")
-    target_job = workflow[target_start:]
-    target_condition = target_job.split("    runs-on:", 1)[0]
-    assert "github.event_name == 'repository_dispatch'" in target_condition
-    assert "github.event_name == 'pull_request_target'" not in target_condition
-
-
 def test_opencode_repository_dispatch_authorization_is_fail_closed():
     """Reject an untrusted dispatcher or a target outside the exact allowlist."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -1840,6 +1881,7 @@ def test_opencode_job_timeout_contains_full_sequential_review_budget():
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
 
     def timeout_minutes(pattern: str) -> int:
+        """Get timeout minutes from workflow step."""
         match = re.search(pattern, workflow, re.MULTILINE)
         assert match, f"missing timeout contract: {pattern}"
         return int(match.group(1))
