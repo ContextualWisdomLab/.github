@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import urllib.error
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 
@@ -23,7 +25,7 @@ def test_trusted_uv_redirect_handler_rejects_before_following() -> None:
     handler = materializer._RejectTrustedUvRedirects()
     original = urllib.request.Request(materializer.TRUSTED_UV_ARCHIVE_URL)
 
-    with pytest.raises(RuntimeError, match="redirects are forbidden"):
+    with pytest.raises(urllib.error.HTTPError, match="trusted uv archive redirects are forbidden"):
         handler.redirect_request(
             original,
             None,

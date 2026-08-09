@@ -19,6 +19,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -65,8 +67,14 @@ class _RejectTrustedUvRedirects(urllib.request.HTTPRedirectHandler):
         new_url: str,
     ) -> None:
         """Fail closed for all redirect status codes and target locations."""
-        del request, response, code, message, headers, new_url
-        raise RuntimeError("trusted uv archive redirects are forbidden")
+        del message, new_url
+        raise urllib.error.HTTPError(
+            request.full_url,  # type: ignore
+            code,
+            "trusted uv archive redirects are forbidden",
+            headers,
+            response,
+        )
 
 
 @functools.cache
