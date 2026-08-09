@@ -45,6 +45,47 @@ sequenceDiagram
   S->>S: Return to integration queue
 ```
 
+## Continuation and handoff state machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> QueueRefetch
+  QueueRefetch --> Execute: executable lane exists
+  QueueRefetch --> ExitSweepOne: no executable lane observed
+  Execute --> RefetchAffectedState: action, merge, RCA, doc or prompt mutation
+  RefetchAffectedState --> Execute: another safe lane exists
+  RefetchAffectedState --> ExitSweepOne: no execute-now lane observed
+  ExitSweepOne --> Execute: first sweep finds work
+  ExitSweepOne --> ExitSweepTwo: first sweep finds none
+  ExitSweepTwo --> Execute: second sweep finds work
+  ExitSweepTwo --> BoundedTermination: second sweep finds none
+  BoundedTermination --> [*]
+```
+
+A user-visible status, prompt update, review request, merge, documentation edit, or defer decision never transitions directly to `BoundedTermination`. It must return through queue selection and the required exit sweeps unless the practical invocation/tool budget is exhausted.
+
+## Conversation-to-repository reconciliation
+
+```mermaid
+sequenceDiagram
+  participant H as Conversation/Prompt/Artifact
+  participant G as GitHub Live State
+  participant C as Canonical Documentation
+  participant T as Documentation Contract
+  participant Q as Executable Queue
+  H->>G: Identify material durable decision candidate
+  G->>G: Refetch protected main + active PR implementation
+  G->>C: Classify shipped/active/accepted/planned/research/superseded/out-of-scope
+  alt canonical line already exists
+    C->>C: Extend existing authority
+  else no canonical line exists
+    C->>C: Create one discoverable authority
+  end
+  C->>T: Update affected PRD/TRD/Architecture/ADR/UML/Data Model/Security/Operations/Traceability
+  T-->>C: Machine-check fitness
+  C->>Q: continuation_handoff to next executable lane
+```
+
 ## Evidence/gate state machine
 
 ```mermaid
@@ -76,6 +117,23 @@ flowchart LR
   G -->|otherwise| D[Defer or remediate]
 ```
 
+## External scheduler and GitHub authority
+
+```mermaid
+flowchart LR
+  X[External scheduler/orchestrator] -->|invocation + writer lease| Q[Execution queue]
+  Q -->|read/write under lease| R[GitHub repository]
+  R --> C[Checks]
+  R --> V[Formal reviews]
+  R --> S[Commit statuses]
+  R --> W[Workflow runs]
+  C --> G[Gate evaluator]
+  V --> G
+  S --> G
+  W --> G
+  X -. cannot substitute .-> G
+```
+
 ## Incident classification
 
 ```mermaid
@@ -87,9 +145,11 @@ flowchart TD
   T -->|repository product defect| P[Test-first product repair]
   T -->|central dependency| H[Read-only handoff to owner]
   T -->|reviewer/provider capacity| D[Defer lane and rotate]
+  T -->|premature termination| C[Repair continuation policy and resume queue]
   B --> V[Exact acceptance evidence]
   X --> V
   P --> V
   H --> V
   D --> V
+  C --> V
 ```
