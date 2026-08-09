@@ -1,6 +1,6 @@
 # CWL Automation Control Plane — Product Requirements
 
-Status: Proposed baseline
+Status: active_pr
 
 ## Purpose
 

@@ -1,6 +1,6 @@
 # ADR-0001 — Dedicated repository writer leases and read-only fleet audit
 
-Status: Proposed
+Status: active_pr
 
 ## Context
 

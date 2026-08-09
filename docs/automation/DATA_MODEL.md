@@ -1,6 +1,6 @@
 # CWL Automation Control Plane — Conceptual Data Model
 
-Status: Proposed baseline
+Status: active_pr
 
 This is a logical evidence/domain model. It does **not** assert that the central control plane currently persists these entities in a database.
 

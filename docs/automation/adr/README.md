@@ -1,12 +1,13 @@
-# Automation Control Plane ADR Index
+# Automation architecture decision records
 
-Status values describe decisions, not implementation completion.
+Status: active_pr
 
-| ADR | Decision | Status |
-|---|---|---|
-| [0001](0001-writer-leases.md) | Dedicated repository writer leases and read-only fleet audit | Proposed |
-| [0002](0002-exact-head-live-base.md) | Exact source-head plus independently resolved live-base evidence | Proposed |
-| [0003](0003-work-conserving-execution.md) | Work-conserving execution and no report-as-completion | Proposed |
-| [0004](0004-evidence-authority-separation.md) | Separate review/check/status/model/merge/runtime authorities | Proposed |
-
-Further ADRs required before this baseline is Accepted: bounded classified bootstrap retries; explicit minimal reusable-workflow secret contracts; counted independent reviewer governance; protected-main operational acceptance; and central-vs-leaf ownership.
+- [ADR-0001 — Dedicated repository writer leases](0001-writer-leases.md)
+- [ADR-0002 — Bind exact source head and current live base](0002-exact-head-live-base.md)
+- [ADR-0003 — Work-conserving execution](0003-work-conserving-execution.md)
+- [ADR-0004 — Separate evidence and decision authorities](0004-evidence-authority-separation.md)
+- [ADR-0005 — Classify and bound trusted-bootstrap retries](0005-bounded-bootstrap-retries.md)
+- [ADR-0006 — Use explicit minimal reusable-workflow secrets](0006-explicit-secret-contracts.md)
+- [ADR-0007 — Require counted independent exact-head review](0007-independent-review-governance.md)
+- [ADR-0008 — Require protected-main operational acceptance](0008-protected-main-acceptance.md)
+- [ADR-0009 — Central control-plane ownership and thin leaf callers](0009-central-control-plane-ownership.md)

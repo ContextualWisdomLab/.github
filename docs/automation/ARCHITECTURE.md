@@ -1,6 +1,6 @@
 # CWL Automation Control Plane Architecture
 
-Status: Proposed baseline
+Status: active_pr
 
 ## Bounded contexts
 

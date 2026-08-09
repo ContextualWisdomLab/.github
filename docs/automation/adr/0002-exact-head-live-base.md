@@ -1,6 +1,6 @@
 # ADR-0002 — Exact source-head plus independently resolved live-base evidence
 
-Status: Proposed
+Status: active_pr
 
 ## Context
 

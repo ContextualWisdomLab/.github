@@ -1,6 +1,6 @@
 # CWL Automation Control Plane — UML Views
 
-Status: Proposed baseline
+Status: active_pr
 
 ## PR maintenance sequence
 

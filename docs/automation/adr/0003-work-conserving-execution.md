@@ -1,6 +1,6 @@
 # ADR-0003 — Work-conserving execution and no report-as-completion
 
-Status: Proposed
+Status: active_pr
 
 ## Context
 

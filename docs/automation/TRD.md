@@ -1,6 +1,6 @@
 # CWL Automation Control Plane — Technical Requirements
 
-Status: Proposed baseline
+Status: active_pr
 
 ## Evidence identity
 

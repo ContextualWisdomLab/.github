@@ -1,6 +1,6 @@
 # ADR-0004 — Separate evidence and decision authorities
 
-Status: Proposed
+Status: active_pr
 
 ## Context
 

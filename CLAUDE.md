@@ -126,3 +126,7 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+
+## Automation control plane
+
+Use [`docs/automation/README.md`](docs/automation/README.md) as the canonical graph for organization automation requirements, architecture, security, operations, diagrams, evidence model, traceability, and ADRs. Preserve its implementation-status vocabulary and never promote `active_pr` to shipped behavior.
