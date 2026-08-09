@@ -218,28 +218,9 @@ def run_failed_model(
     )
 
 
-def run_central_fallback(
-    tmp_path: Path,
-    *,
-    changed_files: list[str] | None = None,
-) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
-    """Run the bounded central fallback with deterministic local command fixtures."""
-    command = bash_command()
-    skip_if_windows_bash_is_unresponsive(command)
-    source_dir = tmp_path / "source"
-    review_dir = tmp_path / "review"
-    runner_temp = tmp_path / "runner-temp"
-    fake_bin = tmp_path / "bin"
-    for path in (
-        source_dir / ".codegraph",
-        source_dir / "scripts" / "ci",
-        source_dir / "tests",
-        review_dir,
-        runner_temp,
-        fake_bin,
-    ):
-        path.mkdir(parents=True, exist_ok=True)
 
+def _create_mock_fallback_scripts(source_dir: Path) -> None:
+    """Create deterministic shell scripts required by central fallback."""
     (source_dir / ".codegraph" / "codegraph.db").write_bytes(b"indexed")
     (source_dir / "scripts" / "ci" / "run_opencode_review_model_pool.sh").write_text(
         "#!/usr/bin/env bash\ncap_model_run_timeout() { :; }\n",
@@ -264,7 +245,9 @@ def run_central_fallback(
     )
     strix_test.chmod(0o755)
 
-    uv_log = tmp_path / "uv.log"
+
+def _create_mock_uv_binary(fake_bin: Path, uv_log: Path) -> None:
+    """Create a mock uv binary that writes its arguments to a log."""
     fake_uv = fake_bin / "uv"
     fake_uv.write_text(
         "#!/usr/bin/env bash\n"
@@ -275,25 +258,19 @@ def run_central_fallback(
     )
     fake_uv.chmod(0o755)
 
-    required_paths = [
-        "scripts/ci/run_opencode_review_model_pool.sh",
-        "scripts/ci/javascript_coverage_gate.py",
-        "scripts/ci/strix_quick_gate.sh",
-    ]
-    changed_files_file = runner_temp / "opencode-changed-files.txt"
-    changed_files_file.write_text(
-        "\n".join(required_paths if changed_files is None else changed_files) + "\n",
-        encoding="utf-8",
-    )
-    manifest_digest = seal_artifacts(
-        runner_temp,
-        head_sha="2" * 40,
-        run_id="central-fallback-test",
-        run_attempt="1",
-        paths=(changed_files_file,),
-    )
-    output_file = tmp_path / "selected-output.json"
-    github_output = tmp_path / "github-output.txt"
+
+def _build_fallback_env(
+    uv_log: Path,
+    github_output: Path,
+    changed_files_file: Path,
+    output_file: Path,
+    review_dir: Path,
+    source_dir: Path,
+    fake_bin: Path,
+    runner_temp: Path,
+    manifest_digest: str,
+) -> dict[str, str]:
+    """Construct an isolated environment mapping for bounded CI testing."""
     env = os.environ.copy()
     for name in CENTRAL_FALLBACK_ENV:
         env.pop(name, None)
@@ -317,6 +294,67 @@ def run_central_fallback(
             "RUN_ATTEMPT": "1",
             "RUN_ID": "central-fallback-test",
         }
+    )
+    return env
+
+
+
+def run_central_fallback(
+    tmp_path: Path,
+    *,
+    changed_files: list[str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
+    """Run the bounded central fallback with deterministic local command fixtures."""
+    command = bash_command()
+    skip_if_windows_bash_is_unresponsive(command)
+    source_dir = tmp_path / "source"
+    review_dir = tmp_path / "review"
+    runner_temp = tmp_path / "runner-temp"
+    fake_bin = tmp_path / "bin"
+    for path in (
+        source_dir / ".codegraph",
+        source_dir / "scripts" / "ci",
+        source_dir / "tests",
+        review_dir,
+        runner_temp,
+        fake_bin,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+    _create_mock_fallback_scripts(source_dir)
+
+    uv_log = tmp_path / "uv.log"
+    _create_mock_uv_binary(fake_bin, uv_log)
+
+    required_paths = [
+        "scripts/ci/run_opencode_review_model_pool.sh",
+        "scripts/ci/javascript_coverage_gate.py",
+        "scripts/ci/strix_quick_gate.sh",
+    ]
+    changed_files_file = runner_temp / "opencode-changed-files.txt"
+    changed_files_file.write_text(
+        "\n".join(required_paths if changed_files is None else changed_files) + "\n",
+        encoding="utf-8",
+    )
+    manifest_digest = seal_artifacts(
+        runner_temp,
+        head_sha="2" * 40,
+        run_id="central-fallback-test",
+        run_attempt="1",
+        paths=(changed_files_file,),
+    )
+    output_file = tmp_path / "selected-output.json"
+    github_output = tmp_path / "github-output.txt"
+    env = _build_fallback_env(
+        uv_log=uv_log,
+        github_output=github_output,
+        changed_files_file=changed_files_file,
+        output_file=output_file,
+        review_dir=review_dir,
+        source_dir=source_dir,
+        fake_bin=fake_bin,
+        runner_temp=runner_temp,
+        manifest_digest=manifest_digest,
     )
     result = subprocess.run(
         [command, bash_path(RUNNER)],
