@@ -80,7 +80,7 @@ def test_interactive_mentions_and_sweeps_have_independent_queue_contracts() -> N
     )
     sweep_job = _job_block(text, "sweep-organization-agent-mentions", None)
 
-    assert "\nconcurrency:\n" not in header
+    assert not any(line.startswith("concurrency:") for line in header.splitlines())
     assert _concurrency_block(local_job) == (
         "    concurrency:\n"
         "      group: review-agent-mention-router-local-${{ github.repository }}\n"
