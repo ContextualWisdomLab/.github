@@ -240,6 +240,27 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
     return binary
 
 
+def _verify_trusted_uv(uv_path: pathlib.Path) -> None:
+    """Verify that the downloaded uv binary executes and reports the expected version."""
+    try:
+        completed = subprocess.run(
+            [str(uv_path), "--version"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=TRUSTED_UV_VERSION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"trusted uv executable verification failed: {type(exc).__name__}"
+        ) from exc
+    observed = completed.stdout.decode("utf-8", errors="replace").strip()
+    if completed.returncode != 0 or observed != f"uv {TRUSTED_UV_VERSION}":
+        raise RuntimeError(
+            "trusted uv executable reported an unexpected version or exit status"
+        )
+
+
 @functools.cache
 def _install_trusted_uv() -> str:
     """Install and verify the pinned uv exporter once for this process."""
@@ -252,23 +273,7 @@ def _install_trusted_uv() -> str:
     try:
         uv_path.write_bytes(_verified_uv_binary(_download_trusted_uv_archive()))
         uv_path.chmod(0o755)
-        try:
-            completed = subprocess.run(
-                [str(uv_path), "--version"],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=TRUSTED_UV_VERSION_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError(
-                f"trusted uv executable verification failed: {type(exc).__name__}"
-            ) from exc
-        observed = completed.stdout.decode("utf-8", errors="replace").strip()
-        if completed.returncode != 0 or observed != f"uv {TRUSTED_UV_VERSION}":
-            raise RuntimeError(
-                "trusted uv executable reported an unexpected version or exit status"
-            )
+        _verify_trusted_uv(uv_path)
     except Exception:
         shutil.rmtree(tool_dir, ignore_errors=True)
         raise
