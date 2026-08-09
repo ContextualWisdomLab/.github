@@ -1,3 +1,4 @@
+import subprocess
 import json
 import runpy
 import shutil
@@ -198,3 +199,48 @@ def test_module_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_verify"] = module
     assert exc_info.value.code == 0
+
+def test_sandboxed_verify_redacts_stdout_and_stderr(monkeypatch, tmp_path, capsys):
+    """The wrapper redacts sensitive tokens from completed process stdout and stderr."""
+    class CompletedProcess:
+        def __init__(self, stdout, stderr, returncode):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    def run_command(command, cwd, env, timeout):
+        return CompletedProcess(
+            "Here is my api_key: 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12345678'",
+            "Failed because of password: mysecretpassword123",
+            0
+        )
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", run_command)
+
+    sandboxed_verify.main(["echo", "test"])
+
+    out, err = capsys.readouterr()
+    assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12345678" not in out
+    assert "[REDACTED]" in out
+    assert "mysecretpassword123" not in err
+    assert "[REDACTED]" in err
+
+def test_timeout_redacts_bytes_output(monkeypatch, tmp_path, capsys):
+    """The wrapper redacts sensitive tokens from timeout stdout and stderr bytes."""
+    def run_command(command, cwd, env, timeout):
+        raise subprocess.TimeoutExpired(
+            cmd="mock",
+            timeout=10,
+            output=b"Timeout with token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12345678",
+            stderr=b"Timeout error with password: mysecretpassword123"
+        )
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", run_command)
+
+    sandboxed_verify.main(["echo", "test"])
+
+    out, err = capsys.readouterr()
+    assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12345678" not in out
+    assert "[REDACTED]" in out
+    assert "mysecretpassword123" not in err
+    assert "[REDACTED]" in err

@@ -1,3 +1,4 @@
+import subprocess
 import json
 import os
 import runpy
@@ -598,3 +599,43 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_web_e2e"] = module
     assert exc_info.value.code == 0
+
+def test_sandboxed_web_e2e_redacts_stdout_and_stderr(monkeypatch, tmp_path, capsys):
+    """The E2E wrapper redacts sensitive tokens from completed process stdout and stderr."""
+    class CompletedProcess:
+        def __init__(self, stdout, stderr, returncode):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    def run_shell(command, cwd, env, timeout):
+        return CompletedProcess(
+            "Found token: 'github_pat_11AAAAAAA000000000000000000000000000000000000000000000000000000000000000000000'",
+            "Error: could not login with session_key: 123456",
+            1
+        )
+
+    def mock_wait_for_url(*args):
+        return True
+
+    def mock_start_service(*args):
+        class Service:
+            label = "mock"
+            command = "mock"
+            process = type("Proc", (), {"poll": lambda self: None, "pid": 123, "wait": lambda self, timeout: None})()
+            log_path = tmp_path / "mock.log"
+            def __init__(self):
+                self.log_path.touch()
+        return Service()
+
+    monkeypatch.setattr(sandboxed_web_e2e, "run_shell", run_shell)
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", mock_wait_for_url)
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", mock_start_service)
+
+    sandboxed_web_e2e.main(["--backend-cmd", "mock", "--frontend-cmd", "mock", "--e2e-cmd", "mock"])
+
+    out, err = capsys.readouterr()
+    assert "github_pat_11AAAAAAA000000000000000000000000000000000000000000000000000000000000000000000" not in out
+    assert "[REDACTED]" in out
+    assert "session_key: 123456" not in err
+    assert "[REDACTED]" in err

@@ -13,9 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Strix 스캔 게이트의 폴백(fallback) 로직에서 GitHub 모델 종료에 따른 410 (brownout) 오류를 정상적인 폴백 트리거로 인식하도록 수정했습니다.
-- 샌드박스 검증 스크립트(`sandboxed_verify.py`, `sandboxed_web_e2e.py`)의 하위 프로세스 실행 시 캡처된 표준 출력과 표준 에러에 로그 데이터 마스킹(redaction) 로직을 추가하여 민감한 정보의 노출을 방지했습니다.
-
+- Added log redaction for standard output and error captured during subprocess execution in `sandboxed_verify.py` and `sandboxed_web_e2e.py` wrappers.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
 - Allowed commas and ASCII parentheses in the bounded Strix changed-file path policy so legal tracked Packrat fixtures can receive exact-head security analysis, while rejecting raw `..` components before normalization and keeping controls, backslashes, whitespace ambiguity, and shell punctuation fail-closed.
 - Bound each review-agent invocation key to the wrapper's complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.

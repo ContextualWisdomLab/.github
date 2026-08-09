@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-if __package__ in (None, ""):
+if __package__ in (None, ""):  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
