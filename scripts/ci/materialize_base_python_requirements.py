@@ -370,6 +370,32 @@ def _reject_unsupported_uv_workspace(
     )
 
 
+def _validate_uv_export(
+    completed: subprocess.CompletedProcess[bytes], lock_path: str
+) -> bytes | None:
+    """Validate a completed uv export and return its hash-pinned requirements."""
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        normalized_stderr = " ".join(stderr.split())
+        detail = (
+            normalized_stderr[:500]
+            if normalized_stderr
+            else f"exit status {completed.returncode}"
+        )
+        raise RuntimeError(
+            f"uv export failed for tracked base lock {lock_path}: {detail}"
+        )
+
+    exported = completed.stdout
+    if not _requirement_lines(exported):
+        return None
+    if not _is_fully_hash_pinned_export(exported):
+        raise RuntimeError(
+            f"uv export for tracked base lock {lock_path} was not fully hash-pinned"
+        )
+    return exported
+
+
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
 ) -> bytes | None:
@@ -399,26 +425,7 @@ def _export_uv_lock(
                 f"{type(exc).__name__}"
             ) from exc
 
-    if completed.returncode != 0:
-        stderr = completed.stderr.decode("utf-8", errors="replace")
-        normalized_stderr = " ".join(stderr.split())
-        detail = (
-            normalized_stderr[:500]
-            if normalized_stderr
-            else f"exit status {completed.returncode}"
-        )
-        raise RuntimeError(
-            f"uv export failed for tracked base lock {lock_path}: {detail}"
-        )
-
-    exported = completed.stdout
-    if not _requirement_lines(exported):
-        return None
-    if not _is_fully_hash_pinned_export(exported):
-        raise RuntimeError(
-            f"uv export for tracked base lock {lock_path} was not fully hash-pinned"
-        )
-    return exported
+    return _validate_uv_export(completed, lock_path)
 
 
 def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosixPath]]:
