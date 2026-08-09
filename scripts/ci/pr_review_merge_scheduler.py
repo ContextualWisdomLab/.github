@@ -706,6 +706,23 @@ def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_files_node(files: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the GraphQL files node from a REST files payload."""
+    return {"nodes": [{"path": file.get("filename")} for file in files if file.get("filename")]}
+
+
+def _build_status_check_rollup_node(checks: dict[str, Any]) -> dict[str, Any]:
+    """Build the GraphQL statusCheckRollup node from a REST check-runs payload."""
+    return {
+        "contexts": {
+            "nodes": [
+                rest_check_node(check)
+                for check in (checks.get("check_runs") or [])
+            ]
+        }
+    }
+
+
 def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     """Convert a REST pull request payload into the GraphQL shape used by the scheduler."""
 
@@ -713,9 +730,11 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     head_repo = head.get("repo") or {}
+
     reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
+
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
         str(pr.get("mergeable_state") or "").upper(),
@@ -736,16 +755,9 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "headRepository": {"nameWithOwner": head_repo.get("full_name") or repo},
         "autoMergeRequest": pr.get("auto_merge"),
         "reviewThreads": {"nodes": []},
-        "files": {"nodes": [{"path": file.get("filename")} for file in files if file.get("filename")]},
+        "files": _build_files_node(files),
         "reviews": {"nodes": [rest_review_node(review) for review in reviews]},
-        "statusCheckRollup": {
-            "contexts": {
-                "nodes": [
-                    rest_check_node(check)
-                    for check in (checks.get("check_runs") or [])
-                ]
-            }
-        },
+        "statusCheckRollup": _build_status_check_rollup_node(checks),
         "restMergeableState": rest_merge_state,
     }
 
