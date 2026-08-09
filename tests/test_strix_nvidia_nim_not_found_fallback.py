@@ -119,8 +119,8 @@ def _workflow_neutralizes(log_text: str) -> bool:
     return backend.returncode == 0 and vulnerability.returncode == 1
 
 
-class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
-    """Protect provider-scoped 404 fallback without weakening security gates."""
+class StrixNvidiaNotFoundClassifierTests(unittest.TestCase):
+    """Test classifier logic for NVIDIA NIM 404s."""
 
     def test_nvidia_hosted_model_404_is_retryable_provider_evidence(self) -> None:
         """Recognize the exact LiteLLM/NVIDIA 404 observed in required CI."""
@@ -152,6 +152,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
 
         log = "source literal: Nvidia_nimException Error code: 404\n"
         self.assertFalse(_classifies_as_nvidia_not_found(log))
+
+
+class StrixNvidiaNotFoundConfigurationTests(unittest.TestCase):
+    """Test workflow file configurations for NVIDIA NIM fallback."""
 
     def test_not_found_skips_same_model_and_enters_cross_model_fallback(self) -> None:
         """Wire the classifier only into infrastructure and model fallback."""
@@ -198,6 +202,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             maxsplit=1,
         )[0]
         self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
+
+
+class StrixNvidiaNotFoundWorkflowSignalTests(unittest.TestCase):
+    """Test workflow neutralization logic for NVIDIA NIM 404 signals."""
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
         """Reject provider-like target text in the outer neutralization gate."""
