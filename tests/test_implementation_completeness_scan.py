@@ -135,17 +135,16 @@ impl Engine {
 def test_rust_scanner_ignores_comments_and_strings(tmp_path: Path) -> None:
     source = tmp_path / "src" / "module.rs"
     source.parent.mkdir()
-    todo_macro = "to" + "do!()"
     source.write_text(
-        f"""/* outer comment starts
-/* nested comment mentions {todo_macro} */
+        """/* outer comment starts
+/* nested comment mentions todo!() */
 still only a comment with unimplemented!()
 */
-{todo_macro}("module-level unfinished work");
+todo!("module-level unfinished work");
 
-pub fn implemented() {{
-    let text = "escaped \\\" {todo_macro} stays in the string";
-}}
+pub fn implemented() {
+    let text = "escaped \\" todo!() stays in the string";
+}
 """,
         encoding="utf-8",
     )
