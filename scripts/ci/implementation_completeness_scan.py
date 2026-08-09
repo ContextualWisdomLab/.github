@@ -197,6 +197,8 @@ def scan_python_file(repo_root: Path, relative_path: Path) -> list[Finding]:
     return visitor.findings
 
 
+_RUST_TOKEN_PATTERN = re.compile(r'//|/\*|\*/|"|\\')
+
 def rust_code_lines(source: str) -> list[tuple[int, str]]:
     """Return Rust source lines with comments and string bodies blanked out."""
     code_lines: list[tuple[int, str]] = []
@@ -206,43 +208,88 @@ def rust_code_lines(source: str) -> list[tuple[int, str]]:
     for line_no, line in enumerate(source.splitlines(), start=1):
         i = 0
         cleaned: list[str] = []
-        while i < len(line):
-            char = line[i]
-            next_two = line[i : i + 2]
-            if block_comment_depth:
-                if next_two == "/*":
-                    block_comment_depth += 1
-                    i += 2
-                    continue
-                if next_two == "*/":
-                    block_comment_depth -= 1
-                    i += 2
-                    continue
-                i += 1
-                continue
-            if in_string:
-                cleaned.append(" ")
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                i += 1
-                continue
-            if next_two == "//":
+        last_append = 0
+        line_len = len(line)
+
+        if in_string and escaped and line_len > 0:
+            escaped = False
+            cleaned.append(" ")
+            last_append = 1
+            i = 1
+
+        while i < line_len:
+            match = _RUST_TOKEN_PATTERN.search(line, i)
+            if not match:
                 break
-            if next_two == "/*":
-                block_comment_depth += 1
-                i += 2
+
+            start = match.start()
+            token = match.group()
+
+            if not block_comment_depth and not in_string:
+                cleaned.append(line[last_append:start])
+                last_append = start
+
+            if block_comment_depth > 0:
+                if token == "/*":  # nosec B105
+                    block_comment_depth += 1
+                    i = match.end()
+                elif token == "*/":  # nosec B105
+                    block_comment_depth -= 1
+                    i = match.end()
+                    if block_comment_depth == 0:
+                        last_append = match.end()
+                else:
+                    i = start + 1
                 continue
-            if char == '"':
+
+            if in_string:
+                cleaned.append(" " * (start - last_append))
+                last_append = start
+
+                if token == "\\":  # nosec B105
+                    if start + 1 < line_len:
+                        cleaned.append("  ")
+                        last_append = start + 2
+                        i = start + 2
+                    else:
+                        escaped = True
+                        cleaned.append(" ")
+                        last_append = start + 1
+                        i = start + 1
+                elif token == '"':  # nosec B105
+                    in_string = False
+                    cleaned.append(" ")
+                    last_append = match.end()
+                    i = match.end()
+                else:
+                    cleaned.append(" ")
+                    last_append = start + 1
+                    i = start + 1
+                continue
+
+            if token == "//":  # nosec B105
+                last_append = line_len
+                break
+            elif token == "/*":  # nosec B105
+                block_comment_depth += 1
+                i = match.end()
+                last_append = match.end()
+            elif token == '"':  # nosec B105
                 in_string = True
                 cleaned.append(" ")
-                i += 1
-                continue
-            cleaned.append(char)
-            i += 1
+                i = match.end()
+                last_append = match.end()
+            else:
+                cleaned.append(line[last_append : start + 1])
+                last_append = start + 1
+                i = start + 1
+
+        if last_append < line_len:
+            if not block_comment_depth and not in_string:
+                cleaned.append(line[last_append:])
+            elif in_string:
+                cleaned.append(" " * (line_len - last_append))
+
         code_lines.append((line_no, "".join(cleaned)))
     return code_lines
 
