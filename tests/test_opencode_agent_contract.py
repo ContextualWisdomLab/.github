@@ -1792,6 +1792,25 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "forced smooth scrolling" in prompt_template
 
 
+def test_opencode_fallback_scope_includes_adversarial_evidence_gate() -> None:
+    """Keep the extracted adversarial gate inside central fallback scope."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    allowlist = workflow.split("fallback_changed_file_allowed() {", 1)[1].split(
+        "fallback_changed_file_counts_as_core() {", 1
+    )[0]
+
+    assert (
+        "ContextualWisdomLab/.github:scripts/ci/adversarial_evidence.py | \\"
+        in allowlist
+    )
+    assert (
+        "ContextualWisdomLab/.github:tests/test_adversarial_evidence.py | \\"
+        in allowlist
+    )
+
+
 def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
     """Never diagnose the central scheduler's own queue check as a peer failure."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
