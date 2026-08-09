@@ -457,14 +457,9 @@ def conflict_comment_exists(repo: str, number: int) -> bool:
     return False
 
 
-def post_conflict_comment(repo: str, pr: dict[str, Any], base_ref: str, *, dry_run: bool) -> bool:
-    """Post the manual-rebase hand-off comment once; return whether it was posted."""
-    number = int(pr["number"])
-    if dry_run:
-        return False
-    if conflict_comment_exists(repo, number):
-        return False
-    body = "\n".join(
+def generate_conflict_comment_body(base_ref: str, number: int) -> str:
+    """Return the markdown body for a manual-rebase hand-off comment."""
+    return "\n".join(
         [
             CONFLICT_COMMENT_MARKER,
             "",
@@ -479,6 +474,16 @@ def post_conflict_comment(repo: str, pr: dict[str, Any], base_ref: str, *, dry_r
             "- `git push --force-with-lease`",
         ]
     )
+
+
+def post_conflict_comment(repo: str, pr: dict[str, Any], base_ref: str, *, dry_run: bool) -> bool:
+    """Post the manual-rebase hand-off comment once; return whether it was posted."""
+    number = int(pr["number"])
+    if dry_run:
+        return False
+    if conflict_comment_exists(repo, number):
+        return False
+    body = generate_conflict_comment_body(base_ref, number)
     run(
         [
             "gh",
