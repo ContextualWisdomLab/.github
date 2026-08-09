@@ -10,6 +10,8 @@ Semantic Versioning where the repository publishes a release.
 
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
+- Add a canonical automation control-plane PRD/TRD/architecture/security/operations/traceability graph, detailed ADR set, diagram/data-model coverage, and an exact-head documentation fitness workflow.
+- Added a conversation-wide documentation fitness audit, external-orchestration/GitHub-evidence authority split, same-invocation continuation handoff, double-exit termination contract, expanded conceptual ERD/UML views, and ADR-0010 so prompt or documentation updates cannot become report-as-completion while safe queue work remains.
 
 ### Fixed
 
@@ -18,5 +20,3 @@ Semantic Versioning where the repository publishes a release.
 - Bound each review-agent invocation key to the wrapper's complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.
 - Bound both trusted-uv quality jobs to `github.event.pull_request.head.sha` and added a permanent two-checkout regression contract so exact-head compatibility, coverage, docstring, and compilation claims cannot silently measure GitHub's generated pull-request merge revision.
 - Made Strix treat only a single LiteLLM provider-error line containing NVIDIA NIM context and model-catalog 404 evidence as cross-model fallback evidence, rejecting cross-line signal assembly and provider-like target source literals; moved the public default to Nemotron 3 Super 120B and added a second NVIDIA hosted candidate before GitHub Models without neutralizing reported vulnerabilities.
-
-- Add a canonical automation control-plane PRD/TRD/architecture/security/operations/traceability graph, detailed ADR set, diagram/data-model coverage, and an exact-head documentation fitness workflow.
