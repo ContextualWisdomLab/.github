@@ -65,3 +65,26 @@ def test_trusted_uv_opener_is_cached_and_disables_ambient_proxies(
     assert isinstance(handlers[0], urllib.request.ProxyHandler)
     assert handlers[0].proxies == {}
     assert isinstance(handlers[1], materializer._RejectTrustedUvRedirects)
+
+
+def test_trusted_uv_origin_accepts_explicit_default_https_port() -> None:
+    """The fixed trusted HTTPS origin remains valid when port 443 is explicit."""
+    materializer._verify_trusted_uv_origin(
+        "https://releases.astral.sh:443/uv-x86_64-unknown-linux-gnu.tar.gz"
+    )
+
+
+def test_trusted_uv_origin_rejects_non_default_port() -> None:
+    """A non-443 port cannot stay inside the governed trusted uv origin."""
+    with pytest.raises(RuntimeError, match="redirected outside.*releases\.astral\.sh"):
+        materializer._verify_trusted_uv_origin(
+            "https://releases.astral.sh:444/uv-x86_64-unknown-linux-gnu.tar.gz"
+        )
+
+
+def test_trusted_uv_origin_rejects_malformed_port() -> None:
+    """A malformed URL port is normalized to the same fail-closed origin error."""
+    with pytest.raises(RuntimeError, match="redirected outside.*releases\.astral\.sh"):
+        materializer._verify_trusted_uv_origin(
+            "https://releases.astral.sh:not-a-port/uv-x86_64-unknown-linux-gnu.tar.gz"
+        )
