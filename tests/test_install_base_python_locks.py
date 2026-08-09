@@ -46,6 +46,7 @@ def test_recovers_partial_supplement_with_same_directory_lock(tmp_path) -> None:
     commands: list[list[str]] = []
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         commands.append(command)
         requirements = [
             command[index + 1]
@@ -100,6 +101,7 @@ def test_skips_partial_candidate_without_completing_sibling(tmp_path) -> None:
     )
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         return subprocess.CompletedProcess(
             command,
             1,
@@ -139,6 +141,7 @@ def test_failed_same_directory_group_still_skips_partial_candidates(tmp_path) ->
     commands: list[list[str]] = []
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         commands.append(command)
         return subprocess.CompletedProcess(
             command,
@@ -184,6 +187,7 @@ def test_unclassified_preflight_failure_is_fatal(tmp_path, failure_output: str) 
     )
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         return subprocess.CompletedProcess(command, 23, stdout=failure_output)
 
     stderr = io.StringIO()
@@ -209,6 +213,7 @@ def test_explicit_python_incompatibility_is_visible_and_nonfatal(tmp_path) -> No
     )
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         return subprocess.CompletedProcess(
             command,
             1,
@@ -247,6 +252,7 @@ def test_fatal_same_directory_group_failure_aborts(tmp_path) -> None:
     call_count = 0
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         nonlocal call_count
         call_count += 1
         if call_count <= 2:
@@ -339,6 +345,7 @@ def test_rejects_unsafe_manifest_before_running_pip(tmp_path) -> None:
     called = False
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         nonlocal called
         called = True
         return subprocess.CompletedProcess(command, 0, stdout="")
@@ -365,6 +372,7 @@ def test_install_failure_after_successful_preflight_is_fatal(tmp_path) -> None:
     call_count = 0
 
     def fake_runner(command: list[str], **kwargs):
+        assert kwargs.get('shell') is False, 'shell=False must be set for runner calls'
         nonlocal call_count
         call_count += 1
         return subprocess.CompletedProcess(

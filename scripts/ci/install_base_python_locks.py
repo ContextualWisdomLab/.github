@@ -180,6 +180,141 @@ def _report_fatal_preflight_failure(
         print(failure_output, file=stderr)
 
 
+def _preflight_independent_candidates(
+    entries: list[LockCandidate],
+    *,
+    runner: Runner,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> tuple[int, set[str], dict[str, subprocess.CompletedProcess[str]]]:
+    """Preflight each candidate lock individually."""
+    independently_valid: set[str] = set()
+    preflight_results: dict[str, subprocess.CompletedProcess[str]] = {}
+
+    for entry in entries:
+        print(
+            f"Preflighting trusted base Python lock candidate {entry.source} "
+            f"({entry.generated_file}).",
+            file=stdout,
+            flush=True,
+        )
+        preflight = runner(
+            _pip_command([entry.path], preflight=True),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            shell=False,
+        )
+        preflight_results[entry.generated_file] = preflight
+        if preflight.returncode == 0:
+            independently_valid.add(entry.generated_file)
+        elif not _is_deferable_preflight_failure(preflight.stdout or ""):
+            _report_fatal_preflight_failure(
+                entry.source,
+                preflight.stdout or "",
+                stderr=stderr,
+            )
+            return preflight.returncode or 1, set(), {}
+
+    return 0, independently_valid, preflight_results
+
+
+def _preflight_recovery_groups(
+    entries: list[LockCandidate],
+    independently_valid: set[str],
+    *,
+    runner: Runner,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> tuple[int, list[list[LockCandidate]], set[str]]:
+    """Group and preflight candidates from the same source directory."""
+    by_source_directory: dict[str, list[LockCandidate]] = defaultdict(list)
+    for entry in entries:
+        by_source_directory[entry.source_directory].append(entry)
+
+    install_plans: list[list[LockCandidate]] = []
+    covered_files: set[str] = set()
+
+    for source_directory, directory_entries in by_source_directory.items():
+        invalid_entries = [
+            entry
+            for entry in directory_entries
+            if entry.generated_file not in independently_valid
+        ]
+        if not invalid_entries or len(directory_entries) < 2:
+            continue
+
+        print(
+            "Preflighting same-directory trusted base Python lock group "
+            f"{source_directory or '.'}: "
+            + ", ".join(entry.source for entry in directory_entries),
+            file=stdout,
+            flush=True,
+        )
+        group_preflight = runner(
+            _pip_command([entry.path for entry in directory_entries], preflight=True),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            shell=False,
+        )
+        if group_preflight.returncode != 0:
+            if not _is_deferable_preflight_failure(group_preflight.stdout or ""):
+                _report_fatal_preflight_failure(
+                    ", ".join(entry.source for entry in directory_entries),
+                    group_preflight.stdout or "",
+                    stderr=stderr,
+                )
+                return group_preflight.returncode or 1, [], set()
+            continue
+
+        install_plans.append(directory_entries)
+        covered_files.update(entry.generated_file for entry in directory_entries)
+        print(
+            "Recovered trusted base Python supplement(s) through a complete "
+            f"same-directory hash closure: {source_directory or '.'}.",
+            file=stdout,
+            flush=True,
+        )
+
+    return 0, install_plans, covered_files
+
+
+def _install_validated_closures(
+    install_plans: list[list[LockCandidate]],
+    *,
+    runner: Runner,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> tuple[int, int]:
+    """Install all successfully preflighted dependency closures."""
+    installed = 0
+    for plan in install_plans:
+        plan_sources = ", ".join(entry.source for entry in plan)
+        print(
+            f"Installing validated trusted base Python lock closure: {plan_sources}.",
+            file=stdout,
+            flush=True,
+        )
+        installation = runner(
+            _pip_command([entry.path for entry in plan], preflight=False),
+            check=False,
+            shell=False,
+        )
+        if installation.returncode != 0:
+            print(
+                "::error::A preflight-valid trusted base Python lock closure failed "
+                f"during installation: {plan_sources}.",
+                file=stderr,
+            )
+            return installation.returncode or 1, installed
+        installed += len(plan)
+
+    return 0, installed
+
+
 def install_materialized_locks(
     requirements_root: pathlib.Path,
     *,
@@ -194,81 +329,19 @@ def install_materialized_locks(
         print(f"::error::Could not validate base Python locks: {exc}", file=stderr)
         return 2
 
-    installed = 0
+    ret_code, independently_valid, preflight_results = _preflight_independent_candidates(
+        entries, runner=runner, stdout=stdout, stderr=stderr
+    )
+    if ret_code != 0:
+        return ret_code
+
+    ret_code, install_plans, covered_files = _preflight_recovery_groups(
+        entries, independently_valid, runner=runner, stdout=stdout, stderr=stderr
+    )
+    if ret_code != 0:
+        return ret_code
+
     skipped = 0
-    preflight_results: dict[str, subprocess.CompletedProcess[str]] = {}
-    independently_valid: set[str] = set()
-    for entry in entries:
-        print(
-            f"Preflighting trusted base Python lock candidate {entry.source} "
-            f"({entry.generated_file}).",
-            file=stdout,
-            flush=True,
-        )
-        preflight = runner(
-            _pip_command([entry.path], preflight=True),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        preflight_results[entry.generated_file] = preflight
-        if preflight.returncode == 0:
-            independently_valid.add(entry.generated_file)
-        elif not _is_deferable_preflight_failure(preflight.stdout or ""):
-            _report_fatal_preflight_failure(
-                entry.source,
-                preflight.stdout or "",
-                stderr=stderr,
-            )
-            return preflight.returncode or 1
-
-    by_source_directory: dict[str, list[LockCandidate]] = defaultdict(list)
-    for entry in entries:
-        by_source_directory[entry.source_directory].append(entry)
-
-    install_plans: list[list[LockCandidate]] = []
-    covered_files: set[str] = set()
-    for source_directory, directory_entries in by_source_directory.items():
-        invalid_entries = [
-            entry
-            for entry in directory_entries
-            if entry.generated_file not in independently_valid
-        ]
-        if not invalid_entries or len(directory_entries) < 2:
-            continue
-        print(
-            "Preflighting same-directory trusted base Python lock group "
-            f"{source_directory or '.'}: "
-            + ", ".join(entry.source for entry in directory_entries),
-            file=stdout,
-            flush=True,
-        )
-        group_preflight = runner(
-            _pip_command([entry.path for entry in directory_entries], preflight=True),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        if group_preflight.returncode != 0:
-            if not _is_deferable_preflight_failure(group_preflight.stdout or ""):
-                _report_fatal_preflight_failure(
-                    ", ".join(entry.source for entry in directory_entries),
-                    group_preflight.stdout or "",
-                    stderr=stderr,
-                )
-                return group_preflight.returncode or 1
-            continue
-        install_plans.append(directory_entries)
-        covered_files.update(entry.generated_file for entry in directory_entries)
-        print(
-            "Recovered trusted base Python supplement(s) through a complete "
-            f"same-directory hash closure: {source_directory or '.'}.",
-            file=stdout,
-            flush=True,
-        )
-
     for entry in entries:
         if entry.generated_file in covered_files:
             continue
@@ -290,25 +363,11 @@ def install_materialized_locks(
         )
         print(failure_output, file=stderr)
 
-    for plan in install_plans:
-        plan_sources = ", ".join(entry.source for entry in plan)
-        print(
-            f"Installing validated trusted base Python lock closure: {plan_sources}.",
-            file=stdout,
-            flush=True,
-        )
-        installation = runner(
-            _pip_command([entry.path for entry in plan], preflight=False),
-            check=False,
-        )
-        if installation.returncode != 0:
-            print(
-                "::error::A preflight-valid trusted base Python lock closure failed "
-                f"during installation: {plan_sources}.",
-                file=stderr,
-            )
-            return installation.returncode or 1
-        installed += len(plan)
+    ret_code, installed = _install_validated_closures(
+        install_plans, runner=runner, stdout=stdout, stderr=stderr
+    )
+    if ret_code != 0:
+        return ret_code
 
     print(
         "Trusted base Python lock installation summary: "
