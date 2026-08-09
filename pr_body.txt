@@ -1,7 +1,0 @@
-🎯 **What:** scripts/ci/install_python_requirements_for_coverage.py의 main 함수에서 패키지 설치 로직(pip, uv)을 분리하여 _install_hash_pinned와 _install_unpinned_with_uv 헬퍼 함수로 추출하고 가독성을 높였습니다. 보안 린터(Bandit) 경고를 해결하기 위해 subprocess.run에 shell=False를 명시하고 # nosec B603 주석을 추가했습니다.
-
-💡 **Why:** main 함수가 다소 길고 여러 역할을 수행하고 있었습니다. 이를 헬퍼 함수로 추출함으로써 가독성과 유지보수성이 향상되었고, Python 코드베이스 헬스(cleanliness)가 개선되었습니다.
-
-✅ **Verification:** 테스트(pytest), interrogate(100%), bandit(0 high/medium issues), coverage(100%)를 모두 통과하여 기능이 동일하게 유지됨을 확인했습니다.
-
-✨ **Result:** 보다 선명하게 역할을 나누어 복잡도를 낮추었으며 잠재적 보안 린터 경고도 안전하게 해제했습니다.
