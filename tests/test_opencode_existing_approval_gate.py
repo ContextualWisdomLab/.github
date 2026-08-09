@@ -40,10 +40,6 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
     source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
     runner_temp.mkdir()
     source_path.parent.mkdir(parents=True)
-    runner_temp.chmod(0o755)
-    source_root.chmod(0o755)
-    source_path.parent.chmod(0o755)
-    source_path.parent.parent.chmod(0o755)
     source_path.write_bytes(b"\n".join(SOURCE_LINES) + b"\n")
 
     changed_files = runner_temp / "opencode-changed-files.txt"
@@ -65,10 +61,6 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    changed_files.chmod(0o644)
-    manifest.chmod(0o644)
-    source_path.chmod(0o644)
-
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
