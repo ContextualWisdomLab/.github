@@ -1356,7 +1356,8 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
             f"expected {expected_head}, observed {live_head or '<missing>'}"
         )
 
-    for review_id in review_ids:
+    def dismiss_one(review_id: str) -> None:
+        """Dismiss a single stale review."""
         message = (
             "Superseded automated OpenCode change request from a previous head; "
             f"exact current head {expected_head} has a later OpenCode approval."
@@ -1372,6 +1373,14 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
                 f"message={message}",
             ]
         )
+
+    if len(review_ids) <= 1:
+        for review_id in review_ids:
+            dismiss_one(review_id)
+    else:
+        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(review_ids))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(dismiss_one, review_ids))
     return len(review_ids)
 
 

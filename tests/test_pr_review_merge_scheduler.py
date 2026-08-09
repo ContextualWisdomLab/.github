@@ -2604,9 +2604,16 @@ def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypa
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
     assert sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False) == 2
     assert calls[0] == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]
-    assert calls[1][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/201/dismissals"]
-    assert calls[2][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/202/dismissals"]
-    assert all(call[-2] == "-f" and call[-1].startswith("message=") for call in calls[1:])
+    # Due to parallel execution, calls[1] and calls[2] may be in either order.
+    dismissal_endpoints = {calls[1][4], calls[2][4]}
+    assert dismissal_endpoints == {
+        "repos/owner/repo/pulls/1/reviews/201/dismissals",
+        "repos/owner/repo/pulls/1/reviews/202/dismissals"
+    }
+    for call in calls[1:]:
+        assert call[:4] == ["gh", "api", "-X", "PUT"]
+        assert call[-2] == "-f"
+        assert call[-1].startswith("message=")
 
     calls.clear()
     monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or ("d" * 40))
