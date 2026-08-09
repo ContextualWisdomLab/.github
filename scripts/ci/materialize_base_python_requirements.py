@@ -20,7 +20,6 @@ import sys
 import tarfile
 import tempfile
 import urllib.error
-import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
