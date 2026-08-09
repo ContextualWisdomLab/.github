@@ -126,6 +126,7 @@ SENSITIVE_COMMAND_OPTIONS = frozenset(
         "userpass",
     }
 )
+CONTAINER_LOGIN_PROGRAMS = frozenset({"docker", "podman"})
 PROVIDER_TOKEN_RES = (
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -336,6 +337,25 @@ def _command_option_identifies_credentials(argument: str) -> bool:
     )
 
 
+def _command_program(argument: str) -> str:
+    """Return the basename used for program-aware evidence handling."""
+    return argument.rsplit("/", 1)[-1].lower()
+
+
+def _container_login_password_option(
+    command: Sequence[str],
+    index: int,
+    argument: str,
+) -> bool:
+    """Identify Docker/Podman login's ambiguous short password option."""
+    option = argument.partition("=")[0]
+    return (
+        option == "-p"
+        and _command_program(command[0]) in CONTAINER_LOGIN_PROGRAMS
+        and "login" in command[1:index]
+    )
+
+
 def redact_command_argv(
     command: Sequence[str],
     *,
@@ -346,7 +366,7 @@ def redact_command_argv(
     literal_pattern = _compile_literal_pattern(values)
     cleaned: list[str] = []
     redact_next = False
-    for argument in command:
+    for index, argument in enumerate(command):
         if redact_next:
             cleaned.append(REDACTED)
             redact_next = False
@@ -355,12 +375,18 @@ def redact_command_argv(
         if (
             separator
             and option.startswith("-")
-            and option.lstrip("-").lower() in SENSITIVE_COMMAND_OPTIONS
+            and (
+                _command_option_identifies_credentials(option)
+                or _container_login_password_option(command, index, argument)
+            )
         ):
             cleaned.append(f"{option}={REDACTED}")
             continue
         cleaned.append(_redact_unstructured(argument, literal_pattern))
-        redact_next = _command_option_identifies_credentials(argument)
+        redact_next = (
+            _command_option_identifies_credentials(argument)
+            or _container_login_password_option(command, index, argument)
+        )
     return cleaned
 
 
