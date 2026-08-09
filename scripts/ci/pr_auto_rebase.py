@@ -545,6 +545,36 @@ def summarize_error(exc: Exception) -> str:
     return first_line[:300]
 
 
+def process_pr(args: argparse.Namespace, pr: dict[str, Any], now: datetime, rebases_used: int) -> tuple[Decision, int]:
+    """Process a single PR and determine the rebase decision."""
+    number = int(pr.get("number") or 0)
+    skip_reason = candidate_skip_reason(
+        args.repo,
+        pr,
+        base_branch=args.base_branch,
+        now=now,
+        human_window_minutes=args.human_window_minutes,
+    )
+    if skip_reason is not None:
+        return Decision(number, "skip", skip_reason), rebases_used
+    if rebases_used >= args.max_per_run:
+        return (
+            Decision(number, "skip", f"rate limit reached ({args.max_per_run} rebases/run); process next run"),
+            rebases_used,
+        )
+    rebases_used += 1
+    if args.dry_run:
+        return (
+            Decision(number, "would_rebase", f"candidate ({candidate_state_note(pr)}); dry-run, no git mutation"),
+            rebases_used,
+        )
+    try:
+        decision = perform_rebase(args.repo, pr, dry_run=args.dry_run)
+        return decision, rebases_used
+    except (RuntimeError, KeyError, ValueError) as exc:
+        return Decision(number, "error", summarize_error(exc)), rebases_used
+
+
 def process_queue(args: argparse.Namespace) -> int:
     """Inspect open PRs and perform bounded, guarded auto-rebases."""
     now = datetime.now(timezone.utc)
@@ -552,32 +582,8 @@ def process_queue(args: argparse.Namespace) -> int:
     decisions: list[Decision] = []
     rebases_used = 0
     for pr in prs:
-        number = int(pr.get("number") or 0)
-        skip_reason = candidate_skip_reason(
-            args.repo,
-            pr,
-            base_branch=args.base_branch,
-            now=now,
-            human_window_minutes=args.human_window_minutes,
-        )
-        if skip_reason is not None:
-            decisions.append(Decision(number, "skip", skip_reason))
-            continue
-        if rebases_used >= args.max_per_run:
-            decisions.append(
-                Decision(number, "skip", f"rate limit reached ({args.max_per_run} rebases/run); process next run")
-            )
-            continue
-        rebases_used += 1
-        if args.dry_run:
-            decisions.append(
-                Decision(number, "would_rebase", f"candidate ({candidate_state_note(pr)}); dry-run, no git mutation")
-            )
-            continue
-        try:
-            decisions.append(perform_rebase(args.repo, pr, dry_run=args.dry_run))
-        except (RuntimeError, KeyError, ValueError) as exc:
-            decisions.append(Decision(number, "error", summarize_error(exc)))
+        decision, rebases_used = process_pr(args, pr, now, rebases_used)
+        decisions.append(decision)
     print_summary(decisions, dry_run=args.dry_run, base_branch=args.base_branch)
     return 0
 
