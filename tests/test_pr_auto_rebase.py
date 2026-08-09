@@ -602,3 +602,25 @@ def test_write_actions_summary_noop_without_path(monkeypatch):
     """No step summary file means no summary write."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     rebase.write_actions_summary([], counts={}, dry_run=True, base_branch="main")
+
+def test_fetch_open_prs_limit(monkeypatch):
+    """Open PRs are fetched up to max_prs."""
+    pages = [
+        {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                        "nodes": [make_pr(number=1), make_pr(number=2)],
+                    }
+                }
+            }
+        },
+    ]
+
+    def fake_graphql(query, **fields):
+        return pages[0]
+
+    monkeypatch.setattr(rebase, "gh_graphql", fake_graphql)
+    prs = rebase.fetch_open_prs("owner/repo", 2)
+    assert [pr["number"] for pr in prs] == [1, 2]

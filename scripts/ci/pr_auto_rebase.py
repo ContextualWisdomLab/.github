@@ -243,25 +243,28 @@ def head_commit_by_recent_human(pr: dict[str, Any], *, now: datetime, window_min
     return 0 <= age_seconds < window_minutes * 60
 
 
-def candidate_skip_reason(
-    repo: str,
-    pr: dict[str, Any],
-    *,
-    base_branch: str,
-    now: datetime,
-    human_window_minutes: int,
-) -> str | None:
-    """Return why a PR is not an auto-rebase candidate, or None if it is one."""
+def _structural_skip_reason(repo: str, pr: dict[str, Any]) -> str | None:
+    """Check structural reasons a PR might be skipped."""
     if pr.get("isDraft"):
         return "draft PR"
     if not same_repository_head(repo, pr):
         head_repo = (pr.get("headRepository") or {}).get("nameWithOwner") or "<unknown>"
         return f"external fork head {head_repo} is not pushable by the scheduler credential"
+    return None
+
+
+def _base_branch_skip_reason(pr: dict[str, Any], base_branch: str) -> str | None:
+    """Check base branch reasons a PR might be skipped."""
     base_ref = pr.get("baseRefName") or ""
     if not base_ref:
         return "PR has no base branch"
     if base_ref != base_branch:
         return f"base branch is {base_ref}; expected {base_branch}"
+    return None
+
+
+def _merge_state_skip_reason(pr: dict[str, Any]) -> str | None:
+    """Check merge state reasons a PR might be skipped."""
     if is_clean(pr):
         return f"already mergeable and up to date (merge state {merge_state(pr) or 'CLEAN'}); nothing to rebase"
     if not (is_behind_base(pr) or is_dirty(pr)):
@@ -272,6 +275,11 @@ def candidate_skip_reason(
             f"(merge state {merge_state(pr) or 'DIRTY'}); awaiting manual rebase so it does not "
             "re-consume a rate-limit slot"
         )
+    return None
+
+
+def _human_commit_skip_reason(pr: dict[str, Any], now: datetime, human_window_minutes: int) -> str | None:
+    """Check if a recent human commit prevents auto-rebasing."""
     if head_commit_by_recent_human(pr, now=now, window_minutes=human_window_minutes):
         login = ((last_commit(pr).get("author") or {}).get("user") or {}).get("login") or "human"
         return (
@@ -279,6 +287,23 @@ def candidate_skip_reason(
             "skipping to avoid rewriting active work"
         )
     return None
+
+
+def candidate_skip_reason(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    base_branch: str,
+    now: datetime,
+    human_window_minutes: int,
+) -> str | None:
+    """Return why a PR is not an auto-rebase candidate, or None if it is one."""
+    return (
+        _structural_skip_reason(repo, pr)
+        or _base_branch_skip_reason(pr, base_branch)
+        or _merge_state_skip_reason(pr)
+        or _human_commit_skip_reason(pr, now, human_window_minutes)
+    )
 
 
 def candidate_state_note(pr: dict[str, Any]) -> str:
