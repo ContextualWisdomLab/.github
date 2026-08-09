@@ -87,7 +87,7 @@ This repair improves availability and processing-integrity evidence without clai
 
 | Control concern | Evidence |
 | --- | --- |
-| Change management | Protected pull request, exact-head checks, independent review, immutable commits |
+| Change management | Protected pull request and exact-head checks; qualifying independent review and post-integration evidence remain pending |
 | Availability | Separate local/sweep groups, bounded job timeouts, bounded interactive queue |
 | Processing integrity | Canonical invocation key, exact-name artifact claim, duplicate suppression |
 | Least privilege | Existing job-scoped permissions and credential separation remain unchanged |
@@ -103,8 +103,8 @@ After protected merge:
 2. require a durable receipt or acknowledgement before relying on downstream review evidence;
 3. verify that scheduled sweep runs do not cancel or replace pending interactive routes;
 4. monitor local queue delay, sweep duration, dispatch count, duplicate-ledger outcomes, and downstream conclusions;
-5. alert when an eligible comment has no receipt within the local five-minute execution timeout plus bounded queue delay;
-6. alert when the interactive queue approaches the documented 100-pending limit;
+5. alert when an eligible interactive request has no receipt within **10 minutes** of comment creation (a CWL operational alert threshold, not a GitHub SLA): this permits at most five minutes of queue delay plus the existing five-minute local execution timeout before operator investigation;
+6. alert immediately on a queue-limit rejection, unexpected cancellation of an interactive route, or when the interactive queue approaches the documented 100-pending limit;
 7. keep metrics finite-cardinality and exclude comment text, source diffs, tokens, and model responses.
 
 A downstream reviewer may still fail closed because credentials, providers, checks, or exact-head evidence are unavailable. That remains distinct from a routing queue failure.
