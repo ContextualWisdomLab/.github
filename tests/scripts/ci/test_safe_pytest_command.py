@@ -255,3 +255,25 @@ def test_execute_command_no_venv(mock_run: mock.MagicMock, tmp_path: pathlib.Pat
     execute_command(tmp_path, ["pytest", "tests/"])
     call_env = mock_run.call_args[1]["env"]
     assert "PATH" not in call_env or str(tmp_path) not in call_env.get("PATH", "")
+
+
+
+
+def test_module_execution_subprocess(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test the module is executable as a script."""
+    # Write a test script that imports and runs it
+    script = tmp_path / "run_it.py"
+    script.write_text("import scripts.ci.safe_pytest_command\nwith open('scripts/ci/safe_pytest_command.py') as f:\n    exec(compile(f.read(), 'scripts/ci/safe_pytest_command.py', 'exec'), {'__name__': '__main__'})")
+
+    env = os.environ.copy()
+    env["COVERAGE_PROCESS_START"] = "pyproject.toml"
+    env["PYTHONPATH"] = str(pathlib.Path.cwd())
+
+    result = subprocess.run(
+        ["python3", str(script), "discover", "--workflow-dir", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True
+    )
+    assert result.returncode == 0

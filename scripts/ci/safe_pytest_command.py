@@ -142,5 +142,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     return execute_command(args.project_dir, command)
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())
