@@ -424,14 +424,19 @@ def materialize(
     return manifest
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Materialize trusted JavaScript locks and report their exact revisions."""
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha")
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Materialize trusted JavaScript locks and report their exact revisions."""
+    args = parse_args(argv)
 
     try:
         manifest = materialize(
