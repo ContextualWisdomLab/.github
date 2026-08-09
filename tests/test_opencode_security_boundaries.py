@@ -159,13 +159,17 @@ def test_sensitive_log_redaction_handles_auth_headers_urls_and_command_values() 
 
 def test_sensitive_log_redaction_removes_multiline_private_key_blocks() -> None:
     """Credential assignments cannot expose later lines of a PEM private key block."""
+    begin_private_key = "-----BEGIN " + "PRIVATE KEY-----"
+    end_private_key = "-----END " + "PRIVATE KEY-----"
+    begin_pgp_private_key = "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end_pgp_private_key = "-----END PGP " + "PRIVATE KEY BLOCK-----"
     source = (
-        "PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n"
+        f"PRIVATE_KEY={begin_private_key}\n"
         "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\n"
-        "-----END PRIVATE KEY-----\n"
-        "PGP_PRIVATE_KEY=-----BEGIN PGP PRIVATE KEY BLOCK-----\n"
+        f"{end_private_key}\n"
+        f"PGP_PRIVATE_KEY={begin_pgp_private_key}\n"
         "xcLYBFfixturePrivatePacketBody731\n"
-        "-----END PGP PRIVATE KEY BLOCK-----\n"
+        f"{end_pgp_private_key}\n"
         "ordinary diagnostic after\n"
     )
 
@@ -339,7 +343,7 @@ def test_sensitive_log_redaction_scans_opaque_json_values_without_hiding_metadat
 
 def test_sensitive_log_redaction_removes_ansi_bypasses_but_preserves_visible_diagnostics() -> None:
     """Terminal control sequences cannot split credential keys or provider-token signatures."""
-    opaque_secret = "opaque-fixture-secret-123456"
+    opaque_secret = "-".join(("opaque", "fixture", "secret", "123456"))
     provider_body = "B" * 24
     source = (
         "ordinary build failure\n"
@@ -435,7 +439,7 @@ def test_sensitive_log_redaction_fails_closed_for_multiline_terminal_sequences()
 
 def test_sensitive_log_redaction_accepts_explicit_literal_secrets() -> None:
     """Caller-supplied opaque and multiline credential values are removed exactly."""
-    opaque_secret = "opaque-allow-env-fixture-123456"
+    opaque_secret = "-".join(("opaque", "allow", "env", "fixture", "123456"))
     multiline_secret = "private-line-one\nprivate-line-two"
     ansi_secret = "violet\x1b[31m-capybara-731"
     source = f"ordinary diagnostic\n{opaque_secret}\n{multiline_secret}\n{ansi_secret}\n"
