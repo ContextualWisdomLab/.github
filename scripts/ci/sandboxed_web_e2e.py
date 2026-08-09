@@ -22,6 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
+from scripts.ci.redact_sensitive_log import redact_text
 
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
@@ -165,11 +166,11 @@ def stop_service(service: Service) -> None:
 
 
 def tail_text(path: Path, max_lines: int = 80) -> str:
-    """Return the final lines of a service log."""
+    """Return redacted final lines of a service log."""
     if not path.exists():
         return ""
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(lines[-max_lines:])
+    return redact_text("\n".join(lines[-max_lines:]))
 
 
 def emit_result(
@@ -232,9 +233,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
             return exit_code
         except subprocess.TimeoutExpired as exc:
