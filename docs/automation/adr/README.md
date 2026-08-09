@@ -11,3 +11,4 @@ Status: active_pr
 - [ADR-0007 — Require counted independent exact-head review](0007-independent-review-governance.md)
 - [ADR-0008 — Require protected-main operational acceptance](0008-protected-main-acceptance.md)
 - [ADR-0009 — Central control-plane ownership and thin leaf callers](0009-central-control-plane-ownership.md)
+- [ADR-0010 — Conversation, prompt, and documentation changes must hand off to executable work](0010-continuation-documentation-handoff.md)
