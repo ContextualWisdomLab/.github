@@ -198,3 +198,9 @@ def test_module_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_verify"] = module
     assert exc_info.value.code == 0
+
+def test_run_command_invalid_executable(tmp_path):
+    """The wrapper rejects commands that cannot be resolved in the allowed PATH."""
+    env = {"PATH": str(tmp_path)}
+    with pytest.raises(ValueError, match="Command not found or not executable: non_existent_cmd"):
+        sandboxed_verify.run_command(["non_existent_cmd", "--arg"], tmp_path, env, 10)

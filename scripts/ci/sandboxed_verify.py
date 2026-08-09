@@ -151,6 +151,8 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
 
 def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
     """Run the verification command and capture output for review evidence."""
+    if not shutil.which(command[0], path=env.get("PATH")):
+        raise ValueError(f"Command not found or not executable: {command[0]}")
     return subprocess.run(
         list(command),
         cwd=cwd,
@@ -160,7 +162,7 @@ def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout:
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
-        shell=False,
+        shell=False,  # nosec B603
     )
 
 

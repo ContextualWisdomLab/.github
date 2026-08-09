@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-08-09 - Prevent Command Injection via Untrusted Executables
+**Vulnerability:** Command Injection / Path Manipulation
+**Learning:** Even with `shell=False`, executing a sequence of arguments where the first element (the executable) comes from untrusted input can be dangerous, especially if the `PATH` is manipulated or if the executable name is crafted to point to an unintended local binary. Bandit flags `subprocess` calls (B603) lacking strict input validation.
+**Prevention:** Strictly validate the first argument (the command) using `shutil.which` to resolve it against the allowed `PATH`. If it does not resolve to an executable, explicitly raise an error before invoking `subprocess.run`. Suppress Bandit's B603 warning (`# nosec B603`) only after such validation is in place.
