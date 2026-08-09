@@ -713,16 +713,9 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     head_repo = head.get("repo") or {}
-
-    if "_pre_fetched_reviews" in pr:
-        reviews = pr.pop("_pre_fetched_reviews")
-        checks = pr.pop("_pre_fetched_checks")
-        files = pr.pop("_pre_fetched_files")
-    else:
-        reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
-        checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
-        files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
-
+    reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
+    checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+    files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
         str(pr.get("mergeable_state") or "").upper(),
@@ -776,25 +769,10 @@ def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None)
         if len(payload) <= 1:
             prs.extend(rest_pr_node(repo, pr) for pr in payload)  # pragma: no cover
         else:
-            paths = []
-            for pr in payload:
-                num = pr["number"]
-                sha = (pr.get("head") or {}).get("sha")
-                paths.extend([
-                    f"repos/{repo}/pulls/{num}/reviews?per_page=100",
-                    f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
-                    f"repos/{repo}/pulls/{num}/files?per_page=20"
-                ])
-
-            max_workers = min(REST_MERGEABLE_STATE_WORKERS * 3, len(paths))
+            max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(payload))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = list(executor.map(gh_api_json, paths))
-
-            for i, pr in enumerate(payload):
-                pr["_pre_fetched_reviews"] = results[i*3]
-                pr["_pre_fetched_checks"] = results[i*3+1]
-                pr["_pre_fetched_files"] = results[i*3+2]
-                prs.append(rest_pr_node(repo, pr))
+                # Keep original API sort order
+                prs.extend(list(executor.map(lambda pr: rest_pr_node(repo, pr), payload)))
         if len(payload) < page_size:
             break
         page += 1
