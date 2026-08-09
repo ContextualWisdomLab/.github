@@ -157,6 +157,34 @@ def test_sensitive_log_redaction_handles_auth_headers_urls_and_command_values() 
     ]
 
 
+@pytest.mark.parametrize("program", ["docker", "podman", "/usr/bin/docker"])
+def test_command_redaction_handles_container_login_short_password(
+    program: str,
+) -> None:
+    """Container login passwords are hidden without masking publish ports."""
+    credential = "quartz-capybara-731-opaque"
+
+    assert redactor.redact_command_argv(
+        [program, "login", "-p", credential]
+    ) == [program, "login", "-p", redactor.REDACTED]
+    assert redactor.redact_command_argv(
+        [program, "login", f"-p={credential}"]
+    ) == [program, "login", f"-p={redactor.REDACTED}"]
+    assert redactor.redact_command_argv(
+        [program, "login", f"--password={credential}"]
+    ) == [program, "login", f"--password={redactor.REDACTED}"]
+    assert redactor.redact_command_argv(
+        [program, "run", "-p", "8080:80", "image"]
+    ) == [program, "run", "-p", "8080:80", "image"]
+
+
+def test_command_redaction_preserves_unrelated_short_port_option() -> None:
+    """Program-aware password handling cannot consume an SSH port."""
+    assert redactor.redact_command_argv(
+        ["ssh", "-p", "22", "host"]
+    ) == ["ssh", "-p", "22", "host"]
+
+
 def test_sensitive_log_redaction_removes_multiline_private_key_blocks() -> None:
     """Credential assignments cannot expose later lines of a PEM private key block."""
     begin_private_key = "-----BEGIN " + "PRIVATE KEY-----"
