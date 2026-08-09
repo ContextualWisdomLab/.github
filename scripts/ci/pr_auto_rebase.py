@@ -504,6 +504,18 @@ def label_conflicted_pr(repo: str, pr: dict[str, Any], base_ref: str, *, dry_run
     return tuple(notes)
 
 
+def clear_stale_manual_rebase_label(repo: str, pr: dict[str, Any], *, dry_run: bool) -> tuple[str, ...]:
+    """Clear a stale manual-rebase label if present, returning audit notes."""
+    # A candidate reaching this point that still carries the manual-rebase label
+    # is no longer dirty (labeled-and-dirty PRs are skipped upstream): its
+    # conflict was resolved by a later base change, so clear the stale label and
+    # let the rebase proceed instead of leaving it permanently blocked.
+    if has_manual_rebase_label(pr):
+        remove_manual_rebase_label(repo, int(pr["number"]), dry_run=dry_run)
+        return (f"removed stale {MANUAL_REBASE_LABEL} label (no longer dirty)",)
+    return ()
+
+
 def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
     """Rebase one candidate PR, force-pushing on success or labeling on conflict."""
     number = int(pr["number"])
@@ -511,14 +523,9 @@ def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
     base_ref = validate_git_ref(pr["baseRefName"])
     expected_head_sha = validate_git_sha(pr["headRefOid"])
     token = scheduler_token()
-    # A candidate reaching this point that still carries the manual-rebase label
-    # is no longer dirty (labeled-and-dirty PRs are skipped upstream): its
-    # conflict was resolved by a later base change, so clear the stale label and
-    # let the rebase proceed instead of leaving it permanently blocked.
-    stale_label_notes: tuple[str, ...] = ()
-    if has_manual_rebase_label(pr):
-        remove_manual_rebase_label(repo, number, dry_run=dry_run)
-        stale_label_notes = (f"removed stale {MANUAL_REBASE_LABEL} label (no longer dirty)",)
+
+    stale_label_notes = clear_stale_manual_rebase_label(repo, pr, dry_run=dry_run)
+
     with tempfile.TemporaryDirectory(prefix="pr-auto-rebase-") as workdir:
         fetch_pr_refs(workdir, repo, head_ref, base_ref, token=token)
         if not try_rebase(workdir, base_ref):
@@ -530,6 +537,7 @@ def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
                 stale_label_notes + notes,
             )
         push_force_with_lease(workdir, repo, head_ref, expected_head_sha, token=token)
+
     return Decision(
         number,
         "rebased",
