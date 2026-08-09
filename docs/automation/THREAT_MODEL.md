@@ -4,7 +4,7 @@ Status: active_pr
 
 ## Assets and adversaries
 
-Assets include protected refs, workflow definitions, reviewer identity, merge/release authority, OIDC/App credentials, model secrets, evidence artifacts, and operator trust. Adversaries include malicious pull-request authors, compromised dependencies/actions, prompt-injected comments or source, confused-deputy callers, spoofed reviewers, and accidental automation races.
+Assets include protected refs, workflow definitions, reviewer identity, merge/release authority, OIDC/App credentials, model secrets, evidence artifacts, writer-lease state, finite scheduled execution capacity, the canonical documentation authority, and operator trust. Adversaries include malicious pull-request authors, compromised dependencies/actions, prompt-injected comments or source, confused-deputy callers, spoofed reviewers, accidental automation races, and control-plane configuration drift.
 
 ## Threats and controls
 
@@ -20,11 +20,14 @@ Assets include protected refs, workflow definitions, reviewer identity, merge/re
 | Unbounded egress or SSRF | Network request construction | Trusted-origin policy, redirect revalidation, allowlists and timeouts | Egress logs, negative redirect/private-address tests |
 | Writer race | Branch/ref mutation | Branch-local lease, refetch-before-write, non-force CAS/fast-forward | Abort on moved head; reconcile read-only |
 | Gate weakening during outage | Failure classification | Integrity/auth/TLS/ref errors never retried or downgraded | Incident classification, rollback and protected-main replay |
+| Premature termination / queue starvation | External scheduler continuation policy | Work-conserving queue, branch-local defer identity, same-invocation reselection, double exit sweep | Detect safe executable lane after terminal output; repair prompt/control and resume queue |
+| Split documentation authority | Conversation/prompt/PR body bypasses canonical owner | One indexed canonical documentation line, explicit central-vs-leaf ownership, maturity vocabulary, reconciliation algorithm | Documentation fitness audit, supersession trace, freeze only conflicting documentation lane |
+| External automation authority conflation | Scheduler state treated as GitHub evidence | Separate external orchestration, GitHub execution/evidence, and canonical documentation planes | Reject cross-channel substitution; require source/check/review/runtime evidence from its own authority |
 
 ## Assumptions
 
-GitHub protection and organization policy remain external governance authorities. Automated reviewers are advisory and cannot create human approval. A provider outage can delay one lane but cannot authorize bypass.
+GitHub protection and organization policy remain external governance authorities. Automated reviewers are advisory and cannot create human approval. A provider outage can delay one lane but cannot authorize bypass. External scheduler/orchestrator configuration can assign an accepted writer lease but cannot manufacture GitHub source, check, review, merge, or protected-main acceptance evidence.
 
 ## Residual risks
 
-Hosted-runner saturation, provider outages, organization billing/policy, and reviewer capacity may remain external. They are reported as exact prerequisites while other safe lanes continue.
+Hosted-runner saturation, provider outages, organization billing/policy, reviewer capacity, external scheduler outages, and incomplete leaf-repository documentation audits may remain external or distributed. They are recorded as exact prerequisites while other safe lanes continue. Conversation-wide product documentation completeness cannot be centrally claimed until each owning repository has been audited under its own writer lease.
