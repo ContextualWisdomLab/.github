@@ -110,6 +110,7 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        shell=False,
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
@@ -123,6 +124,7 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
+    delay = 0.1
     while time.monotonic() < deadline:
         if service.process.poll() is not None:
             return False
@@ -131,7 +133,8 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
                 if 200 <= response.status < 500:
                     return True
         except (urllib.error.URLError, TimeoutError):
-            time.sleep(1)
+            time.sleep(delay)
+            delay = min(1.0, delay * 2)
     return False
 
 
@@ -146,6 +149,7 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
+        shell=False,
     )
 
 
