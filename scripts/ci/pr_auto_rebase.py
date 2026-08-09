@@ -450,11 +450,9 @@ def conflict_comment_exists(repo: str, number: int) -> bool:
         ]
     )
 
-    for page in json.loads(pages or "[]"):
-        for comment in page:
-            if CONFLICT_COMMENT_MARKER in str(comment.get("body") or ""):
-                return True
-    return False
+    if not pages:
+        return False
+    return str(pages).find(CONFLICT_COMMENT_MARKER) != -1
 
 
 def post_conflict_comment(repo: str, pr: dict[str, Any], base_ref: str, *, dry_run: bool) -> bool:
