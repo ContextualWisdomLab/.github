@@ -165,6 +165,26 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     return completed.stdout
 
 
+def _verify_trusted_uv_origin(url: str) -> None:
+    """Verify the final response URL remains within the trusted HTTPS origin."""
+    final_url = urllib.parse.urlparse(url)
+    try:
+        final_port = final_url.port
+    except ValueError as exc:
+        raise RuntimeError(
+            "trusted uv archive redirected outside the fixed "
+            "releases.astral.sh HTTPS origin"
+        ) from exc
+    if (
+        (final_url.scheme, final_url.hostname)
+        != ("https", "releases.astral.sh")
+        or final_port not in (None, 443)
+    ):
+        raise RuntimeError(
+            "trusted uv archive redirected outside the fixed "
+            "releases.astral.sh HTTPS origin"
+        )
+
 def _download_trusted_uv_archive() -> bytes:
     """Download the fixed uv release archive through one HTTPS trust boundary."""
     _install_trusted_uv_url_opener()
@@ -177,23 +197,7 @@ def _download_trusted_uv_archive() -> bytes:
             "uv-x86_64-unknown-linux-gnu.tar.gz",
             timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
         ) as response:
-            final_url = urllib.parse.urlparse(response.geturl())
-            try:
-                final_port = final_url.port
-            except ValueError as exc:
-                raise RuntimeError(
-                    "trusted uv archive redirected outside the fixed "
-                    "releases.astral.sh HTTPS origin"
-                ) from exc
-            if (
-                (final_url.scheme, final_url.hostname)
-                != ("https", "releases.astral.sh")
-                or final_port not in (None, 443)
-            ):
-                raise RuntimeError(
-                    "trusted uv archive redirected outside the fixed "
-                    "releases.astral.sh HTTPS origin"
-                )
+            _verify_trusted_uv_origin(response.geturl())
             payload = bytearray()
             while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
                 chunk = response.read(
