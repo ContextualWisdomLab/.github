@@ -119,6 +119,7 @@ jobs:
           include =
               scripts/ci/agent_mention_router.py
               scripts/ci/agent_mention_sweep.py
+              scripts/ci/pr_review_fix_scheduler.py
               scripts/ci/pr_review_merge_scheduler.py
           [report]
           fail_under = 100
@@ -131,6 +132,7 @@ jobs:
           python -m interrogate --fail-under=100 \
             scripts/ci/agent_mention_router.py \
             scripts/ci/agent_mention_sweep.py \
+            scripts/ci/pr_review_fix_scheduler.py \
             scripts/ci/pr_review_merge_scheduler.py
           python -m compileall -q scripts/ci tests
           git diff --check "$CHANGE_DIFF_RANGE"
