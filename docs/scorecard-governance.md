@@ -15,9 +15,9 @@ or the inherited organization ruleset must require all of the following:
   to pass against the latest head commit before merge;
 - stale approvals to be dismissed after a push;
 - current-head OpenCode review evidence from the central required workflow;
-- code owner review coverage through CODEOWNERS-owned workflow and CI paths,
-  with the organization required-workflow ruleset carrying the enforceable
-  single-maintainer approval gate;
+- code owner coverage for workflow and CI paths, with the organization
+  required-workflow ruleset carrying the enforceable exactly two eligible
+  approvals, stale-dismissal, and last-pusher protection;
 - review thread resolution before merge;
 - last-pusher approval protection;
 - force-push and branch deletion protection.

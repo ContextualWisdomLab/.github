@@ -1,5 +1,9 @@
 # NVIDIA NIM OpenCode model priority (hotfix)
 
+Status: historical rollout note. Current secret and governance contracts are
+normative in `docs/automation/SECURITY.md`; administrative bypass is not an
+accepted activation or rollback path.
+
 ## Why
 
 OpenCode Agent failed to produce a usable review on the PR thread starting at
@@ -14,25 +18,24 @@ still emit APPROVE / REQUEST_CHANGES when GitHub Models / free tiers stall.
    - `enabled_providers`: `nvidia-nim` first, then `github-models`
    - default `model` / `small_model` prefer NIM Nemotron / Llama 3.3
    - new OpenAI-compatible provider `nvidia-nim` → `https://integrate.api.nvidia.com/v1`
-     with `apiKey: {env:NVIDIA_API_KEY}`
+     with process-local `apiKey: {env:NVIDIA_API_KEY}`, sourced only from the
+     scoped organization secret `NVIDIA_NIM_API_KEY`
 2. `.github/workflows/opencode-review-dispatch.yml`
    - `OPENCODE_MODEL_CANDIDATES` prefixes six NIM models before existing pool
-   - binds `NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}`
+   - binds process-local `NVIDIA_API_KEY` from `${{ secrets.NVIDIA_NIM_API_KEY }}`
 3. `scripts/ci/run_opencode_review_model_pool.sh`
-   - skips `nvidia-nim/*` when `NVIDIA_API_KEY` is unset (same pattern as OpenRouter)
+   - skips `nvidia-nim/*` when scoped `NVIDIA_NIM_API_KEY` is unset
 
-## Temporary permission bypass (hotfix only)
+## Historical activation constraint
 
-For this merge-aid hotfix only:
-
-- Branch-protection / ruleset admin override may be used to land the central
-  `.github` change if required checks conflict during the hotfix window.
+- Branch protection and rulesets are not bypassed to activate a model-provider
+  change; eligible review and protected-main consumer evidence remain required.
 - **Do not** permanently weaken Security Scan, trivy-fs, osv-scan, or
   CodeQL gates.
 - **Do not** flip OpenCode agent `permission.edit` / `bash` from `deny` to
   `allow` permanently; review agents remain read-only.
-- Org secret `NVIDIA_API_KEY` must be set on ContextualWisdomLab for NIM pool
-  entries to execute; without it the pool falls through to prior candidates.
+- Org secret `NVIDIA_NIM_API_KEY` must be set on ContextualWisdomLab for NIM
+  pool entries to execute; without it the pool falls through to prior candidates.
 
 ## Rollback
 
@@ -42,8 +45,9 @@ catalog reliability is restored.
 
 ## Secret name
 
-Org secret is **`NVIDIA_NIM_API_KEY`**. Workflows bind it to process env `NVIDIA_API_KEY`
-(fallback: `secrets.NVIDIA_API_KEY` if present) so `opencode.jsonc` `{env:NVIDIA_API_KEY}` resolves.
+Org secret is **`NVIDIA_NIM_API_KEY`**. Workflows bind it to process env
+`NVIDIA_API_KEY`; there is no fallback to a legacy `secrets.NVIDIA_API_KEY`, so
+`opencode.jsonc` `{env:NVIDIA_API_KEY}` resolves only from the scoped secret.
 
 ## Large-repo OpenCode timeouts (~1 hour)
 

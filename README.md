@@ -11,6 +11,12 @@ The audit includes repository-by-repository DX/UX transfer decisions: what the
 central workflow borrows because it reduces friction, and what it rejects
 because it adds noise or misleading review experience.
 
+The authoritative PRD, TRD, architecture, UML, ERD, security, threat, test,
+operability, incident, traceability, and ADR spine starts at
+[docs/automation/README.md](docs/automation/README.md). Dated audit narratives
+are evidence inputs; when prose conflicts, the canonical spine and executable
+workflow/test contract govern.
+
 ## PR review and merge policy
 
 OpenCode judges PRs; GitHub Actions performs mechanical updates and merges.
@@ -78,9 +84,12 @@ push, and commits as `github-actions[bot]` only when a conservative OpenCode
 autofix produces a validated diff. A repository-local autofix worker remains an
 explicit compatibility override through `--autofix-repository`; it is no longer
 the default contract.
-Strix keeps `cancel-in-progress: false` so old evidence is not cancelled by a
-force-push, but PR-scoped concurrency includes the head SHA so an obsolete scan
-does not serialize newer current-head evidence.
+Strix uses event/repository/PR-number concurrency with
+`cancel-in-progress: true`; a newer run for the same event class and PR cancels
+the predecessor so the queued scan resolves `refs/pull/<n>/head` at execution
+time and evaluates the current head. Repository-dispatch and
+`pull_request_target` event classes remain separate so one cannot cancel the
+other's required-check context.
 
 OpenCode approval is evidence-gated. Before approval, the review summary must
 name changed files, CodeGraph or structural MCP evidence, a Change Flow DAG,
@@ -120,10 +129,12 @@ that discovers runtime matrices, package manifests, test, coverage, docstring,
 E2E, lint, security, Docker, and unpackaged-source gaps before the agent chooses
 commands.
 The configured `code-reviewer` subagent is reviewer-only: it may read, grep,
-glob, and run safe local verification commands, but it must not edit files,
-stage changes, commit, push, install dependencies, mutate branches, or touch
-production state. Blocking findings must be source-backed, severity-labeled,
-impactful, remediable, and include suggested verification.
+glob, and list the trusted bounded evidence, but bash, task/subagents, network,
+LSP, MCP, and external-directory access are denied. It cannot edit, stage,
+commit, push, install dependencies, mutate branches, or touch production state.
+Execution receipts are supplied by the trusted workflow. Blocking findings
+must be source-backed, severity-labeled, impactful, remediable, and include
+suggested verification.
 
 Failed GitHub Checks are not reviewed as URL lists. OpenCode must explain the
 failed check name, failing step, source-backed file and line when available,

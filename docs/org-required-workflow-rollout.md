@@ -43,7 +43,11 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Model token posture: use the organization `STRIX_GITHUB_MODELS_TOKEN` secret for GitHub Models calls, with `github.token` as the fallback; live workflow evidence showed `github.token` alone can return 403 from `models.github.ai/inference`
 - Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; the workflow token is limited to the same-repository PR context and publication failures remain visible
 - Coverage execution posture: PR-controlled package, test, build, R, Rust, and Docker inputs are never executed from `pull_request_target`; the dispatch workflow runs bounded low-privilege coverage only after exact live metadata and scheduler identity validation
-- Fork posture: PR heads are fetched through `refs/pull/<number>/head` when direct head-SHA fetch is not available, so review can inspect fork PR source as data without executing it in the trusted workflow context
+- Fork posture: the lower-level materializer can fetch `refs/pull/<number>/head`,
+  but current privileged scheduler/OpenCode/Strix targeted entrypoints reject a
+  head repository different from the base. External-head review is not an
+  end-to-end deployed capability; alignment is tracked in
+  `ContextualWisdomLab/.github#889`.
 - Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate rechecks current-head peer checks and extends its bounded wait only while image-validation checks remain pending, logging the reason before approval
 - Model-exhaustion posture: command exit codes and deterministic checks cannot synthesize an approval. Exhaustion remains `MODEL_OUTPUT_UNAVAILABLE`; only a prior real-model approval bound to the exact current head can satisfy the review gate after all checks, alerts, and threads are revalidated.
 - Adversarial-evidence posture: every probe must cite its exact changed path and positive in-range line in the materialized current-head source tree. Unrelated paths, nonexistent lines, circular claims, and missing observed results fail closed with a concrete rejection reason.
@@ -127,11 +131,14 @@ The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the
 - Token posture: the workflow passes the first available mutation credential in this order: `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, exchanged OpenCode GitHub App token, then the target repository workflow token. The scheduler reports the non-secret token source and expected actor class in every mutation decision.
 - Flow posture: default branches named `main` or `master` are treated as GitHub Flow; default branches named `develop` are treated as Git Flow unless a repository explicitly sets `PROJECT_FLOW`
 - Merge posture: the default merge mode is `direct_or_auto`. When a current-head approved PR is same-repository and the scheduler has no failed-check, action-required, unresolved-thread, or conflict blocker, it requests an immediate guarded squash merge with `--match-head-commit`. This includes PRs where native GitHub auto-merge is already enabled; native auto-merge is a fallback queue, not the scheduler's first stop when direct merge is possible.
-- Fork posture: fork or external-head PRs remain reviewable, but the scheduler does not direct-merge them and does not enable auto-merge for them. A maintainer must make the final merge decision after same-head OpenCode approval, same-head Strix evidence, required checks, and unresolved-thread checks are clean.
+- Fork posture: current privileged targeted dispatch rejects fork/external
+  heads. They are neither centrally reviewable nor mutable through this path;
+  `ContextualWisdomLab/.github#889` will choose a safe review-only contract or a
+  consistently documented rejection/import path.
 - Branch freshness posture: the scheduler also runs after protected base-branch pushes to `main`, `develop`, or `master`, because those pushes can create the GitHub UI state where reviews are satisfied, auto-merge is enabled, checks are stale or failed, and the PR shows `Update branch` without a PR `synchronize` event.
 - Auto-merge posture: `auto_merge_enabled` PR events trigger the scheduler so an already stale branch is refreshed immediately after native auto-merge is turned on instead of waiting for the periodic schedule. If the same PR is already mergeable, the scheduler attempts the guarded direct merge immediately.
 - Automation boundary: current-head failed checks and `ACTION_REQUIRED` checks are reported before branch updates, so an update attempt does not hide the concrete reason a PR cannot merge. `update-branch` handles approved `BEHIND` PRs and already queued auto-merge PRs only when there is no current-head failed or action-required check to diagnose first. `DIRTY` or `CONFLICTING` PRs still require author or maintainer conflict resolution guidance; current-head approved conflicts may keep or queue native GitHub auto-merge as a wait state while the conflict is repaired, but the scheduler must not treat queued auto-merge as a conflict resolver.
-- Retry posture: before retrying OpenCode, the scheduler force-cancels older active OpenCode runs for the same PR number and a previous head SHA. It does not automatically cancel Strix runs because security evidence should not be silently discarded by force-push churn.
+- Retry posture: before retrying OpenCode, the scheduler force-cancels older active OpenCode runs for the same PR number and a previous head SHA. Strix itself uses event/repository/PR-number concurrency with `cancel-in-progress: true`; the replacement run resolves the current PR head at execution time, while repository-dispatch and required-workflow event classes cannot cancel each other.
 
 Do not centralize the scheduler by running a `.github` scheduled job against other repositories with the `.github` repository token. That would either fail permission checks or use the wrong mutation actor. The central path is a required workflow executed in each target repository context.
 
@@ -211,9 +218,14 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 4. Git Flow repositories are those whose default branch is `develop`.
 5. OpenCode remains responsible for review judgment and structured decisions.
 6. GitHub Actions remains responsible for mechanical branch updates and merges.
-7. A merge is acceptable only when the current head has required checks passing, distinct current-head OpenCode and Noema approvals, no unresolved review threads, and a clean or mergeable merge state.
+7. A merge is acceptable only when the current head has required checks,
+   exactly two eligible current-head formal approvals, no unresolved review
+   threads, and a clean or policy-accepted merge state. Noema is deployed as a
+   distinct identity, but the scheduler does not require that one counted
+   approval came from Noema; `ContextualWisdomLab/.github#772` tracks that gap.
 8. Previous-head approvals or checks are not merge evidence.
-9. Same-repository approved PRs should merge immediately when GitHub reports `CLEAN`; fork or external-head PRs are excluded from scheduler merge and auto-merge.
+9. Same-repository approved PRs may merge only through the guarded policy;
+   fork/external-head targeted review/update/merge is currently rejected.
 
 ## Evidence from this rollout
 
@@ -251,7 +263,10 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - Live non-fork inventory on 2026-07-02 18:15 KST found 17 public non-fork repositories, inherited ruleset `18156473` on `kaefa` and `waf-ids-ai-soc`, and no default-branch copies of `opencode-review.yml`, `strix.yml`, or `pr-review-merge-scheduler.yml` outside `.github`.
 - `ContextualWisdomLab/waf-ids-ai-soc` PR `#6` merged at `e1c0a85fd4a8e6dd67039be43eb7f659fec22abd` after central required workflow proof on head `43b62b5f347d1532c81b5ae38d8e41b4494fd486`; PR `#8` current head `48d8b56a0f995829fc95de4fed129d1c33aaadff` is now the open runtime proof fixture with central and local Rust checks queued at the 2026-07-02 18:15 KST refresh.
 - `ContextualWisdomLab/kaefa` inherits ruleset `18156473`, but PR `#60` current head `13c9089855fcdd34391173560ccf6935bac1eebe` showed only repo-local R-CMD-check, dependency-review, and CodeQL signals in status rollup. Treat this as a runtime proof gap until a new PR event or manual dispatch proves central OpenCode, Strix, and scheduler checks on a kaefa current head.
-- `.github` scheduler default merge mode is now `direct_or_auto`: approved same-repository `CLEAN` PRs request immediate guarded merge, approved non-clean same-repository PRs can queue native auto-merge, and fork or external-head PRs are left for maintainer merge.
+- `.github` scheduler default merge mode is `direct_or_auto`; its complete
+  state/credential decision table and external-head contract are tracked in
+  `ContextualWisdomLab/.github#892` and
+  `ContextualWisdomLab/.github#889`, respectively.
 - OpenCode approval runs the trusted central merge scheduler script directly with `pr_number` and `max_prs=1`, so the just-reviewed PR is inspected immediately even when organization required workflows are not repo-local `workflow_dispatch` targets.
 - `.github` PR `#74` changed OpenCode review model order to DeepSeek R1 first and added a catalog fallback pool.
 - `.github` PR `#75` removed the Strix finding against the scheduler command wrapper by using `subprocess.run(..., check=True)` and preserving the existing scrubbed failure contract.
@@ -301,7 +316,7 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 - Existing open PRs may need a new push or base update before the latest required workflow SHA appears on their current head.
 - The central OpenCode workflow now retries DeepSeek R1, DeepSeek V3, GPT-5, and a catalog fallback pool. Keep model/tooling failures out of PR comments unless there is a source-backed failed-check diagnosis.
-- The central OpenCode config includes a read-only `code-reviewer` subagent for focused review passes. The subagent may read, grep, glob, and run safe local verification commands, but it must not edit files, stage changes, commit, push, install dependencies, mutate branches, or touch production state.
+- The central OpenCode config includes a read-only `code-reviewer` subagent for focused review passes. It may read, grep, glob, and list trusted bounded evidence, but bash, task/subagents, network, LSP, MCP, external-directory access, edit, stage, commit, push, dependency installation, branch mutation, and production access are denied. Trusted workflow receipts supply execution evidence.
 - OpenCode execution evidence must be sandboxed in the CI workspace or an isolated temporary directory, with a credential-scrubbed environment by default and no persistent mutation outside test caches or scratch files. Prefer `python3 scripts/ci/sandboxed_verify.py --repo-root <reviewed worktree> -- <verification command>` when the central helper is available, and cite its `SANDBOXED_VERIFY_RESULT` line. When repo-native verification legitimately needs network access or GitHub Secrets, pass only the needed names with `--allow-env`, record `--network required`, and explain it with `--evidence-note` without printing secret values. The helper does not replace existing bash, task, webfetch, websearch, lsp, CodeGraph, DeepWiki, Context7, or web_search review policy. If a verification cannot be sandboxed without changing the result, the review must say so instead of presenting an unsafe run as evidence.
 - Web application reviews should run backend, frontend, and repository-native E2E checks together through `python3 scripts/ci/sandboxed_web_e2e.py --repo-root <reviewed worktree> --backend-cmd <backend command> --frontend-cmd <frontend command> --e2e-cmd <e2e command>` when those contracts exist, then cite `SANDBOXED_WEB_E2E_RESULT`. If backend/frontend/E2E/readiness contracts are missing, the review must name the gap instead of treating unit or lint evidence as full E2E proof.
 - Bounded OpenCode evidence includes `Review execution contracts`, which inventories runtime matrices, package manifests, test, coverage, docstring, E2E, lint, security, Docker, and unpackaged-source gaps before the model chooses verification commands.

@@ -8,7 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission, ecosystem UML, cross-cutting
 disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap), the live
 [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1) (work/roadmap source of
-truth), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
+truth), the automation control-plane contract at
+[`docs/automation/README.md`](docs/automation/README.md), and operate the Project
+per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
@@ -63,8 +65,9 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
   dependency sets (see below).
 - `fuzz/` + `.clusterfuzzlite/` — Atheris fuzz targets for the review-output normalizer and the
   ClusterFuzzLite discovery marker.
-- `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
-  `scorecard-governance.md`, SBOM inventory.
+- `docs/` — master context, Project protocol, the canonical automation spine at
+  `docs/automation/README.md`, `org-required-workflow-rollout.md`,
+  `scorecard-governance.md`, and SBOM inventory.
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 

@@ -2,7 +2,7 @@
 
 > Purpose: a single, durable, agent-readable brief so ANY agent (Claude with a fresh context, Codex, Grok, Gemini) can reconstruct and continue this work WITHOUT the originating conversation. Private assistant memory is NOT the source of truth — this repo is. Keep this file current.
 >
-> Durable sources of truth (in priority order): (1) **GitHub Project #1** "naruon Platform Roadmap" https://github.com/orgs/ContextualWisdomLab/projects/1 — live work/roadmap; (2) **naruon `docs/planning/naruon-platform-plan.md`** (PR ContextualWisdomLab/naruon#974) — full IA/User-Stories/Use-Cases/Architecture spec; (3) **`docs/agent-github-project-protocol.md`** (this repo, PR #363) — how agents operate the Project + cross-repo-ref convention; (4) this file.
+> Durable sources of truth (in priority order): (1) **GitHub Project #1** "naruon Platform Roadmap" https://github.com/orgs/ContextualWisdomLab/projects/1 — live work/roadmap; (2) **naruon `docs/planning/naruon-platform-plan.md`** (PR ContextualWisdomLab/naruon#974) — full IA/User-Stories/Use-Cases/Architecture spec; (3) **`docs/agent-github-project-protocol.md`** (this repo, PR #363) — how agents operate the Project + cross-repo-ref convention; (4) **`docs/automation/README.md`** — authoritative `.github` automation PRD/TRD/architecture/security/operations/ADR spine; (5) this file.
 
 ## 0. Origin / core job-to-be-done (READ THIS — everything serves it)
 naruon's genesis (the user's own words): **"I can't find my emails, and the schedules that arrive by email keep changing so they're hard to track."** So the two founding jobs are:
@@ -124,14 +124,16 @@ A **source-agnostic artifact-analysis service**: `submit(artifact, context) → 
 ## 9. How work is tracked (dogfood the traceability)
 GitHub **Project #1** is the shared source of truth. Structure: real **Issues** (roadmap/backlog, in owning repos, custom fields Phase P0–P5/Ops/Decision + Component) and real **PRs** (delivered work, native Repository). Native workflows are ON (item added→Todo, PR merged→Done, item closed→Done). Chain: roadmap **Issue** → agent sets In Progress on pickup → implementing **PR** `Closes #N` → merge → auto Done. Operate the Project per `docs/agent-github-project-protocol.md`. Group by Phase / Component / Repository.
 
-## 10. Current state (2026-07-08)
+## 10. Historical state snapshot (observed 2026-07-08)
 - Renames done (keyverse/wardnet/inkspan). Planning spec = naruon#974. Project #1 populated (68 issues + 60 PRs). Protocol = .github#363.
 - **BLOCKER B1**: org GitHub Actions effectively HALTED (~86 queued, ~0 in_progress org-wide) — likely the Actions monthly SPENDING CAP. Blocks ALL PR checks/merges + the Cloudflare DNS run (nameservers). Fix (org-admin): raise the Actions spending limit OR add a self-hosted runner. Nothing merges until then.
 - **Decisions pending**: (D1) Code Security enablement vs the CodeQL-only code_scanning ruleset (osv/trivy/scorecard SARIF upload) — a private repo needs GHAS seats; reconcile or make those checks non-required. (D2) trivy `limit-severities-for-sarif: true` (gate only CRITICAL/HIGH) — held pending the user's strict-security preference.
 - **Built this session, PR-open, awaiting merge (B1)**: see Project #1 PRs (contextual-orchestrator cost/routing #46 + naruon#973; pg-llm-batch; keyverse Keycloak; inkspan; SBOM #361; opencode auto-retry #360; Strix neutral #349 + emit #358; appguardrail collector #254; auto-rebase #357; noema #359/naruon#970; PDF-DOM naruon#965/newsdom#300; SDP #11; fast-mlsirm GPGPU #109; scopeweave #284/naruon#971; fuzzing 10 PRs (found+fixed 2 real naruon bugs); Cloudflare DNS/Pages #362; this protocol #363; planning #974). Human step: report the mapasevo21 malware file (github user-attachments) to GitHub Abuse; rotate the xtrmLLMBatchPython-leaked keys; the org-admin runner/decisions above.
 
 ---
-*Keep this current. Update Project #1 as the live tracker; this file is the narrative brief a fresh agent reads to reconstruct the whole picture.*
+*Project #1 is the live tracker. Dated facts in this narrative are historical
+snapshots until re-observed; the automation contract is indexed at
+`docs/automation/README.md`.*
 
 ## Inter-component architecture (UML)
 

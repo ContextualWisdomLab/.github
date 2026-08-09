@@ -553,7 +553,7 @@ jobs:
     # published after the scheduler pass, required merge-preview checks landing
     # late, a base-branch policy blocker clearing) stays approved-but-unmerged
     # with no later trigger. This job re-runs the same trusted scheduler against
-    # every organization repository on an hourly heartbeat so each such PR is
+    # every organization repository on a fifteen-minute heartbeat so each such PR is
     # merged, branch-updated, or leaves a concrete per-PR blocker reason in this
     # log. It never bypasses policy: all mutations go through the same guarded
     # scheduler contract as the per-repository runs.

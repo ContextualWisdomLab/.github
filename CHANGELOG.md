@@ -8,6 +8,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added the machine-checked automation control-plane documentation spine at
+  `docs/automation/README.md`: PRD, TRD, architecture, UML, conceptual ERD,
+  security/threat/test/operability/incident contracts, requirement traceability,
+  coverage assessment, and eight governing ADRs.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 

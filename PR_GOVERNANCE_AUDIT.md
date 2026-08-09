@@ -1,6 +1,9 @@
 # PR Governance Audit
 
-Live check: 2026-06-26 17:53 KST, GitHub API via `gh` as `seonghobae`.
+Baseline check: 2026-06-26 17:53 KST, GitHub API via `gh` as `seonghobae`.
+Later dated observations are appended below. This is a historical evidence
+ledger, not the current normative contract; use `docs/automation/README.md` and
+executable workflows/tests for current repository behavior.
 
 ## Canonical Policy
 
@@ -13,16 +16,12 @@ OpenCode decides; GitHub Actions mutates.
   at all when an organization required-workflow/ruleset mechanism can provide
   the trigger. Thick downstream sync PRs are an anti-pattern unless they are a
   temporary rollback bridge.
-- `fork` versus `non-fork` is not the rollout boundary. Central governance
-  applies to every target repository that opts into the organization contract.
-  Runtime decisions classify the PR head capability instead: observable,
-  reviewable, updateable, auto-mergeable, and mergeable. External heads may be
-  fully reviewable while remaining non-mutable by the scheduler credential.
-  The same rule applies to repository onboarding: a public fork can be governed
-  by the same reusable workflow if it deliberately opts in, while a non-fork
-  PR head can still be non-mutable at runtime. The scheduler must decide from
-  observed PR permissions and current-head evidence, not from the repository's
-  `fork` flag alone.
+- External-head review is a documented target, not protected-main behavior.
+  The current privileged scheduler, OpenCode, and Strix targeted-dispatch paths
+  reject a head repository that differs from the base repository. The policy
+  and implementation must converge through `ContextualWisdomLab/.github#889`
+  before an external head is described as centrally reviewable. External heads
+  never receive update, autofix, merge, release, or deployment authority.
 - GitHub workflow templates can help create thin callers, but templates are
   scaffolding, not centralized execution. Reusable workflows (`workflow_call`)
   centralize implementation while a caller or required-workflow trigger supplies
@@ -33,12 +32,14 @@ OpenCode decides; GitHub Actions mutates.
   deadlock. The central reusable workflow owns concurrency: required-workflow
   PR events are isolated by pull request number, while scheduled full-queue
   scans stay serialized by repository/ref.
-- Live organization state at the 2026-06-26 17:53 KST check: Actions are
-  enabled for the public non-fork target repositories, and organization ruleset
-  `18156473` (`CWL Central required workflows`) is active. It requires Strix,
-  OpenCode Review, and PR Review Merge Scheduler from `ContextualWisdomLab/.github`
-  for each target repository's default branch. Repository-local copies are now
-  cleanup candidates, not rollout prerequisites.
+- Historical organization state at the 2026-06-26 17:53 KST check had Actions
+  enabled for the public non-fork target repositories and organization ruleset
+  `18156473` (`CWL Central required workflows`) active with Strix, OpenCode
+  Review, and PR Review Merge Scheduler. The audited protected-main contract on
+  2026-08-09 has seven required workflow paths: close-empty PR, Noema, OpenCode,
+  merge scheduler, security scan, Strix, and Semgrep. Repository-local copies
+  are cleanup candidates, not rollout prerequisites; the checked-in auditor
+  detects drift but does not repair the live ruleset.
 - Strix is part of the same central governance contract, not a repo-specific
   security scanner to copy into each repository. The model allow-list, provider
   routing, fallback models, secret gate, PR-scope fetch, artifact/report
@@ -46,11 +47,11 @@ OpenCode decides; GitHub Actions mutates.
   `ContextualWisdomLab/.github`. Target repositories supply repository content,
   event context, and inherited secrets; they do not redefine the Strix gate.
 - OpenCode may return only a decision: `UPDATE_BRANCH`, `WAIT`, `REQUEST_CHANGES`, or `NO_ACTION`.
-- GitHub Actions updates only mutable PR heads with `expected_head_sha` after
-  current-head failed checks have been ruled out. Same-repository heads are
-  normally mutable; external heads are attempted only when GitHub exposes a
-  maintainer-writable head path, and otherwise receive explicit update
-  guidance instead of being skipped.
+- GitHub Actions updates only mutable same-repository PR heads with
+  `expected_head_sha` after current-head failed checks have been ruled out. The
+  scheduler library has external-head guidance states, but the current
+  privileged targeted entrypoints reject external heads before that path;
+  `ContextualWisdomLab/.github#889` owns the convergence.
 - The GitHub REST permission surfaces are split: `update-branch` uses Pull
   requests write permission, while merge uses Contents write permission
   (GitHub REST pull request endpoint docs:
@@ -67,7 +68,7 @@ OpenCode decides; GitHub Actions mutates.
   workflow `GITHUB_TOKEN`, and `merge_mode=disabled` reports the approved head
   without mutating it. Direct merge requires `CLEAN` mergeability and is a
   repository policy choice, not a fallback for missing evidence.
-- OpenCode app-token merges are deprecated; keep app tokens for review publication, not mechanical branch mutation.
+- The workflow `github.token` is preferred for same-repository mechanical mutation. The exchanged OpenCode App token remains an implemented, auditable fallback in the scheduler credential chain for scoped cross-repository operation; do not describe it as removed.
 - OpenCode approval publication must be bounded. Peer GitHub Checks can be awaited, but the approval step itself must time out instead of running for hours; the current central limit is a 45 minute approval step with 81 peer-check probes at 30 seconds.
 - Tool failures are not source findings. Model failure, API transient, update-branch `422/403`, fork/write-permission failure, conflict, failed checks, and stale review state must be reported as distinct scheduler outcomes. A failed current-head check blocks `UPDATE_BRANCH`; the scheduler must not use a branch update as a way to hide or bypass failed evidence.
 - Developer experience and user experience are separate review surfaces. Reviews must adopt helpful sibling-repo automation, review, setup, documentation, and product-flow patterns when they reduce friction, and flag noisy automation, false failures, misleading status, repeated waiting, or URL-only diagnostics as experience defects instead of treating them as neutral implementation detail.
@@ -100,11 +101,15 @@ them to a local defect.
 ## Central Strix Contract
 
 The central Strix surface is the required workflow from repository
-`ContextualWisdomLab/.github` through organization ruleset `18156473`. The live
-ruleset pins `.github/workflows/strix.yml`, `.github/workflows/opencode-review.yml`,
-and `.github/workflows/pr-review-merge-scheduler.yml` to repository ID
-`1274066402` at SHA `807254a04efafd5f806e0f70cb067ecf050cfd11` for default
-branches in the current target set.
+`ContextualWisdomLab/.github` through organization ruleset `18156473`. The
+audited protected-main contract sources seven paths from repository ID
+`1274066402` at `refs/heads/main`: `.github/workflows/close-empty-pr.yml`,
+`.github/workflows/noema-review.yml`, `.github/workflows/opencode-review.yml`,
+`.github/workflows/pr-review-merge-scheduler.yml`,
+`.github/workflows/security-scan.yml`, `.github/workflows/strix.yml`, and
+`.github/workflows/sast-semgrep.yml`. A dated resolved SHA is audit evidence,
+not the durable ruleset definition; live drift is reported by the read-only
+auditor.
 
 Strix centralization includes these files and contracts:
 
@@ -213,7 +218,7 @@ onboarding exception before relying on autonomous PR queue draining.
 | `kaefa` | Newly discovered public non-fork target at the 2026-07-02 18:15 KST refresh. It inherits org ruleset `18156473`, but current PR #60 status rollup showed only repo-local R-CMD-check, dependency-review, and CodeQL signals, with no central Strix/OpenCode/scheduler check runs. Treat it as an inherited-ruleset runtime proof gap until a new PR event or manual dispatch proves central checks on the current head. |
 | `naruon` | Canonical strict check source. PR #756 synced the central scheduler into `naruon`; its first head proved that widening `GITHUB_TOKEN` permissions to solve DX creates Scorecard and governance failures, so the merged rollout keeps minimal token permissions and defaults risky review-dispatch/auto-merge paths off. PR #721 remains the useful historical fixture for `BEHIND` handling: central dry-run selected `update_branch`, while the older repo-local workflow treated it as `wait`. Current PR #760 is clean, approved, and green on head `57a2f8e4`, so it is a merge-readiness sample; current dry-run with auto-merge disabled reports `wait`, as expected for the low-privilege scheduler profile. |
 | `newsdom-api` | Ruleset-required checks must stay GitHub-interpreted. PR #207 has merged, so it is no longer an update-branch proof candidate. The remaining open PRs #187, #203, #205, and #206 currently block because the current head has no OpenCode approval. |
-| `pg-erd-cloud` | Good GitHub Actions merge samples; keep autofix workflows repo-local. |
+| `pg-erd-cloud` | Good GitHub Actions merge samples; its former repo-local autofix worker was folded into the central worker and removed by `ContextualWisdomLab/pg-erd-cloud#393`. |
 | `scopeweave` | PR #127 is the current representative trace. Dry-run `28147098767` selected `auto_merge`, but live run `28147157319` failed with `GraphQL: Resource not accessible by integration (mergePullRequest)` because merge through GitHub Actions requires a contents-write mutation surface. Commit `6601953` proved the tempting fix, but Scorecard immediately opened a Token-Permissions review thread against job-level `contents: write`; follow-up commit `c5c5530` restores `contents: read` and keeps update-branch on the lower-privilege PR-write path. Current head `c5c5530` is clean, approved, and green; it remains unmerged because Actions-based merge is an explicit repo policy exception, not the default rollout. |
 | `appguardrail` | Public organization repo discovered in the 2026-06-26 refresh. It follows Git Flow on `develop`, inherits the central required workflow ruleset, has no default-branch local central-workflow copies, and has nine open PRs in the 2026-07-02 18:15 KST refresh, so it is now an active proof candidate rather than a zero-PR control repo. |
 | `xtrmLLMBatchPython` | Private repository discovered during PR queue draining on 2026-06-29. PR #50 is blocked by the repository-local one-approval rule because the only visible direct collaborator is also the PR author, and no current-head central OpenCode or Strix check exists. Add the private repository to the central required-workflow ruleset before continuing autonomous merges; do not force-merge and do not reduce the approval count to zero as a workaround. |
@@ -240,7 +245,7 @@ both separately; a change can improve one while harming the other.
 |---|---|---|---|
 | `.github` | Same-head manual evidence and `--match-head-commit` make self-modifying workflow changes reviewable without pretending stale base-branch checks are current. | Stale `pull_request_target` failures, long polling review runs, and cancelled helper checks can become misleading review noise. | Serialize Strix before OpenCode, bound approval runtime, and require failed-check explanations instead of URL-only comments. |
 | `naruon` | Strict required checks, stale review dismissal, changed-file Mermaid flow DAGs, and current-head evidence make review evidence easier to audit. | Earlier repo-local scheduler drift had no update-branch path, no Strix-before-OpenCode sequencing, and no failed-check interpretation from the central script. Run `28073490721` also showed that an auto-merge permission failure can stop the whole queue before later PRs are inspected. PR #756 additionally showed that broadening workflow permissions is a tempting DX shortcut, but it degrades review trust and triggers Scorecard/governance failures. | Keep the implementation contract in `.github` required workflows, retire thick local copies only after central required runs prove stable, re-review every updated head, require an exact changed-file evidence path plus a Change Flow DAG before approval, keep `actions: read`/`contents: read` unless a separate privileged workflow is deliberately introduced, and record action failures per PR instead of aborting the scan. |
-| `pg-erd-cloud` | GitHub Actions bot merges with head guards give a clear mechanical actor for merges. | Repo-local autofix workflows are useful there, but centralizing autofix would widen mutation scope too far. | Keep GitHub Actions as the merge actor and leave autofix workflows repo-local. |
+| `pg-erd-cloud` | GitHub Actions bot merges with head guards give a clear mechanical actor for merges. | A thick repo-local autofix copy would drift from the guarded central worker. | Keep GitHub Actions as the merge actor and use the central autofix worker; retain only repository-specific application/security checks locally. |
 | `appguardrail` | Security-review subject matter makes it a useful place to verify that review automation distinguishes policy failure, tool failure, and source-code failure. | The live queue now has open PRs, so stale zero-PR assumptions can hide actual update-branch or merge behavior. | Use the current queue as a low-noise policy-vs-source review fixture after central checks are verified on each head. |
 | `bandscope` | Broad required checks encode repo-specific release, build, SBOM, and security expectations. | Copying the central scheduler into this repo turns one canonical contract into another repo-local drift surface. | Let GitHub native auto-merge and rulesets interpret required checks, and replace thick local governance files with a thin caller or organization required workflow. |
 | `newsdom-api` | Required quality gates and security checks give API changes stronger release evidence. | Central review comments that only point at failing check URLs do not help an API maintainer fix the failure. | Require failed-check root cause, source location when available, fix direction, and rerun command. |
@@ -259,8 +264,9 @@ The checked-in scheduler already does the minimal central path:
 
 - skips only draft PRs and PRs whose base branch is outside the configured
   scheduler target branch;
-- keeps external-head PRs in the same observation and review pipeline, then
-  gates only the write actions by PR head mutation capability;
+- keeps same-repository heads in the observation/review pipeline; external-head
+  targeted review is currently rejected and tracked as policy drift in
+  `ContextualWisdomLab/.github#889`;
 - blocks UI `Conflicting`, API `DIRTY`, or API `CONFLICTING` with repair guidance that names the base branch, head branch, merge/rebase direction, conflict-marker cleanup, focused checks, same-branch push, and a compact `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` command path; it explicitly does not retry `update-branch` for conflicted PRs because GitHub cannot choose the correct conflict resolution;
 - resolves GitHub `Outdated` unresolved review threads through `resolveReviewThread` before active blocker checks, using the scheduler workflow `GITHUB_TOKEN` inside GitHub Actions; dry-runs report the cleanup as `notes` without mutating the PR;
 - blocks active, non-outdated unresolved review threads;
@@ -269,7 +275,9 @@ The checked-in scheduler already does the minimal central path:
 - waits on `ACTION_REQUIRED` check runs as workflow approval or repository-policy states, not as source-code failures; failed checks still take precedence for current-head-approved PRs, so `ACTION_REQUIRED` cannot mask a real failed `strix`, lint, build, or required-check result;
 - rejects OpenCode reviews whose GitHub review commit matches the PR head but whose review-body `Gate evidence` names a different `Head SHA`; this prevents stale review evidence from becoming current-head approval by attachment alone;
 - updates `BEHIND` only when OpenCode approved the exact current head, no current-head failed check is present, and the PR head is actually mutable by the scheduler credential, using `expected_head_sha` from the scheduler workflow `GITHUB_TOKEN` so the mechanical branch update is performed by `github-actions[bot]` inside GitHub Actions instead of an OpenCode or maintainer-local credential; the script now refuses non-dry-run `update-branch` outside GitHub Actions, and this path needs `pull-requests: write`, not `contents: write`;
-- waits with `external_head_update_required` guidance when a current-head-approved external PR head is behind but is not writable by the scheduler credential, instead of treating fork/non-fork as an onboarding exception;
+- contains an `external_head_update_required` library decision, but current
+  privileged targeted entrypoints reject the external head before end-to-end
+  review; do not cite the library branch as deployed support;
 - enables native auto-merge only for current-head OpenCode approval;
 - supports explicit merge policy through `merge_mode`: `auto` enables native
   auto-merge, `direct` performs a guarded `gh pr merge --merge
@@ -278,7 +286,7 @@ The checked-in scheduler already does the minimal central path:
   and `disabled` records the approval without mutating the PR;
 - dispatches same-head Strix evidence first when the current head has no completed Strix evidence;
 - waits while same-head Strix evidence is still running, so OpenCode is not started just to poll a peer check;
-- keeps old Strix evidence running instead of cancelling it, but scopes PR Strix concurrency by head SHA so an obsolete scan does not serialize newer current-head evidence;
+- uses event/repository/PR-number Strix concurrency with `cancel-in-progress: true`, so the replacement run resolves the current PR head at execution while repository-dispatch and required-workflow event classes remain isolated;
 - dispatches OpenCode only after same-head Strix evidence is complete, including failed Strix evidence that OpenCode must explain from logs.
 - records mutation failures as `action_error` for the affected PR and continues scanning later PRs, so a permission failure on one merge/update action does not hide the rest of the queue.
 - writes the same per-PR decisions to the GitHub Actions step summary, so conflict repair and update-branch decisions are visible without opening raw logs.
@@ -324,9 +332,9 @@ PR #381: wait: OpenCode review is already in progress
    required-workflow mechanism, keep only a thin caller that passes PR number,
    base ref/SHA, head ref/SHA, target flow, and inherited secrets/permissions
    into `.github`.
-4. Treat fork and non-fork repositories uniformly for onboarding. At runtime,
-   classify only the PR head mutation capability: observable/reviewable,
-   updateable, auto-mergeable, or mergeable.
+4. Target policy is uniform fork/non-fork onboarding with a read-only external
+   review capability, but protected main does not yet implement it. Complete
+   `ContextualWisdomLab/.github#889` before enabling that contract.
 5. Do not leave an active public fork PR queue in the inventory-only state.
    When a public fork such as `html4tree` has open PRs targeting the
    organization-owned fork, it must either be included in the organization required-workflow ruleset
@@ -393,7 +401,7 @@ PR #381: wait: OpenCode review is already in progress
 - `bandscope` also proved the large-queue scan risk: `max_prs=120` initially failed with `Resource limits for this query exceeded` while reading 80 open PRs. After reducing the GraphQL page size to 25, the same dry-run scanned all 80 open PRs and returned `{"block": 67, "update_branch": 1, "wait": 12}`, including PR #378 as `update_branch` and PR #404 as a conflict block with repair guidance.
 - `newsdom-api` no longer has a smaller current update-branch proof candidate in the 15:12 KST dry-run. PRs #187, #203, #205, and #206 all block before update because the current head has no OpenCode approval.
 - 2026-07-13 KST `.github` model-pool starvation incident: `opencode run` hangs to the full run timeout when a provider returns a fatal error (`ContextOverflowError` "Request body too large ... Max size: 4000 tokens" on `github-models/openai/gpt-5`, `html4tree` PR #166 run `29221961969`), burning 2×300s of a 600s retry budget before pool candidates 5-7 were tried. PR #511 adds an early-kill watchdog to `run_opencode_review_model_pool.sh` that polls the JSON event log while `opencode run` executes and kills hung processes within seconds of a structured fatal `"type":"error"` event. The same day exposed a central-scope review starvation loop: PRs whose changed files are all central review-process core receive the 120s/attempt fallback cadence, but since PR #508 removed the model-unavailable approve path, such PRs can only pass with a full model verdict inside 120s — `openai/gpt-5.6-luna` (the only live candidate while the GitHub Models org budget is capped) exceeded 120s twice on PR #511 itself, so the required check exhausted deterministically while the skipped evidence fallback published nothing. Recording the incident in this audit file also routes PR #511 through the standard small-change cadence (300s/attempt) — the same full-contract adversarial-probe review every other small PR receives — instead of the starved 120s fast path whose approval authority no longer exists. The durable repair is raising the central-scope cadence timeout or reviving the budget-capped candidates (org Billing → Budgets).
-- `.github` PR #58 exposed that a cancelled manual Strix run can keep its manual status publisher queued and delay the next same-PR Strix run. PR #58 now skips that publisher when the workflow is cancelled, scopes Strix PR concurrency by head SHA so obsolete scans do not serialize newer evidence, and requires conflict reviews to include a concrete `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` repair path.
+- `.github` PR #58 exposed that a cancelled manual Strix run can keep its manual status publisher queued and delay the next same-PR Strix run. The current protected workflow skips that publisher when cancelled and supersedes same-event, same-PR Strix work through PR-number concurrency; repository-dispatch and required-workflow event classes remain separate. Conflict reviews also include a concrete `gh pr checkout` / `git fetch` / merge-or-rebase / `git status --short` repair path.
 - PR #721 in `naruon` remains the historical fixture for this proof: head `b683deaf8b4761399321799279f58d884db57141`, current-head OpenCode approval `4558310923`, unresolved review threads `0`, and `mergeStateStatus=BEHIND`. Central `.github` dry-run selected `update_branch`, but `naruon` workflow run `28073586594` used the then-stale repo-local scheduler and did not update it. PR #756 has since rolled the central scheduler into `naruon`, so the next proof must use a fresh current-head outdated PR instead of reusing stale evidence from #721.
 - `naruon` workflow run `28073490721` failed at `gh pr merge 694 --auto --merge --match-head-commit 76416321742af4c8dcd0f96927f64b7548d66fd8` with `GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)`. This is a DX/governance action failure, not a source-code finding, and the scheduler now records it per PR instead of aborting the scan.
 - `naruon` PR #756 completed the repo-local rollout for the scheduler contract. Its initial head failed backend governance and Scorecard because `actions: write`/`contents: write` were broader than the repo policy allows; the amended and merged head restores minimal `GITHUB_TOKEN` permissions, keeps `trigger_reviews` and `enable_auto_merge` defaulted off, keeps `update_branches` defaulted on, and still dry-runs PR #694/#721 as `update_branch`.

@@ -11,6 +11,18 @@ Trusted ContextualWisdomLab maintainers can invoke the existing review planes fr
 
 The router never checks out or executes pull-request-controlled code. It reads live PR metadata, binds the request to the current head SHA and base branch, and dispatches the already deployed central workflows in `ContextualWisdomLab/.github`.
 
+### Audited end-to-end limitation
+
+At protected-main baseline `6eb06cdd`, that binding is authoritative for the
+router/wrapper claim, not yet for the complete downstream review path. The
+OpenCode wrapper's review-only flags and the OpenCode/Noema exact SHA fields are
+not all revalidated at the authoritative execution/publication boundary;
+downstream scheduling can re-enter the default merge mode. The strict
+snapshot-only route is pending in `ContextualWisdomLab/.github#840`. Until that
+lands and passes consumer acceptance, a mention acknowledgement or immutable
+claim is dispatch evidence, not proof that the final review used the claimed
+snapshot or remained review-only.
+
 ## Architecture
 
 GitHub organization ruleset workflows support `pull_request`, `pull_request_target`, and `merge_group`, but not `issue_comment`. Separately, an `issue_comment` workflow runs only when that workflow file exists on the commented repository's default branch. Therefore, a workflow stored only in the central `.github` repository cannot directly receive comments created in sibling repositories.
@@ -45,8 +57,8 @@ This preserves the central MSA boundary without copying privileged workflow code
 - `contents: write` is intentionally retained only on jobs that call GitHub's create-repository-dispatch endpoint. GitHub documents that endpoint as requiring Contents repository permission at write level. Removing it would disable the bounded central dispatch path; broad workflow-default write access is not granted.
 - The organization sweep uses the established cross-repository credential chain for reading target comments, while the central repository's own short-lived job token dispatches the central workflows.
 - OpenCode dispatch is restricted to the exact `OPENCODE_REPOSITORY_DISPATCH_TARGETS` allowlist.
-- An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are explicit in the dispatch payload.
-- Every dispatch is bound to live PR number, current head SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch.
+- The router requests review-only execution with `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled`; end-to-end preservation is pending in `.github#840`.
+- Every router/wrapper claim is bound to live PR number, current head SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch. The authoritative review boundary must revalidate the tuple before this becomes end-to-end evidence.
 - Router jobs use the fixed `ubuntu-24.04` runner and an immutable `actions/checkout` v7.0.1 commit pin; checkout credentials are not persisted.
 - A branch-selectable `workflow_dispatch` trigger is intentionally absent. This prevents a repository writer from choosing an unreviewed branch version of the central router while the job holds dispatch permissions.
 
@@ -54,7 +66,9 @@ This preserves the central MSA boundary without copying privileged workflow code
 
 - `AGENT_MENTION_LOOKBACK_HOURS`: default `168`, allowed range 1–720.
 - `AGENT_MENTION_MAX_DISPATCHES`: default `20`, allowed range 1–100. The bound counts source requests that actually queue at least one new agent, not historical no-ops.
-- Durable invocation claims use 30-day artifact retention. A new source comment creates a new invocation key when an intentional retry is required.
+- Durable invocation claims use 30-day artifact retention and at-most-once
+  forwarding. A failed forward after claim requires a new source comment today;
+  recoverable claim states are tracked in `ContextualWisdomLab/.github#893`.
 - Operators request immediate work by writing an exact trusted mention on the target pull request; otherwise, the five-minute protected-default-branch sweep processes it.
 - The sweep fails visibly when no cross-repository credential is available.
 - `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN` takes precedence. Otherwise, the workflow exchanges its OIDC token for the existing OpenCode installation token and enumerates that installation's repositories.
