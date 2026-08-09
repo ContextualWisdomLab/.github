@@ -138,6 +138,37 @@ def transient_backoff_seconds(consecutive_failures: int, interval_seconds: float
     return interval_seconds * multiplier
 
 
+def _handle_transient_failure(
+    exc: Exception,
+    consecutive_failures: int,
+    attempt: int,
+    attempts: int,
+    interval_seconds: float,
+    context: str,
+    exhausted_context: str,
+    log: TextIO,
+    sleeper: Callable[[float], None],
+) -> int:
+    """Handle a transient GitHub API failure and sleep with backoff."""
+    consecutive_failures += 1
+    detail = redact_text(str(exc)).strip() or "GitHub API call failed"
+    if attempt < attempts:
+        delay = transient_backoff_seconds(consecutive_failures, interval_seconds)
+        print(
+            f"Transient GitHub API failure {context} "
+            f"poll {attempt}/{attempts}: {detail}; retrying in {delay:g}s.",
+            file=log,
+        )
+        sleeper(delay)
+    else:
+        print(
+            f"{exhausted_context} exhausted its bounded polls after a transient "
+            f"GitHub API failure: {detail}.",
+            file=log,
+        )
+    return consecutive_failures
+
+
 def run_handoff(
     repo: str,
     number: int,
@@ -159,25 +190,17 @@ def run_handoff(
             live_head = fetch_head(repo, number, runner=runner)
             reviews = fetch_reviews(repo, number, runner=runner)
         except RuntimeError as exc:
-            consecutive_failures += 1
-            detail = redact_text(str(exc)).strip() or "GitHub API call failed"
-            if attempt < attempts:
-                delay = transient_backoff_seconds(
-                    consecutive_failures,
-                    interval_seconds,
-                )
-                print(
-                    "Transient GitHub API failure during Noema handoff "
-                    f"poll {attempt}/{attempts}: {detail}; retrying in {delay:g}s.",
-                    file=log,
-                )
-                sleeper(delay)
-            else:
-                print(
-                    "Noema handoff exhausted its bounded polls after a transient "
-                    f"GitHub API failure: {detail}.",
-                    file=log,
-                )
+            consecutive_failures = _handle_transient_failure(
+                exc,
+                consecutive_failures,
+                attempt,
+                attempts,
+                interval_seconds,
+                "during Noema handoff",
+                "Noema handoff",
+                log,
+                sleeper,
+            )
             continue
 
         if live_head.lower() != head_sha.lower():
@@ -215,26 +238,17 @@ def run_handoff(
             try:
                 dispatch_noema(repo, number, head_sha, runner=runner)
             except RuntimeError as exc:
-                consecutive_failures += 1
-                detail = redact_text(str(exc)).strip() or "GitHub API call failed"
-                if attempt < attempts:
-                    delay = transient_backoff_seconds(
-                        consecutive_failures,
-                        interval_seconds,
-                    )
-                    print(
-                        "Transient GitHub API failure while dispatching Noema "
-                        f"on poll {attempt}/{attempts}: {detail}; "
-                        f"retrying in {delay:g}s.",
-                        file=log,
-                    )
-                    sleeper(delay)
-                else:
-                    print(
-                        "Noema dispatch exhausted its bounded polls after a "
-                        f"transient GitHub API failure: {detail}.",
-                        file=log,
-                    )
+                consecutive_failures = _handle_transient_failure(
+                    exc,
+                    consecutive_failures,
+                    attempt,
+                    attempts,
+                    interval_seconds,
+                    "while dispatching Noema on",
+                    "Noema dispatch",
+                    log,
+                    sleeper,
+                )
                 continue
             dispatched = True
             print(
