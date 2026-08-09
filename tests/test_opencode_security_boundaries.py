@@ -300,6 +300,11 @@ def trusted_dispatch_status_artifacts(
         ),
         encoding="utf-8",
     )
+    changed_files.chmod(0o644)
+    manifest.chmod(0o644)
+    runner_temp.chmod(0o755)
+    source_root.chmod(0o755)
+
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))

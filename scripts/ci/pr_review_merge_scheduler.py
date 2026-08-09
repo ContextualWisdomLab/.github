@@ -1282,6 +1282,28 @@ def dismiss_pull_request_review(
     return False
 
 
+
+def require_unmodified_pr_head(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    action_name: str,
+) -> tuple[str, str, str]:
+    """Validate the PR head matches the live GitHub state before mutation."""
+    repo = validate_github_repository(repo)
+    number = str(int(pr["number"]))
+    expected_head = validate_git_sha(pr["headRefOid"])
+    live_head = run_github_read(
+        ["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
+    ).strip()
+    if live_head != expected_head:
+        raise RuntimeError(
+            f"PR head changed before {action_name}; "
+            f"expected {expected_head}, observed {live_head or '<missing>'}"
+        )
+    return repo, number, expected_head
+
+
 def dismiss_stale_opencode_approvals(
     repo: str,
     pr: dict[str, Any],
@@ -1296,17 +1318,9 @@ def dismiss_stale_opencode_approvals(
         return len(review_ids), 0
 
     require_github_actions_mutation_actor("dismiss-stale-opencode-approval")
-    repo = validate_github_repository(repo)
-    number = str(int(pr["number"]))
-    expected_head = validate_git_sha(pr["headRefOid"])
-    live_head = run_github_read(
-        ["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
-    ).strip()
-    if live_head != expected_head:
-        raise RuntimeError(
-            "PR head changed before stale approval dismissal; "
-            f"expected {expected_head}, observed {live_head or '<missing>'}"
-        )
+    repo, number, expected_head = require_unmodified_pr_head(
+        repo, pr, action_name="stale approval dismissal"
+    )
 
     dismissed = 0
     for review_id in review_ids:
@@ -1344,17 +1358,9 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
         return len(review_ids)
 
     require_github_actions_mutation_actor("dismiss-stale-opencode-review")
-    repo = validate_github_repository(repo)
-    number = str(int(pr["number"]))
-    expected_head = validate_git_sha(pr["headRefOid"])
-    live_head = run_github_read(
-        ["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]
-    ).strip()
-    if live_head != expected_head:
-        raise RuntimeError(
-            "PR head changed before stale review dismissal; "
-            f"expected {expected_head}, observed {live_head or '<missing>'}"
-        )
+    repo, number, expected_head = require_unmodified_pr_head(
+        repo, pr, action_name="stale review dismissal"
+    )
 
     for review_id in review_ids:
         message = (
@@ -1623,15 +1629,10 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
     if not same_repository_head(repo, pr):
         raise RuntimeError("last-push approval head refresh only supports same-repository PR heads")
 
-    number = str(int(pr["number"]))
-    head = validate_git_sha(pr["headRefOid"])
+    repo, number, head = require_unmodified_pr_head(
+        repo, pr, action_name="last-push approval head refresh"
+    )
     head_ref = validate_git_ref(pr["headRefName"])
-    live_head = run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]).strip()
-    if live_head != head:
-        raise RuntimeError(
-            "PR head changed before last-push approval head refresh; "
-            f"expected {head}, observed {live_head or '<missing>'}"
-        )
 
     current_commit = json.loads(run(["gh", "api", f"repos/{repo}/git/commits/{head}"]))
     tree = current_commit.get("tree") or {}
