@@ -427,6 +427,28 @@ def test_cli_confines_paths_to_explicit_roots(tmp_path: Path) -> None:
     escaped_input.symlink_to(outside_input)
     assert quality.main([*root_args, "--input", str(escaped_input)]) == 2
 
+    with pytest.raises(quality.BenchmarkValidationError, match="root must be a directory"):
+        quality.confined_path(
+            inside_input,
+            inside_input,
+            "input",
+            must_exist=True,
+        )
+    with pytest.raises(quality.BenchmarkValidationError, match="cannot resolve"):
+        quality.confined_path(
+            inside_input,
+            trusted / "missing-root",
+            "input",
+            must_exist=True,
+        )
+    with pytest.raises(quality.BenchmarkValidationError, match="regular file"):
+        quality.confined_path(
+            trusted,
+            trusted,
+            "input",
+            must_exist=True,
+        )
+
 
 def test_all_production_callables_are_documented() -> None:
     """Every locally defined production callable must retain a docstring."""
