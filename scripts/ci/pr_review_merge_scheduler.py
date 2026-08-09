@@ -1309,11 +1309,11 @@ def dismiss_stale_opencode_approvals(
         )
 
     dismissed = 0
+    message = (
+        "Superseded automated OpenCode approval whose explicit review evidence does not match "
+        f"exact current head {expected_head}; a fresh current-head review is required."
+    )
     for review_id in review_ids:
-        message = (
-            "Superseded automated OpenCode approval whose explicit review evidence does not match "
-            f"exact current head {expected_head}; a fresh current-head review is required."
-        )
         if dismiss_pull_request_review(repo, number, review_id, message=message):
             dismissed += 1
     return dismissed, len(review_ids) - dismissed
