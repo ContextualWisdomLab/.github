@@ -1083,7 +1083,9 @@ def test_central_progress_ignores_required_workflow_checkrun_placeholder(
     )
 
 
-def test_review_state_and_failed_checks():
+def test_review_state_base():
+    """Test test review state base."""
+    """Test test review state base."""
     pr = make_pr(reviews={"nodes": [opencode_review("APPROVED", "old"), opencode_review("APPROVED", "head")]})
     assert sched.current_head_review_state(pr, "APPROVED")
     assert sched.has_current_head_approval(pr)
@@ -1091,6 +1093,10 @@ def test_review_state_and_failed_checks():
     assert not sched.has_current_head_approval(
         make_pr(headRefOid="", reviews={"nodes": [opencode_review("APPROVED", "head")]})
     )
+
+def test_review_state_body_sha():
+    """Test test review state body sha."""
+    """Test test review state body sha."""
     exact_head = "a" * 40
     stale_body_head = "b" * 40
     body_sha_mismatch = make_pr(
@@ -1106,6 +1112,7 @@ def test_review_state_and_failed_checks():
     )
     assert sched.review_body_head_sha(body_sha_mismatch["reviews"]["nodes"][0]) == stale_body_head
     assert not sched.has_current_head_approval(body_sha_mismatch)
+
     body_sha_match = make_pr(
         headRefOid=exact_head,
         reviews={
@@ -1118,6 +1125,7 @@ def test_review_state_and_failed_checks():
         },
     )
     assert sched.has_current_head_approval(body_sha_match)
+
     body_sha_only_match = make_pr(
         headRefOid=exact_head,
         reviews={
@@ -1130,6 +1138,7 @@ def test_review_state_and_failed_checks():
         },
     )
     assert sched.has_current_head_approval(body_sha_only_match)
+
     body_sha_only_mismatch = make_pr(
         headRefOid=exact_head,
         reviews={
@@ -1142,6 +1151,7 @@ def test_review_state_and_failed_checks():
         },
     )
     assert not sched.has_current_head_approval(body_sha_only_mismatch)
+
     body_sha_does_not_override_commit = make_pr(
         headRefOid=exact_head,
         reviews={
@@ -1154,6 +1164,11 @@ def test_review_state_and_failed_checks():
         },
     )
     assert not sched.has_current_head_approval(body_sha_does_not_override_commit)
+
+def test_review_state_deterministic_fallback():
+    """Test test review state deterministic fallback."""
+    """Test test review state deterministic fallback."""
+    exact_head = "a" * 40
     deterministic_fallback = make_pr(
         headRefOid=exact_head,
         reviews={
@@ -1177,6 +1192,7 @@ def test_review_state_and_failed_checks():
     )
     assert sched.has_current_head_deterministic_fallback_approval(deterministic_fallback)
     assert not sched.has_current_head_approval(deterministic_fallback)
+
     fallback_scan_without_current_opencode = make_pr(
         reviews={
             "nodes": [
@@ -1188,6 +1204,10 @@ def test_review_state_and_failed_checks():
     assert not sched.has_current_head_deterministic_fallback_approval(
         fallback_scan_without_current_opencode
     )
+
+def test_review_state_timestamp_and_author():
+    """Test test review state timestamp and author."""
+    """Test test review state timestamp and author."""
     stale_review = make_pr(
         reviews={
             "nodes": [
@@ -1200,6 +1220,7 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.has_current_head_approval(stale_review)
+
     same_timestamp_review = make_pr(
         reviews={
             "nodes": [
@@ -1212,6 +1233,7 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.has_current_head_approval(same_timestamp_review)
+
     missing_review_time = make_pr(
         reviews={
             "nodes": [
@@ -1224,10 +1246,12 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.has_current_head_approval(missing_review_time)
+
     human_review_only = make_pr(
         reviews={"nodes": [opencode_review("APPROVED", "head", login="human")]}
     )
     assert not sched.has_current_head_approval(human_review_only)
+
     superseded = make_pr(
         reviews={
             "nodes": [
@@ -1239,6 +1263,11 @@ def test_review_state_and_failed_checks():
     assert sched.has_current_head_approval(superseded)
     assert not sched.has_current_head_changes_requested(superseded)
 
+def test_review_state_stale_ids():
+    """Test test review state stale ids."""
+    """Test test review state stale ids."""
+    exact_head = "a" * 40
+    stale_body_head = "b" * 40
     stale_gate_reviews = make_pr(
         reviews={
             "nodes": [
@@ -1308,6 +1337,9 @@ def test_review_state_and_failed_checks():
     stale_approval_history["reviews"]["nodes"].remove(exact_head_approval)
     assert sched.stale_opencode_approval_ids(stale_approval_history) == [301, 303]
 
+def test_review_state_failed_checks():
+    """Test test review state failed checks."""
+    """Test test review state failed checks."""
     failed = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1320,6 +1352,7 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(failed) == ["strix", "lint"]
+
     action_required = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1335,6 +1368,7 @@ def test_review_state_and_failed_checks():
     assert sched.workflow_action_required_reason(["a", "b", "c", "d", "e", "f"]).startswith(
         "workflow action required: a, b, c, d, e, +1 more"
     )
+
     manual_strix_supersedes_pr_target_failure = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1347,6 +1381,7 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
+
     opencode_pr_target_failure_without_status = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1357,6 +1392,7 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(opencode_pr_target_failure_without_status) == ["opencode-review"]
+
     manual_opencode_supersedes_pr_target_failure = make_pr(
         statusCheckRollup={
             "contexts": {
