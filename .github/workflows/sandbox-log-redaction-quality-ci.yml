@@ -57,6 +57,9 @@ jobs:
             -r "${RUNNER_TEMP}/sandbox-redaction-quality-requirements.txt"
 
       - name: Verify fail-closed sandbox redaction contract
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: "3"
+          STRIX_TEST_FAKE_SLEEP_SECONDS: "5"
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
@@ -68,6 +71,25 @@ jobs:
           python -m coverage report \
             --include='scripts/ci/sandboxed_verify.py,scripts/ci/sandboxed_web_e2e.py' \
             --fail-under=100
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          missing = []
+          for filename in (
+              "scripts/ci/sandboxed_verify.py",
+              "scripts/ci/sandboxed_web_e2e.py",
+          ):
+              tree = ast.parse(Path(filename).read_text(encoding="utf-8"), filename=filename)
+              for node in tree.body:
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                      if not node.name.startswith("_") and ast.get_docstring(node) is None:
+                          missing.append(f"{filename}:{node.lineno}:{node.name}")
+          if missing:
+              raise SystemExit("public docstrings missing: " + ", ".join(missing))
+          PY
+          python -m pytest tests -q
+          bash scripts/ci/test_strix_quick_gate.sh
           python -m compileall -q \
             scripts/ci/sandboxed_verify.py \
             scripts/ci/sandboxed_web_e2e.py \
