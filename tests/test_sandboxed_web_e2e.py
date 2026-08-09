@@ -639,3 +639,14 @@ def test_sandboxed_web_e2e_redacts_stdout_and_stderr(monkeypatch, tmp_path, caps
     assert "[REDACTED]" in out
     assert "session_key: 123456" not in err
     assert "[REDACTED]" in err
+def test_wait_for_url_rejects_external_hosts(monkeypatch, tmp_path):
+    class RunningProcess:
+        def poll(self):
+            return None
+    service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "mock.log")
+
+    with pytest.raises(ValueError, match="Readiness URL must use localhost or loopback IP"):
+        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data/", 10, service)
+
+    with pytest.raises(ValueError, match="Readiness URL must use localhost or loopback IP"):
+        sandboxed_web_e2e.wait_for_url("https://example.com", 10, service)

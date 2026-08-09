@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-08-08 - Prevent SSRF in Web E2E Readiness Polling
+**Vulnerability:** Server-Side Request Forgery (SSRF) / Local File Inclusion
+**Learning:** Checking that a user-provided `--backend-ready-url` or `--frontend-ready-url` starts with `http://` or `https://` is insufficient if the script blindly requests the URL. This allows attackers to proxy requests through CI to internal endpoints or metadata services (e.g. `169.254.169.254`).
+**Prevention:** Strictly parse the URL using `urllib.parse.urlparse` and ensure the hostname belongs to an explicitly allowed loopback interface (e.g., `127.0.0.1`, `localhost`, `::1`).

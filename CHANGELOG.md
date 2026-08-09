@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Replaced prefix-only HTTP/HTTPS readiness validation with robust SSRF protection in the `sandboxed_web_e2e.py` E2E test harness.
 - Added log redaction for standard output and error captured during subprocess execution in `sandboxed_verify.py` and `sandboxed_web_e2e.py` wrappers.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
 - Allowed commas and ASCII parentheses in the bounded Strix changed-file path policy so legal tracked Packrat fixtures can receive exact-head security analysis, while rejecting raw `..` components before normalization and keeping controls, backslashes, whitespace ambiguity, and shell punctuation fail-closed.
