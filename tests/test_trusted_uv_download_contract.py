@@ -86,7 +86,7 @@ def test_downloader_never_constructs_a_dynamic_request_object() -> None:
 def test_literal_urlopen_sink_has_one_scoped_semgrep_suppression() -> None:
     """The known false positive is suppressed only at the audited literal sink."""
     source_lines = _MATERIALIZER.read_text(encoding="utf-8").splitlines()
-    sink_lines = [line for line in source_lines if "with urllib.request.urlopen(" in line]
+    sink_lines = [line for line in source_lines if "urllib.request.urlopen(" in line]
 
     assert len(sink_lines) == 1
     assert f"# nosemgrep: {_SEMGREP_DYNAMIC_URL_RULE}" in sink_lines[0]

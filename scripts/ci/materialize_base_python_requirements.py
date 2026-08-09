@@ -37,6 +37,20 @@ UV_EXACT_REQUIREMENT_RE = re.compile(
 )
 UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
 UV_EXPORT_TIMEOUT_SECONDS = 120
+
+UV_EXPORT_COMMAND = (
+    "export",
+    "--frozen",
+    "--offline",
+    "--no-cache",
+    "--no-progress",
+    "--color",
+    "never",
+    "--no-emit-project",
+    "--no-editable",
+    "--format",
+    "requirements-txt",
+)
 TRUSTED_UV_VERSION = "0.12.1"
 TRUSTED_UV_ARCHIVE_URL = (
     "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
@@ -148,13 +162,16 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
     rejected even when they contain a ``--hash=`` substring.
     """
     lines = _requirement_lines(content)
-    return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
+    return bool(lines) and all(
+        _is_fully_hash_pinned_requirement(line) for line in lines
+    )
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     """Run one read-only git command in the materialized repository."""
     completed = subprocess.run(
         ["git", "-C", str(repo_root), *args],
+        shell=False,  # nosec B603
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -172,11 +189,13 @@ def _download_trusted_uv_archive() -> bytes:
         # Keep the audited URL literal at the network sink so static analysis can
         # prove that neither user data nor repository content selects a scheme,
         # host, path, query, fragment, method, or request header.
-        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-            "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
-            "uv-x86_64-unknown-linux-gnu.tar.gz",
-            timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
-        ) as response:
+        with (
+            urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+                "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
+                "uv-x86_64-unknown-linux-gnu.tar.gz",
+                timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+            ) as response
+        ):
             final_url = urllib.parse.urlparse(response.geturl())
             try:
                 final_port = final_url.port
@@ -185,20 +204,17 @@ def _download_trusted_uv_archive() -> bytes:
                     "trusted uv archive redirected outside the fixed "
                     "releases.astral.sh HTTPS origin"
                 ) from exc
-            if (
-                (final_url.scheme, final_url.hostname)
-                != ("https", "releases.astral.sh")
-                or final_port not in (None, 443)
-            ):
+            if (final_url.scheme, final_url.hostname) != (
+                "https",
+                "releases.astral.sh",
+            ) or final_port not in (None, 443):
                 raise RuntimeError(
                     "trusted uv archive redirected outside the fixed "
                     "releases.astral.sh HTTPS origin"
                 )
             payload = bytearray()
             while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
-                chunk = response.read(
-                    TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload)
-                )
+                chunk = response.read(TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload))
                 if not chunk:
                     break
                 payload.extend(chunk)
@@ -223,7 +239,9 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
             try:
                 member = bundle.getmember(TRUSTED_UV_ARCHIVE_MEMBER)
             except KeyError as exc:
-                raise RuntimeError("trusted uv archive omitted the uv executable") from exc
+                raise RuntimeError(
+                    "trusted uv archive omitted the uv executable"
+                ) from exc
             if not member.isfile():
                 raise RuntimeError("trusted uv archive member is not a regular file")
             if member.size > TRUSTED_UV_BINARY_MAX_BYTES:
@@ -236,7 +254,9 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
         raise RuntimeError("trusted uv archive could not be parsed") from exc
 
     if len(binary) != member.size:
-        raise RuntimeError("trusted uv executable size did not match its archive metadata")
+        raise RuntimeError(
+            "trusted uv executable size did not match its archive metadata"
+        )
     return binary
 
 
@@ -255,6 +275,7 @@ def _install_trusted_uv() -> str:
         try:
             completed = subprocess.run(
                 [str(uv_path), "--version"],
+                shell=False,  # nosec B603
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -314,21 +335,9 @@ def _run_uv_export(
     enabled so the reconstructed ``pyproject.toml`` remains authoritative.
     """
     return subprocess.run(
-        [
-            uv_path,
-            "export",
-            "--frozen",
-            "--offline",
-            "--no-cache",
-            "--no-progress",
-            "--color",
-            "never",
-            "--no-emit-project",
-            "--no-editable",
-            "--format",
-            "requirements-txt",
-        ],
+        [uv_path, *UV_EXPORT_COMMAND],
         cwd=str(work_dir),
+        shell=False,  # nosec B603
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -341,9 +350,7 @@ def _uv_pyproject_path(lock_path: str) -> str:
     """Return the sibling project metadata path for one safe tracked uv lock."""
     project_dir = pathlib.PurePosixPath(lock_path).parent
     return (
-        "pyproject.toml"
-        if str(project_dir) == "."
-        else f"{project_dir}/pyproject.toml"
+        "pyproject.toml" if str(project_dir) == "." else f"{project_dir}/pyproject.toml"
     )
 
 
