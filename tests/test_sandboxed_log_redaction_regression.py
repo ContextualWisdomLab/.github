@@ -92,6 +92,27 @@ def test_sandboxed_verify_redacts_timeout_bytes(monkeypatch, tmp_path, capsys):
     assert "ordinary timeout stderr" in captured.err
 
 
+def test_sandboxed_verify_handles_empty_completed_streams(monkeypatch, tmp_path, capsys):
+    """Redaction does not invent output when a completed command emits no streams."""
+    _bind_verify_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sandboxed_verify,
+        "run_command",
+        lambda *_args: subprocess.CompletedProcess(
+            args=["fake"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    assert sandboxed_verify.main(["--repo-root", str(tmp_path), "--", "fake"]) == 0
+    captured = capsys.readouterr()
+
+    assert "[REDACTED]" not in captured.out
+    assert captured.err == ""
+
+
 def test_sandboxed_web_e2e_redacts_completed_output_and_service_tails(monkeypatch, tmp_path, capsys):
     """E2E process streams and backend/frontend log tails must redact credentials."""
     _bind_e2e_services(
@@ -175,3 +196,66 @@ def test_sandboxed_web_e2e_redacts_timeout_bytes(monkeypatch, tmp_path, capsys):
     assert "[REDACTED]" in captured.err
     assert "ordinary e2e timeout stdout" in captured.out
     assert "ordinary e2e timeout stderr" in captured.err
+
+
+def test_sandboxed_web_e2e_handles_empty_completed_streams(monkeypatch, tmp_path, capsys):
+    """E2E redaction preserves the no-output branch for successful commands."""
+    _bind_e2e_services(monkeypatch, tmp_path, log_text="")
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "run_shell",
+        lambda *_args: subprocess.CompletedProcess(
+            args=["fake-e2e"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    assert (
+        sandboxed_web_e2e.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--backend-cmd",
+                "backend",
+                "--frontend-cmd",
+                "frontend",
+                "--e2e-cmd",
+                "e2e",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+
+    assert "[REDACTED]" not in captured.out
+    assert captured.err == ""
+
+
+def test_wait_for_url_retries_nonready_http_status(monkeypatch, tmp_path):
+    """A non-ready HTTP status follows the existing bounded polling path."""
+    class RunningProcess:
+        def poll(self):
+            return None
+
+    class Response:
+        status = 503
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class Opener:
+        def open(self, _url, timeout):
+            assert timeout == 2
+            return Response()
+
+    ticks = iter([0.0, 0.0, 2.0])
+    monkeypatch.setattr(sandboxed_web_e2e.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *_args: Opener())
+    service = _service(tmp_path / "unused.log")
+
+    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 1, service) is False
