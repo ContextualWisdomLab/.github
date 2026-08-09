@@ -34,7 +34,38 @@ def _has_hash_pins(path: pathlib.Path) -> bool:
 def _run(command: list[str], cwd: pathlib.Path) -> int:
     """Run one installer command from a target project directory."""
     print("+ " + " ".join(command), flush=True)
-    return subprocess.run(command, cwd=cwd, check=False).returncode
+    return subprocess.run(command, cwd=cwd, check=False, shell=False).returncode  # nosec B603
+
+
+def _install_hash_pinned(requirements: pathlib.Path, cwd: pathlib.Path) -> int:
+    """Install hash-pinned Python requirements using pip."""
+    print(
+        f"Installing hash-pinned Python requirements from {requirements}.",
+        flush=True,
+    )
+    return _run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--require-hashes",
+            "-r",
+            str(requirements),
+        ],
+        cwd,
+    )
+
+
+def _install_unpinned_with_uv(requirements: pathlib.Path, cwd: pathlib.Path, uv_path: str) -> int:
+    """Install unpinned requirements using uv, warning about lack of hashes."""
+    print(
+        "::warning::Target requirements are not hash-pinned; using uv for "
+        "coverage-only dependency materialization in a read-only/no-secret job.",
+        flush=True,
+    )
+    return _run([uv_path, "pip", "install", "--system", "-r", str(requirements)], cwd)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,32 +81,10 @@ def main(argv: list[str] | None = None) -> int:
 
     cwd = requirements.parent
     if _has_hash_pins(requirements):
-        print(
-            f"Installing hash-pinned Python requirements from {requirements}.",
-            flush=True,
-        )
-        return _run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--disable-pip-version-check",
-                "--require-hashes",
-                "-r",
-                str(requirements),
-            ],
-            cwd,
-        )
+        return _install_hash_pinned(requirements, cwd)
 
-    uv = shutil.which("uv")
-    if uv:
-        print(
-            "::warning::Target requirements are not hash-pinned; using uv for "
-            "coverage-only dependency materialization in a read-only/no-secret job.",
-            flush=True,
-        )
-        return _run([uv, "pip", "install", "--system", "-r", str(requirements)], cwd)
+    if uv := shutil.which("uv"):
+        return _install_unpinned_with_uv(requirements, cwd, uv)
 
     print(
         "::error::Target requirements are not hash-pinned and uv is unavailable; "
