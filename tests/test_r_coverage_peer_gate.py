@@ -222,3 +222,8 @@ def test_script_entrypoint_returns_cli_status(
         runpy.run_path(str(script), run_name="__main__")
 
     assert raised.value.code == 1
+
+def test_classify_testthat_failure_returns_false_no_summaries():
+    """Ensure it handles logs missing summary matches but containing the test string."""
+    text = "Error: Test failures something else missing package 'test'"
+    assert gate.classify_testthat_failure(text, "test") is False
