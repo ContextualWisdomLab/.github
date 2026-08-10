@@ -128,9 +128,9 @@ def test_timestamp_cutoff_and_page_validation() -> None:
         {"a": 1},
         {"b": 2},
     ]
-    assert sweep.flatten_pages(
-        [{"items": [{"a": 1}]}], collection_key="items"
-    ) == [{"a": 1}]
+    assert sweep.flatten_pages([{"items": [{"a": 1}]}], collection_key="items") == [
+        {"a": 1}
+    ]
     with pytest.raises(ValueError, match="empty"):
         sweep.flatten_pages(None)
     with pytest.raises(ValueError, match="page is not an object"):
@@ -145,12 +145,14 @@ def test_accessible_repository_sources_filter_and_validate() -> None:
     """PAT and installation-token repository inventories are both supported."""
 
     sweep = module()
-    organization_response = [[
-        repository(),
-        repository("archived", archived=True),
-        repository("disabled", disabled=True),
-        repository("outside", owner="outside"),
-    ]]
+    organization_response = [
+        [
+            repository(),
+            repository("archived", archived=True),
+            repository("disabled", disabled=True),
+            repository("outside", owner="outside"),
+        ]
+    ]
     organization_client = FakeClient(
         {"orgs/ContextualWisdomLab/repos": organization_response}
     )
@@ -185,9 +187,9 @@ def test_accessible_repository_sources_filter_and_validate() -> None:
         )
     invalid_client = FakeClient(
         {
-            "orgs/ContextualWisdomLab/repos": [[
-                {**repository(), "full_name": "bad/name"}
-            ]]
+            "orgs/ContextualWisdomLab/repos": [
+                [{**repository(), "full_name": "bad/name"}]
+            ]
         }
     )
     with pytest.raises(ValueError, match="full_name"):
@@ -205,10 +207,12 @@ def test_recent_pull_request_filtering() -> None:
     client = FakeClient(
         {
             "orgs/ContextualWisdomLab/repos": [[repository()]],
-            "repos/ContextualWisdomLab/example/pulls": [[
-                pull_list_item(7, "2026-08-05T11:00:00Z"),
-                pull_list_item(8, "2026-08-04T11:59:59Z"),
-            ]],
+            "repos/ContextualWisdomLab/example/pulls": [
+                [
+                    pull_list_item(7, "2026-08-05T11:00:00Z"),
+                    pull_list_item(8, "2026-08-04T11:59:59Z"),
+                ]
+            ],
         }
     )
     assert list(
@@ -222,9 +226,9 @@ def test_recent_pull_request_filtering() -> None:
     bad_number_client = FakeClient(
         {
             "orgs/ContextualWisdomLab/repos": [[repository()]],
-            "repos/ContextualWisdomLab/example/pulls": [[
-                {"number": 0, "updated_at": "2026-08-05T11:00:00Z"}
-            ]],
+            "repos/ContextualWisdomLab/example/pulls": [
+                [{"number": 0, "updated_at": "2026-08-05T11:00:00Z"}]
+            ],
         }
     )
     with pytest.raises(ValueError, match="pull request number"):
@@ -495,6 +499,7 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["max_dispatches"] == 3
     assert captured[0]["dry_run"] is True
 
+
 def test_list_recent_pull_requests_concurrent_multiple_repositories():
     """Testing N+1 API block solution branch where multiple repositories are checked concurrently."""
     sweep = module()
@@ -546,21 +551,170 @@ def test_list_recent_pull_requests_concurrent_multiple_repositories():
                 ]
             ],
         },
-        explode_repos=True
+        explode_repos=True,
     )
-    errors_caught = []
-    def on_error(repo, exc):
-        errors_caught.append(repo)
 
+    metrics = sweep.SweepMetrics()
+    dispatched = sweep.sweep(
+        target_client=error_client,
+        dispatch_client=error_client,
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        lookback_hours=1,
+        max_dispatches=10,
+        opencode_allowlist=frozenset(),
+        dry_run=True,
+        now=datetime(2026, 8, 5, 11, 0, tzinfo=timezone.utc),
+        metrics=metrics,
+    )
+    assert dispatched == 0
+    assert metrics.failures == 2  # One failure per repository
+
+
+def test_sweep_failures_during_processing(monkeypatch, capsys) -> None:
+    """Sweep gracefully isolates exceptions during request building and dispatching."""
+    sweep = module()
+    client = FakeClient(
+        {
+            "orgs/ContextualWisdomLab/repos": [[repository()]],
+            "repos/ContextualWisdomLab/example/pulls": [
+                [pull_list_item(number=1), pull_list_item(number=2)]
+            ],
+        }
+    )
+
+    def fail_build(*args, **kwargs):
+        if kwargs.get("issue", {}).get("number") == 1:
+            raise ValueError("Build Error")
+        return [mention_request(2, 20, "opencode-agent")]
+
+    monkeypatch.setattr(sweep, "build_requests_for_pull_request", fail_build)
+
+    def fail_dispatch(*args, **kwargs):
+        raise ValueError("Dispatch Error")
+
+    monkeypatch.setattr(sweep, "dispatch_request", fail_dispatch)
+
+    metrics = sweep.SweepMetrics()
+    sweep.sweep(
+        target_client=client,
+        dispatch_client=client,
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        lookback_hours=1,
+        max_dispatches=10,
+        opencode_allowlist=frozenset(),
+        now=datetime(2026, 8, 5, 11, 0, tzinfo=timezone.utc),
+        metrics=metrics,
+    )
+    assert metrics.failures == 2  # One for PR 1 build fail, one for PR 2 dispatch fail
+
+
+def test_pagination_break_without_cutoff() -> None:
+    """Pagination terminates gracefully when less than 100 items are returned."""
+    sweep = module()
+    client = FakeClient(
+        {
+            "orgs/ContextualWisdomLab/repos": [[repository()]],
+            "repos/ContextualWisdomLab/example/pulls": [
+                [pull_list_item(number=1, updated_at="2026-08-05T11:00:00Z")],
+                [],  # Page 2 returns empty list
+            ],
+        }
+    )
     pulls = list(
         sweep.list_recent_pull_requests(
-            error_client,
+            client,
             organization="ContextualWisdomLab",
             repository_source="organization",
             since="2026-08-05T10:00:00Z",
-            on_error=on_error
+        )
+    )
+    assert len(pulls) == 1
+
+
+def test_pagination_empty_page_loop_break() -> None:
+    """Pagination terminates when an empty list of pull requests is returned without exceptions."""
+    sweep = module()
+    client = FakeClient(
+        {
+            "orgs/ContextualWisdomLab/repos": [[repository()]],
+            "repos/ContextualWisdomLab/example/pulls": [[]],
+        }
+    )
+    pulls = list(
+        sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T10:00:00Z",
         )
     )
     assert len(pulls) == 0
-    # Both repos will fail due to ValueError
-    assert len(errors_caught) == 2
+
+
+def test_accessible_repository_invalid_repo_name() -> None:
+    """Accessible repository invalid name check."""
+    sweep = module()
+    organization_response = [
+        [
+            {
+                "full_name": "ContextualWisdomLab/invalid name with spaces",
+                "owner": {"login": "ContextualWisdomLab"},
+                "archived": False,
+                "disabled": False,
+            }
+        ]
+    ]
+    client = FakeClient({"orgs/ContextualWisdomLab/repos": organization_response})
+    import pytest
+
+    with pytest.raises(ValueError, match="invalid repository full_name"):
+        sweep.list_accessible_repositories(
+            client, organization="ContextualWisdomLab", repository_source="organization"
+        )
+
+
+def test_flatten_pages_direct_list_return():
+    """Flatten pages handles direct list of dicts properly."""
+    sweep = module()
+    direct_list = [{"foo": "bar"}, {"baz": "qux"}]
+    assert sweep.flatten_pages(direct_list) == direct_list
+
+
+def test_list_recent_pull_requests_multiple_pages():
+    """Pagination fetches multiple pages correctly without errors."""
+    sweep = module()
+    client = FakeClient(
+        {
+            "orgs/ContextualWisdomLab/repos": [[repository()]],
+            "repos/ContextualWisdomLab/example/pulls": [
+                [
+                    pull_list_item(number=i, updated_at="2026-08-05T11:00:00Z")
+                    for i in range(1, 101)
+                ],
+                [pull_list_item(number=101, updated_at="2026-08-05T11:00:00Z")],
+                [],
+            ],
+        }
+    )
+
+    def request(args, *, input_payload=None):
+        if "repos/ContextualWisdomLab/example/pulls" in args[0]:
+            page = int(
+                next(arg for arg in args if arg.startswith("page=")).split("=")[1]
+            )
+            return client.responses["repos/ContextualWisdomLab/example/pulls"][page - 1]
+        return client.responses.get(args[0])
+
+    client.request = request
+
+    pulls = list(
+        sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T10:00:00Z",
+        )
+    )
+    assert len(pulls) == 101
