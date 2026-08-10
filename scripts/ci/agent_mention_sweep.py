@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import os
 import re
 from dataclasses import dataclass
@@ -78,9 +79,7 @@ def flatten_pages(
         if not isinstance(collection, list):
             raise ValueError("paginated GitHub response is not a list")
         if not all(isinstance(record, dict) for record in collection):
-            raise ValueError(
-                "paginated GitHub response contains a non-object record"
-            )
+            raise ValueError("paginated GitHub response contains a non-object record")
         records.extend(collection)
     return records
 
@@ -155,7 +154,9 @@ def list_recent_pull_requests(
         organization=organization,
         repository_source=repository_source,
     )
-    for repository in repositories:
+
+    def fetch_repo_pulls(repository: str) -> list[dict[str, Any]]:
+        repo_pulls: list[dict[str, Any]] = []
         try:
             page = 1
             while True:
@@ -182,9 +183,7 @@ def list_recent_pull_requests(
                 reached_cutoff = False
                 for pull_request in pull_requests:
                     if (
-                        parse_timestamp(
-                            str(pull_request.get("updated_at") or "")
-                        )
+                        parse_timestamp(str(pull_request.get("updated_at") or ""))
                         < cutoff
                     ):
                         reached_cutoff = True
@@ -194,16 +193,18 @@ def list_recent_pull_requests(
                         raise ValueError(
                             "GitHub returned an invalid pull request number"
                         )
-                    yield {
-                        "number": number,
-                        "repository": repository,
-                        "pull_request": {
-                            "url": (
-                                "https://api.github.com/repos/"
-                                f"{repository}/pulls/{number}"
-                            )
-                        },
-                    }
+                    repo_pulls.append(
+                        {
+                            "number": number,
+                            "repository": repository,
+                            "pull_request": {
+                                "url": (
+                                    "https://api.github.com/repos/"
+                                    f"{repository}/pulls/{number}"
+                                )
+                            },
+                        }
+                    )
                 if reached_cutoff or len(pull_requests) < 100:
                     break
                 page += 1
@@ -211,6 +212,16 @@ def list_recent_pull_requests(
             if on_error is None:
                 raise
             on_error(repository, exc)
+        return repo_pulls
+
+    if len(repositories) <= 1:
+        for repository in repositories:
+            yield from fetch_repo_pulls(repository)
+    else:
+        max_workers = min(10, len(repositories))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for repo_pulls in list(executor.map(fetch_repo_pulls, repositories)):
+                yield from repo_pulls
 
 
 def list_recent_comments(
@@ -305,9 +316,7 @@ def sweep(
 
         counters.failures += 1
         message = " ".join(str(error).split()) or error.__class__.__name__
-        print(
-            f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
-        )
+        print(f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}")
 
     for issue in list_recent_pull_requests(
         target_client,
@@ -375,9 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     metrics = SweepMetrics()
     sweep(
-        target_client=GitHubClient(
-            os.environ.get("TARGET_REPOSITORY_TOKEN", "")
-        ),
+        target_client=GitHubClient(os.environ.get("TARGET_REPOSITORY_TOKEN", "")),
         dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
         organization=args.organization,
         repository_source=args.repository_source,
