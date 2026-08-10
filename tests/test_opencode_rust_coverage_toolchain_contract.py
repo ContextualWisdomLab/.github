@@ -8,6 +8,9 @@ from pathlib import Path
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW_PATH = _REPOSITORY_ROOT / ".github/workflows/opencode-review-dispatch.yml"
+_QUALITY_WORKFLOW_PATH = (
+    _REPOSITORY_ROOT / ".github/workflows/opencode-rust-coverage-toolchain-quality-ci.yml"
+)
 _LLVM_COV_PATH = "/usr/bin/llvm-cov-19"
 _LLVM_PROFDATA_PATH = "/usr/bin/llvm-profdata-19"
 
@@ -84,3 +87,21 @@ def test_isolated_runtime_revalidates_llvm_tools_before_coverage() -> None:
     assert f'"${{LLVM_PROFDATA:-}}" != "{_LLVM_PROFDATA_PATH}"' in toolchain
     assert docker_run < llvm_cov_checks[-1] < cargo_coverage_invocation
     assert docker_run < llvm_profdata_checks[-1] < cargo_coverage_invocation
+
+
+def test_quality_workflow_watched_paths_resolve_to_repository_files() -> None:
+    """Every exact-path trigger in the permanent quality workflow must exist."""
+
+    quality_workflow = _QUALITY_WORKFLOW_PATH.read_text(encoding="utf-8")
+    watched_section = quality_workflow.split("    paths:\n", 1)[1].split(
+        "\n\npermissions:\n", 1
+    )[0]
+    watched_paths = [
+        line.strip()[2:].strip('"')
+        for line in watched_section.splitlines()
+        if line.strip().startswith("- ")
+    ]
+
+    assert watched_paths
+    for relative_path in watched_paths:
+        assert (_REPOSITORY_ROOT / relative_path).is_file(), relative_path
