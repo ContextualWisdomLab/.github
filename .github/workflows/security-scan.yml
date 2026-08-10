@@ -225,7 +225,7 @@ jobs:
         # The reporter above is the vulnerability gate. Preserve an upload
         # quota failure in this step's log without reclassifying it as a CVE.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           sarif_file: results.sarif
           # results.sarif is produced after checkout of the pull request head.
@@ -383,7 +383,7 @@ jobs:
         if: always() && hashFiles('trivy-results.sarif') != ''
         # The parser above fails on every fixable Medium+ finding independently.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
@@ -457,7 +457,7 @@ jobs:
         id: upload_scorecard_sarif
         # Scorecard is soft repository-posture evidence; upload quota is external.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           sarif_file: results.sarif
           category: scorecard
