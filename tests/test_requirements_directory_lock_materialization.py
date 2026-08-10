@@ -85,6 +85,7 @@ def test_materializes_hash_pinned_requirements_directory_lock(
         ),
         (b"--index-url https://packages.example.invalid/simple\n", False),
         (b"--requirement other.txt\n", True),
+        (b"-r ./locks/other.txt\n", True),
     ),
 )
 def test_global_hash_directive_does_not_replace_per_requirement_trust(
@@ -107,6 +108,12 @@ def test_global_hash_directive_does_not_replace_per_requirement_trust(
         b"--requirement ../parent.txt\n",
         b"-r nested/../../escape.txt\n",
         b"--requirement other.txt --hash=sha256:" + (b"a" * 64) + b"\n",
+        b"--requirement https://packages.example.invalid/lock.txt\n",
+        b"--requirement ~/private-lock.txt\n",
+        b"--requirement -option-like.txt\n",
+        b"--requirement locks\\windows.txt\n",
+        b"--requirement other.txt?variant=1\n",
+        b"--requirement other.txt#fragment\n",
     ),
 )
 def test_unsafe_requirement_lines_are_rejected_before_materialization(
@@ -126,6 +133,7 @@ def test_unsafe_requirement_lines_are_rejected_before_materialization(
         + "\n",
         "-r /tmp/absolute.txt\n",
         "--requirement ../parent.txt\n",
+        "--requirement https://packages.example.invalid/lock.txt\n",
     ),
 )
 def test_unsafe_requirements_directory_candidate_is_excluded_from_manifest(
