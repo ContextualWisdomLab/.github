@@ -494,3 +494,73 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["lookback_hours"] == 48
     assert captured[0]["max_dispatches"] == 3
     assert captured[0]["dry_run"] is True
+
+def test_list_recent_pull_requests_concurrent_multiple_repositories():
+    """Testing N+1 API block solution branch where multiple repositories are checked concurrently."""
+    sweep = module()
+
+    class SmartFakeClient(FakeClient):
+        def __init__(self, responses, explode_repos=False):
+            super().__init__(responses)
+            self.explode_repos = explode_repos
+
+        def request(self, args, *, input_payload=None):
+            if self.explode_repos and args[0].startswith("repos/"):
+                raise ValueError("Simulated Exception")
+            return super().request(args, input_payload=input_payload)
+
+    client = SmartFakeClient(
+        {
+            "orgs/ContextualWisdomLab/repos": [
+                [
+                    repository(name="example1"),
+                    repository(name="example2"),
+                ]
+            ],
+            "repos/ContextualWisdomLab/example1/pulls": [
+                [pull_list_item(number=1, updated_at="2026-08-05T11:00:00Z")]
+            ],
+            "repos/ContextualWisdomLab/example2/pulls": [
+                [pull_list_item(number=2, updated_at="2026-08-05T11:00:00Z")]
+            ],
+        }
+    )
+    pulls = list(
+        sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T10:00:00Z",
+        )
+    )
+    assert len(pulls) == 2
+    assert {p["number"] for p in pulls} == {1, 2}
+
+    # Test error handling logic inside fetch_repo_pulls
+    error_client = SmartFakeClient(
+        {
+            "orgs/ContextualWisdomLab/repos": [
+                [
+                    repository(name="example1"),
+                    repository(name="example2"),
+                ]
+            ],
+        },
+        explode_repos=True
+    )
+    errors_caught = []
+    def on_error(repo, exc):
+        errors_caught.append(repo)
+
+    pulls = list(
+        sweep.list_recent_pull_requests(
+            error_client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T10:00:00Z",
+            on_error=on_error
+        )
+    )
+    assert len(pulls) == 0
+    # Both repos will fail due to ValueError
+    assert len(errors_caught) == 2
