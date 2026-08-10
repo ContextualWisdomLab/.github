@@ -269,6 +269,30 @@ def _is_fully_hash_pinned_requirement(line: str) -> bool:
     return all(UV_SHA256_HASH_RE.fullmatch(hash_value) for hash_value in hashes)
 
 
+def _is_hash_pinned(content: bytes) -> bool:
+    """Return whether content carries only trusted pins or bounded includes.
+
+    Discovery is content-based rather than name-based so exact hash-pinned locks
+    in service subdirectories and role-specific requirements files can be
+    considered for offline coverage. Candidate syntax is deliberately stricter
+    than a substring search: each package line must be an exact ``==`` pin with
+    one or more complete SHA-256 hashes, or a bounded relative requirements
+    include. A global ``--require-hashes`` directive is not trust evidence by
+    itself. The downstream installer separately preflights every candidate as an
+    independent ``pip --require-hashes`` closure, so syntax eligibility never
+    substitutes for dependency-closure proof.
+    """
+    lines = _requirement_lines(content)
+    requirement_lines = [line for line in lines if line != "--require-hashes"]
+    if not requirement_lines:
+        return False
+    return all(
+        _is_fully_hash_pinned_requirement(line)
+        or _is_bounded_requirement_include(line)
+        for line in requirement_lines
+    )
+
+
 def _is_fully_hash_pinned_export(content: bytes) -> bool:
     """Return whether every emitted uv requirement is exactly SHA-256 pinned.
 
