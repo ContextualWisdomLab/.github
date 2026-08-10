@@ -201,7 +201,7 @@ def test_receipt_and_allowlist_helpers() -> None:
 
 
 def test_eligible_agents_and_payloads() -> None:
-    """Eligibility and event bodies preserve the bounded review contract."""
+    """Eligibility and wrapper transport preserve the bounded review contract."""
 
     module = load_module()
     request = module.parse_event(event("@cwl-noema-review @opencode-agent"))
@@ -218,13 +218,30 @@ def test_eligible_agents_and_payloads() -> None:
     assert noema["event_type"] == "agent-mention-noema"
     assert noema["client_payload"]["pr_head_sha"] == "a" * 40
     assert noema["client_payload"]["pr_base_sha"] == "b" * 40
+
     opencode = module.opencode_payload(request)
     assert opencode["event_type"] == "agent-mention-opencode"
+    assert set(opencode["client_payload"]) == {
+        "target_repository",
+        "pr_number",
+        "pr_head_sha",
+        "pr_base_sha",
+        "base_branch",
+        "requested_agent",
+        "agent_invocation_key",
+        "requested_by",
+        "source_comment_id",
+    }
+    assert len(opencode["client_payload"]) == 9
     assert opencode["client_payload"]["base_branch"] == "develop"
     assert opencode["client_payload"]["pr_base_sha"] == "b" * 40
-    assert opencode["client_payload"]["merge_mode"] == "disabled"
-    assert opencode["client_payload"]["enable_auto_merge"] is False
-    assert opencode["client_payload"]["update_branches"] is False
+
+    claim = module.agent_invocation_claim(request, "opencode-agent")
+    assert claim["trigger_reviews"] is True
+    assert claim["review_dispatch_limit"] == "1"
+    assert claim["merge_mode"] == "disabled"
+    assert claim["enable_auto_merge"] is False
+    assert claim["update_branches"] is False
 
 
 def test_dispatch_uses_central_events_and_acknowledges() -> None:
@@ -251,6 +268,7 @@ def test_dispatch_uses_central_events_and_acknowledges() -> None:
         args[0] == "repos/ContextualWisdomLab/.github/dispatches"
         for args, _ in dispatches
     )
+    assert len(dispatches[1][1]["client_payload"]) == 9
     assert target.calls[0][1] == {"content": "eyes"}
     assert "cwl-agent-mention-receipt:91" in target.calls[1][1]["body"]
     assert "exact-name Actions artifacts" in target.calls[1][1]["body"]
