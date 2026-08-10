@@ -77,7 +77,7 @@ jobs:
         id: osv_base
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@f4cfcc01edc9c8b756a9b873b7a623ca674da51e # v2.3.8
         with:
           scan-args: |
             --format=json
@@ -95,7 +95,7 @@ jobs:
         if: steps.osv_base.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@f4cfcc01edc9c8b756a9b873b7a623ca674da51e # v2.3.8
         with:
           scan-args: |
             --format=json
@@ -116,7 +116,7 @@ jobs:
         id: osv_head
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@f4cfcc01edc9c8b756a9b873b7a623ca674da51e # v2.3.8
         with:
           scan-args: |
             --format=json
@@ -134,7 +134,7 @@ jobs:
         if: steps.osv_head.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@f4cfcc01edc9c8b756a9b873b7a623ca674da51e # v2.3.8
         with:
           scan-args: |
             --format=json
