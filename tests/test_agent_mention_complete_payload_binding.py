@@ -182,6 +182,72 @@ def test_wrappers_recompute_complete_claim_before_ledger_access() -> None:
         assert opencode.count(field) >= 2
 
 
+def test_repository_dispatch_payloads_stay_within_github_property_limit() -> None:
+    """Keep both OpenCode dispatch hops at GitHub's ten-property API boundary."""
+
+    router = _load_router()
+    request = router.parse_event(_event())
+    assert request is not None
+    noema_payload = router.noema_payload(request)["client_payload"]
+    opencode_payload = router.opencode_payload(request)["client_payload"]
+
+    assert len(noema_payload) <= 10
+    assert set(opencode_payload) == {
+        "target_repository",
+        "pr_number",
+        "pr_head_sha",
+        "pr_base_sha",
+        "base_branch",
+        "requested_agent",
+        "agent_invocation_key",
+        "requested_by",
+        "source_comment_id",
+    }
+    assert len(opencode_payload) <= 10
+
+    workflow = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+    for default in (
+        "github.event.client_payload.trigger_reviews || 'true'",
+        "github.event.client_payload.review_dispatch_limit || '1'",
+        "github.event.client_payload.enable_auto_merge || 'false'",
+        "github.event.client_payload.update_branches || 'false'",
+        "github.event.client_payload.merge_mode || 'disabled'",
+    ):
+        assert default in workflow
+
+    forward = workflow.split(
+        "      - name: Forward once to the authoritative review-only scheduler\n", 1
+    )[1]
+    payload_literal = forward.split("client_payload: {\n", 1)[1].split(
+        "\n              }\n            }'", 1
+    )[0]
+    forwarded_keys = {
+        line.strip().split(":", 1)[0]
+        for line in payload_literal.splitlines()
+        if ":" in line
+    }
+    assert forwarded_keys == {
+        "target_repository",
+        "pr_number",
+        "pr_head_sha",
+        "pr_base_sha",
+        "base_branch",
+        "trigger_reviews",
+        "review_dispatch_limit",
+        "enable_auto_merge",
+        "update_branches",
+        "merge_mode",
+    }
+    assert len(forwarded_keys) <= 10
+    for wrapper_identity in (
+        "requested_agent",
+        "agent_invocation_key",
+        "requested_by",
+        "source_comment_id",
+    ):
+        assert f"{wrapper_identity}:" not in payload_literal
+
+
 def test_no_pr_specific_writer_workflow_remains() -> None:
     """Complete binding is implemented in canonical files, never a branch writer."""
 
