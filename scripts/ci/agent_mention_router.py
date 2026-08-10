@@ -390,10 +390,14 @@ def noema_payload(request: MentionRequest) -> dict[str, Any]:
 
 
 def opencode_payload(request: MentionRequest) -> dict[str, Any]:
-    """Return the durable review-only OpenCode wrapper dispatch body."""
+    """Return the capped review-only OpenCode wrapper dispatch body.
+
+    Repository-dispatch payloads carry only identity and durable-claim fields.
+    The trusted wrapper reconstructs the immutable review-only controls before
+    recomputing the invocation key and before forwarding the scheduler payload.
+    """
 
     agent = "opencode-agent"
-    claim = agent_invocation_claim(request, agent)
     return {
         "event_type": "agent-mention-opencode",
         "client_payload": {
@@ -402,11 +406,6 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
             "pr_head_sha": request.pull_request_head_sha,
             "pr_base_sha": request.pull_request_base_sha,
             "base_branch": request.pull_request_base_branch,
-            "trigger_reviews": claim["trigger_reviews"],
-            "review_dispatch_limit": claim["review_dispatch_limit"],
-            "enable_auto_merge": claim["enable_auto_merge"],
-            "update_branches": claim["update_branches"],
-            "merge_mode": claim["merge_mode"],
             "requested_agent": agent,
             "agent_invocation_key": agent_invocation_key(request, agent),
             "requested_by": request.actor,
