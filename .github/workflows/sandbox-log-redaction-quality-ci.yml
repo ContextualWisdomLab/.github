@@ -10,6 +10,7 @@ on:
       - "scripts/ci/redact_sensitive_log.py"
       - "scripts/ci/sandboxed_verify.py"
       - "scripts/ci/sandboxed_web_e2e.py"
+      - "tests/test_command_wrapper_redaction.py"
       - "tests/test_opencode_security_boundaries.py"
       - "tests/test_sandboxed_verify.py"
       - "tests/test_sandboxed_web_e2e.py"
@@ -66,6 +67,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           python -m coverage run --branch -m pytest \
+            tests/test_command_wrapper_redaction.py \
             tests/test_opencode_security_boundaries.py \
             tests/test_sandboxed_verify.py \
             tests/test_sandboxed_web_e2e.py \
@@ -98,6 +100,7 @@ jobs:
             scripts/ci/redact_sensitive_log.py \
             scripts/ci/sandboxed_verify.py \
             scripts/ci/sandboxed_web_e2e.py \
+            tests/test_command_wrapper_redaction.py \
             tests/test_opencode_security_boundaries.py \
             tests/test_sandboxed_verify.py \
             tests/test_sandboxed_web_e2e.py \
