@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -569,6 +570,39 @@ def test_list_recent_pull_requests_concurrent_multiple_repositories():
     )
     assert dispatched == 0
     assert metrics.failures == 2  # One failure per repository
+
+
+def test_concurrent_repository_errors_are_reported_serially_in_source_order() -> None:
+    """Worker failures reach the caller callback in repository order on its thread."""
+    sweep = module()
+    caller_thread = threading.get_ident()
+    barrier = threading.Barrier(2)
+
+    class ConcurrentFailureClient(FakeClient):
+        def request(self, args, *, input_payload=None):
+            if args[0] == "orgs/ContextualWisdomLab/repos":
+                return [[repository("first"), repository("second")]]
+            barrier.wait(timeout=2)
+            raise ValueError(args[0])
+
+    failures = []
+    assert list(
+        sweep.list_recent_pull_requests(
+            ConcurrentFailureClient(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T10:00:00Z",
+            on_error=lambda name, error: failures.append(
+                (name, str(error), threading.get_ident())
+            ),
+        )
+    ) == []
+
+    assert [name for name, _error, _thread in failures] == [
+        "ContextualWisdomLab/first",
+        "ContextualWisdomLab/second",
+    ]
+    assert {thread for _name, _error, thread in failures} == {caller_thread}
 
 
 def test_sweep_failures_during_processing(monkeypatch, capsys) -> None:
