@@ -704,6 +704,19 @@ def _redact_command_text_with_pattern(
     except ValueError:
         cleaned_command = _redact_unstructured(command, literal_pattern)
         rough_arguments = cleaned_command.split()
+        rough_program = _command_program(rough_arguments[0])
+        if rough_program == "env" and any(
+            argument in ENV_SPLIT_OPTIONS
+            or argument.startswith("--split-string=")
+            for argument in rough_arguments[1:]
+        ):
+            return REDACTED
+        if rough_program in COMMAND_WRAPPER_SHELLS and any(
+            re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", argument)
+            and argument.count("c") == 1
+            for argument in rough_arguments[1:]
+        ):
+            return REDACTED
         if any(
             _command_option_identifies_credentials(argument)
             for argument in rough_arguments

@@ -114,6 +114,24 @@ def test_unsupported_shell_operand_fails_closed(operand: str) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        "sh -c 'docker login -p {credential}",
+        "env -S 'docker login -p {credential}",
+        'env --split-string="docker login -p {credential}',
+    ),
+)
+def test_unterminated_outer_wrapper_quote_fails_closed(source: str) -> None:
+    """Malformed public wrapper quoting never falls back to raw evidence."""
+    credential = _credential()
+
+    cleaned = redactor.redact_command_text(source.format(credential=credential))
+
+    assert cleaned == redactor.REDACTED
+    assert credential not in cleaned
+
+
 def test_env_split_string_rejects_trailing_argv_and_expansion() -> None:
     """Ambiguous GNU env operand composition fails closed for all evidence."""
     credential = _credential()
