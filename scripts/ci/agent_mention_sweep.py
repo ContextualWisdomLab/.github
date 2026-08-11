@@ -155,7 +155,10 @@ def list_recent_pull_requests(
         repository_source=repository_source,
     )
 
-    def fetch_repo_pulls(repository: str) -> list[dict[str, Any]]:
+    def fetch_repo_pulls(
+        repository: str,
+    ) -> tuple[list[dict[str, Any]], Exception | None]:
+        """Return one repository's PRs and isolate its worker exception for the caller."""
         repo_pulls: list[dict[str, Any]] = []
         try:
             page = 1
@@ -209,19 +212,30 @@ def list_recent_pull_requests(
                     break
                 page += 1
         except Exception as exc:  # noqa: BLE001 - repository isolation boundary
+            return repo_pulls, exc
+        return repo_pulls, None
+
+    def emit_repo_result(
+        repository: str,
+        result: tuple[list[dict[str, Any]], Exception | None],
+    ) -> Iterator[dict[str, Any]]:
+        """Yield worker results and report failures serially on the caller thread."""
+        repo_pulls, error = result
+        if error is not None:
             if on_error is None:
-                raise
-            on_error(repository, exc)
-        return repo_pulls
+                raise error
+            on_error(repository, error)
+        yield from repo_pulls
 
     if len(repositories) <= 1:
         for repository in repositories:
-            yield from fetch_repo_pulls(repository)
+            yield from emit_repo_result(repository, fetch_repo_pulls(repository))
     else:
         max_workers = min(10, len(repositories))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for repo_pulls in list(executor.map(fetch_repo_pulls, repositories)):
-                yield from repo_pulls
+            results = executor.map(fetch_repo_pulls, repositories)
+            for repository, result in zip(repositories, results, strict=True):
+                yield from emit_repo_result(repository, result)
 
 
 def list_recent_comments(
