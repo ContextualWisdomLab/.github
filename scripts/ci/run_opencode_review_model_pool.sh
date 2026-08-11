@@ -3,6 +3,28 @@ set -euo pipefail
 
 : "${GITHUB_OUTPUT:=/dev/null}"
 
+run_with_timeout() {
+	local kill_after="$1"
+	local duration="$2"
+	shift 2
+
+	if command -v timeout >/dev/null 2>&1; then
+		timeout --kill-after="$kill_after" "$duration" "$@"
+	elif command -v gtimeout >/dev/null 2>&1; then
+		gtimeout --kill-after="$kill_after" "$duration" "$@"
+	else
+		local portable_pid portable_status
+		python3 "${GITHUB_WORKSPACE:-.}/scripts/ci/portable_timeout.py" \
+			"$kill_after" "$duration" -- "$@" &
+		portable_pid=$!
+		trap 'kill "$portable_pid" 2>/dev/null || true' TERM INT
+		wait "$portable_pid"
+		portable_status=$?
+		trap - TERM INT
+		return "$portable_status"
+	fi
+}
+
 record_review_status() {
 	printf 'review_status=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
@@ -465,7 +487,7 @@ run_one_model_attempt() {
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	timeout --kill-after=30s "${run_timeout_seconds}s" \
+	run_with_timeout 30s "${run_timeout_seconds}s" \
 		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
 		opencode run "$(cat "$prompt_file")" \
@@ -520,7 +542,7 @@ run_one_model_attempt() {
 		fi
 		return 1
 	fi
-	if ! timeout --kill-after=15s "${export_timeout_seconds}s" \
+	if ! run_with_timeout 15s "${export_timeout_seconds}s" \
 		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
 		opencode export "$session_id" --pure >"$opencode_export_file"; then

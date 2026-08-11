@@ -1296,7 +1296,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "variants.high.reasoningEffort=high" in reasoning_effort_guard
     assert "deepseek/deepseek-r1" in reasoning_effort_guard
     assert '--config "$OPENCODE_REVIEW_WORKDIR/opencode.jsonc"' in workflow
-    assert 'timeout --kill-after=15s "${export_timeout_seconds}s"' in model_pool_runner
+    assert "run_with_timeout 15s \"${export_timeout_seconds}s\"" in model_pool_runner
     assert "opencode export" in model_pool_runner
     assert "env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN" in model_pool_runner
     assert "session export did not complete within %ss" in model_pool_runner
