@@ -38,6 +38,15 @@ PR #821 exact head `f92784f389317d512376a0725cbd78606b2e832c`의 품질 실행�
 
 전체 `tests` suite, shell harness, Python compilation, Bash syntax 및 clean-worktree 검증은 계속 같은 exact-head quality step에서 수행합니다. 품질 gate의 성공은 실제 Strix 모델 security review, 독립 승인 또는 branch protection을 대체하지 않습니다.
 
+## Coverage follow-up
+
+stdlib `scripts/ci/portable_timeout.py` fallback은 subprocess 통합 테스트와
+validation·signal forwarding·cleanup·deadline branch를 직접 실행하는
+in-process 테스트를 함께 사용합니다. subprocess-only 테스트는 자식 프로세스
+실행을 부모 coverage 보고서에 포함하지 않으므로, fallback을 omit하거나
+100% threshold를 낮추면 미검증 제어 경로를 숨기게 됩니다. Fallback 변경 시
+두 테스트 계층을 모두 유지합니다.
+
 ## Rollback
 
 3초/5초 fixture가 GitHub-hosted runner에서 재현 가능한 race margin을 제공하지 못한다는 결정적 실패가 관찰되면 테스트 전용 값만 가장 작은 재현 가능한 상한으로 올립니다. production scanner timeout을 낮추거나 품질 테스트를 삭제하여 문제를 숨기지 않습니다. 10분 job timeout 자체를 늘리는 것은 fixture 가속으로도 완료할 수 없다는 실행 증거가 있을 때 별도 검토합니다.

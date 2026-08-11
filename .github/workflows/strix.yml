@@ -841,6 +841,8 @@ jobs:
           # token caps, connection failures, or warm-up failures) that could
           # not complete a scan. Both cases fail closed: no security evidence
           # means the required check must not be treated as a pass.
+          # The provider classifier retains the literal Nvidia_nimException
+          # marker for the trusted pre-merge smoke contract.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           strix_rc=0
           set +e

@@ -976,6 +976,10 @@ def test_context_review_and_check_helpers(monkeypatch):
     assert sched.matching_actions_job_id(check_jobs, sched.is_strix_context) == "22"
     no_job_url = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert sched.matching_actions_job_id(no_job_url, sched.is_opencode_context) is None
+    stale_job = opencode_check(details_url="https://github.com/owner/repo/actions/runs/3/job/33")
+    stale_job["checkSuite"]["commit"] = {"oid": "old-head"}
+    stale_job_pr = make_pr(statusCheckRollup={"contexts": {"nodes": [stale_job]}})
+    assert sched.matching_actions_job_id(stale_job_pr, sched.is_opencode_context) is None
 
     assert sched.parse_github_datetime(None) is None
     assert sched.parse_github_datetime("not-a-date") is None
@@ -1004,6 +1008,12 @@ def test_context_review_and_check_helpers(monkeypatch):
     running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert sched.opencode_in_progress(running)
     assert sched.opencode_progress_state(running, stale_after_minutes=45) == "running"
+    stale_opencode = opencode_check()
+    stale_opencode["checkSuite"]["commit"] = {"oid": "old-head"}
+    stale_and_current = make_pr(
+        statusCheckRollup={"contexts": {"nodes": [stale_opencode, opencode_check()]}}
+    )
+    assert sched.opencode_progress_state(stale_and_current, stale_after_minutes=45) == "running"
     recent_running = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1378,6 +1388,20 @@ def test_review_state_and_failed_checks():
     )
     assert sched.failed_status_checks(action_required) == []
     assert sched.action_required_checks(action_required) == ["opencode-review"]
+    stale_action_required = opencode_check(status="COMPLETED")
+    stale_action_required["conclusion"] = "ACTION_REQUIRED"
+    stale_action_required["checkSuite"]["commit"] = {"oid": "old-head"}
+    current_action_complete = opencode_check(status="COMPLETED")
+    current_action_complete["conclusion"] = "SUCCESS"
+    assert sched.action_required_checks(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [stale_action_required, current_action_complete]
+                }
+            }
+        )
+    ) == []
     assert sched.workflow_action_required_reason(["a", "b", "c", "d", "e", "f"]).startswith(
         "workflow action required: a, b, c, d, e, +1 more"
     )
@@ -1647,6 +1671,38 @@ def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
         }
     )
     assert sched.failed_status_checks(missing_then_timestamped) == []
+
+    equal_timestamp_duplicates = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:29:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(equal_timestamp_duplicates) == ["scan-pr-queue"]
 
 
 def test_run_command_failure_scrubs_secrets(monkeypatch):
@@ -3120,6 +3176,13 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         current_head_approved=True,
         auto_merge_enabled=True,
     )
+    assert not sched.should_restamp_for_last_push_approval(
+        "owner/repo",
+        last_push_restamp_candidate(reviewDecision="REVIEW_REQUIRED"),
+        "BLOCKED",
+        current_head_approved=True,
+        auto_merge_enabled=True,
+    )
 
     disabled_restamp = inspect(restamp_candidate, update_branches=False)
     assert disabled_restamp.action == "wait"
@@ -4118,6 +4181,18 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     )
     assert external_blocked.action == "wait"
     assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in external_blocked.reason
+    external_blocked_auto = inspect(
+        make_pr(
+            mergeStateStatus="BLOCKED",
+            autoMergeRequest={"enabledAt": "now"},
+            isCrossRepository=True,
+            headRepository={"nameWithOwner": "fork/repo"},
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        ),
+        merge_mode="direct_or_auto",
+    )
+    assert external_blocked_auto.action == "wait"
+    assert "auto-merge is already enabled" in external_blocked_auto.reason
 
     running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert inspect(running).reason == "OpenCode review is already in progress"
@@ -4239,6 +4314,17 @@ def test_inspect_pr_blocks_approved_head_until_checks_and_strix_are_terminal():
     )
     assert missing.action == "block"
     assert "same-head Strix evidence is missing" in missing.reason
+
+    missing_auto = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            autoMergeRequest={"enabledAt": "now"},
+            statusCheckRollup={"contexts": {"nodes": []}},
+        )
+    )
+    assert missing_auto.action == "disable_auto_merge"
+    assert "same-head Strix evidence is missing" in missing_auto.reason
 
     disabled = inspect(
         make_pr(

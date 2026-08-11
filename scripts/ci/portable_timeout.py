@@ -83,5 +83,5 @@ def main(argv: list[str]) -> int:
             continue
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised through subprocess tests
     raise SystemExit(main(sys.argv[1:]))

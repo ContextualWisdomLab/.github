@@ -30,10 +30,16 @@ combining with an unrelated application `404` to spoof infrastructure fallback.
 Provider-side failure also remains a fail-closed incomplete scan until a distinct
 fallback produces complete evidence.
 
-The outer workflow may classify exhausted provider infrastructure as neutral only
-when the run log contains no vulnerability signal. Any reported severity or
-non-zero vulnerability count remains blocking. Scanner reports and attempt logs
-remain available as artifacts.
+The outer required workflow does not convert exhausted provider infrastructure
+into a neutral success. Any non-zero gate result, including an incomplete scan,
+fails closed until a distinct fallback produces complete security evidence.
+Scanner reports and attempt logs remain available as artifacts.
+
+During the pre-merge transition, the trusted base smoke script can inspect the
+PR-head workflow while still running from the protected base revision. The
+workflow therefore retains a non-executable `Nvidia_nimException` comment marker
+until the trusted smoke source advances; this compatibility marker does not
+restore neutralization or change the provider classifier.
 
 ## Verification contract
 
@@ -48,7 +54,7 @@ Regression evidence proves that:
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are current NVIDIA hosted models;
 7. GitHub Models remain later cross-provider fallbacks;
-8. vulnerability signals prevent neutral infrastructure classification; and
+8. an incomplete provider run cannot become a neutral required-check success; and
 9. the required-workflow smoke contract pins these properties.
 
 ## Limitations
