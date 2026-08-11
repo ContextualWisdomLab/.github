@@ -74,6 +74,20 @@ def make_pr(**overrides):
             value["reviewDecision"] = "CHANGES_REQUESTED"
         elif any((review.get("state") or "").upper() == "APPROVED" for review in current_reviews):
             value["reviewDecision"] = "APPROVED"
+    if "statusCheckRollup" not in overrides and value.get("reviewDecision") == "APPROVED":
+        value["statusCheckRollup"] = {
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "strix",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "Strix Security Scan"}}},
+                    }
+                ]
+            }
+        }
     return value
 
 
@@ -1024,10 +1038,12 @@ def test_context_review_and_check_helpers(monkeypatch):
     assert sched.opencode_progress_state(unrelated, stale_after_minutes=45) == "absent"
     assert sched.strix_evidence_state(make_pr()) == "missing"
     assert sched.strix_evidence_state(unrelated) == "running"
+    assert sched.running_status_checks(unrelated) == ["strix"]
     mixed_contexts = make_pr(
         statusCheckRollup={"contexts": {"nodes": [{"context": "lint", "state": "SUCCESS"}, strix_check()]}}
     )
     assert sched.strix_evidence_state(mixed_contexts) == "complete"
+    assert sched.running_status_checks(mixed_contexts) == []
     unknown_running = make_pr(
         statusCheckRollup={"contexts": {"nodes": [strix_check(status="", conclusion="")]}}
     )
@@ -3052,9 +3068,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
     )
     blocked_auto_decision = inspect(blocked_auto)
-    assert blocked_auto_decision.action == "wait"
-    assert "GitHub mergeability is BLOCKED" in blocked_auto_decision.reason
-    assert "rerun the scheduler" in blocked_auto_decision.reason
+    assert blocked_auto_decision.action == "restamp_head"
+    assert "last-push approval head refresh requested" in blocked_auto_decision.reason
 
     assert sched.latest_commit_headline(make_pr(commits={"nodes": []})) == ""
     restamp_candidate = last_push_restamp_candidate()
@@ -3186,7 +3201,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     behind_failed = make_pr(
         mergeStateStatus="BEHIND",
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}]}},
+        statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}},
     )
     failed_decision = inspect(behind_failed)
     assert failed_decision.action == "block"
@@ -3198,7 +3213,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         statusCheckRollup={
             "contexts": {
                 "nodes": [
-                    {"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"},
+                    {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"},
                     {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"},
                 ]
             }
@@ -3213,7 +3228,10 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
         statusCheckRollup={
             "contexts": {
-                "nodes": [{"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"}]
+                "nodes": [
+                    strix_check(),
+                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"},
+                ]
             }
         },
     )
@@ -3253,7 +3271,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         autoMergeRequest={"enabledAt": "now"},
         statusCheckRollup={
             "contexts": {
-                "nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}],
+                "nodes": [strix_check(conclusion="FAILURE")],
             }
         },
     )
@@ -3851,7 +3869,18 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     approved = make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
     failed = make_pr(
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}]}},
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "strix",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    }
+                ]
+            }
+        },
     )
     assert inspect(failed).reason == "failed check(s): strix"
     assert inspect(make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]}, autoMergeRequest={"enabledAt": "now"})).reason == (
@@ -4030,9 +4059,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ),
         merge_mode="direct_or_auto",
     )
-    assert blocked_already_auto.action == "wait"
-    assert "auto-merge is already enabled" in blocked_already_auto.reason
-    assert "GitHub mergeability is BLOCKED" in blocked_already_auto.reason
+    assert blocked_already_auto.action == "restamp_head"
+    assert "last-push approval head refresh requested" in blocked_already_auto.reason
     assert direct_merges == [
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
@@ -4167,6 +4195,41 @@ def test_inspect_pr_requires_approved_aggregate_review(review_decision, expected
     )
     assert disabled.action == "disable_auto_merge"
     assert f"aggregate reviewDecision is {expected_state}" in disabled.reason
+
+
+def test_inspect_pr_blocks_approved_head_until_checks_and_strix_are_terminal():
+    approved_review = {"nodes": [opencode_review("APPROVED", "head")]}
+
+    running = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}},
+        )
+    )
+    assert running.action == "block"
+    assert "check(s) still running: strix" in running.reason
+
+    missing = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            statusCheckRollup={"contexts": {"nodes": []}},
+        )
+    )
+    assert missing.action == "block"
+    assert "same-head Strix evidence is missing" in missing.reason
+
+    disabled = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            autoMergeRequest={"enabledAt": "now"},
+            statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}},
+        )
+    )
+    assert disabled.action == "disable_auto_merge"
+    assert "check(s) still running: strix" in disabled.reason
 
 
 def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch):

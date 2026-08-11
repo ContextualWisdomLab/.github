@@ -1076,6 +1076,21 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
     return "complete" if found else "missing"
 
 
+def running_status_checks(pr: dict[str, Any]) -> list[str]:
+    """Return check/status contexts that have not reached a terminal state."""
+    running: set[str] = set()
+    for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun":
+            state = (node.get("status") or "").upper()
+            name = node.get("name") or "check-run"
+        else:
+            state = (node.get("state") or "").upper()
+            name = node.get("context") or "status-context"
+        if state in RUNNING_CHECK_STATES:
+            running.add(name)
+    return sorted(running)
+
+
 def unresolved_thread_count(pr: dict[str, Any]) -> int:
     """Count active, non-outdated unresolved review threads on a PR."""
     threads = ((pr.get("reviewThreads") or {}).get("nodes") or [])
@@ -2455,6 +2470,22 @@ def inspect_pr(
         return decide("block", conflict_reason)
 
     if current_head_approved:
+        running_checks = running_status_checks(pr)
+        if running_checks:
+            visible = ", ".join(running_checks[:5])
+            suffix = f", +{len(running_checks) - 5} more" if len(running_checks) > 5 else ""
+            reason = f"check(s) still running: {visible}{suffix}; wait for terminal exact-head results"
+            if pr.get("autoMergeRequest"):
+                return finish(disable_auto_merge_decision(repo, pr, dry_run=dry_run, reason=reason))
+            return decide("block", reason)
+
+        strix_state = strix_evidence_state(pr)
+        if strix_state != "complete":
+            reason = f"same-head Strix evidence is {strix_state}; wait for a completed security result"
+            if pr.get("autoMergeRequest"):
+                return finish(disable_auto_merge_decision(repo, pr, dry_run=dry_run, reason=reason))
+            return decide("block", reason)
+
         failed_checks = failed_status_checks(pr)
         if failed_checks:
             if pr.get("autoMergeRequest"):
@@ -3224,7 +3255,19 @@ def self_test() -> None:
                 }
             ]
         },
-        "statusCheckRollup": {"contexts": {"nodes": []}},
+        "statusCheckRollup": {
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "strix",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "Strix Security Scan"}}},
+                    }
+                ]
+            }
+        },
     }
     assert has_current_head_approval(sample)
     assert not has_current_head_changes_requested(sample)
