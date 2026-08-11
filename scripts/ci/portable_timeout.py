@@ -15,6 +15,7 @@ _DURATION_RE = re.compile(r"^(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>s)?$")
 
 
 def _seconds(value: str) -> float:
+    """Parse a non-negative seconds value with an optional ``s`` suffix."""
     match = _DURATION_RE.fullmatch(value.strip())
     if match is None:
         raise ValueError(f"invalid duration: {value!r}")
@@ -22,6 +23,7 @@ def _seconds(value: str) -> float:
 
 
 def _signal_process_group(process: subprocess.Popen[object], signum: int) -> None:
+    """Forward a signal to the child session, tolerating an exited process."""
     try:
         os.killpg(process.pid, signum)
     except ProcessLookupError:
@@ -29,6 +31,7 @@ def _signal_process_group(process: subprocess.Popen[object], signum: int) -> Non
 
 
 def _terminate(process: subprocess.Popen[object], kill_after: float) -> int:
+    """Terminate a child session, escalating to SIGKILL after the grace period."""
     _signal_process_group(process, signal.SIGTERM)
     try:
         return process.wait(timeout=kill_after)
@@ -38,6 +41,7 @@ def _terminate(process: subprocess.Popen[object], kill_after: float) -> int:
 
 
 def main(argv: list[str]) -> int:
+    """Run a command with a bounded timeout and return 124 on expiry."""
     if "--" not in argv:
         print("portable_timeout.py requires -- before the command", file=sys.stderr)
         return 2

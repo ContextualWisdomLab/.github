@@ -1113,9 +1113,10 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
 
 
 def strix_evidence_state(pr: dict[str, Any]) -> str:
-    """Return missing, running, or complete for current-head Strix evidence."""
+    """Return missing, running, failed, or complete for current-head Strix evidence."""
     current_check_ids = {id(node) for node in current_head_check_runs(pr)[0]}
     found = False
+    saw_failed = False
     for node in context_nodes(pr):
         if node.get("__typename") == "CheckRun" and id(node) not in current_check_ids:
             continue
@@ -1125,9 +1126,16 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
         status = (node.get("status") or node.get("state") or "").upper()
         if status in RUNNING_CHECK_STATES:
             return "running"
-        if node.get("__typename") == "CheckRun" and status != "COMPLETED":
-            return "running"
-    return "complete" if found else "missing"
+        if node.get("__typename") == "CheckRun":
+            if status != "COMPLETED":
+                return "running"
+            if (node.get("conclusion") or "").upper() != "SUCCESS":
+                saw_failed = True
+        elif status != "SUCCESS":
+            saw_failed = True
+    if not found:
+        return "missing"
+    return "failed" if saw_failed else "complete"
 
 
 def running_status_checks(pr: dict[str, Any]) -> list[str]:
@@ -2545,14 +2553,17 @@ def inspect_pr(
                 return finish(disable_auto_merge_decision(repo, pr, dry_run=dry_run, reason=reason))
             return decide("block", reason)
 
+        failed_checks = failed_status_checks(pr)
         strix_state = strix_evidence_state(pr)
         if strix_state != "complete":
-            reason = f"same-head Strix evidence is {strix_state}; wait for a completed security result"
+            if strix_state == "failed" and failed_checks:
+                reason = f"failed check(s): {', '.join(failed_checks[:5])}"
+            else:
+                reason = f"same-head Strix evidence is {strix_state}; wait for a completed security result"
             if pr.get("autoMergeRequest"):
                 return finish(disable_auto_merge_decision(repo, pr, dry_run=dry_run, reason=reason))
             return decide("block", reason)
 
-        failed_checks = failed_status_checks(pr)
         if failed_checks:
             if pr.get("autoMergeRequest"):
                 return finish(
@@ -2815,6 +2826,8 @@ def inspect_pr(
             )
         if strix_state == "running":
             return decide("wait", "same-head Strix evidence is still running")
+        if strix_state == "failed":
+            return decide("block", "same-head Strix evidence failed; rerun the security workflow before review dispatch")
         # Legacy trusted-base Strix self-test sentinel while this scheduler rollout lands:
         # same-head Strix and OpenCode dispatched
         if not review_dispatch_allowed:

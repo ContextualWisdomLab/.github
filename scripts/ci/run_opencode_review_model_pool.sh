@@ -25,6 +25,22 @@ run_with_timeout() {
 	fi
 }
 
+signal_process_tree() {
+	local signum="$1"
+	local pid="$2"
+	local child pgid shell_pgid
+	for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+		signal_process_tree "$signum" "$child"
+	done
+	pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+	shell_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
+	if [ -n "$pgid" ] && [ "$pgid" != "$shell_pgid" ]; then
+		kill "-$signum" -- "-$pgid" 2>/dev/null || true
+	else
+		kill "-$signum" "$pid" 2>/dev/null || true
+	fi
+}
+
 record_review_status() {
 	printf 'review_status=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
@@ -479,15 +495,26 @@ run_one_model_attempt() {
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
 	local opencode_pid fatal_poll_seconds
+	local -a opencode_timeout_command
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
+	if command -v timeout >/dev/null 2>&1; then
+		opencode_timeout_command=(timeout --kill-after=30s "${run_timeout_seconds}s")
+	elif command -v gtimeout >/dev/null 2>&1; then
+		opencode_timeout_command=(gtimeout --kill-after=30s "${run_timeout_seconds}s")
+	else
+		opencode_timeout_command=(
+			python3 "${GITHUB_WORKSPACE:-.}/scripts/ci/portable_timeout.py"
+			30s "${run_timeout_seconds}s" --
+		)
+	fi
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	run_with_timeout 30s "${run_timeout_seconds}s" \
+	"${opencode_timeout_command[@]}" \
 		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
 		opencode run "$(cat "$prompt_file")" \
@@ -506,12 +533,12 @@ run_one_model_attempt() {
 		if has_fatal_provider_error_event "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
-			kill "$opencode_pid" 2>/dev/null
+			signal_process_tree TERM "$opencode_pid"
 			for _ in $(seq 1 30); do
 				kill -0 "$opencode_pid" 2>/dev/null || break
 				sleep 1
 			done
-			kill -9 "$opencode_pid" 2>/dev/null
+			signal_process_tree KILL "$opencode_pid"
 			break
 		fi
 		sleep "$fatal_poll_seconds"

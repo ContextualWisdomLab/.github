@@ -1070,10 +1070,15 @@ def test_context_review_and_check_helpers(monkeypatch):
     )
     assert sched.strix_evidence_state(unknown_running) == "running"
     assert sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})) == "complete"
-    assert (
-        sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}))
-        == "complete"
-    )
+    assert sched.strix_evidence_state(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}})
+    ) == "failed"
+    assert sched.strix_evidence_state(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "NEUTRAL"}]}})
+    ) == "failed"
+    assert sched.strix_evidence_state(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
+    ) == "complete"
     stale_strix = strix_check()
     stale_strix["checkSuite"]["commit"] = {"oid": "old-head"}
     stale_pr = make_pr(statusCheckRollup={"contexts": {"nodes": [stale_strix]}})
@@ -1679,7 +1684,7 @@ def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
                     {
                         "__typename": "CheckRun",
                         "name": "scan-pr-queue",
-                        "conclusion": "CANCELLED",
+                        "conclusion": "SUCCESS",
                         "startedAt": "2026-07-10T09:30:00Z",
                         "checkSuite": {
                             "workflowRun": {
@@ -1690,8 +1695,8 @@ def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
                     {
                         "__typename": "CheckRun",
                         "name": "scan-pr-queue",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-07-10T09:29:00Z",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-07-10T09:30:00Z",
                         "checkSuite": {
                             "workflowRun": {
                                 "workflow": {"name": "Required PR Review Merge Scheduler"}
@@ -1703,6 +1708,38 @@ def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
         }
     )
     assert sched.failed_status_checks(equal_timestamp_duplicates) == ["scan-pr-queue"]
+
+    older_duplicate = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-07-10T09:30:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-07-10T09:29:00Z",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(older_duplicate) == []
 
 
 def test_run_command_failure_scrubs_secrets(monkeypatch):
@@ -4290,6 +4327,98 @@ def test_inspect_pr_requires_approved_aggregate_review(review_decision, expected
     )
     assert disabled.action == "disable_auto_merge"
     assert f"aggregate reviewDecision is {expected_state}" in disabled.reason
+
+
+def test_inspect_pr_blocks_missing_aggregate_review_field_and_disables_auto_merge():
+    approved_review = {"nodes": [opencode_review("APPROVED", "head")]}
+
+    blocked_pr = make_pr(reviews=approved_review)
+    blocked_pr.pop("reviewDecision")
+    blocked = inspect(blocked_pr)
+    assert blocked.action == "block"
+    assert "aggregate reviewDecision is MISSING" in blocked.reason
+
+    auto_merge_pr = make_pr(
+        reviews=approved_review,
+        autoMergeRequest={"enabledAt": "now"},
+    )
+    auto_merge_pr.pop("reviewDecision")
+    disabled = inspect(auto_merge_pr)
+    assert disabled.action == "disable_auto_merge"
+    assert "aggregate reviewDecision is MISSING" in disabled.reason
+
+
+@pytest.mark.parametrize("conclusion", [None, "NEUTRAL", "SKIPPED"])
+def test_inspect_pr_blocks_non_success_strix_and_disables_auto_merge(conclusion):
+    approved_review = {"nodes": [opencode_review("APPROVED", "head")]}
+    status_check_rollup = {"contexts": {"nodes": [strix_check(conclusion=conclusion)]}}
+
+    blocked = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            statusCheckRollup=status_check_rollup,
+        )
+    )
+    assert blocked.action == "block"
+    assert "same-head Strix evidence is failed" in blocked.reason
+
+    disabled = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            autoMergeRequest={"enabledAt": "now"},
+            statusCheckRollup=status_check_rollup,
+        )
+    )
+    assert disabled.action == "disable_auto_merge"
+    assert "same-head Strix evidence is failed" in disabled.reason
+
+
+def test_inspect_pr_blocks_failed_non_strix_checks_with_or_without_auto_merge():
+    approved_review = {"nodes": [opencode_review("APPROVED", "head")]}
+    status_check_rollup = {
+        "contexts": {
+            "nodes": [
+                strix_check(),
+                {
+                    "__typename": "CheckRun",
+                    "name": "lint",
+                    "status": "COMPLETED",
+                    "conclusion": "FAILURE",
+                },
+            ]
+        }
+    }
+
+    blocked = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            statusCheckRollup=status_check_rollup,
+        )
+    )
+    assert blocked.action == "block"
+    assert "failed check(s): lint" in blocked.reason
+
+    disabled = inspect(
+        make_pr(
+            reviewDecision="APPROVED",
+            reviews=approved_review,
+            autoMergeRequest={"enabledAt": "now"},
+            statusCheckRollup=status_check_rollup,
+        )
+    )
+    assert disabled.action == "disable_auto_merge"
+    assert "failed check(s): lint" in disabled.reason
+
+
+def test_inspect_pr_blocks_failed_strix_before_review_dispatch():
+    failed = inspect(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}})
+    )
+    assert failed.action == "block"
+    assert failed.reason == "same-head Strix evidence failed; rerun the security workflow before review dispatch"
 
 
 def test_inspect_pr_blocks_approved_head_until_checks_and_strix_are_terminal():
