@@ -8,6 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added a production-independent OpenCode shadow review pool with deterministic risk-adaptive routing, bounded non-shell detector and verifier execution, child-only NVIDIA credential mapping, secret redaction, immutable evidence receipts, strict output-directory boundaries, partial-failure isolation, and non-publishing verified findings backed by 100% owned production statement, branch, and callable-docstring evidence.
 - Added an exact-head OpenCode decision envelope that keeps semantic source verdicts independent from coverage, checks, approval, and branch-protection merge readiness; emits path-free infrastructure blockers; fails closed on stale or malformed evidence; and preserves 100% production statement, branch, and public-docstring evidence.
 - Added deterministic exact-head corpus sampling and blinded two-expert-plus-adjudicator gold-freeze tooling, with strict JSON, immutable evidence receipts, hard language/size/risk/defect coverage, atomic outputs, stable failure classes, and permanent 100% production statement/branch/docstring evidence.
 - Added an empirical OpenCode review-quality benchmark, fail-closed scorer, exact-head quality workflow, and APA 7th doctoring that keep lifecycle-yield evidence separate from head-matched expert-gold precision and recall, require Wilson-bound non-inferiority before any CodeRabbit-parity claim, and preserve 100% production statement/branch/docstring evidence.

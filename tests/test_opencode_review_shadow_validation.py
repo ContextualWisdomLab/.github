@@ -107,6 +107,40 @@ def test_routing_rejects_empty_files_duplicate_models_and_invalid_roles() -> Non
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
+        (lambda value: value.pop("repository"), "missing fields"),
+        (lambda value: value.update({"repository": ""}), "non-empty string"),
+        (
+            lambda value: value["policy"]["model_pool"][0].update(
+                {"role_codes": []}
+            ),
+            "non-empty list",
+        ),
+        (
+            lambda value: value["policy"]["model_pool"][0].update(
+                {"role_codes": ["general_detector", "general_detector"]}
+            ),
+            "duplicates",
+        ),
+        (
+            lambda value: value["changed_files"][0].update({"risk_tags": [""]}),
+            "risk_tags",
+        ),
+        (lambda value: value["policy"].update({"model_pool": []}), "model_pool"),
+    ],
+)
+def test_routing_rejects_empty_duplicate_or_incomplete_contract_fields(
+    mutate: Any, message: str
+) -> None:
+    """Strict routing validation covers missing and structurally empty evidence."""
+    value = request()
+    mutate(value)
+    with pytest.raises(shadow.ShadowValidationError, match=message):
+        shadow.build_plan(value)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
         (lambda value: value.update({"unexpected": True}), "unknown fields"),
         (
             lambda value: value["verification_policy"].update({"unexpected": True}),
@@ -209,6 +243,64 @@ def test_verification_rejects_duplicate_or_unknown_identity_references() -> None
     )
     with pytest.raises(verify.VerificationValidationError, match="unknown detector"):
         verify.verify_bundle(unknown_attempt)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda value: value.update({"source_index": {}}), "must be a list"),
+        (lambda value: value.update({"schema_version": "2.0"}), "schema_version"),
+        (lambda value: value.update({"risk_tier": "unknown"}), "risk_tier"),
+        (
+            lambda value: value["verification_policy"].update(
+                {"require_model_diversity": 1}
+            ),
+            "require_model_diversity",
+        ),
+        (
+            lambda value: value["source_index"][0].update(
+                {"relationship": "untrusted"}
+            ),
+            "relationship",
+        ),
+        (
+            lambda value: value["detector_attempts"][0].update(
+                {"phase": "verifier"}
+            ),
+            "phase",
+        ),
+        (
+            lambda value: value["detector_attempts"][0].update(
+                {"status": "queued"}
+            ),
+            "status",
+        ),
+        (
+            lambda value: value["candidates"][0].update({"blocking": 1}),
+            "booleans",
+        ),
+        (
+            lambda value: value["verifier_decisions"][0].update(
+                {"verifier_attempt_id": "unknown_verifier"}
+            ),
+            "unknown verifier",
+        ),
+        (
+            lambda value: value["verifier_decisions"].append(
+                dict(value["verifier_decisions"][0])
+            ),
+            "decision identity",
+        ),
+    ],
+)
+def test_verification_rejects_additional_closed_contract_failures(
+    mutate: Any, message: str
+) -> None:
+    """Strict verification validation covers every closed-schema authority boundary."""
+    value = verification_input()
+    mutate(value)
+    with pytest.raises(verify.VerificationValidationError, match=message):
+        verify.verify_bundle(value)
 
 
 def test_strict_json_loaders_reject_duplicate_keys_and_nonfinite_numbers(

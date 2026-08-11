@@ -24,7 +24,13 @@ from opencode_review_shadow_test_support import (
 )
 
 
-def fake_opencode(path: Path, *, fail_role: str = "", sleep_role: str = "") -> Path:
+def fake_opencode(
+    path: Path,
+    *,
+    fail_role: str = "",
+    sleep_role: str = "",
+    leak_role: str = "",
+) -> Path:
     """Create a deterministic fake OpenCode CLI that validates credential mapping."""
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -37,7 +43,11 @@ def fake_opencode(path: Path, *, fail_role: str = "", sleep_role: str = "") -> P
         "if role == " + repr(fail_role) + ":\n"
         "    print('bounded fake failure', file=sys.stderr)\n"
         "    raise SystemExit(7)\n"
-        "print(json.dumps({'argv': args, 'role': role, 'secret_exposed': 'nim-secret' in json.dumps(args)}))\n",
+        "event = {'argv': args, 'role': role, 'secret_exposed': 'nim-secret' in json.dumps(args)}\n"
+        "if role == " + repr(leak_role) + ":\n"
+        "    event['untrusted_echo'] = os.environ['NVIDIA_API_KEY']\n"
+        "    print(os.environ['NVIDIA_API_KEY'], file=sys.stderr)\n"
+        "print(json.dumps(event))\n",
         encoding="utf-8",
     )
     path.chmod(0o700)
@@ -61,6 +71,7 @@ def test_execute_plan_invokes_detectors_before_verifiers_without_publication(
     executable = fake_opencode(tmp_path / "opencode")
     monkeypatch.setenv("NVIDIA_NIM_API_KEY", "nim-secret")
     output = tmp_path / "output"
+    output.mkdir()
     manifest = shadow.execute_plan(
         plan,
         evidence_path=evidence,
@@ -186,6 +197,33 @@ def test_timeout_is_bounded_and_recorded_without_exception_escape(
     ]
 
 
+def test_child_secret_echo_is_redacted_from_all_persisted_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An untrusted child cannot persist its mapped provider secret in evidence."""
+    plan, evidence, workdir = run_inputs(tmp_path)
+    executable = fake_opencode(
+        tmp_path / "opencode", leak_role="general_detector"
+    )
+    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "nim-secret")
+    output = tmp_path / "output"
+    manifest = shadow.execute_plan(
+        plan,
+        evidence_path=evidence,
+        output_directory=output,
+        opencode_binary=executable,
+        working_directory=workdir,
+    )
+    persisted = "\n".join(
+        (output / record[field]).read_text(encoding="utf-8")
+        for record in manifest["attempts"]
+        if record["status"] == "complete"
+        for field in ("stdout_file", "stderr_file")
+    )
+    assert "nim-secret" not in persisted
+    assert "[REDACTED_NVIDIA_API_KEY]" in persisted
+
+
 def test_execution_fails_before_process_start_on_untrusted_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,6 +271,59 @@ def test_execution_fails_before_process_start_on_untrusted_boundary(
             evidence_path=evidence,
             output_directory=tmp_path / "output",
             opencode_binary=symlink,
+            working_directory=workdir,
+        )
+
+    non_executable = tmp_path / "not-executable"
+    non_executable.write_text("not executable", encoding="utf-8")
+    with pytest.raises(shadow.ShadowExecutionError, match="executable file"):
+        shadow.execute_plan(
+            plan,
+            evidence_path=evidence,
+            output_directory=tmp_path / "output",
+            opencode_binary=non_executable,
+            working_directory=workdir,
+        )
+
+    invalid_worktree = tmp_path / "not-a-worktree"
+    invalid_worktree.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(shadow.ShadowExecutionError, match="trusted directory"):
+        shadow.execute_plan(
+            plan,
+            evidence_path=evidence,
+            output_directory=tmp_path / "output",
+            opencode_binary=executable,
+            working_directory=invalid_worktree,
+        )
+
+
+@pytest.mark.parametrize("boundary", ["symlink", "file", "writable", "nonempty"])
+def test_execution_rejects_untrusted_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    """Output evidence cannot follow links or overwrite a reusable untrusted path."""
+    plan, evidence, workdir = run_inputs(tmp_path)
+    executable = fake_opencode(tmp_path / "opencode")
+    output = tmp_path / "output"
+    if boundary == "symlink":
+        target = tmp_path / "target"
+        target.mkdir()
+        output.symlink_to(target, target_is_directory=True)
+    elif boundary == "file":
+        output.write_text("not a directory", encoding="utf-8")
+    else:
+        output.mkdir()
+        if boundary == "writable":
+            output.chmod(0o770)
+        else:
+            (output / "existing.txt").write_text("existing", encoding="utf-8")
+    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "nim-secret")
+    with pytest.raises(shadow.ShadowExecutionError, match="output directory"):
+        shadow.execute_plan(
+            plan,
+            evidence_path=evidence,
+            output_directory=output,
+            opencode_binary=executable,
             working_directory=workdir,
         )
 
