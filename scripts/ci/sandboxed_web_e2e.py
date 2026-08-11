@@ -18,11 +18,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-if __package__ in (None, ""):  # pragma: no cover
+if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
-from scripts.ci.redact_sensitive_log import redact_text
 
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
@@ -111,7 +110,6 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
-        shell=False,
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
@@ -130,9 +128,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
             return False
         try:
             with opener.open(url, timeout=2) as response:  # nosec B310
-                if 200 <= response.status < 500:  # pragma: no branch
+                if 200 <= response.status < 500:
                     return True
-        except (urllib.error.URLError, TimeoutError):  # pragma: no cover
+        except (urllib.error.URLError, TimeoutError):
             time.sleep(1)
     return False
 
@@ -148,7 +146,6 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
-        shell=False,
     )
 
 
@@ -235,18 +232,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
             if completed.stdout:
-                print(redact_text(completed.stdout), end="")
+                print(completed.stdout, end="")
             if completed.stderr:
-                print(redact_text(completed.stderr), end="", file=sys.stderr)
+                print(completed.stderr, end="", file=sys.stderr)
             exit_code = completed.returncode
             return exit_code
         except subprocess.TimeoutExpired as exc:
             stdout = sandboxed_verify.timeout_output_text(exc.stdout)
             stderr = sandboxed_verify.timeout_output_text(exc.stderr)
             if stdout:
-                print(redact_text(stdout), end="" if stdout.endswith("\n") else "\n")  # pragma: no cover
+                print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(redact_text(stderr), end="" if stderr.endswith("\n") else "\n", file=sys.stderr)  # pragma: no cover
+                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
             print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
             exit_code = 124
             return exit_code
@@ -256,7 +253,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_tail = tail_text(service.log_path)
             if log_tail:
                 print(f"--- {service.label} log tail ---")
-                print(redact_text(log_tail))
+                print(log_tail)
         emit_result(
             args=args,
             copied_repo=copied_repo,

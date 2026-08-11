@@ -181,13 +181,13 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
     assert popen_calls[0][0] == (["npm", "run", "dev"],)
-    assert popen_calls[0][1].get("shell") is False
+    assert "shell" not in popen_calls[0][1]
     assert "executable" not in popen_calls[0][1]
     assert popen_calls[0][1]["start_new_session"] is True
     assert completed.returncode == 7
     assert run_calls[0][0] == (["npm", "test"],)
     assert run_calls[0][1]["timeout"] == 5
-    assert run_calls[0][1].get("shell") is False
+    assert "shell" not in run_calls[0][1]
     assert "executable" not in run_calls[0][1]
 
 

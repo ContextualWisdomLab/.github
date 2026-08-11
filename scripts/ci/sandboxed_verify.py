@@ -14,11 +14,6 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-if str(Path(__file__).resolve().parents[2]) not in (sys.path[0] if sys.path else ""):  # pragma: no cover
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from scripts.ci.redact_sensitive_log import redact_text
-
 
 DEFAULT_IGNORE = (
     ".git",
@@ -224,17 +219,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_command(args.command, copied_repo, env, args.timeout)
             if completed.stdout:
-                print(redact_text(completed.stdout), end="")
+                print(completed.stdout, end="")
             if completed.stderr:
-                print(redact_text(completed.stderr), end="", file=sys.stderr)
+                print(completed.stderr, end="", file=sys.stderr)
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
             stdout = timeout_output_text(exc.stdout)
             stderr = timeout_output_text(exc.stderr)
             if stdout:
-                print(redact_text(stdout), end="" if stdout.endswith("\n") else "\n")  # pragma: no cover
+                print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(redact_text(stderr), end="" if stderr.endswith("\n") else "\n", file=sys.stderr)  # pragma: no cover
+                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
             print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
             exit_code = 124
         return exit_code
