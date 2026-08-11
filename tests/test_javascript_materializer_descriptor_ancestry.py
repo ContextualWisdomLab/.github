@@ -71,8 +71,8 @@ def test_materializer_rejects_intermediate_ancestor_swap_before_parent_open(
         nonlocal swapped
         if (
             not swapped
-            and Path(path) == trusted_parent.absolute()
-            and kwargs.get("dir_fd") is None
+            and path == trusted_parent.name
+            and kwargs.get("dir_fd") is not None
         ):
             trusted_root.rename(pinned_root)
             trusted_root.symlink_to(attacker_root, target_is_directory=True)

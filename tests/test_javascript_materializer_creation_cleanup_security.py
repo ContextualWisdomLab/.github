@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import pathlib
 
 import pytest
 
@@ -87,22 +86,26 @@ def test_missing_ancestor_swap_never_creates_output_through_attacker_symlink(
     attacker_output = attacker_parent / "generated_locks"
     _stub_projects(monkeypatch)
 
-    real_mkdir = pathlib.Path.mkdir
+    real_mkdir = os.mkdir
     swapped = False
 
     def swap_after_parent_creation(
-        path: pathlib.Path,
+        path: object,
         *args: object,
         **kwargs: object,
     ) -> None:
         nonlocal swapped
         real_mkdir(path, *args, **kwargs)
-        if not swapped and path == output_directory.parent.absolute():
+        if (
+            not swapped
+            and path == output_directory.parent.name
+            and kwargs.get("dir_fd") is not None
+        ):
             trusted_root.rename(pinned_root)
             trusted_root.symlink_to(attacker_root, target_is_directory=True)
             swapped = True
 
-    monkeypatch.setattr(pathlib.Path, "mkdir", swap_after_parent_creation)
+    monkeypatch.setattr(os, "mkdir", swap_after_parent_creation)
 
     with pytest.raises(ValueError, match="ancestor|symlink|changed"):
         materializer.materialize(tmp_path, _BASE_SHA, output_directory)

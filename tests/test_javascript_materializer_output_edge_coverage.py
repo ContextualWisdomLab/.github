@@ -58,7 +58,7 @@ def test_output_open_detects_parent_descriptor_replacement(
     """The opened parent descriptor must retain the pre-open parent identity."""
 
     output_directory = tmp_path / "generated_locks"
-    expected_parent = os.fspath(output_directory.parent)
+    expected_parent = output_directory.parent.name
     real_open = materializer.os.open
     real_fstat = materializer.os.fstat
     parent_descriptors: list[int] = []
@@ -70,7 +70,7 @@ def test_output_open_detects_parent_descriptor_replacement(
         **kwargs: object,
     ) -> int:
         descriptor = real_open(path, flags, *args, **kwargs)
-        if os.fspath(path) == expected_parent and kwargs.get("dir_fd") is None:
+        if path == expected_parent and kwargs.get("dir_fd") is not None:
             parent_descriptors.append(descriptor)
         return descriptor
 
@@ -83,7 +83,7 @@ def test_output_open_detects_parent_descriptor_replacement(
     monkeypatch.setattr(materializer.os, "open", capture_parent_open)
     monkeypatch.setattr(materializer.os, "fstat", replace_parent_identity)
 
-    with pytest.raises(ValueError, match="ancestor changed"):
+    with pytest.raises(ValueError, match="binding changed"):
         materializer._open_output_directory(output_directory)
 
     assert len(parent_descriptors) == 1
@@ -122,7 +122,7 @@ def test_output_open_detects_output_descriptor_replacement_and_closes_it(
     monkeypatch.setattr(materializer.os, "open", capture_output_open)
     monkeypatch.setattr(materializer.os, "fstat", replace_output_identity)
 
-    with pytest.raises(ValueError, match="output directory changed"):
+    with pytest.raises(ValueError, match="output directory.*changed"):
         materializer._open_output_directory(output_directory)
 
     assert len(output_descriptors) == 1
@@ -343,3 +343,48 @@ def test_remove_owned_directory_ignores_rmdir_failure(tmp_path: Path) -> None:
     finally:
         os.close(parent_fd)
     assert (destination / "retained_file").read_bytes() == b"content"
+
+
+def test_owned_cleanup_rejects_replaced_child_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recursive cleanup never descends through a replaced child binding."""
+
+    project_directory = tmp_path / "project-000"
+    child_directory = project_directory / "nested_directory"
+    child_directory.mkdir(parents=True)
+    project_fd = os.open(project_directory, materializer._DIRECTORY_OPEN_FLAGS)
+    real_open = materializer.os.open
+    real_fstat = materializer.os.fstat
+    child_descriptors: list[int] = []
+
+    def capture_child_open(
+        path: object,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        descriptor = real_open(path, flags, *args, **kwargs)
+        if path == child_directory.name and kwargs.get("dir_fd") == project_fd:
+            child_descriptors.append(descriptor)
+        return descriptor
+
+    def replace_child_identity(descriptor: int) -> os.stat_result:
+        metadata = real_fstat(descriptor)
+        if descriptor in child_descriptors:
+            return _different_inode(metadata)
+        return metadata
+
+    monkeypatch.setattr(materializer.os, "open", capture_child_open)
+    monkeypatch.setattr(materializer.os, "fstat", replace_child_identity)
+    try:
+        with pytest.raises(ValueError, match="binding changed"):
+            materializer._remove_owned_directory_contents(project_fd)
+    finally:
+        os.close(project_fd)
+
+    assert child_directory.is_dir()
+    assert len(child_descriptors) == 1
+    with pytest.raises(OSError) as raised:
+        os.fstat(child_descriptors[0])
+    assert raised.value.errno == errno.EBADF

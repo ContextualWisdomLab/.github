@@ -31,6 +31,8 @@ SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
 _DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
 _REQUIRED_DIR_FD_FUNCTIONS = (os.open, os.mkdir, os.stat, os.unlink, os.rmdir)
+_REQUIRED_FD_FUNCTIONS = (os.listdir,)
+_REQUIRED_FOLLOW_SYMLINK_FUNCTIONS = (os.stat,)
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -426,8 +428,20 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
 
 def _require_descriptor_relative_capabilities() -> None:
     """Fail before mutation when required descriptor-relative filesystem APIs are absent."""
-    supported = getattr(os, "supports_dir_fd", set())
-    if any(function not in supported for function in _REQUIRED_DIR_FD_FUNCTIONS):
+    dir_fd_supported = getattr(os, "supports_dir_fd", set())
+    fd_supported = getattr(os, "supports_fd", set())
+    follow_symlinks_supported = getattr(os, "supports_follow_symlinks", set())
+    if (
+        any(
+            function not in dir_fd_supported
+            for function in _REQUIRED_DIR_FD_FUNCTIONS
+        )
+        or any(function not in fd_supported for function in _REQUIRED_FD_FUNCTIONS)
+        or any(
+            function not in follow_symlinks_supported
+            for function in _REQUIRED_FOLLOW_SYMLINK_FUNCTIONS
+        )
+    ):
         raise ValueError("descriptor-relative output operations are unavailable")
     if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
         raise ValueError("descriptor-relative output operations are unavailable")
@@ -465,39 +479,21 @@ def _open_output_directory(output_dir: pathlib.Path) -> tuple[int, tuple[int, in
     """Open one no-follow output directory while detecting ancestor replacement races."""
     candidate = output_dir.absolute()
     _reject_symlinked_output_components(candidate)
-    candidate.parent.mkdir(parents=True, exist_ok=True)
-    candidate.mkdir(exist_ok=True)
-    _reject_symlinked_output_components(candidate)
-
-    expected_parent = _directory_identity(
-        os.stat(candidate.parent, follow_symlinks=False)
-    )
-    expected_output = _directory_identity(os.stat(candidate, follow_symlinks=False))
-    parent_fd = os.open(candidate.parent, _DIRECTORY_OPEN_FLAGS)
+    anchor = pathlib.Path(candidate.anchor)
+    anchor_fd = os.open(anchor, _DIRECTORY_OPEN_FLAGS)
     try:
-        if _directory_identity(os.fstat(parent_fd)) != expected_parent:
-            raise ValueError(
-                "output directory ancestor changed during secure materialization"
-            )
-        output_fd = os.open(
-            candidate.name,
-            _DIRECTORY_OPEN_FLAGS,
-            dir_fd=parent_fd,
-        )
+        output_fd = _open_relative_directory(anchor_fd, tuple(candidate.parts[1:]))
         try:
-            if _directory_identity(os.fstat(output_fd)) != expected_output:
-                raise ValueError(
-                    "output directory changed during secure materialization"
-                )
-            os.fsync(parent_fd)
             os.fsync(output_fd)
             metadata = os.fstat(output_fd)
-            return output_fd, (metadata.st_dev, metadata.st_ino)
+            identity = (metadata.st_dev, metadata.st_ino)
+            _verify_output_directory_binding(candidate, output_fd, identity)
+            return output_fd, identity
         except BaseException:
             os.close(output_fd)
             raise
     finally:
-        os.close(parent_fd)
+        os.close(anchor_fd)
 
 
 def _verify_output_directory_binding(
@@ -634,6 +630,30 @@ def _remove_owned_empty_directory(
     os.fsync(parent_fd)
 
 
+def _remove_owned_directory_contents(directory_fd: int) -> None:
+    """Remove regular files and directories owned by one fresh project attempt."""
+    for entry in sorted(os.listdir(directory_fd), reverse=True):
+        metadata = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
+        identity = (metadata.st_dev, metadata.st_ino)
+        if stat.S_ISREG(metadata.st_mode):
+            _unlink_owned_file(directory_fd, entry, identity)
+            continue
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(
+                "unexpected output entry during secure materialization cleanup"
+            )
+        child_fd = os.open(entry, _DIRECTORY_OPEN_FLAGS, dir_fd=directory_fd)
+        try:
+            if _directory_identity(os.fstat(child_fd)) != identity:
+                raise ValueError(
+                    "output directory binding changed during secure materialization"
+                )
+            _remove_owned_directory_contents(child_fd)
+        finally:
+            os.close(child_fd)
+        _remove_owned_empty_directory(directory_fd, entry, identity)
+
+
 def _write_new_file(parent_fd: int, filename: str, content: bytes) -> None:
     """Create, synchronize, revalidate, and clean up one descriptor-pinned file."""
     try:
@@ -759,15 +779,28 @@ def materialize(
             project_fd = _create_project_directory(output_fd, directory)
             project_metadata = os.fstat(project_fd)
             project_identity = (project_metadata.st_dev, project_metadata.st_ino)
+            project_failed = False
             try:
                 for relative_path, content in sorted(base_inputs.items()):
                     _write_relative_file(project_fd, relative_path, content)
                 os.fsync(project_fd)
             except BaseException:
-                _remove_owned_empty_directory(output_fd, directory, project_identity)
+                project_failed = True
+                try:
+                    _remove_owned_directory_contents(project_fd)
+                except (OSError, ValueError):
+                    # Preserve the first fail-closed boundary and leave any
+                    # unowned or raced entry available for forensic inspection.
+                    pass
                 raise
             finally:
                 os.close(project_fd)
+                if project_failed:
+                    _remove_owned_empty_directory(
+                        output_fd,
+                        directory,
+                        project_identity,
+                    )
             manifest.append(
                 {
                     "directory": directory,
