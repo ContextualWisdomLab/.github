@@ -2400,6 +2400,17 @@ def inspect_pr(
         return decide("block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
+    aggregate_review_decision = str(pr.get("reviewDecision") or "").upper()
+    if current_head_approved and aggregate_review_decision != "APPROVED":
+        review_state = aggregate_review_decision or "MISSING"
+        reason = (
+            f"GitHub aggregate reviewDecision is {review_state}; require APPROVED aggregate review "
+            "evidence before direct merge or auto-merge"
+        )
+        if pr.get("autoMergeRequest"):
+            return finish(disable_auto_merge_decision(repo, pr, dry_run=dry_run, reason=reason))
+        return decide("block", reason)
+
     if current_head_approved:
         stale_review_cleanup_count = dismiss_stale_opencode_change_requests(
             repo,
@@ -3189,7 +3200,7 @@ def self_test() -> None:
         "isCrossRepository": False,
         "maintainerCanModify": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
-        "reviewDecision": "REVIEW_REQUIRED",
+        "reviewDecision": "APPROVED",
         "commits": {
             "nodes": [
                 {
@@ -3229,6 +3240,37 @@ def self_test() -> None:
         base_branch="main",
     )
     assert decision.action == "merge"
+    sample["reviewDecision"] = "REVIEW_REQUIRED"
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "block"
+    assert "aggregate reviewDecision is REVIEW_REQUIRED" in decision.reason
+    sample["reviewDecision"] = "CHANGES_REQUESTED"
+    sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
+    decision = inspect_pr(
+        "owner/repo",
+        sample,
+        dry_run=True,
+        trigger_reviews=True,
+        enable_auto_merge_flag=True,
+        update_branches=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    assert decision.action == "disable_auto_merge"
+    assert "aggregate reviewDecision is CHANGES_REQUESTED" in decision.reason
+    sample["reviewDecision"] = "APPROVED"
+    sample["autoMergeRequest"] = None
     sample["restMergeableState"] = "BEHIND"
     decision = inspect_pr(
         "owner/repo",

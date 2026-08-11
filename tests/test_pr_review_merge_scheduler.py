@@ -64,6 +64,16 @@ def make_pr(**overrides):
         "statusCheckRollup": {"contexts": {"nodes": []}},
     }
     value.update(overrides)
+    if "reviewDecision" not in overrides:
+        current_reviews = [
+            review
+            for review in value["reviews"]["nodes"]
+            if sched.review_matches_current_head(review, value)
+        ]
+        if any((review.get("state") or "").upper() == "CHANGES_REQUESTED" for review in current_reviews):
+            value["reviewDecision"] = "CHANGES_REQUESTED"
+        elif any((review.get("state") or "").upper() == "APPROVED" for review in current_reviews):
+            value["reviewDecision"] = "APPROVED"
     return value
 
 
@@ -3044,8 +3054,6 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     blocked_auto_decision = inspect(blocked_auto)
     assert blocked_auto_decision.action == "wait"
     assert "GitHub mergeability is BLOCKED" in blocked_auto_decision.reason
-    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_auto_decision.reason
-    assert "required approving review" in blocked_auto_decision.reason
     assert "rerun the scheduler" in blocked_auto_decision.reason
 
     assert sched.latest_commit_headline(make_pr(commits={"nodes": []})) == ""
@@ -4012,6 +4020,7 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
     ]
+
     assert auto_merges == [("owner/repo", 1, True)]
     blocked_already_auto = inspect(
         make_pr(
@@ -4024,8 +4033,6 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert blocked_already_auto.action == "wait"
     assert "auto-merge is already enabled" in blocked_already_auto.reason
     assert "GitHub mergeability is BLOCKED" in blocked_already_auto.reason
-    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_already_auto.reason
-    assert "required approving review" in blocked_already_auto.reason
     assert direct_merges == [
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
@@ -4133,6 +4140,25 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     missing_approval_auto = inspect(make_pr(autoMergeRequest={"enabledAt": "now"}), trigger_reviews=False)
     assert missing_approval_auto.action == "disable_auto_merge"
     assert "no OpenCode approval" in missing_approval_auto.reason
+
+
+@pytest.mark.parametrize("review_decision", ["REVIEW_REQUIRED", "CHANGES_REQUESTED"])
+def test_inspect_pr_requires_approved_aggregate_review(review_decision):
+    approved_review = {"nodes": [opencode_review("APPROVED", "head")]}
+
+    blocked = inspect(make_pr(reviewDecision=review_decision, reviews=approved_review))
+    assert blocked.action == "block"
+    assert f"aggregate reviewDecision is {review_decision}" in blocked.reason
+
+    disabled = inspect(
+        make_pr(
+            reviewDecision=review_decision,
+            reviews=approved_review,
+            autoMergeRequest={"enabledAt": "now"},
+        )
+    )
+    assert disabled.action == "disable_auto_merge"
+    assert f"aggregate reviewDecision is {review_decision}" in disabled.reason
 
 
 def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch):
