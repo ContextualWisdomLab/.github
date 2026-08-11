@@ -4142,13 +4142,20 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert "no OpenCode approval" in missing_approval_auto.reason
 
 
-@pytest.mark.parametrize("review_decision", ["REVIEW_REQUIRED", "CHANGES_REQUESTED"])
-def test_inspect_pr_requires_approved_aggregate_review(review_decision):
+@pytest.mark.parametrize(
+    ("review_decision", "expected_state"),
+    [
+        ("REVIEW_REQUIRED", "REVIEW_REQUIRED"),
+        ("CHANGES_REQUESTED", "CHANGES_REQUESTED"),
+        (None, "MISSING"),
+    ],
+)
+def test_inspect_pr_requires_approved_aggregate_review(review_decision, expected_state):
     approved_review = {"nodes": [opencode_review("APPROVED", "head")]}
 
     blocked = inspect(make_pr(reviewDecision=review_decision, reviews=approved_review))
     assert blocked.action == "block"
-    assert f"aggregate reviewDecision is {review_decision}" in blocked.reason
+    assert f"aggregate reviewDecision is {expected_state}" in blocked.reason
 
     disabled = inspect(
         make_pr(
@@ -4158,7 +4165,7 @@ def test_inspect_pr_requires_approved_aggregate_review(review_decision):
         )
     )
     assert disabled.action == "disable_auto_merge"
-    assert f"aggregate reviewDecision is {review_decision}" in disabled.reason
+    assert f"aggregate reviewDecision is {expected_state}" in disabled.reason
 
 
 def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch):
