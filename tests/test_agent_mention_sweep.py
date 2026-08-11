@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import importlib
 import sys
 import threading
@@ -371,6 +372,137 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
                 max_dispatches=value,
                 opencode_allowlist=frozenset(),
             )
+
+
+def test_sweep_closes_pull_iterator_at_dispatch_limit(monkeypatch) -> None:
+    """Reaching the work limit explicitly closes repository collection."""
+
+    sweep = module()
+
+    class PullIterator:
+        """Expose whether the sweep closes its candidate source."""
+
+        def __init__(self) -> None:
+            self.closed = False
+            self.sent = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.sent:
+                raise StopIteration
+            self.sent = True
+            return candidate()
+
+        def close(self) -> None:
+            self.closed = True
+
+    source = PullIterator()
+    request = mention_request(7, 10, "opencode-agent")
+    monkeypatch.setattr(
+        sweep, "list_recent_pull_requests", lambda *args, **kwargs: source
+    )
+    monkeypatch.setattr(
+        sweep,
+        "build_requests_for_pull_request",
+        lambda *args, **kwargs: (request,),
+    )
+    monkeypatch.setattr(
+        sweep, "dispatch_request", lambda *args, **kwargs: ("@opencode-agent",)
+    )
+
+    assert (
+        sweep.sweep(
+            target_client=FakeClient(),
+            dispatch_client=FakeClient(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            lookback_hours=24,
+            max_dispatches=1,
+            opencode_allowlist=frozenset(),
+            now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+        )
+        == 1
+    )
+    assert source.closed is True
+
+
+def test_closing_concurrent_collection_cancels_pending_repository_work(
+    monkeypatch,
+) -> None:
+    """Closing a partial result stops running work and cancels queued futures."""
+
+    sweep = module()
+
+    class FakeFuture:
+        """Run one submitted call on demand for deterministic scheduling."""
+
+        def __init__(self, function, arguments) -> None:
+            self.function = function
+            self.arguments = arguments
+            self.cancelled = False
+            self.executed = False
+
+        def result(self):
+            self.executed = True
+            return self.function(*self.arguments)
+
+    class FakeExecutor:
+        """Record the shutdown contract and model one running worker."""
+
+        instance = None
+
+        def __init__(self, *, max_workers) -> None:
+            self.max_workers = max_workers
+            self.futures = []
+            self.shutdown_call = None
+            FakeExecutor.instance = self
+
+        def submit(self, function, *arguments):
+            future = FakeFuture(function, arguments)
+            self.futures.append(future)
+            return future
+
+        def shutdown(self, *, wait, cancel_futures=False) -> None:
+            self.shutdown_call = (wait, cancel_futures)
+            if not wait:
+                # A task that was already running observes the shared stop
+                # signal before issuing its first page request.
+                self.futures[1].result()
+                for future in self.futures[2:]:
+                    future.cancelled = True
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
+    client = FakeClient(
+        {
+            "orgs/ContextualWisdomLab/repos": [
+                [repository("first"), repository("running"), repository("queued")]
+            ],
+            "repos/ContextualWisdomLab/first/pulls": [
+                pull_list_item(1, "2026-08-05T11:00:00Z")
+            ],
+        }
+    )
+    candidates = sweep.list_recent_pull_requests(
+        client,
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        since="2026-08-05T10:00:00Z",
+    )
+
+    assert next(candidates)["number"] == 1
+    candidates.close()
+
+    executor = FakeExecutor.instance
+    assert executor.max_workers == 3
+    assert executor.shutdown_call == (False, True)
+    assert executor.futures[1].executed is True
+    assert executor.futures[2].cancelled is True
+    assert [call[0][0] for call in client.calls] == [
+        "orgs/ContextualWisdomLab/repos",
+        "repos/ContextualWisdomLab/first/pulls",
+    ]
 
 
 def test_sweep_noops_do_not_starve_new_mentions_across_repeated_runs(
