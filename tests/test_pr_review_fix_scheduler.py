@@ -684,6 +684,51 @@ def test_dispatch_autofix_rejects_selectable_workflow_and_invalid_repository():
             workflow_repository="bad repository",
             dry_run=True,
         )
+    with pytest.raises(ValueError, match="invalid repair mode"):
+        fix.dispatch_autofix(
+            "owner/repo",
+            pr,
+            workflow="pr-review-autofix.yml",
+            workflow_repository="ContextualWisdomLab/.github",
+            dry_run=True,
+            repair_mode="invalid",
+        )
+
+
+def test_inspect_pr_dispatches_failed_check_rca(monkeypatch):
+    """A current-head failed-check review dispatches in explicit RCA mode."""
+    head = "a" * 40
+    pr = make_pr(
+        headRefOid=head,
+        reviews={
+            "nodes": [
+                {
+                    "state": "CHANGES_REQUESTED",
+                    "author": {"login": "opencode-agent"},
+                    "commit": {"oid": head},
+                    "body": "Coverage-evidence failed on this exact head.",
+                }
+            ]
+        },
+    )
+    captured = {}
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    args = fix.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
+    )
+
+    action, reasons = fix.inspect_pr("owner/repo", pr, args)
+
+    assert action == "dispatch"
+    assert reasons == ("current-head failed-check blocker requires RCA",)
+    assert captured["repair_mode"] == "rca"
+    assert captured["resolve_conflict"] is False
 
 
 def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
