@@ -4148,6 +4148,7 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ("REVIEW_REQUIRED", "REVIEW_REQUIRED"),
         ("CHANGES_REQUESTED", "CHANGES_REQUESTED"),
         (None, "MISSING"),
+        ("", "MISSING"),
     ],
 )
 def test_inspect_pr_requires_approved_aggregate_review(review_decision, expected_state):
