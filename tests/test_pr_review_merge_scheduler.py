@@ -88,6 +88,15 @@ def make_pr(**overrides):
                 ]
             }
         }
+    for node in value["statusCheckRollup"]["contexts"]["nodes"]:
+        if node.get("__typename") != "CheckRun":
+            continue
+        check_suite = node.setdefault("checkSuite", {})
+        if not isinstance(check_suite, dict):
+            continue
+        commit = check_suite.setdefault("commit", {})
+        if isinstance(commit, dict):
+            commit.setdefault("oid", value["headRefOid"])
     return value
 
 
@@ -616,6 +625,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     assert node["reviews"]["nodes"][0]["commit"]["oid"] == "abc123"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["status"] == "COMPLETED"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] == "SUCCESS"
+    assert node["statusCheckRollup"]["contexts"]["nodes"][0]["checkSuite"]["commit"]["oid"] == "abc123"
 
 
 def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):
@@ -931,6 +941,7 @@ def test_context_review_and_check_helpers(monkeypatch):
     monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
     assert sched.context_nodes({}) == []
     assert sched.context_nodes(make_pr()) == []
+    assert "commit { oid }" in sched.PULL_REQUEST_FIELDS_FRAGMENT
     assert sched.compare_behind_by({"compareBehindBy": "2"}) == 2
     assert sched.compare_behind_by({"compareBehindBy": "unknown"}) == 0
     assert sched.is_opencode_context({"__typename": "CheckRun", "name": "opencode-review"})
@@ -1053,6 +1064,15 @@ def test_context_review_and_check_helpers(monkeypatch):
         sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}))
         == "complete"
     )
+    stale_strix = strix_check()
+    stale_strix["checkSuite"]["commit"] = {"oid": "old-head"}
+    stale_pr = make_pr(statusCheckRollup={"contexts": {"nodes": [stale_strix]}})
+    assert sched.strix_evidence_state(stale_pr) == "missing"
+    assert sched.running_status_checks(stale_pr) == ["strix (not bound to current head)"]
+    fresh_strix = strix_check()
+    mixed_heads = make_pr(statusCheckRollup={"contexts": {"nodes": [stale_strix, fresh_strix]}})
+    assert sched.strix_evidence_state(mixed_heads) == "complete"
+    assert sched.running_status_checks(mixed_heads) == []
 
     threaded = make_pr(
         reviewThreads={

@@ -72,6 +72,7 @@ fragment SchedulerPullRequestFields on PullRequest {
           startedAt
           detailsUrl
           checkSuite {
+            commit { oid }
             workflowRun {
               workflow { name }
             }
@@ -692,9 +693,10 @@ def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
+def rest_check_node(check: dict[str, Any], *, head_sha: str | None = None) -> dict[str, Any]:
     """Convert a REST check-run payload into the GraphQL status rollup shape."""
 
+    check_head_sha = check.get("head_sha") or head_sha
     return {
         "__typename": "CheckRun",
         "name": check.get("name"),
@@ -702,7 +704,10 @@ def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
         "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
         "startedAt": check.get("started_at"),
         "detailsUrl": check.get("details_url"),
-        "checkSuite": {"workflowRun": {"workflow": {}}},
+        "checkSuite": {
+            "commit": {"oid": check_head_sha},
+            "workflowRun": {"workflow": {}},
+        },
     }
 
 
@@ -741,7 +746,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [
-                    rest_check_node(check)
+                    rest_check_node(check, head_sha=head.get("sha"))
                     for check in (checks.get("check_runs") or [])
                 ]
             }
@@ -937,6 +942,46 @@ def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
     return contexts.get("nodes") or []
 
 
+def check_run_head_sha(node: dict[str, Any]) -> str:
+    """Return the commit SHA attached to a GraphQL CheckRun, if present."""
+    check_suite = node.get("checkSuite") or {}
+    commit = check_suite.get("commit") or {}
+    return str(commit.get("oid") or "").lower()
+
+
+def current_head_check_runs(
+    pr: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition CheckRuns into current-head evidence and stale/unbound groups.
+
+    GitHub keeps older runs with the same name in a PR rollup. A group is
+    current only when its CheckSuite commit matches the PR head; stale runs are
+    ignored when a current run exists, and otherwise remain a blocking signal
+    so missing exact-head evidence cannot pass.
+    """
+    expected_head = str(pr.get("headRefOid") or "").lower()
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for node in context_nodes(pr):
+        if node.get("__typename") != "CheckRun":
+            continue
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, str(node.get("name") or "check-run"))
+        grouped.setdefault(key, []).append(node)
+
+    current: list[dict[str, Any]] = []
+    stale_or_unbound: list[dict[str, Any]] = []
+    for nodes in grouped.values():
+        matching = [node for node in nodes if expected_head and check_run_head_sha(node) == expected_head]
+        if matching:
+            current.extend(matching)
+        else:
+            stale_or_unbound.extend(nodes)
+    return current, stale_or_unbound
+
+
 def is_opencode_context(node: dict[str, Any]) -> bool:
     """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
@@ -977,8 +1022,11 @@ def actions_job_id_from_details_url(value: str | None) -> str | None:
 
 def matching_actions_job_id(pr: dict[str, Any], predicate: Any) -> str | None:
     """Return the latest matching check-run job id, if GitHub exposed one."""
+    current_check_ids = {id(node) for node in current_head_check_runs(pr)[0]}
     for node in reversed(context_nodes(pr)):
         if node.get("__typename") != "CheckRun" or not predicate(node):
+            continue
+        if id(node) not in current_check_ids:
             continue
         job_id = actions_job_id_from_details_url(node.get("detailsUrl"))
         if job_id:
@@ -1036,8 +1084,11 @@ def opencode_progress_state(
 ) -> str:
     """Return absent, running, stale, or complete for current OpenCode review status."""
     now = now or datetime.now(timezone.utc)
+    current_check_ids = {id(node) for node in current_head_check_runs(pr)[0]}
     saw_complete = False
     for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun" and id(node) not in current_check_ids:
+            continue
         if not is_opencode_context(node):
             continue
         state = running_check_state(node)
@@ -1063,8 +1114,11 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
 
 def strix_evidence_state(pr: dict[str, Any]) -> str:
     """Return missing, running, or complete for current-head Strix evidence."""
+    current_check_ids = {id(node) for node in current_head_check_runs(pr)[0]}
     found = False
     for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun" and id(node) not in current_check_ids:
+            continue
         if not is_strix_context(node):
             continue
         found = True
@@ -1079,8 +1133,14 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
 def running_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return check/status contexts that have not reached a terminal state."""
     running: set[str] = set()
+    current_check_runs, stale_check_runs = current_head_check_runs(pr)
+    current_check_ids = {id(node) for node in current_check_runs}
+    for node in stale_check_runs:
+        running.add(f"{node.get('name') or 'check-run'} (not bound to current head)")
     for node in context_nodes(pr):
         if node.get("__typename") == "CheckRun":
+            if id(node) not in current_check_ids:
+                continue
             state = (node.get("status") or "").upper()
             name = node.get("name") or "check-run"
         else:
@@ -1398,9 +1458,12 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
         tuple[datetime | None, int, dict[str, Any]],
     ] = {}
     status_contexts: list[dict[str, Any]] = []
+    current_check_ids = {id(node) for node in current_head_check_runs(pr)[0]}
     for index, node in enumerate(context_nodes(pr)):
         if node.get("__typename") != "CheckRun":
             status_contexts.append(node)
+            continue
+        if id(node) not in current_check_ids:
             continue
         workflow = (
             (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
@@ -1447,8 +1510,11 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
 def action_required_checks(pr: dict[str, Any]) -> list[str]:
     """Return check-run names that need explicit GitHub Actions approval or unblocking."""
     required: list[str] = []
+    current_check_ids = {id(node) for node in current_head_check_runs(pr)[0]}
     for node in context_nodes(pr):
         if node.get("__typename") != "CheckRun":
+            continue
+        if id(node) not in current_check_ids:
             continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in ACTION_REQUIRED_CONCLUSIONS:
@@ -3263,7 +3329,10 @@ def self_test() -> None:
                         "name": "strix",
                         "status": "COMPLETED",
                         "conclusion": "SUCCESS",
-                        "checkSuite": {"workflowRun": {"workflow": {"name": "Strix Security Scan"}}},
+                        "checkSuite": {
+                            "commit": {"oid": "abc"},
+                            "workflowRun": {"workflow": {"name": "Strix Security Scan"}},
+                        },
                     }
                 ]
             }
@@ -3361,7 +3430,13 @@ def self_test() -> None:
     sample["restMergeableState"] = "CLEAN"
     sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
     sample["statusCheckRollup"]["contexts"]["nodes"] = [
-        {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"}
+        {
+            "__typename": "CheckRun",
+            "name": "strix",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "checkSuite": {"commit": {"oid": "abc"}},
+        }
     ]
     decision = inspect_pr(
         "owner/repo",
@@ -3434,7 +3509,12 @@ def self_test() -> None:
     assert "current-head OpenCode review requested changes" in decision.reason
     sample["autoMergeRequest"] = None
     sample["statusCheckRollup"]["contexts"]["nodes"].append(
-        {"__typename": "CheckRun", "name": "opencode-review", "status": "IN_PROGRESS"}
+        {
+            "__typename": "CheckRun",
+            "name": "opencode-review",
+            "status": "IN_PROGRESS",
+            "checkSuite": {"commit": {"oid": "abc"}},
+        }
     )
     assert opencode_in_progress(sample)
     sample["statusCheckRollup"]["contexts"]["nodes"] = []
@@ -3466,7 +3546,10 @@ def self_test() -> None:
             "name": "strix",
             "status": "COMPLETED",
             "conclusion": "SUCCESS",
-            "checkSuite": {"workflowRun": {"workflow": {"name": "Strix Security Scan"}}},
+            "checkSuite": {
+                "commit": {"oid": "abc"},
+                "workflowRun": {"workflow": {"name": "Strix Security Scan"}},
+            },
         }
     ]
     decision = inspect_pr(
@@ -3542,7 +3625,13 @@ def self_test() -> None:
     )
     assert decision.action == "update_branch"
     sample["statusCheckRollup"]["contexts"]["nodes"] = [
-        {"__typename": "CheckRun", "name": "strix", "status": "COMPLETED", "conclusion": "FAILURE"}
+        {
+            "__typename": "CheckRun",
+            "name": "strix",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "checkSuite": {"commit": {"oid": "abc"}},
+        }
     ]
     decision = inspect_pr(
         "owner/repo",
@@ -3678,6 +3767,7 @@ def self_test() -> None:
                         "name": "strix",
                         "status": "COMPLETED",
                         "conclusion": "SUCCESS",
+                        "checkSuite": {"commit": {"oid": "abc"}},
                     }
                 ]
             }
