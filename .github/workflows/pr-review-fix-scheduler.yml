@@ -87,6 +87,56 @@ jobs:
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
     steps:
+      - name: Validate scheduler target and dispatch authority
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # A rerun retains github.actor from the original event. Authorize the
+          # identity that initiated this run or rerun, plus the signed sender.
+          DISPATCH_ACTOR: ${{ github.triggering_actor }}
+          DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
+          ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
+          ALLOWED_TARGET_REPOSITORIES: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            printf '::error::Scheduler target repository is malformed: %s.\n' \
+              "${TARGET_REPOSITORY:-<empty>}"
+            exit 1
+          fi
+          if [ -z "$ALLOWED_TARGET_REPOSITORIES" ]; then
+            echo "::error::Scheduler target repository allowlist is not configured."
+            exit 1
+          fi
+
+          target_allowed=false
+          IFS=',' read -r -a allowed_targets <<<"$ALLOWED_TARGET_REPOSITORIES"
+          for candidate in "${allowed_targets[@]}"; do
+            candidate="${candidate//[[:space:]]/}"
+            if [ -n "$candidate" ] && [ "$candidate" = "$TARGET_REPOSITORY" ]; then
+              target_allowed=true
+              break
+            fi
+          done
+          if [ "$target_allowed" != "true" ]; then
+            printf '::error::Scheduler target repository is not allowlisted: %s.\n' \
+              "$TARGET_REPOSITORY"
+            exit 1
+          fi
+
+          # A reusable workflow receives its caller's original event payload,
+          # so the hourly callers arrive as `schedule`, not `workflow_call`.
+          # Only the direct repository_dispatch surface needs sender binding;
+          # every invocation still passes the target allowlist above.
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
+              [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
+              [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
+              echo "::error::Scheduler repository dispatch actor or sender is unauthorized."
+              exit 1
+            fi
+          fi
+
       - name: Exchange OpenCode app token for scheduler mutations
         id: scheduler_app_token
         env:

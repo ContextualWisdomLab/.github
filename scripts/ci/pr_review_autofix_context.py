@@ -230,12 +230,14 @@ def pr_changed_paths(repo: str, number: int) -> list[str]:
 
 def review_requires_rca(reviews: list[dict[str, Any]]) -> bool:
     """Return whether an exact-head change request reports a failed check."""
-    for review in reversed(reviews):
-        if str(review.get("state") or "").upper() != "CHANGES_REQUESTED":
-            continue
-        body = str(review.get("body") or "").lower()
-        return any(marker in body for marker in _RCA_REVIEW_MARKERS)
-    return False
+    return any(
+        any(
+            marker in str(review.get("body") or "").lower()
+            for marker in _RCA_REVIEW_MARKERS
+        )
+        for review in reviews
+        if str(review.get("state") or "").upper() == "CHANGES_REQUESTED"
+    )
 
 
 def _quote_untrusted_markdown(body: str, *, limit: int = 6000) -> str:
@@ -327,6 +329,11 @@ def write_context(
     detected_rca_mode = review_requires_rca(reviews)
     if repair_mode is None:
         rca_mode = detected_rca_mode
+    elif repair_mode == "conflict":
+        # Conflict repair has an independently sealed unresolved-path scope.
+        # Failed-check reviews may coexist on the same head, but they must not
+        # widen this approved conflict-only invocation to every changed path.
+        rca_mode = False
     elif (repair_mode == "rca") != detected_rca_mode:
         raise RuntimeError(
             "requested repair mode does not match exact-head review evidence"

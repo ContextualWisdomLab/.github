@@ -61,6 +61,22 @@ def test_review_requires_rca_returns_false_without_failed_check_marker() -> None
     )
 
 
+def test_review_requires_rca_checks_every_change_request() -> None:
+    """One exact-head failed-check review cannot be hidden by a later ordinary one."""
+    assert context.review_requires_rca(
+        [
+            {
+                "state": "CHANGES_REQUESTED",
+                "body": "Coverage-evidence failed on this exact head.",
+            },
+            {
+                "state": "CHANGES_REQUESTED",
+                "body": "Please rename this symbol.",
+            },
+        ]
+    )
+
+
 def _bind_fake_collector(monkeypatch, tmp_path: Path) -> Path:
     """Point the module at one regular trusted sibling collector."""
     module_path = tmp_path / "pr_review_autofix_context.py"

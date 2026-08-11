@@ -458,6 +458,24 @@ def test_context_explicit_mode_and_evidence_fail_closed(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="does not match"):
         context.write_context("owner/repo", 7, head, output, repair_mode="review")
+
+    monkeypatch.setattr(
+        context,
+        "pr_changed_paths",
+        lambda repo, number: (_ for _ in ()).throw(
+            AssertionError("conflict mode must not widen to all changed paths")
+        ),
+    )
+    context.write_context(
+        "owner/repo",
+        7,
+        head,
+        output,
+        repair_mode="conflict",
+    )
+    assert "Repair mode: review-feedback" in output.read_text(encoding="utf-8")
+    monkeypatch.setattr(context, "pr_changed_paths", lambda repo, number: [])
+
     with pytest.raises(RuntimeError, match="missing or not a regular file"):
         context.write_context(
             "owner/repo",

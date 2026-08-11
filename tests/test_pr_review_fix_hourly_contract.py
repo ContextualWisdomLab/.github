@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import textwrap
 from pathlib import Path
 
 from scripts.ci import pr_review_fix_scheduler as scheduler
@@ -120,6 +123,76 @@ def test_reusable_scheduler_declares_only_required_caller_secrets() -> None:
     )
     assert 'if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then' in reusable
     assert "github.token remains read-only and is never accepted as the mutation authority" in reusable
+
+
+def test_scheduler_validates_dispatch_authority_before_credentials() -> None:
+    """Untrusted dispatch identity and targets fail before token materialization."""
+    workflow = _read(_REUSABLE_WORKFLOW)
+    validation_name = "Validate scheduler target and dispatch authority"
+    validation = workflow.index(validation_name)
+    exchange = workflow.index("Exchange OpenCode app token for scheduler mutations")
+    assert validation < exchange
+
+    step = workflow.split(f"      - name: {validation_name}\n", 1)[1].split(
+        "      - name: Exchange OpenCode app token for scheduler mutations\n", 1
+    )[0]
+    assert "DISPATCH_ACTOR: ${{ github.triggering_actor }}" in step
+    assert "DISPATCH_SENDER: ${{ github.event.sender.login || '' }}" in step
+    assert (
+        "ALLOWED_DISPATCH_ACTOR: "
+        "${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}" in step
+    )
+    assert (
+        "ALLOWED_TARGET_REPOSITORIES: "
+        "${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}" in step
+    )
+
+    shell = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    base_env = {
+        **os.environ,
+        "EVENT_NAME": "repository_dispatch",
+        "DISPATCH_ACTOR": "github-actions[bot]",
+        "DISPATCH_SENDER": "github-actions[bot]",
+        "ALLOWED_DISPATCH_ACTOR": "github-actions[bot]",
+        "ALLOWED_TARGET_REPOSITORIES": (
+            "ContextualWisdomLab/clearfolio,ContextualWisdomLab/disksage"
+        ),
+        "TARGET_REPOSITORY": "ContextualWisdomLab/clearfolio",
+    }
+    assert subprocess.run(
+        ["bash"], input=shell, text=True, env=base_env, check=False
+    ).returncode == 0
+    # Reusable workflows retain the caller event payload. The scheduled
+    # product callers therefore arrive as `schedule`, not `workflow_call`.
+    assert subprocess.run(
+        ["bash"],
+        input=shell,
+        text=True,
+        env={
+            **base_env,
+            "EVENT_NAME": "schedule",
+            "DISPATCH_ACTOR": "",
+            "DISPATCH_SENDER": "",
+        },
+        check=False,
+    ).returncode == 0
+
+    for override in (
+        {"DISPATCH_SENDER": "untrusted"},
+        {"DISPATCH_ACTOR": "untrusted"},
+        {"TARGET_REPOSITORY": "ContextualWisdomLab/unapproved"},
+        {"ALLOWED_DISPATCH_ACTOR": ""},
+        {"ALLOWED_TARGET_REPOSITORIES": ""},
+    ):
+        assert subprocess.run(
+            ["bash"],
+            input=shell,
+            text=True,
+            env={**base_env, **override},
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).returncode != 0
 
 
 def test_reusable_scheduler_keeps_workflow_token_read_only() -> None:
