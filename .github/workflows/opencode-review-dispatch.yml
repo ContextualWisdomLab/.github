@@ -7851,8 +7851,9 @@ jobs:
             exit 1
           fi
           if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
-            [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ]; then
-            echo "::notice::OpenCode repository_dispatch status publication is unavailable because only the same-repository github.token can access cross-repository target ${GH_REPOSITORY}. The exact-head formal review remains authoritative; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish the optional commit status."
+            { [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ] ||
+              [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "opencode-app" ]; }; then
+            echo "::notice::OpenCode repository_dispatch status publication is unavailable because only the same-repository github.token can access cross-repository target ${GH_REPOSITORY}, and the OpenCode App token has no cross-repository commit-status permission in this deployment. The exact-head formal review remains authoritative; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish the optional commit status."
             exit 0
           fi
 
