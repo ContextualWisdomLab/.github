@@ -127,6 +127,16 @@ SENSITIVE_COMMAND_OPTIONS = frozenset(
     }
 )
 CONTAINER_LOGIN_PROGRAMS = frozenset({"docker", "podman"})
+COMMAND_WRAPPER_SHELLS = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
+COMMAND_EVIDENCE_KEYS = frozenset(
+    {"argv", "backend_cmd", "command", "e2e_cmd", "frontend_cmd"}
+)
+ENV_SPLIT_OPTIONS = frozenset({"-S", "--split-string"})
+ENV_VALUE_OPTIONS = frozenset({"-C", "-u", "--chdir", "--unset"})
+MAX_COMMAND_WRAPPER_DEPTH = 4
+MAX_COMMAND_INPUT_BYTES = 65_536
+MAX_COMMAND_TOKENS = 4_096
+MAX_COMMAND_WORK = 262_144
 PROVIDER_TOKEN_RES = (
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -160,6 +170,12 @@ def _key_identifies_credentials(value: object) -> bool:
     if not signal_end:
         return False
     return words[signal_end:] not in SAFE_METADATA_SUFFIXES
+
+
+def _key_identifies_command_evidence(value: object) -> bool:
+    """Return whether an exact structured key owns command or argv evidence."""
+    normalized = NON_KEY_WORD_RE.sub("_", str(value).lower()).strip("_")
+    return normalized in COMMAND_EVIDENCE_KEYS
 
 
 def _strip_ansi(text: str) -> str:
@@ -291,15 +307,37 @@ def _redact_json(
                     collision_index += 1
                 collision_counts[cleaned_key] = collision_index + 1
                 cleaned_key = f"{cleaned_key}#{collision_index}"
-            cleaned[cleaned_key] = (
-                REDACTED
-                if (
-                    key_identifies_credentials
-                    or _key_identifies_credentials(cleaned_key)
-                    or key_has_unsafe_controls
+            if (
+                key_identifies_credentials
+                or _key_identifies_credentials(cleaned_key)
+                or key_has_unsafe_controls
+            ):
+                cleaned[cleaned_key] = REDACTED
+            elif _key_identifies_command_evidence(cleaned_key):
+                if isinstance(item, str):
+                    cleaned[cleaned_key] = _redact_command_text_with_pattern(
+                        item,
+                        literal_pattern,
+                    )
+                elif isinstance(item, list) and all(
+                    isinstance(argument, str) for argument in item
+                ):
+                    cleaned[cleaned_key] = _redact_command_argv_with_pattern(
+                        item,
+                        literal_pattern,
+                    )
+                else:
+                    cleaned[cleaned_key] = _redact_json(
+                        item,
+                        literal_pattern,
+                        redact_literal_keys,
+                    )
+            else:
+                cleaned[cleaned_key] = _redact_json(
+                    item,
+                    literal_pattern,
+                    redact_literal_keys,
                 )
-                else _redact_json(item, literal_pattern, redact_literal_keys)
-            )
         return cleaned
     if isinstance(value, list):
         return [
@@ -326,9 +364,15 @@ def redact_json_value(
     )
 
 
+class _CommandRedactionError(Exception):
+    """Signal that bounded command evidence cannot be parsed safely."""
+
+
 def _command_option_identifies_credentials(argument: str) -> bool:
     """Return whether an argv element expects a separate credential value."""
     if not argument.startswith("-") or "=" in argument:
+        return False
+    if argument.lower() == "--password-stdin":
         return False
     option = argument.lstrip("-")
     return bool(option) and (
@@ -352,18 +396,224 @@ def _container_login_password_option(
     return (
         option == "-p"
         and _command_program(command[0]) in CONTAINER_LOGIN_PROGRAMS
-        and "login" in command[1:index]
+        and len(command) > 1
+        and command[1] == "login"
+        and index > 1
     )
 
 
-def redact_command_argv(
+def _spend_command_budget(
+    budget: dict[str, int],
+    *,
+    text: str = "",
+    tokens: int = 0,
+) -> None:
+    """Charge UTF-8 scan work and parsed tokens to one root-owned budget."""
+    budget["work"] -= len(text.encode("utf-8"))
+    budget["tokens"] -= tokens
+    if budget["work"] < 0 or budget["tokens"] < 0:
+        raise _CommandRedactionError
+
+
+def _validate_wrapper_operand(text: str, *, shell_operand: bool) -> None:
+    """Accept only the documented linear quote grammar for one wrapper operand."""
+    quote = ""
+    shell_metacharacters = frozenset(";&|<>()*?[]{}")
+    for character in text:
+        if character in "\r\n\v\f" or character == "\\":
+            raise _CommandRedactionError
+        if quote:
+            if character == quote:
+                quote = ""
+            elif quote == '"' and character in "`$":
+                raise _CommandRedactionError
+            continue
+        if character in "'\"":
+            quote = character
+        elif character in "`$#":
+            raise _CommandRedactionError
+        elif shell_operand and character in shell_metacharacters:
+            raise _CommandRedactionError
+    if quote:
+        raise _CommandRedactionError
+
+
+def _tokenize_wrapper_operand(
+    text: str,
+    *,
+    shell_operand: bool,
+    budget: dict[str, int],
+) -> list[str]:
+    """Validate and tokenize one nested wrapper operand within the shared budget."""
+    _spend_command_budget(budget, text=text)
+    _validate_wrapper_operand(text, shell_operand=shell_operand)
+    arguments = shlex.split(text, comments=False, posix=True)
+    if not arguments:
+        raise _CommandRedactionError
+    _spend_command_budget(budget, tokens=len(arguments))
+    return arguments
+
+
+def _env_split_operand(command: Sequence[str]) -> tuple[int, str] | None:
+    """Locate an exact GNU env split-string operand or report no such wrapper."""
+    index = 1
+    while index < len(command):
+        argument = command[index]
+        if argument in ENV_SPLIT_OPTIONS:
+            if index + 1 >= len(command) or index + 2 != len(command):
+                raise _CommandRedactionError
+            return index + 1, ""
+        if argument.startswith("--split-string="):
+            if index + 1 != len(command) or not argument.partition("=")[2]:
+                raise _CommandRedactionError
+            return index, "--split-string="
+        if argument in ENV_VALUE_OPTIONS:
+            if index + 1 >= len(command):
+                return None
+            index += 2
+            continue
+        if argument.startswith(("--unset=", "--chdir=")) or re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=.*",
+            argument,
+        ):
+            index += 1
+            continue
+        if argument.startswith("-"):
+            index += 1
+            continue
+        return None
+    return None
+
+
+def _shell_command_operand(command: Sequence[str]) -> int | None:
+    """Locate a shell command string selected by an exact or combined c option."""
+    for index, argument in enumerate(command[1:], start=1):
+        if argument == "--":
+            return None
+        if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", argument) and argument.count("c") == 1:
+            if index + 1 >= len(command) or index + 2 != len(command):
+                raise _CommandRedactionError
+            return index + 1
+        if not argument.startswith("-"):
+            return None
+    return None
+
+
+def _nested_command_start(arguments: Sequence[str], *, env_operand: bool) -> int:
+    """Return the actual program position after bounded assignment/env modifiers."""
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", argument):
+            index += 1
+            continue
+        if env_operand and argument in ENV_VALUE_OPTIONS:
+            if index + 1 >= len(arguments):
+                return len(arguments)
+            index += 2
+            continue
+        if env_operand and argument.startswith(("--unset=", "--chdir=")):
+            index += 1
+            continue
+        if env_operand and argument == "--":
+            return index + 1
+        if env_operand and argument.startswith("-"):
+            index += 1
+            continue
+        return index
+    return index
+
+
+def _redact_nested_command(
+    operand: str,
+    *,
+    shell_operand: bool,
+    literal_pattern: re.Pattern[str] | None,
+    budget: dict[str, int],
+    depth: int,
+) -> str:
+    """Redact one nested command or hide it completely at the depth boundary."""
+    if depth >= MAX_COMMAND_WRAPPER_DEPTH:
+        return REDACTED
+    arguments = _tokenize_wrapper_operand(
+        operand,
+        shell_operand=shell_operand,
+        budget=budget,
+    )
+    command_start = _nested_command_start(
+        arguments,
+        env_operand=not shell_operand,
+    )
+    cleaned = [
+        _redact_unstructured(argument, literal_pattern)
+        for argument in arguments[:command_start]
+    ]
+    if command_start < len(arguments):
+        cleaned.extend(
+            _redact_command_argv(
+                arguments[command_start:],
+                literal_pattern=literal_pattern,
+                budget=budget,
+                depth=depth + 1,
+            )
+        )
+    joined = shlex.join(cleaned)
+    _spend_command_budget(budget, text=joined)
+    return joined
+
+
+def _command_option_at_index_identifies_credentials(
+    command: Sequence[str],
+    index: int,
+    argument: str,
+) -> bool:
+    """Apply program-aware exceptions before generic sensitive-option matching."""
+    if (
+        command
+        and _command_program(command[0]) == "env"
+        and (
+            argument in ENV_VALUE_OPTIONS
+            or argument.startswith(("--unset=", "--chdir="))
+        )
+    ):
+        return False
+    return _command_option_identifies_credentials(argument)
+
+
+def _redact_command_argv(
     command: Sequence[str],
     *,
-    sensitive_values: Sequence[str] = (),
+    literal_pattern: re.Pattern[str] | None,
+    budget: dict[str, int],
+    depth: int,
 ) -> list[str]:
-    """Redact argv, including values following credential-denoting options."""
-    values = _canonical_sensitive_values(sensitive_values)
-    literal_pattern = _compile_literal_pattern(values)
+    """Redact one already-counted argv and its supported nested wrapper operand."""
+    replacements: dict[int, str] = {}
+    if command:
+        program = _command_program(command[0])
+        if program == "env":
+            split_operand = _env_split_operand(command)
+            if split_operand is not None:
+                index, prefix = split_operand
+                operand = command[index][len(prefix) :] if prefix else command[index]
+                replacements[index] = prefix + _redact_nested_command(
+                    operand,
+                    shell_operand=False,
+                    literal_pattern=literal_pattern,
+                    budget=budget,
+                    depth=depth,
+                )
+        elif program in COMMAND_WRAPPER_SHELLS:
+            index = _shell_command_operand(command)
+            if index is not None:
+                replacements[index] = _redact_nested_command(
+                    command[index],
+                    shell_operand=True,
+                    literal_pattern=literal_pattern,
+                    budget=budget,
+                    depth=depth,
+                )
+
     cleaned: list[str] = []
     redact_next = False
     for index, argument in enumerate(command):
@@ -371,12 +621,18 @@ def redact_command_argv(
             cleaned.append(REDACTED)
             redact_next = False
             continue
+        argument = replacements.get(index, argument)
         option, separator, _value = argument.partition("=")
         if (
             separator
             and option.startswith("-")
             and (
-                _command_option_identifies_credentials(option)
+                option.lower() == "--password-stdin"
+                or _command_option_at_index_identifies_credentials(
+                    command,
+                    index,
+                    option,
+                )
                 or _container_login_password_option(command, index, argument)
             )
         ):
@@ -384,22 +640,69 @@ def redact_command_argv(
             continue
         cleaned.append(_redact_unstructured(argument, literal_pattern))
         redact_next = (
-            _command_option_identifies_credentials(argument)
+            _command_option_at_index_identifies_credentials(
+                command,
+                index,
+                argument,
+            )
             or _container_login_password_option(command, index, argument)
         )
     return cleaned
 
 
-def redact_command_text(
-    command: str,
+def _redact_command_argv_with_pattern(
+    command: Sequence[str],
+    literal_pattern: re.Pattern[str] | None,
+) -> list[str]:
+    """Redact one public argv using an already-compiled literal matcher."""
+    arguments = list(command)
+    input_text = "\0".join(arguments)
+    if len(input_text.encode("utf-8")) > MAX_COMMAND_INPUT_BYTES:
+        return [REDACTED]
+    budget = {"tokens": MAX_COMMAND_TOKENS, "work": MAX_COMMAND_WORK}
+    try:
+        _spend_command_budget(budget, text=input_text, tokens=len(arguments))
+        return _redact_command_argv(
+            arguments,
+            literal_pattern=literal_pattern,
+            budget=budget,
+            depth=0,
+        )
+    except _CommandRedactionError:
+        return [REDACTED]
+
+
+def redact_command_argv(
+    command: Sequence[str],
     *,
     sensitive_values: Sequence[str] = (),
+) -> list[str]:
+    """Redact argv and bounded supported wrapper operands without changing execution."""
+    values = _canonical_sensitive_values(sensitive_values)
+    return _redact_command_argv_with_pattern(
+        command,
+        _compile_literal_pattern(values),
+    )
+
+
+def _redact_command_text_with_pattern(
+    command: str,
+    literal_pattern: re.Pattern[str] | None,
 ) -> str:
-    """Redact a shell-like command string without changing the executed command."""
-    cleaned_command = redact_text(command, sensitive_values=sensitive_values)
+    """Redact one public command string using an already-compiled matcher."""
+    if len(command.encode("utf-8")) > MAX_COMMAND_INPUT_BYTES:
+        return REDACTED
+    if _contains_unsafe_render_controls(command):
+        return REDACTED
+    budget = {"tokens": MAX_COMMAND_TOKENS, "work": MAX_COMMAND_WORK}
     try:
-        arguments = shlex.split(cleaned_command)
+        _spend_command_budget(budget, text=command)
+    except _CommandRedactionError:
+        return REDACTED
+    try:
+        arguments = shlex.split(command, comments=False, posix=True)
     except ValueError:
+        cleaned_command = _redact_unstructured(command, literal_pattern)
         rough_arguments = cleaned_command.split()
         if any(
             _command_option_identifies_credentials(argument)
@@ -407,8 +710,31 @@ def redact_command_text(
         ):
             return REDACTED
         return cleaned_command
-    return shlex.join(
-        redact_command_argv(arguments, sensitive_values=sensitive_values)
+    try:
+        _spend_command_budget(budget, tokens=len(arguments))
+        cleaned = _redact_command_argv(
+            arguments,
+            literal_pattern=literal_pattern,
+            budget=budget,
+            depth=0,
+        )
+        joined = shlex.join(cleaned)
+        _spend_command_budget(budget, text=joined)
+        return joined
+    except _CommandRedactionError:
+        return REDACTED
+
+
+def redact_command_text(
+    command: str,
+    *,
+    sensitive_values: Sequence[str] = (),
+) -> str:
+    """Redact bounded shell-like evidence without changing the executed command."""
+    values = _canonical_sensitive_values(sensitive_values)
+    return _redact_command_text_with_pattern(
+        command,
+        _compile_literal_pattern(values),
     )
 
 
