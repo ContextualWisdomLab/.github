@@ -359,32 +359,95 @@ def test_markdown_and_cli_outputs_are_deterministic(tmp_path: Path, capsys: pyte
     input_path.write_text(json.dumps(lifecycle), encoding="utf-8")
     json_path = tmp_path / "out/report.json"
     md_path = tmp_path / "out/report.md"
-    assert quality.main(["--input", str(input_path), "--json-output", str(json_path), "--markdown-output", str(md_path)]) == 0
+    root_args = ["--input-root", str(tmp_path), "--output-root", str(tmp_path)]
+    assert quality.main([*root_args, "--input", str(input_path), "--json-output", str(json_path), "--markdown-output", str(md_path)]) == 0
     assert json.loads(json_path.read_text(encoding="utf-8"))["parity_gate"]["status"] == "INSUFFICIENT_EVIDENCE"
     assert not (json_path.parent / ".report.json.tmp").exists()
-    assert quality.main(["--input", str(input_path), "--require-parity-evidence"]) == 3
+    assert quality.main([*root_args, "--input", str(input_path), "--require-parity-evidence"]) == 3
     assert '"INSUFFICIENT_EVIDENCE"' in capsys.readouterr().out
 
     passing = tmp_path / "pass.json"
     passing.write_text(json.dumps(benchmark("head_matched_gold", 100)), encoding="utf-8")
-    assert quality.main(["--input", str(passing), "--fail-on-parity-regression"]) == 0
+    assert quality.main([*root_args, "--input", str(passing), "--fail-on-parity-regression"]) == 0
     failing_value = benchmark("head_matched_gold", 100)
     for case in failing_value["cases"][:10]:
         case["reviewers"]["opencode"]["findings"] = []
     failing = tmp_path / "fail.json"
     failing.write_text(json.dumps(failing_value), encoding="utf-8")
-    assert quality.main(["--input", str(failing), "--fail-on-parity-regression"]) == 1
+    assert quality.main([*root_args, "--input", str(failing), "--fail-on-parity-regression"]) == 1
 
     invalid = tmp_path / "invalid.json"
     invalid.write_text("{", encoding="utf-8")
-    assert quality.main(["--input", str(invalid)]) == 2
+    assert quality.main([*root_args, "--input", str(invalid)]) == 2
     assert "benchmark rejected" in capsys.readouterr().err
     with pytest.raises(quality.BenchmarkValidationError, match="cannot load"):
         quality.load_json(tmp_path / "missing.json")
 
-    monkeypatch.setattr(sys, "argv", [str(MODULE_PATH), "--input", str(input_path)])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(MODULE_PATH), *root_args, "--input", str(input_path)],
+    )
     with pytest.raises(SystemExit, match="0"):
         runpy.run_path(str(MODULE_PATH), run_name="__main__")
+
+
+def test_cli_confines_paths_to_explicit_roots(tmp_path: Path) -> None:
+    """CLI input and output paths must not escape their trusted roots."""
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    inside_input = trusted / "input.json"
+    inside_input.write_text(json.dumps(benchmark()), encoding="utf-8")
+    outside_input = tmp_path / "outside.json"
+    outside_input.write_text(json.dumps(benchmark()), encoding="utf-8")
+    outside_output = tmp_path / "outside-report.json"
+    root_args = [
+        "--input-root",
+        str(trusted),
+        "--output-root",
+        str(trusted),
+    ]
+
+    assert quality.main([*root_args, "--input", str(outside_input)]) == 2
+    assert (
+        quality.main(
+            [
+                *root_args,
+                "--input",
+                str(inside_input),
+                "--json-output",
+                str(outside_output),
+            ]
+        )
+        == 2
+    )
+    assert not outside_output.exists()
+
+    escaped_input = trusted / "escaped.json"
+    escaped_input.symlink_to(outside_input)
+    assert quality.main([*root_args, "--input", str(escaped_input)]) == 2
+
+    with pytest.raises(quality.BenchmarkValidationError, match="root must be a directory"):
+        quality.confined_path(
+            inside_input,
+            inside_input,
+            "input",
+            must_exist=True,
+        )
+    with pytest.raises(quality.BenchmarkValidationError, match="cannot resolve"):
+        quality.confined_path(
+            inside_input,
+            trusted / "missing-root",
+            "input",
+            must_exist=True,
+        )
+    with pytest.raises(quality.BenchmarkValidationError, match="regular file"):
+        quality.confined_path(
+            trusted,
+            trusted,
+            "input",
+            must_exist=True,
+        )
 
 
 def test_all_production_callables_are_documented() -> None:

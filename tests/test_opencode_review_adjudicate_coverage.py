@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import runpy
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -30,6 +31,23 @@ support = load_support()
 adjudicate = support.adjudicate
 case_identity = support.case_identity
 valid_inputs = support.valid_inputs
+
+
+def test_direct_module_load_registers_its_support_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path-based invocation must make sibling validation modules importable."""
+    module_dir = str(MODULE_PATH.parent)
+    monkeypatch.setattr(sys, "path", [entry for entry in sys.path if entry != module_dir])
+
+    spec = importlib.util.spec_from_file_location(
+        "opencode_review_adjudicate_direct", MODULE_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert sys.path[0] == module_dir
 
 
 def test_adjudicator_helper_boundaries_reject_invalid_shapes_and_scalars() -> None:

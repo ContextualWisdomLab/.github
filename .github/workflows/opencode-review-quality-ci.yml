@@ -74,6 +74,8 @@ jobs:
             --fail-under=100 \
             --show-missing
           python scripts/ci/opencode_review_quality_score.py \
+            --input-root "${GITHUB_WORKSPACE}" \
+            --output-root "${RUNNER_TEMP}" \
             --input benchmarks/opencode_review/pilot_baseline_v1.json \
             --json-output "${RUNNER_TEMP}/opencode-review-quality.json" \
             --markdown-output "${RUNNER_TEMP}/opencode-review-quality.md"
