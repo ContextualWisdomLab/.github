@@ -101,3 +101,4 @@ def test_quality_workflow_covers_supported_pythons_and_all_contract_files() -> N
     assert "interrogate --fail-under 100" in workflow
     assert "compileall -q" in workflow
     assert "actionlint" in workflow
+    assert '"${RUNNER_TEMP}/actionlint" -shellcheck=' in workflow

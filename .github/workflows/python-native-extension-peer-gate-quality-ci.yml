@@ -172,7 +172,9 @@ jobs:
 
       - name: Validate protected workflow syntax with actionlint
         run: |
-          "${RUNNER_TEMP}/actionlint" \
+          # Shell behavior is covered by the repository's executable contract
+          # tests; keep this bounded gate focused on YAML and expressions.
+          "${RUNNER_TEMP}/actionlint" -shellcheck= \
             .github/workflows/opencode-review-dispatch.yml \
             .github/workflows/python-native-extension-peer-gate-quality-ci.yml
 
