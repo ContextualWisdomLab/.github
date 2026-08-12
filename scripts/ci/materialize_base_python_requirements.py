@@ -38,6 +38,8 @@ UV_EXACT_REQUIREMENT_RE = re.compile(
 UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
+# The release host rejects Python's default User-Agent with HTTP 403.
+TRUSTED_UV_USER_AGENT = "ContextualWisdomLab-OpenCode-Coverage/1"
 TRUSTED_UV_ARCHIVE_URL = (
     "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
     "uv-x86_64-unknown-linux-gnu.tar.gz"
@@ -172,9 +174,13 @@ def _download_trusted_uv_archive() -> bytes:
         # Keep the audited URL literal at the network sink so static analysis can
         # prove that neither user data nor repository content selects a scheme,
         # host, path, query, fragment, method, or request header.
-        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+        request = urllib.request.Request(
             "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
             "uv-x86_64-unknown-linux-gnu.tar.gz",
+            headers={"User-Agent": TRUSTED_UV_USER_AGENT},
+        )
+        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+            request,
             timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
         ) as response:
             final_url = urllib.parse.urlparse(response.geturl())
