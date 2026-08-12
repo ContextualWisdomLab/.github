@@ -920,22 +920,44 @@ jobs:
             if ! jq -e '(.status == "completed") and (.scan_results.scan_completed == true) and (.scan_results.success == true)' "$candidate_run" >/dev/null 2>&1; then
               continue
             fi
-            candidate_head_sha="$(jq -r '
+            candidate_metadata_count="$(jq -r '
               [
                 .head_sha,
                 .commit_sha,
-                .scan_results.head_sha,
-                .scan_results.commit_sha
+                ((.scan_results // {}).head_sha),
+                ((.scan_results // {}).commit_sha)
               ]
-              | map(select(type == "string" and . != ""))
-              | .[0] // empty
+              | map(select(. != null))
+              | length
             ' "$candidate_run")"
-            if [ -z "$candidate_head_sha" ]; then
+            if [ "$candidate_metadata_count" -eq 0 ]; then
               candidate_head_sha="$scan_stage_head_sha"
-            fi
-            if ! [[ "$candidate_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
-              [ "${candidate_head_sha,,}" != "${evidence_head_sha,,}" ]; then
-              continue
+            else
+              candidate_metadata_matches=1
+              candidate_head_sha=""
+              while IFS= read -r candidate_metadata_value; do
+                if [ -z "$candidate_head_sha" ]; then
+                  candidate_head_sha="$candidate_metadata_value"
+                fi
+                if ! [[ "$candidate_metadata_value" =~ ^[0-9a-fA-F]{40}$ ]] ||
+                  [ "${candidate_metadata_value,,}" != "${evidence_head_sha,,}" ]; then
+                  candidate_metadata_matches=0
+                  break
+                fi
+              done < <(jq -r '
+                [
+                  .head_sha,
+                  .commit_sha,
+                  ((.scan_results // {}).head_sha),
+                  ((.scan_results // {}).commit_sha)
+                ]
+                | map(select(. != null))
+                | .[]
+                | if type == "string" then . else "__invalid_metadata_type__" end
+              ' "$candidate_run")
+              if [ "$candidate_metadata_matches" -ne 1 ]; then
+                continue
+              fi
             fi
             candidate_report="$(dirname -- "$candidate_run")/penetration_test_report.md"
             if [ -s "$candidate_report" ]; then
