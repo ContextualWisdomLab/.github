@@ -62,6 +62,19 @@ review again even though the durable central artifact claim already exists.
    (`HTTP 403 admin:org`), so no unauthorized variable mutation is attempted;
    until the admin update is applied, the affected target remains correctly
    blocked rather than receiving untrusted review dispatch.
+8. A push-time Dependabot notice reported five open alerts on the default
+   branch, but the read-only alert records bind them to versions already at or
+   above each advisory's first patched release: `cryptography==50.0.0` for
+   GHSA-g6cj-pr64-35w5/CVE-2026-69247 and `aiohttp==3.14.3` for
+   GHSA-cq5v-8q36-5273/CVE-2026-69244,
+   GHSA-mfx4-hv73-q22v/CVE-2026-69243, and
+   GHSA-mq44-7p77-q5h7/CVE-2026-59881. The pinned hash manifest and source
+   requirements agree with those versions, and the current security workflow's
+   pip-audit passed. Treat the open alert state as stale GitHub advisory
+   materialization until a fresh scan proves otherwise: do not downgrade or
+   dismiss the advisories, and rerun the exact-head security scan after any
+   dependency-manifest change. If a future scan binds an affected version,
+   regenerate both requirements files with uv and commit the generated hashes.
 
 ## Consequences
 
