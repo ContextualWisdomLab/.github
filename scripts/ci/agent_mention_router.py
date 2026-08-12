@@ -402,17 +402,37 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
             "pr_head_sha": request.pull_request_head_sha,
             "pr_base_sha": request.pull_request_base_sha,
             "base_branch": request.pull_request_base_branch,
-            "trigger_reviews": claim["trigger_reviews"],
-            "review_dispatch_limit": claim["review_dispatch_limit"],
-            "enable_auto_merge": claim["enable_auto_merge"],
-            "update_branches": claim["update_branches"],
-            "merge_mode": claim["merge_mode"],
+            "review_policy": {
+                "trigger_reviews": claim["trigger_reviews"],
+                "review_dispatch_limit": claim["review_dispatch_limit"],
+                "enable_auto_merge": claim["enable_auto_merge"],
+                "update_branches": claim["update_branches"],
+                "merge_mode": claim["merge_mode"],
+            },
             "requested_agent": agent,
             "agent_invocation_key": agent_invocation_key(request, agent),
             "requested_by": request.actor,
             "source_comment_id": request.comment_id,
         },
     }
+
+
+def _best_effort_target_request(
+    target_client: GitHubClient,
+    args: Sequence[str],
+    input_payload: dict[str, Any],
+    *,
+    operation: str,
+) -> None:
+    """Keep target-repository UX failures from causing a duplicate dispatch."""
+
+    try:
+        target_client.request(args, input_payload=input_payload)
+    except RuntimeError as exc:
+        print(
+            "Target-repository "
+            f"{operation} unavailable; dispatch remains authoritative: {str(exc)[:500]}"
+        )
 
 
 def dispatch_request(
@@ -478,13 +498,15 @@ def dispatch_request(
             ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
 
     target_api = f"repos/{request.repository}"
-    target_client.request(
+    _best_effort_target_request(
+        target_client,
         [
             f"{target_api}/issues/comments/{request.comment_id}/reactions",
             "-X",
             "POST",
         ],
-        input_payload={"content": "eyes"},
+        {"content": "eyes"},
+        operation="reaction",
     )
     status_parts = [f"Queued {' and '.join(handles)}"]
     existing_handles = tuple(
@@ -507,13 +529,15 @@ def dispatch_request(
         "are the durable dispatch ledger; existing review workflows remain "
         "authoritative for the final verdict and failure evidence."
     )
-    target_client.request(
+    _best_effort_target_request(
+        target_client,
         [
             f"{target_api}/issues/{request.pull_request_number}/comments",
             "-X",
             "POST",
         ],
-        input_payload={"body": acknowledgement},
+        {"body": acknowledgement},
+        operation="acknowledgement",
     )
     return handles
 

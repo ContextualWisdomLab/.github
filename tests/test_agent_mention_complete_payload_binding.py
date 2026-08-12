@@ -122,6 +122,15 @@ def test_invocation_claim_binds_all_security_relevant_fields() -> None:
         "trigger_reviews": True,
         "update_branches": False,
     }
+    opencode_payload = router.opencode_payload(request)["client_payload"]
+    assert opencode_payload["review_policy"] == {
+        "trigger_reviews": True,
+        "review_dispatch_limit": "1",
+        "enable_auto_merge": False,
+        "update_branches": False,
+        "merge_mode": "disabled",
+    }
+    assert len(opencode_payload) <= 10
 
     noema_key = router.agent_invocation_key(request, "cwl-noema-review")
     opencode_key = router.agent_invocation_key(request, "opencode-agent")

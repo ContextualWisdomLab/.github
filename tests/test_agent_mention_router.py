@@ -220,11 +220,17 @@ def test_eligible_agents_and_payloads() -> None:
     assert noema["client_payload"]["pr_base_sha"] == "b" * 40
     opencode = module.opencode_payload(request)
     assert opencode["event_type"] == "agent-mention-opencode"
-    assert opencode["client_payload"]["base_branch"] == "develop"
-    assert opencode["client_payload"]["pr_base_sha"] == "b" * 40
-    assert opencode["client_payload"]["merge_mode"] == "disabled"
-    assert opencode["client_payload"]["enable_auto_merge"] is False
-    assert opencode["client_payload"]["update_branches"] is False
+    payload = opencode["client_payload"]
+    assert payload["base_branch"] == "develop"
+    assert payload["pr_base_sha"] == "b" * 40
+    assert payload["review_policy"] == {
+        "trigger_reviews": True,
+        "review_dispatch_limit": "1",
+        "enable_auto_merge": False,
+        "update_branches": False,
+        "merge_mode": "disabled",
+    }
+    assert len(payload) <= 10
 
 
 def test_dispatch_uses_central_events_and_acknowledges() -> None:
