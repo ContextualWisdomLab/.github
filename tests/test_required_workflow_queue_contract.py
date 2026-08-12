@@ -1104,6 +1104,8 @@ def test_strix_provider_outage_without_findings_fails_closed() -> None:
     assert "before producing complete security evidence" in workflow
     assert "The required check remains failed" in workflow
     assert "rerun after provider capacity recovers" in workflow
+    assert "Incomplete provider evidence is not a clean security result" in workflow
+    assert "backend outage is CI infrastructure noise" not in workflow
     assert "reported_vulnerability_signal" not in workflow
     assert (
         'if grep -Eiq "$backend_unavailable_signal" "$strix_run_log"; then'
