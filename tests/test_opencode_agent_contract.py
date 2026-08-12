@@ -2045,10 +2045,17 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "exit 1" in status_step
     cross_repository_guard = status_step.split(
         'if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]', 1
-    )[1].split("\n          fi", 1)[0]
+    )[1].split("\n\n          state=", 1)[0]
     assert "exact-head formal review remains authoritative" in cross_repository_guard
+    assert 'formal_review_file="$(mktemp)"' in cross_repository_guard
+    assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in cross_repository_guard
+    assert '(.commit_id // "") == $head' in cross_repository_guard
+    assert 'opencode-agent[bot]' in cross_repository_guard
+    assert "APPROVED" in cross_repository_guard
+    assert "CHANGES_REQUESTED" in cross_repository_guard
+    assert "could not prove an exact-head formal OpenCode review" in cross_repository_guard
     assert "exit 0" in cross_repository_guard
-    assert "exit 1" not in cross_repository_guard
+    assert "exit 1" in cross_repository_guard
     assert "using %s token" in status_step
     assert "scripts/ci/opencode_dispatch_status.py" in status_step
     assert "COVERAGE_EVIDENCE_RESULT" in status_step
