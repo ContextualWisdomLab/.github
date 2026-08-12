@@ -38,7 +38,10 @@ The implementation therefore:
 11. rejects every nonempty export unless every logical line is an exact normalized
     package `==` pin followed only by complete SHA-256 hashes; and
 12. exposes only generated requirements files and a source manifest to the later
-    networkless coverage environment.
+    networkless coverage environment;
+13. sends a fixed repository-owned `User-Agent` value on the archive request so
+    the release host does not reject Python's default `urllib` identity, without
+    allowing that header to select the URL, origin, proxy, redirect, or payload.
 
 ## Standards and current-tool rationale
 
@@ -72,6 +75,13 @@ be a complete `sha256` digest. Option lines, direct or local references, other
 algorithms, truncated digests, and global directives are rejected even when they
 contain a `--hash=` substring.
 
+The download request sends a fixed repository-owned `User-Agent` value. This is
+request metadata only: it does not change the literal URL, fixed HTTPS origin,
+empty proxy map, redirect handler, byte bound, or archive digest. The explicit
+value is required because the release host rejects Python's default
+`urllib` identity with HTTP 403 even though the same fixed URL is available to
+an explicit client identity.
+
 The download request uses neither ambient proxy configuration nor automatic
 redirect following. Any HTTP redirect is rejected before a request to the target
 location can be created. The parsed response origin is still checked as defense
@@ -104,8 +114,8 @@ Regression coverage must prove:
 - base-revision-only reads and rejection of unsafe revision/path shapes;
 - an absent sibling project is skipped, but an inventoried project blob that
   cannot be read propagates a fatal error before uv starts;
-- the download opener is cached, disables ambient proxies, and rejects redirects
-  before following them;
+- the download opener is cached, uses the fixed repository-owned `User-Agent`,
+  disables ambient proxies, and rejects redirects before following them;
 - fixed HTTPS scheme and hostname validation, acceptance only of an absent or
   explicit port 443, rejection of malformed and nondefault ports, bounded reads,
   archive digest, member type, member size, executable size, executable mode,
@@ -170,6 +180,9 @@ changes neither the trusted uv download boundary nor the dependency closure
 accepted by the coverage sandbox.
 
 ## References
+
+Internet Engineering Task Force. (2022). *HTTP semantics* (RFC 9110),
+Section 10.1.5, User-Agent. https://www.rfc-editor.org/rfc/rfc9110#section-10.1.5
 
 Astral Software, Inc. (n.d.). *Exporting a lockfile*. uv documentation. Retrieved
 August 4, 2026, from https://docs.astral.sh/uv/concepts/projects/export/
