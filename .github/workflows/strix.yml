@@ -834,6 +834,7 @@ jobs:
           export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=300"
           export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
           export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"
+          printf '%s\n' "${PR_HEAD_SHA:-$GITHUB_SHA}" > "$RUNNER_TEMP/strix_scan_head_sha"
 
           # Capture the gate exit code plus its console output. A non-zero gate
           # result means the scan did not produce complete, trusted evidence;
@@ -876,6 +877,10 @@ jobs:
             cp "$RUNNER_TEMP/strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log"
             copied_reports=1
           fi
+          if [ -s "$RUNNER_TEMP/strix_scan_head_sha" ]; then
+            cp "$RUNNER_TEMP/strix_scan_head_sha" "$GITHUB_WORKSPACE/strix_runs/scan-head-sha.txt"
+            copied_reports=1
+          fi
           if [ -n "$(find "$GITHUB_WORKSPACE/strix_runs" -mindepth 1 -print -quit)" ]; then
             copied_reports=1
           fi
@@ -900,10 +905,36 @@ jobs:
             exit 1
           fi
 
+          scan_stage_head_sha=""
+          if [ -s "$GITHUB_WORKSPACE/strix_runs/scan-head-sha.txt" ]; then
+            scan_stage_head_sha="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/strix_runs/scan-head-sha.txt")"
+          fi
+          if ! [[ "$scan_stage_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Strix evidence must contain the exact head SHA recorded at scan start."
+            exit 1
+          fi
+
           successful_run_file=""
           report_file=""
           while IFS= read -r -d '' candidate_run; do
             if ! jq -e '(.status == "completed") and (.scan_results.scan_completed == true) and (.scan_results.success == true)' "$candidate_run" >/dev/null 2>&1; then
+              continue
+            fi
+            candidate_head_sha="$(jq -r '
+              [
+                .head_sha,
+                .commit_sha,
+                .scan_results.head_sha,
+                .scan_results.commit_sha
+              ]
+              | map(select(type == "string" and . != ""))
+              | .[0] // empty
+            ' "$candidate_run")"
+            if [ -z "$candidate_head_sha" ]; then
+              candidate_head_sha="$scan_stage_head_sha"
+            fi
+            if ! [[ "$candidate_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+              [ "${candidate_head_sha,,}" != "${evidence_head_sha,,}" ]; then
               continue
             fi
             candidate_report="$(dirname -- "$candidate_run")/penetration_test_report.md"
