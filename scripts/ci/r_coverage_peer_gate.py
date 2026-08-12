@@ -79,7 +79,7 @@ def classify_testthat_failure(
             return False
         allowed_packages.update(allowed_missing)
 
-    # ⚡ Bolt: Fast-path rejection before running expensive regex on potentially 2MB logs
+    # Reject the common nonfailure path before scanning a bounded 2 MiB log.
     if "Error: Test failures" not in text:
         return False
 
