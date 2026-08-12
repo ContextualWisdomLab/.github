@@ -556,3 +556,95 @@ def test_list_recent_pull_requests_on_error_parallel(monkeypatch) -> None:
     assert len(captured_errors) == 2
     repo_names = {err[0] for err in captured_errors}
     assert repo_names == {"ContextualWisdomLab/repo1", "ContextualWisdomLab/repo2"}
+
+def test_list_recent_pull_requests_no_on_error_serial(monkeypatch) -> None:
+    """The serial logic propagates errors if on_error is missing."""
+    sweep = module()
+
+    class FailingClient:
+        def request(self, args: list[str]) -> Any:
+            if args[0].startswith("orgs/"):
+                return [[{"full_name": "ContextualWisdomLab/repo1", "owner": {"login": "ContextualWisdomLab"}}]]
+            raise RuntimeError("API failed")
+
+    with pytest.raises(RuntimeError, match="API failed"):
+        list(
+            sweep.list_recent_pull_requests(
+                FailingClient(),
+                organization="ContextualWisdomLab",
+                repository_source="organization",
+                since="2026-08-04T12:00:00Z",
+                on_error=None,
+            )
+        )
+
+
+def test_list_recent_pull_requests_no_on_error_parallel(monkeypatch) -> None:
+    """The parallel logic propagates errors if on_error is missing."""
+    sweep = module()
+
+    class FailingClient:
+        def request(self, args: list[str]) -> Any:
+            if args[0].startswith("orgs/"):
+                return [[
+                    {"full_name": "ContextualWisdomLab/repo1", "owner": {"login": "ContextualWisdomLab"}},
+                    {"full_name": "ContextualWisdomLab/repo2", "owner": {"login": "ContextualWisdomLab"}},
+                ]]
+            raise RuntimeError("API failed")
+
+    with pytest.raises(RuntimeError, match="API failed"):
+        list(
+            sweep.list_recent_pull_requests(
+                FailingClient(),
+                organization="ContextualWisdomLab",
+                repository_source="organization",
+                since="2026-08-04T12:00:00Z",
+                on_error=None,
+            )
+        )
+
+def test_list_recent_pull_requests_parallel_success(monkeypatch) -> None:
+    """The parallel logic yields PRs correctly."""
+    sweep = module()
+
+    class SuccessClient:
+        def request(self, args: list[str]) -> Any:
+            if args[0].startswith("orgs/"):
+                return [[
+                    {"full_name": "ContextualWisdomLab/repo1", "owner": {"login": "ContextualWisdomLab"}},
+                    {"full_name": "ContextualWisdomLab/repo2", "owner": {"login": "ContextualWisdomLab"}},
+                ]]
+            if args[0].startswith("repos/ContextualWisdomLab/repo1"):
+                return [[{"number": 7, "updated_at": "2026-08-05T11:00:00Z"}]]
+            if args[0].startswith("repos/ContextualWisdomLab/repo2"):
+                return [[{"number": 8, "updated_at": "2026-08-05T11:00:00Z"}]]
+            return []
+
+    prs = list(
+        sweep.list_recent_pull_requests(
+            SuccessClient(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-04T12:00:00Z",
+        )
+    )
+
+    assert len(prs) == 2
+    repo_names = {pr["repository"] for pr in prs}
+    assert repo_names == {"ContextualWisdomLab/repo1", "ContextualWisdomLab/repo2"}
+
+
+def test_list_recent_pull_requests_cancel_event(monkeypatch) -> None:
+    """The cancel_event halts fetching in _fetch_repo_pulls."""
+    sweep = module()
+
+    import threading
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    class LoopClient:
+        def request(self, args: list[str]) -> Any:
+            return [[{"number": 7, "updated_at": "2026-08-05T11:00:00Z"}]]
+
+    res = sweep._fetch_repo_pulls(LoopClient(), "ContextualWisdomLab/repo1", datetime.now(timezone.utc), cancel_event)
+    assert res == []

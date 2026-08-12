@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Sequence
@@ -144,10 +145,11 @@ def _fetch_repo_pulls(
     client: GitHubClient,
     repository: str,
     cutoff: datetime,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
     results = []
     page = 1
-    while True:
+    while not (cancel_event and cancel_event.is_set()):
         response = client.request(
             [
                 f"repos/{repository}/pulls",
@@ -216,13 +218,25 @@ def list_recent_pull_requests(
         repository_source=repository_source,
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_repo = {
-            executor.submit(_fetch_repo_pulls, client, repository, cutoff): repository
-            for repository in repositories
-        }
-        for future in concurrent.futures.as_completed(future_to_repo):
-            repository = future_to_repo[future]
+    if len(repositories) <= 1:
+        for repository in repositories:
+            try:
+                yield from _fetch_repo_pulls(client, repository, cutoff)
+            except Exception as exc:  # noqa: BLE001 - repository isolation boundary
+                if on_error is None:
+                    raise
+                on_error(repository, exc)
+        return
+
+    cancel_event = threading.Event()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+    futures = [
+        (repository, executor.submit(_fetch_repo_pulls, client, repository, cutoff, cancel_event))
+        for repository in repositories
+    ]
+
+    try:
+        for repository, future in futures:
             try:
                 pull_requests = future.result()
                 for pr in pull_requests:
@@ -231,6 +245,9 @@ def list_recent_pull_requests(
                 if on_error is None:
                     raise
                 on_error(repository, exc)
+    finally:
+        cancel_event.set()
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def list_recent_comments(
