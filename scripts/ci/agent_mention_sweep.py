@@ -147,6 +147,7 @@ def _fetch_repo_pulls(
     cutoff: datetime,
     cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
+    """Fetch pull requests from a single repository."""
     results = []
     page = 1
     while not (cancel_event and cancel_event.is_set()):
