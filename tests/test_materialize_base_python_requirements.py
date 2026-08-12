@@ -6,6 +6,7 @@ import runpy
 import subprocess
 import sys
 import tarfile
+from urllib.error import HTTPError
 from pathlib import Path
 
 import pytest
@@ -526,6 +527,7 @@ def test_download_trusted_uv_archive_rejects_network_and_size_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Network errors and oversized archives cannot enter the trusted tool path."""
+    monkeypatch.setattr(materializer.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         materializer.urllib.request,
         "urlopen",
@@ -539,6 +541,64 @@ def test_download_trusted_uv_archive_rejects_network_and_size_failures(
     monkeypatch.setattr(materializer, "TRUSTED_UV_DOWNLOAD_MAX_BYTES", 4)
     with pytest.raises(RuntimeError, match="bounded download size"):
         materializer._download_trusted_uv_archive()
+
+
+def test_download_trusted_uv_archive_retries_transient_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient upstream response is retried without changing the trust boundary."""
+    calls = 0
+    sleeps: list[float] = []
+    response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, b"archive")
+
+    def flaky_urlopen(*_args: object, **_kwargs: object) -> FakeHttpResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError(
+                materializer.TRUSTED_UV_ARCHIVE_URL,
+                503,
+                "temporarily unavailable",
+                hdrs=None,
+                fp=None,
+            )
+        return response
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", flaky_urlopen)
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == b"archive"
+    assert calls == 2
+    assert sleeps == [materializer.TRUSTED_UV_RETRY_BACKOFF_SECONDS]
+
+
+@pytest.mark.parametrize("status", [403, 503])
+def test_download_trusted_uv_archive_reports_http_status_after_blocking_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+) -> None:
+    """A non-retryable or exhausted HTTP failure remains an explicit blocker."""
+    calls = 0
+    sleeps: list[float] = []
+
+    def blocked_urlopen(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise HTTPError(
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            status,
+            "blocked",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", blocked_urlopen)
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match=f"HTTPError {status}"):
+        materializer._download_trusted_uv_archive()
+    assert calls == (1 if status == 403 else materializer.TRUSTED_UV_DOWNLOAD_ATTEMPTS)
+    assert len(sleeps) == calls - 1
 
 
 def test_verified_uv_binary_accepts_exact_archive(

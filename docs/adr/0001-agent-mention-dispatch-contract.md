@@ -38,6 +38,15 @@ review again even though the durable central artifact claim already exists.
    resolver failures remain fatal. The exact contextual-orchestrator #109
    failure at head `216177f` (`atheris==3.0.0`, Python 3.14, only `3.1.0`
    available) is a regression case, not a provider or code-quality excuse.
+6. The trusted uv archive fetch keeps its fixed HTTPS origin, no-proxy and
+   no-redirect opener, bounded size, and checksum/member verification. A
+   transient transport failure may be retried twice at most for HTTP 408, 429,
+   5xx gateway/service responses, or socket-level `OSError`; non-retryable HTTP
+   status, exhausted retries, redirects, size violations, and integrity failures
+   remain blocking. The prior fast-mlsirm #778 exact-head review recorded only
+   `trusted uv archive download failed: HTTPError`, so the downloader now retains
+   the status code for diagnosis without accepting an alternate origin or
+   weakening TLS verification.
 
 ## Consequences
 
