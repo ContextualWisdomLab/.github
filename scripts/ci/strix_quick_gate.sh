@@ -3902,7 +3902,7 @@ run_current_target_scan() {
 		fi
 	fi
 
-	if has_only_below_threshold_vulnerabilities; then
+	if [ "$strict_primary_provider_fallback" -eq 0 ] && has_only_below_threshold_vulnerabilities; then
 		return 0
 	fi
 
@@ -3979,7 +3979,7 @@ run_current_target_scan() {
 			strict_fallback_provider_signal=1
 		fi
 
-		if has_only_below_threshold_vulnerabilities; then
+		if [ "$strict_fallback_provider_signal" -eq 0 ] && has_only_below_threshold_vulnerabilities; then
 			return 0
 		fi
 

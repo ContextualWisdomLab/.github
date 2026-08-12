@@ -66,6 +66,7 @@ def main(argv: list[str]) -> int:
         return 127
 
     def forward(signum: int, _frame: object) -> None:
+        """Forward termination to the child process group before exiting."""
         _signal_process_group(process, signum)
         raise SystemExit(128 + signum)
 

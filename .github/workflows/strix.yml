@@ -887,6 +887,58 @@ jobs:
             } > "$GITHUB_WORKSPACE/strix_runs/scan-summary.txt"
           fi
 
+      - name: Validate Strix report provenance
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
+        env:
+          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
+        run: |
+          set -euo pipefail
+          evidence_head_sha="${PR_HEAD_SHA:-$GITHUB_SHA}"
+          if ! [[ "$evidence_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Strix evidence head SHA must be a 40-character git SHA."
+            exit 1
+          fi
+
+          successful_run_file=""
+          report_file=""
+          while IFS= read -r -d '' candidate_run; do
+            if ! jq -e '(.status == "completed") and (.scan_results.scan_completed == true) and (.scan_results.success == true)' "$candidate_run" >/dev/null 2>&1; then
+              continue
+            fi
+            candidate_report="$(dirname -- "$candidate_run")/penetration_test_report.md"
+            if [ -s "$candidate_report" ]; then
+              successful_run_file="$candidate_run"
+              report_file="$candidate_report"
+              break
+            fi
+          done < <(find "$GITHUB_WORKSPACE/strix_runs" -type f -name run.json -print0)
+
+          if [ -z "$successful_run_file" ] || [ -z "$report_file" ]; then
+            echo "::error::Strix evidence must contain a completed successful run.json and a non-empty penetration_test_report.md."
+            exit 1
+          fi
+
+          gate_console="$GITHUB_WORKSPACE/strix_runs/gate-console.log"
+          if [ -f "$gate_console" ] && grep -Eiq 'Strix (report artifacts emitted|run emitted|scan failed|reported zero vulnerabilities).*failing closed|No Strix vulnerability report artifact was produced' "$gate_console"; then
+            echo "::error::Strix evidence contains a fail-closed/provider-infrastructure marker; it cannot be published as a successful scan."
+            exit 1
+          fi
+
+          run_id="$(jq -r '.run_id // empty' "$successful_run_file")"
+          if [ -z "$run_id" ]; then
+            echo "::error::Strix evidence run.json must contain a run_id."
+            exit 1
+          fi
+          report_sha256="$(sha256sum "$report_file" | awk '{print $1}')"
+          jq -n \
+            --arg head_sha "$evidence_head_sha" \
+            --arg run_id "$run_id" \
+            --arg run_json "${successful_run_file#"$GITHUB_WORKSPACE/strix_runs/"}" \
+            --arg report "${report_file#"$GITHUB_WORKSPACE/strix_runs/"}" \
+            --arg report_sha256 "$report_sha256" \
+            '{head_sha:$head_sha, run_id:$run_id, run_json:$run_json, report:$report, report_sha256:$report_sha256, scan_completed:true}' \
+            > "$GITHUB_WORKSPACE/strix_runs/evidence-binding.json"
+
       - name: Upload Strix reports artifact
         if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
