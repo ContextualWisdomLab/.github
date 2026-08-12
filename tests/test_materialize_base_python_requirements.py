@@ -503,12 +503,22 @@ def _trusted_uv_archive(
 def test_download_trusted_uv_archive_accepts_fixed_https_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The downloader returns bounded bytes from the fixed Astral HTTPS origin."""
+    """The downloader sends a stable User-Agent to the fixed Astral HTTPS origin."""
     payload = b"archive"
     response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, payload)
-    monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: object, **_kwargs: object) -> FakeHttpResponse:
+        captured["request"] = request
+        return response
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", fake_urlopen)
 
     assert materializer._download_trusted_uv_archive() == payload
+    request = captured["request"]
+    assert isinstance(request, materializer.urllib.request.Request)
+    assert request.full_url == materializer.TRUSTED_UV_ARCHIVE_URL
+    assert request.get_header("User-agent") == materializer.TRUSTED_UV_USER_AGENT
 
 
 def test_download_trusted_uv_archive_rejects_unsafe_redirect(
