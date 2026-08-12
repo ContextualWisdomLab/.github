@@ -42,7 +42,7 @@ def test_strix_workflow_installs_only_hash_verified_wheels() -> None:
 
 
 def test_strix_requirement_locks_keep_dependabot_patch_floors() -> None:
-    """Both Strix locks must retain the exact versions used by the hash contract."""
+    """Both Strix locks must pin each patched dependency exactly once."""
     for requirements_file in STRIX_REQUIREMENT_FILES:
         content = requirements_file.read_text(encoding="utf-8")
         for package, version in PATCHED_DEPENDENCY_FLOORS.items():
