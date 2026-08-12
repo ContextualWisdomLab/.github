@@ -232,6 +232,39 @@ def test_explicit_python_incompatibility_is_visible_and_nonfatal(tmp_path) -> No
     assert "candidates=1 installed=0 skipped=1" in stdout.getvalue()
 
 
+def test_unavailable_binary_version_for_runner_interpreter_is_nonfatal(tmp_path) -> None:
+    """A pinned package without a compatible runner binary may defer safely."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="fuzz/requirements-atheris.txt",
+    )
+
+    def fake_runner(command: list[str], **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                "ERROR: Could not find a version that satisfies the requirement "
+                "atheris==3.0.0 (from versions: 3.1.0)\n"
+                "ERROR: No matching distribution found for atheris==3.0.0"
+            ),
+        )
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    result = installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert "atheris==3.0.0" in stderr.getvalue()
+    assert "candidates=1 installed=0 skipped=1" in stdout.getvalue()
+
+
 def test_fatal_same_directory_group_failure_aborts(tmp_path) -> None:
     """A group cannot turn a registry or integrity failure into a skip."""
     write_candidate(

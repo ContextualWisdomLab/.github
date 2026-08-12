@@ -38,6 +38,10 @@ DEFERABLE_PREFLIGHT_FAILURES = (
         re.IGNORECASE,
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
+    re.compile(
+        r"Could not find a version that satisfies the requirement .*\(from versions:\s+[^)]+\)",
+        re.IGNORECASE,
+    ),
 )
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -151,11 +155,12 @@ def _is_deferable_preflight_failure(output: str) -> bool:
 
     A hash-bearing supplement can fail pip's independent-closure check because a
     transitive pin/hash lives in a sibling lock, and a base lock can explicitly
-    reject the pinned coverage-image interpreter. Those states are safe to
-    recover through a same-directory group or defer to the later networkless
-    coverage run. Hash mismatches, resolver crashes, empty diagnostics, and
-    registry/network failures remain fatal so a broken trusted build cannot be
-    mistaken for an optional lock.
+    reject the pinned coverage-image interpreter or offer versions that have no
+    compatible binary for it. Those states are safe to recover through a
+    same-directory group or defer to the later networkless coverage run. Hash
+    mismatches, resolver crashes, empty diagnostics, and registry/network
+    failures remain fatal so a broken trusted build cannot be mistaken for an
+    optional lock.
     """
     return bool(output.strip()) and any(
         pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES

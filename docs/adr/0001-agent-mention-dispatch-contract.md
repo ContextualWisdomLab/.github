@@ -31,6 +31,13 @@ review again even though the durable central artifact claim already exists.
    OpenCode installation token. A central `GITHUB_TOKEN` is not treated as a
    sibling-repository credential, and no review or merge authority is inferred
    from a router success.
+5. Trusted coverage-image lock preflight must classify a pinned package with no
+   binary compatible with the runner interpreter as interpreter incompatibility
+   when the resolver reports an explicit available-version list. It may defer
+   that candidate to the later coverage stage, while registry, hash, and
+   resolver failures remain fatal. The exact contextual-orchestrator #109
+   failure at head `216177f` (`atheris==3.0.0`, Python 3.14, only `3.1.0`
+   available) is a regression case, not a provider or code-quality excuse.
 
 ## Consequences
 
@@ -56,5 +63,8 @@ mechanism.
 - The wrapper workflow reads only `client_payload.review_policy` and forwards a
   ten-property scheduler payload.
 - `actionlint` accepts both dispatch wrapper workflows.
+- `tests/test_install_base_python_locks.py` covers the Python 3.14/Atheris
+  binary-compatibility classification and keeps unclassified resolver/network
+  failures fatal.
 - Independent current-head review, terminal checks, structured Strix evidence,
   and protected-branch rules remain required before merge.
