@@ -3767,91 +3767,6 @@ jobs:
                       "context": 200000,
                       "output": 32000
                     }
-                  },
-                  "hy3-free": {
-                    "name": "Hy3 Free",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "variants": {
-                      "high": {
-                        "reasoningEffort": "high"
-                      }
-                    },
-                    "limit": {
-                      "context": 190000,
-                      "output": 64000
-                    }
-                  },
-                  "minimax-m3-free": {
-                    "name": "MiniMax-M3 Free",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "variants": {
-                      "high": {
-                        "reasoningEffort": "high"
-                      }
-                    },
-                    "limit": {
-                      "context": 200000,
-                      "output": 32000
-                    }
-                  },
-                  "glm-5-free": {
-                    "name": "GLM-5 Free",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "variants": {
-                      "high": {
-                        "reasoningEffort": "high"
-                      }
-                    },
-                    "limit": {
-                      "context": 204800,
-                      "output": 131072
-                    }
-                  },
-                  "kimi-k2.5-free": {
-                    "name": "Kimi K2.5 Free",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "variants": {
-                      "high": {
-                        "reasoningEffort": "high"
-                      }
-                    },
-                    "limit": {
-                      "context": 262144,
-                      "output": 262144
-                    }
-                  },
-                  "qwen3.6-plus-free": {
-                    "name": "Qwen3.6 Plus Free",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "variants": {
-                      "high": {
-                        "reasoningEffort": "high"
-                      }
-                    },
-                    "limit": {
-                      "context": 262144,
-                      "output": 65536
-                    }
                   }
                 }
               },
@@ -4305,15 +4220,16 @@ jobs:
           # existing keyed fallback list: OpenCode Zen GPT-5.6 Terra, DeepSeek
           # V3, the direct GPT-5.6 Luna slot, and pinned PAID
           # OpenRouter coder models (free-tier candidates hit the shared
-          # free-models-per-day cap and hung for the full candidate timeout,
-          # so the OpenRouter slots use cheap paid models billed against the
+          # free-models-per-day cap and can otherwise hold the queue for hours,
+          # so free-tier candidates use a bounded five-minute timeout and the
+          # OpenRouter slots use cheap paid models billed against the
           # org's OpenRouter credits), then the full-size GPT-4.1 long-context
           # endpoint and provider-specific GPT/o3 fallbacks.
           # The direct-OpenAI slot runs GPT-5.6 Luna: the newest family's
           # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
           # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
           # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free opencode-free/hy3-free opencode-free/minimax-m3-free opencode-free/glm-5-free opencode-free/kimi-k2.5-free opencode-free/qwen3.6-plus-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -4347,7 +4263,7 @@ jobs:
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
           OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"
           OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"
-          OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"
+          OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "300"
           # This installation currently reports a 4k request-body limit for
           # GitHub Models GPT-5 endpoints even though the public catalog is
           # larger. Keep the exact runtime failure visible without spending a
