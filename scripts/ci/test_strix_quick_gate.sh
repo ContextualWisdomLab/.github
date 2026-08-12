@@ -226,6 +226,12 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "bash \"\$TRUSTED_STRIX_GATE\"" "strix workflow executes trusted temp gate script"
 	assert_file_contains "$workflow_file" "Collect Strix reports for artifact upload" "strix workflow preserves reports from trusted workspace"
 	assert_file_contains "$workflow_file" "scan-summary.txt" "strix workflow creates a fallback artifact when Strix emits no report files"
+	assert_file_contains "$workflow_file" "Validate Strix report provenance" "strix workflow validates structured report provenance before publishing evidence"
+	assert_file_contains "$workflow_file" "scan_results.scan_completed == true" "strix workflow requires a completed Strix scan result"
+	assert_file_contains "$workflow_file" "evidence-binding.json" "strix workflow binds the report artifact to the scanned head SHA"
+	assert_file_contains "$workflow_file" "fail-closed/provider-infrastructure marker" "strix workflow rejects provider-failure evidence even when a report exists"
+	assert_file_contains "$GATE_SCRIPT" 'strict_primary_provider_fallback" -eq 0 ] && has_only_below_threshold_vulnerabilities' "strix gate cannot bypass strict primary provider fallback with below-threshold findings"
+	assert_file_contains "$GATE_SCRIPT" 'strict_fallback_provider_signal" -eq 0 ] && has_only_below_threshold_vulnerabilities' "strix gate cannot bypass strict fallback provider signal with below-threshold findings"
 	local checkout_count
 	checkout_count="$(grep -Fc "uses: actions/checkout@" "$workflow_file")"
 	assert_equals "1" "$checkout_count" "strix workflow uses actions/checkout exactly once for the central trusted source"
