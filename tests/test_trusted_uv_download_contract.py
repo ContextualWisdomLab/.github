@@ -12,6 +12,7 @@ _EXPECTED_URL = (
     "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
     "uv-x86_64-unknown-linux-gnu.tar.gz"
 )
+_EXPECTED_USER_AGENT = "ContextualWisdomLab-OpenCode-Coverage/1"
 _SEMGREP_DYNAMIC_URL_RULE = (
     "python.lang.security.audit.dynamic-urllib-use-detected."
     "dynamic-urllib-use-detected"
@@ -53,16 +54,15 @@ def _urlopen_calls() -> list[ast.Call]:
     ]
 
 
-def test_urlopen_receives_one_literal_https_release_url() -> None:
-    """Static analysis can prove repository or user data never selects the URL."""
+def test_urlopen_receives_one_static_request() -> None:
+    """Static analysis can prove the downloader passes one named request object."""
     calls = _urlopen_calls()
 
     assert len(calls) == 1
     assert len(calls[0].args) == 1
-    url_argument = calls[0].args[0]
-    assert isinstance(url_argument, ast.Constant)
-    assert isinstance(url_argument.value, str)
-    assert url_argument.value == _EXPECTED_URL
+    request_argument = calls[0].args[0]
+    assert isinstance(request_argument, ast.Name)
+    assert request_argument.id == "request"
 
 
 def test_literal_network_sink_matches_the_documented_release_constant() -> None:
@@ -70,8 +70,13 @@ def test_literal_network_sink_matches_the_documented_release_constant() -> None:
     assert _assigned_literal("TRUSTED_UV_ARCHIVE_URL") == _EXPECTED_URL
 
 
-def test_downloader_never_constructs_a_dynamic_request_object() -> None:
-    """The audited downloader cannot hide a dynamic URL inside ``Request``."""
+def test_literal_user_agent_matches_the_documented_identity() -> None:
+    """The request identity remains fixed and contains no user-controlled data."""
+    assert _assigned_literal("TRUSTED_UV_USER_AGENT") == _EXPECTED_USER_AGENT
+
+
+def test_downloader_constructs_one_static_request() -> None:
+    """The request URL and User-Agent are both statically constrained."""
     request_calls = [
         node
         for node in ast.walk(_download_function())
@@ -80,7 +85,24 @@ def test_downloader_never_constructs_a_dynamic_request_object() -> None:
         and node.func.attr == "Request"
     ]
 
-    assert request_calls == []
+    assert len(request_calls) == 1
+    request_call = request_calls[0]
+    assert len(request_call.args) == 1
+    url_argument = request_call.args[0]
+    assert isinstance(url_argument, ast.Constant)
+    assert url_argument.value == _EXPECTED_URL
+
+    headers_keyword = next(
+        keyword for keyword in request_call.keywords if keyword.arg == "headers"
+    )
+    assert isinstance(headers_keyword.value, ast.Dict)
+    assert len(headers_keyword.value.keys) == 1
+    key = headers_keyword.value.keys[0]
+    value = headers_keyword.value.values[0]
+    assert isinstance(key, ast.Constant)
+    assert key.value == "User-Agent"
+    assert isinstance(value, ast.Name)
+    assert value.id == "TRUSTED_UV_USER_AGENT"
 
 
 def test_literal_urlopen_sink_has_one_scoped_semgrep_suppression() -> None:
