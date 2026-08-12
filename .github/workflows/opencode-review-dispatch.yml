@@ -7853,7 +7853,33 @@ jobs:
           if [ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ] &&
             { [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "github-token" ] ||
               [ "${OPENCODE_STATUS_TOKEN_SOURCE:-}" = "opencode-app" ]; }; then
-            echo "::notice::OpenCode repository_dispatch status publication is unavailable because only the same-repository github.token can access cross-repository target ${GH_REPOSITORY}, and the OpenCode App token has no cross-repository commit-status permission in this deployment. The exact-head formal review remains authoritative; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish the optional commit status."
+            formal_review_file="$(mktemp)"
+            cleanup_formal_review_evidence() {
+              rm -f "$formal_review_file"
+            }
+            trap cleanup_formal_review_evidence EXIT
+            if ! gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp |
+              jq 'flatten' >"$formal_review_file"; then
+              echo "::error::OpenCode repository_dispatch status publication could not prove an exact-head formal OpenCode review before skipping unavailable cross-repository commit-status publication."
+              exit 1
+            fi
+            if ! jq -e --arg head "$PR_HEAD_SHA" '
+              any(.[];
+                (.commit_id // "") == $head
+                and (
+                  (.user.login // "") == "opencode-agent[bot]"
+                  or (.user.login // "") == "opencode-agent"
+                )
+                and (
+                  ((.state // "") | ascii_upcase) == "APPROVED"
+                  or ((.state // "") | ascii_upcase) == "CHANGES_REQUESTED"
+                )
+              )
+            ' "$formal_review_file" >/dev/null; then
+              echo "::error::OpenCode repository_dispatch status publication could not prove an exact-head formal OpenCode review; refusing to hide a cross-repository review-evidence gap."
+              exit 1
+            fi
+            echo "::notice::OpenCode repository_dispatch status publication is unavailable because only the same-repository github.token can access cross-repository target ${GH_REPOSITORY}, and the OpenCode App token has no cross-repository commit-status permission in this deployment. A verified exact-head formal review remains authoritative; configure PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN to publish the optional commit status."
             exit 0
           fi
 
