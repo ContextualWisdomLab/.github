@@ -1092,7 +1092,7 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
-def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+def test_strix_provider_outage_without_findings_fails_closed() -> None:
     workflow = workflow_text("strix.yml")
 
     assert "RateLimitError|Too many requests" in workflow
@@ -1100,12 +1100,14 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
-    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
-    assert "before producing a vulnerability report" in workflow
-    assert "genuine findings still fail the check" in workflow
+    assert "before producing complete security evidence" in workflow
+    assert "The required check remains failed" in workflow
+    assert "rerun after provider capacity recovers" in workflow
+    assert "reported_vulnerability_signal" not in workflow
     assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+        'if grep -Eiq "$backend_unavailable_signal" "$strix_run_log"; then'
+        in workflow
     )
 
 
