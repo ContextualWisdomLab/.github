@@ -47,6 +47,21 @@ review again even though the durable central artifact claim already exists.
    `trusted uv archive download failed: HTTPError`, so the downloader now retains
    the status code for diagnosis without accepting an alternate origin or
    weakening TLS verification.
+7. The exact `OPENCODE_REPOSITORY_DISPATCH_TARGETS` organization variable is a
+   security boundary, not a best-effort hint. On 2026-08-12, central dispatch
+   validation rejected `ContextualWisdomLab/argos#425` with the expected
+   `repository_dispatch authorization rejected target ... absent from the
+   configured exact repository allowlist` error, although the organization
+   ruleset audit records that `argos` inherits the required workflows. This is
+   allowlist drift: the safe repair is to add the intended repository through
+   the organization-admin variable change path (using the managed Keyverse/
+   admin credential), add an audit assertion that inherited review targets are
+   represented in the dispatch allowlist, and retain exact matching. Wildcards,
+   implicit organization-wide trust, and weakening the validator are rejected.
+   The current repository token lacks the required organization variable scope
+   (`HTTP 403 admin:org`), so no unauthorized variable mutation is attempted;
+   until the admin update is applied, the affected target remains correctly
+   blocked rather than receiving untrusted review dispatch.
 
 ## Consequences
 
@@ -77,3 +92,6 @@ mechanism.
   failures fatal.
 - Independent current-head review, terminal checks, structured Strix evidence,
   and protected-branch rules remain required before merge.
+- The allowlist/ruleset parity audit must be rerun after any organization
+  variable update; a missing target is an operational blocker, not review
+  approval evidence.
