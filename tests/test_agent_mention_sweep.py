@@ -494,3 +494,65 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["lookback_hours"] == 48
     assert captured[0]["max_dispatches"] == 3
     assert captured[0]["dry_run"] is True
+
+def test_list_recent_pull_requests_on_error(monkeypatch) -> None:
+    """The pagination logic isolates and reports errors through on_error without crashing."""
+    sweep = module()
+
+    class FailingClient:
+        def request(self, args: list[str]) -> Any:
+            if args[0].startswith("orgs/"):
+                return [[{"full_name": "ContextualWisdomLab/repo1", "owner": {"login": "ContextualWisdomLab"}}]]
+            raise RuntimeError("API failed")
+
+    captured_errors: list[tuple[str, Exception]] = []
+
+    def handle_error(repo: str, exc: Exception) -> None:
+        captured_errors.append((repo, exc))
+
+    list(
+        sweep.list_recent_pull_requests(
+            FailingClient(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-04T12:00:00Z",
+            on_error=handle_error,
+        )
+    )
+
+    assert len(captured_errors) == 1
+    assert captured_errors[0][0] == "ContextualWisdomLab/repo1"
+    assert str(captured_errors[0][1]) == "API failed"
+
+
+def test_list_recent_pull_requests_on_error_parallel(monkeypatch) -> None:
+    """The parallel logic isolates and reports errors through on_error without crashing."""
+    sweep = module()
+
+    class FailingClient:
+        def request(self, args: list[str]) -> Any:
+            if args[0].startswith("orgs/"):
+                return [[
+                    {"full_name": "ContextualWisdomLab/repo1", "owner": {"login": "ContextualWisdomLab"}},
+                    {"full_name": "ContextualWisdomLab/repo2", "owner": {"login": "ContextualWisdomLab"}},
+                ]]
+            raise RuntimeError("API failed")
+
+    captured_errors: list[tuple[str, Exception]] = []
+
+    def handle_error(repo: str, exc: Exception) -> None:
+        captured_errors.append((repo, exc))
+
+    list(
+        sweep.list_recent_pull_requests(
+            FailingClient(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-04T12:00:00Z",
+            on_error=handle_error,
+        )
+    )
+
+    assert len(captured_errors) == 2
+    repo_names = {err[0] for err in captured_errors}
+    assert repo_names == {"ContextualWisdomLab/repo1", "ContextualWisdomLab/repo2"}

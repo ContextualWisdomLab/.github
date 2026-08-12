@@ -68,6 +68,10 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     """Run a command without invoking a shell and return stdout."""
     if isinstance(args, str):
         raise TypeError("run() requires argv, not a shell command string")
+
+    env = os.environ.copy()
+    env.pop("GITHUB_API_URL", None)
+
     completed = subprocess.run(
         list(args),
         input=stdin,
