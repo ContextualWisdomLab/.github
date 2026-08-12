@@ -1,0 +1,48 @@
+name: One-shot Independent Noema Review Repair
+
+on:
+  push:
+    branches:
+      - fix/noema-independent-llm-review
+    paths:
+      - .github/workflows/one-shot-noema-independent-review-repair.yml
+      - scripts/ci/one_shot_noema_independent_review_repair.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-noema-independent-review-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Check out exact feature branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/noema-independent-llm-review
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-verified review test toolchain
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: >-
+          python -m pip install --only-binary=:all: --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Execute RED-GREEN repair and publish verified tree
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: python scripts/ci/one_shot_noema_independent_review_repair.py
