@@ -231,6 +231,139 @@ def test_fetch_repo_pulls_skips_requests_when_already_cancelled() -> None:
     assert client.calls == []
 
 
+def test_recent_pull_results_preserve_repository_order(monkeypatch) -> None:
+    """Concurrent fetch completion cannot change bounded sweep selection order."""
+
+    sweep = module()
+    fast_finished = threading.Event()
+    monkeypatch.setattr(
+        sweep,
+        "list_accessible_repositories",
+        lambda *args, **kwargs: [
+            "ContextualWisdomLab/slow-first",
+            "ContextualWisdomLab/fast-second",
+        ],
+    )
+
+    def fetch(client, repository_name, cutoff, cancelled):
+        """Finish the second repository first while retaining source order."""
+
+        del client, cutoff, cancelled
+        if repository_name.endswith("/slow-first"):
+            assert fast_finished.wait(1)
+        else:
+            fast_finished.set()
+        return [{"repository": repository_name, "number": 7}]
+
+    monkeypatch.setattr(sweep, "_fetch_repo_pulls", fetch)
+    results = list(
+        sweep.list_recent_pull_requests(
+            object(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T00:00:00Z",
+        )
+    )
+
+    assert [result["repository"] for result in results] == [
+        "ContextualWisdomLab/slow-first",
+        "ContextualWisdomLab/fast-second",
+    ]
+
+
+def test_single_repository_uses_serial_fast_path(monkeypatch) -> None:
+    """A one-repository sweep avoids executor lifecycle and thread overhead."""
+
+    sweep = module()
+    monkeypatch.setattr(
+        sweep,
+        "list_accessible_repositories",
+        lambda *args, **kwargs: ["ContextualWisdomLab/only"],
+    )
+    monkeypatch.setattr(
+        sweep.concurrent.futures,
+        "ThreadPoolExecutor",
+        lambda *args, **kwargs: pytest.fail("single repository created an executor"),
+    )
+    monkeypatch.setattr(
+        sweep,
+        "_fetch_repo_pulls",
+        lambda *args, **kwargs: [
+            {"repository": "ContextualWisdomLab/only", "number": 7}
+        ],
+    )
+
+    assert list(
+        sweep.list_recent_pull_requests(
+            object(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T00:00:00Z",
+        )
+    ) == [{"repository": "ContextualWisdomLab/only", "number": 7}]
+
+
+def test_single_repository_failure_uses_isolation_sink(monkeypatch) -> None:
+    """The serial fast path preserves repository-local error isolation."""
+
+    sweep = module()
+    monkeypatch.setattr(
+        sweep,
+        "list_accessible_repositories",
+        lambda *args, **kwargs: ["ContextualWisdomLab/only"],
+    )
+    monkeypatch.setattr(
+        sweep,
+        "_fetch_repo_pulls",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("forbidden")),
+    )
+    failures = []
+
+    assert list(
+        sweep.list_recent_pull_requests(
+            object(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T00:00:00Z",
+            on_error=lambda scope, error: failures.append((scope, str(error))),
+        )
+    ) == []
+    assert failures == [("ContextualWisdomLab/only", "forbidden")]
+
+
+def test_parallel_repository_failure_raises_without_sink(monkeypatch) -> None:
+    """Concurrent collection fails closed when no isolation sink is supplied."""
+
+    sweep = module()
+    monkeypatch.setattr(
+        sweep,
+        "list_accessible_repositories",
+        lambda *args, **kwargs: [
+            "ContextualWisdomLab/broken",
+            "ContextualWisdomLab/healthy",
+        ],
+    )
+
+    def fetch(client, repository_name, cutoff, cancelled):
+        """Fail the first repository while allowing its peer to finish."""
+
+        del client, cutoff, cancelled
+        if repository_name.endswith("/broken"):
+            raise RuntimeError("forbidden")
+        return []
+
+    monkeypatch.setattr(sweep, "_fetch_repo_pulls", fetch)
+    with pytest.raises(RuntimeError, match="forbidden"):
+        list(
+            sweep.list_recent_pull_requests(
+                object(),
+                organization="ContextualWisdomLab",
+                repository_source="organization",
+                since="2026-08-05T00:00:00Z",
+            )
+        )
+
+
 def test_closing_recent_pull_iterator_cancels_without_waiting(
     monkeypatch,
 ) -> None:

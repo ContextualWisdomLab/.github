@@ -220,7 +220,7 @@ def list_recent_pull_requests(
     since: str,
     on_error: Callable[[str, Exception], None] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Yield recent open pull requests with lazy cutoff-aware pagination."""
+    """Yield recent PRs in stable repository order with bounded pagination."""
 
     cutoff = parse_timestamp(since)
     repositories = list_accessible_repositories(
@@ -230,25 +230,40 @@ def list_recent_pull_requests(
     )
 
     cancelled = threading.Event()
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+
+    if len(repositories) <= 1:
+        for repository in repositories:
+            try:
+                yield from _fetch_repo_pulls(
+                    client, repository, cutoff, cancelled
+                )
+            except Exception as exc:  # noqa: BLE001 - repository isolation boundary
+                if on_error is None:
+                    raise
+                on_error(repository, exc)
+        return
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(5, len(repositories))
+    )
     completed = False
     try:
-        future_to_repo = {
-            executor.submit(
-                _fetch_repo_pulls,
-                client,
+        repository_futures = [
+            (
                 repository,
-                cutoff,
-                cancelled,
-            ): repository
+                executor.submit(
+                    _fetch_repo_pulls,
+                    client,
+                    repository,
+                    cutoff,
+                    cancelled,
+                ),
+            )
             for repository in repositories
-        }
-        for future in concurrent.futures.as_completed(future_to_repo):
-            repository = future_to_repo[future]
+        ]
+        for repository, future in repository_futures:
             try:
-                pull_requests = future.result()
-                for pr in pull_requests:
-                    yield pr
+                yield from future.result()
             except Exception as exc:  # noqa: BLE001 - repository isolation boundary
                 if on_error is None:
                     raise
@@ -256,7 +271,7 @@ def list_recent_pull_requests(
         completed = True
     finally:
         cancelled.set()
-        for future in future_to_repo:
+        for _, future in repository_futures:
             future.cancel()
         executor.shutdown(wait=completed, cancel_futures=True)
 
