@@ -219,7 +219,6 @@ def _touches_native_or_trust_boundary(
         python_source / PurePosixPath(*module_name.split("."))
     ).with_suffix(".pyi")
     for path in changed_paths:
-        path_text = path.as_posix()
         if path == pyproject_path or path == manifest_path:
             return True
         if path.name in LOCK_FILE_NAMES or path.name in PACKAGING_FILE_NAMES:
@@ -230,11 +229,14 @@ def _touches_native_or_trust_boundary(
             return True
         if path.parts[:2] in {(".github", "workflows"), (".github", "actions")}:
             return True
-        if path.name.startswith("requirements") and path.suffix == ".txt":
+        if path.name.startswith(("requirements", "constraints")) and path.suffix in {
+            ".in",
+            ".txt",
+        }:
             return True
         if manifest_parent != PurePosixPath(".") and path.is_relative_to(manifest_parent):
             return True
-        if path_text.endswith("/pyproject.toml"):
+        if path.name == "pyproject.toml":
             return True
     return False
 

@@ -192,6 +192,8 @@ def test_maturin_contract_uses_default_manifest(tmp_path: Path) -> None:
         "build.rs\n",
         "setup.py\n",
         "requirements-ci.txt\n",
+        "requirements-ci.in\n",
+        "constraints.txt\n",
         ".github/workflows/ci.yml\n",
         ".github/actions/setup/action.yml\n",
         "python/fast_mlsirm/_core.pyi\n",

@@ -898,6 +898,104 @@ jobs:
             rm -f "$log_file"
           }
 
+          run_python_native_extension_classifier() {
+            local project_dir="$1"
+            local python_native_pytest_log="$2"
+            local python_native_changed_files="$3"
+            local python_native_pyproject_snapshot="$4"
+
+            [ -s "$python_native_pyproject_snapshot" ] || return 1
+            python3 -I "$GITHUB_WORKSPACE/scripts/ci/python_native_extension_peer_gate.py" \
+              classify-pytest \
+              --log "$python_native_pytest_log" \
+              --pyproject "$python_native_pyproject_snapshot" \
+              --logical-pyproject "$project_dir/pyproject.toml" \
+              --changed-files "$python_native_changed_files" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR"
+          }
+
+          run_python_test_and_capture() {
+            local label="$1"
+            local project_dir="$2"
+            shift 2
+            local python_native_pytest_log
+            local python_native_changed_files
+            local python_native_pyproject_snapshot
+            local rc
+
+            python_native_pytest_log="$(mktemp "$RUNNER_TEMP/python-native-pytest.XXXXXX")"
+            python_native_changed_files="$(mktemp)"
+            python_native_pyproject_snapshot="$(mktemp)"
+            changed_files_for_coverage >"$python_native_changed_files"
+            chmod 0444 "$python_native_changed_files"
+            if [ -f "$project_dir/pyproject.toml" ] \
+              && [ ! -L "$project_dir/pyproject.toml" ]; then
+              install -m 0444 -- \
+                "$project_dir/pyproject.toml" \
+                "$python_native_pyproject_snapshot"
+            fi
+
+            append "### ${label}"
+            append ""
+            append '```text'
+            append_command "$@"
+            set +e
+            timeout --kill-after=20 900 setpriv \
+              --reuid "$OPENCODE_SANDBOX_UID" \
+              --regid "$OPENCODE_SANDBOX_GID" \
+              --clear-groups \
+              env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GH_TOKEN \
+              -u GITHUB_TOKEN \
+              GITHUB_ENV=/dev/null \
+              GITHUB_PATH=/dev/null \
+              GITHUB_OUTPUT=/dev/null \
+              GITHUB_STEP_SUMMARY=/dev/null \
+              BASH_ENV=/dev/null \
+              UV_NO_BUILD=1 \
+              GIT_CONFIG_NOSYSTEM=1 \
+              GIT_CONFIG_GLOBAL=/dev/null \
+              GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0=safe.directory \
+              GIT_CONFIG_VALUE_0=/work \
+              HOME=/work/.opencode-sandbox-home \
+              XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
+              CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
+              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              "$@" >"$python_native_pytest_log" 2>&1
+            rc=$?
+            set -e
+            emit_captured_log "$python_native_pytest_log"
+            append '```'
+            append ""
+
+            if [ "$rc" -eq 0 ]; then
+              append "- Result: PASS"
+            elif run_python_native_extension_classifier \
+              "$project_dir" \
+              "$python_native_pytest_log" \
+              "$python_native_changed_files" \
+              "$python_native_pyproject_snapshot" >/dev/null 2>&1; then
+              append "### Python native-extension source-only deferral"
+              append ""
+              append "- Result: DEFERRED"
+              append "- Reason: the unchanged declared PyO3 module was unavailable in the source-only sandbox; exact-head Python, Rust/PyO3, and package CheckRuns must all complete successfully before approval."
+              append ""
+              python_native_peer_check_required=1
+            else
+              append "- Result: FAIL (exit ${rc})"
+              failures=$((failures + 1))
+            fi
+            append ""
+            rm -f \
+              "$python_native_pytest_log" \
+              "$python_native_changed_files" \
+              "$python_native_pyproject_snapshot"
+          }
+
           run_r_package_testthat() {
             local package_name="$1"
             local log_file rc classification description_snapshot
@@ -1041,7 +1139,7 @@ jobs:
             if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] \
               && trusted_git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
               && trusted_git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
-              trusted_git diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
+              trusted_git diff --name-only --no-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
             else
               trusted_git ls-files
             fi
@@ -7118,6 +7216,143 @@ jobs:
             done
 
             return 2
+          }
+
+          coverage_defers_to_python_native_peer_checks() {
+            printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-}" |
+              grep -Fq -- "- Python native-extension peer evidence: deferred source-only collection requires successful exact-head peer checks"
+          }
+
+          collect_successful_python_native_peer_check_evidence() {
+            local output_file="$1"
+            local owner="${GH_REPOSITORY%%/*}"
+            local name="${GH_REPOSITORY#*/}"
+            local graphql_page_file graphql_nodes_file cursor has_next_page next_cursor
+            local page_count=0
+            local -a graphql_args
+            graphql_page_file="$(mktemp)"
+            graphql_nodes_file="$(mktemp)"
+            cursor=""
+            : >"$graphql_nodes_file"
+
+            # Materialize trusted current-head GraphQL check-runs as the helper's
+            # bounded JSON contract. Every page is bound independently to the
+            # current head; missing or repeating cursors fail closed.
+            while true; do
+              page_count=$((page_count + 1))
+              if [ "$page_count" -gt 100 ]; then
+                printf 'GitHub Checks lookup exceeded the bounded 100-page limit.\n' >&2
+                rm -f "$graphql_page_file" "$graphql_nodes_file"
+                return 1
+              fi
+              graphql_args=(
+                api graphql
+                -f owner="$owner"
+                -f name="$name"
+                -F number="$PR_NUMBER"
+                -f query='
+                  query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
+                    repository(owner:$owner,name:$name) {
+                      pullRequest(number:$number) {
+                        headRefOid
+                        statusCheckRollup {
+                          contexts(first: 100, after: $cursor) {
+                            pageInfo {
+                              hasNextPage
+                              endCursor
+                            }
+                            nodes {
+                              __typename
+                              ... on CheckRun {
+                                name
+                                status
+                                conclusion
+                                checkSuite {
+                                  workflowRun {
+                                    workflow {
+                                      name
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                '
+              )
+              if [ -n "$cursor" ]; then
+                graphql_args+=(-f cursor="$cursor")
+              fi
+              if ! timeout "$(check_lookup_api_timeout_seconds)s" \
+                gh "${graphql_args[@]}" >"$graphql_page_file"; then
+                rm -f "$graphql_page_file" "$graphql_nodes_file"
+                return 1
+              fi
+              if ! jq -e --arg head_sha "$PR_HEAD_SHA" '
+                .data.repository.pullRequest as $pr
+                | (($pr.headRefOid // "") == $head_sha)
+                  and (($pr.statusCheckRollup.contexts.nodes | type) == "array")
+                  and (($pr.statusCheckRollup.contexts.pageInfo.hasNextPage | type) == "boolean")
+              ' "$graphql_page_file" >/dev/null; then
+                printf 'GitHub Checks page was stale or malformed.\n' >&2
+                rm -f "$graphql_page_file" "$graphql_nodes_file"
+                return 1
+              fi
+              jq --arg head_sha "$PR_HEAD_SHA" '[
+                (.data.repository.pullRequest.statusCheckRollup.contexts.nodes // [])[]
+                | select(.__typename == "CheckRun")
+                | {
+                    __typename: "CheckRun",
+                    workflow: (.checkSuite.workflowRun.workflow.name // ""),
+                    name: (.name // ""),
+                    head_sha: $head_sha,
+                    status: (.status // ""),
+                    conclusion: (.conclusion // "")
+                  }
+              ]' "$graphql_page_file" >>"$graphql_nodes_file"
+              has_next_page="$(jq -r '.data.repository.pullRequest.statusCheckRollup.contexts.pageInfo.hasNextPage' "$graphql_page_file")"
+              next_cursor="$(jq -r '.data.repository.pullRequest.statusCheckRollup.contexts.pageInfo.endCursor // empty' "$graphql_page_file")"
+              if [ "$has_next_page" != "true" ]; then
+                break
+              fi
+              if [ -z "$next_cursor" ] || [ "$next_cursor" = "$cursor" ]; then
+                printf 'GitHub Checks pagination returned an empty or repeated cursor.\n' >&2
+                rm -f "$graphql_page_file" "$graphql_nodes_file"
+                return 1
+              fi
+              cursor="$next_cursor"
+            done
+
+            jq -s 'add // []' "$graphql_nodes_file" >"$output_file"
+            rm -f "$graphql_page_file" "$graphql_nodes_file"
+
+            python3 "$GITHUB_WORKSPACE/scripts/ci/python_native_extension_peer_gate.py" \
+              require-checks \
+              --checks-json "$output_file" \
+              --head-sha "$PR_HEAD_SHA" \
+              --required-check "CI::python" \
+              --required-check "CI::rust" \
+              --required-check "CI::package" >/dev/null
+          }
+
+          require_python_native_peer_checks_for_deferred_coverage() {
+            local checks_file
+            if ! coverage_defers_to_python_native_peer_checks; then
+              return 0
+            fi
+            checks_file="$(mktemp)"
+            if collect_github_checks_with_retry \
+              collect_successful_python_native_peer_check_evidence "$checks_file"; then
+              rm -f "$checks_file"
+              printf 'Verified successful exact-head Python, Rust/PyO3, and package CheckRuns after bounded source-only native-extension deferral.\n'
+              return 0
+            fi
+            rm -f "$checks_file"
+            printf '::notice::Python native-extension source-only deferral cannot authorize approval without successful exact-head Python, Rust/PyO3, and package CheckRuns.\n'
+            return 1
           }
 
           coverage_defers_to_r_cmd_check() {

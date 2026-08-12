@@ -78,6 +78,7 @@ def test_nested_project_native_and_metadata_changes_block_deferral(
     """Nested native paths and their exact pyproject remain blocking."""
 
     for changed in (
+        "pyproject.toml\n",
         "services/nested_project/crates/native_bridge/README.md\n",
         "services/nested_project/crates/native_bridge/src/lib.rs\n",
         "services/nested_project/pyproject.toml\n",
