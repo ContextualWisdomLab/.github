@@ -1,0 +1,40 @@
+name: Strix Workflow Contract
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read PR Strix workflow as data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$HEAD_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::PR workflow contract metadata is malformed."
+            exit 1
+          fi
+          workflow_json="$(gh api "repos/${HEAD_REPOSITORY}/contents/.github/workflows/strix.yml?ref=${HEAD_SHA}")"
+          printf '%s' "$workflow_json" |
+            jq -r '.content // empty' |
+            tr -d '\n' |
+            base64 --decode > "$RUNNER_TEMP/strix-pr-workflow.yml"
+          workflow_file="$RUNNER_TEMP/strix-pr-workflow.yml"
+          test -s "$workflow_file"
+          grep -Fq "Validate Strix report provenance" "$workflow_file"
+          grep -Fq "evidence-binding.json" "$workflow_file"
+          grep -Fq "scan-head-sha.txt" "$workflow_file"
+          grep -Fq "Strix evidence incomplete" "$workflow_file"
+          if grep -Fq "neutral skip so an infrastructure outage does not block merges" "$workflow_file"; then
+            echo "::error::PR Strix workflow still neutralizes missing security evidence."
+            exit 1
+          fi

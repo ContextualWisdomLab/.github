@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-23 06:35 KST
+Updated: 2026-08-12 11:45 KST
 
 ## Decision
 
@@ -30,6 +30,20 @@ reports another ref, treat that as operations drift and restore ruleset
 `18156473` to the current `main` head.
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
+
+### Strix workflow-version evidence boundary
+
+`pull_request_target` intentionally executes the workflow definition from the
+base branch. A green `strix` CheckRun on a central `.github` workflow PR can
+therefore prove only the protected-base implementation; it does not prove that
+the changed PR workflow ran. The central configuration now has a separate
+non-privileged `strix-workflow-contract` workflow that reads the PR workflow as
+data and checks the fail-closed/provenance markers without provider
+credentials. The provider-backed provenance binding remains a post-integration
+gate: after the central workflow merges, rerun each linked target PR at its
+exact current head and require `evidence-binding.json`, a clean provider log,
+and a final exact-head re-fetch. Never treat a pre-merge green base-workflow
+run or a status-only comment as proof of the PR workflow change.
 
 ## OpenCode required workflow posture
 

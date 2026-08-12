@@ -175,7 +175,15 @@ assert_strix_pr_scope_includes_deployment_context() {
 
 assert_strix_workflow_pr_trigger_hardened() {
 	local workflow_file="$REPO_ROOT/.github/workflows/strix.yml"
+	local workflow_contract_file="$REPO_ROOT/.github/workflows/strix-workflow-contract.yml"
 
+	assert_file_contains "$workflow_contract_file" "pull_request:" "strix workflow contract uses an unprivileged PR trigger"
+	assert_file_contains "$workflow_contract_file" "workflow-contract:" "strix workflow contract has a dedicated data-only job"
+	assert_file_contains "$workflow_contract_file" "Read PR Strix workflow as data" "strix workflow contract reads the PR workflow as data"
+	assert_file_contains "$workflow_contract_file" "HEAD_REPOSITORY" "strix workflow contract binds the PR head repository"
+	assert_file_contains "$workflow_contract_file" "HEAD_SHA" "strix workflow contract binds the PR head SHA"
+	assert_file_contains "$workflow_contract_file" "evidence-binding.json" "strix workflow contract requires evidence binding"
+	assert_file_contains "$workflow_contract_file" "Strix workflow still neutralizes missing security evidence" "strix workflow contract rejects the old neutral-success branch"
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
 	assert_file_contains "$workflow_file" 'strix-${{ github.event_name }}-' "strix workflow isolates manual evidence runs from required PR contexts"
