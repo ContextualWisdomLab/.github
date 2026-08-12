@@ -75,6 +75,20 @@ review again even though the durable central artifact claim already exists.
    dismiss the advisories, and rerun the exact-head security scan after any
    dependency-manifest change. If a future scan binds an affected version,
    regenerate both requirements files with uv and commit the generated hashes.
+9. A current-head Strix run must not be treated as clean security evidence
+   merely because GitHub reports the job successful. On 2026-08-12,
+   `ContextualWisdomLab/fast-mlsirm#778` at head
+   `0fb9e466847325edfb32506d77bb615d3c65298f` ran central `main`'s older
+   trusted workflow (`31581202078`, job `94064514313`). That workflow had no
+   provenance-validation step and converted the gate's provider-outage exit
+   into a neutral success. Its artifact `9136142983` contained a successful
+   NVIDIA report, while `gate-console.log` also contained NVIDIA HTTP 429,
+   GitHub Models HTTP 410 retirement-brownout, and fail-closed/no-report
+   markers. This is provider-degraded, non-authoritative evidence. The
+   fail-closed gate, scan-start head capture, successful structured-report
+   requirement, and report/provenance binding in this PR are the required
+   repair. After integration, every affected PR must be rescanned at its
+   exact head; no old neutral-success result transfers.
 
 ## Consequences
 
