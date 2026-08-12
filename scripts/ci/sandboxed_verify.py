@@ -14,6 +14,11 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+if __package__ in (None, ""):  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci.redact_sensitive_log import redact_text
+
 
 DEFAULT_IGNORE = (
     ".git",
@@ -219,13 +224,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_command(args.command, copied_repo, env, args.timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
-            stdout = timeout_output_text(exc.stdout)
-            stderr = timeout_output_text(exc.stderr)
+            stdout = redact_text(timeout_output_text(exc.stdout))
+            stderr = redact_text(timeout_output_text(exc.stderr))
             if stdout:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:

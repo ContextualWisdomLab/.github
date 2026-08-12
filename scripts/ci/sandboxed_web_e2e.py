@@ -22,6 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
+from scripts.ci.redact_sensitive_log import redact_text
 
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
@@ -232,14 +233,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(redact_text(completed.stdout), end="")
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(redact_text(completed.stderr), end="", file=sys.stderr)
             exit_code = completed.returncode
             return exit_code
         except subprocess.TimeoutExpired as exc:
-            stdout = sandboxed_verify.timeout_output_text(exc.stdout)
-            stderr = sandboxed_verify.timeout_output_text(exc.stderr)
+            stdout = redact_text(sandboxed_verify.timeout_output_text(exc.stdout))
+            stderr = redact_text(sandboxed_verify.timeout_output_text(exc.stderr))
             if stdout:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
@@ -253,7 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_tail = tail_text(service.log_path)
             if log_tail:
                 print(f"--- {service.label} log tail ---")
-                print(log_tail)
+                print(redact_text(log_tail))
         emit_result(
             args=args,
             copied_repo=copied_repo,
