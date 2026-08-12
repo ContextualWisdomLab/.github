@@ -114,8 +114,9 @@ Regression coverage must prove:
 - base-revision-only reads and rejection of unsafe revision/path shapes;
 - an absent sibling project is skipped, but an inventoried project blob that
   cannot be read propagates a fatal error before uv starts;
-- the download opener is cached, uses the fixed repository-owned `User-Agent`,
-  disables ambient proxies, and rejects redirects before following them;
+- the download opener is cached, disables ambient proxies, and rejects redirects
+  before following them; the download request uses the fixed repository-owned
+  `User-Agent`;
 - fixed HTTPS scheme and hostname validation, acceptance only of an absent or
   explicit port 443, rejection of malformed and nondefault ports, bounded reads,
   archive digest, member type, member size, executable size, executable mode,
