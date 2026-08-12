@@ -157,14 +157,40 @@ def run_failed_model(
     fake_opencode.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "${1:-}" = run ]; then\n'
-        '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$2" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
+        '  prompt="${2:-}"\n'
+        '  model=""\n'
+        '  while [ "$#" -gt 0 ]; do\n'
+        '    if [ "${1:-}" = "--model" ] && [ "$#" -ge 2 ]; then\n'
+        '      model="$2"\n'
+        '      shift 2\n'
+        '    else\n'
+        '      shift\n'
+        '    fi\n'
+        '  done\n'
+        '  [ -z "${FAKE_OPENCODE_MODEL_LOG:-}" ] || printf \'%s\\n\' "$model" >> "$FAKE_OPENCODE_MODEL_LOG"\n'
+        '  if [ "$model" = "${FAKE_OPENCODE_NEXT_MODEL:-}" ] && [ -f "${FAKE_OPENCODE_CHILD_PID_FILE:-}" ]; then\n'
+        '    child_pid="$(tr -d \'[:space:]\' < "$FAKE_OPENCODE_CHILD_PID_FILE")"\n'
+        '    if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then\n'
+        '      : > "${FAKE_OPENCODE_OVERLAP_FILE:?}"\n'
+        '    fi\n'
+        '  fi\n'
+        '  if [ "$model" = "${FAKE_OPENCODE_FATAL_MODEL:-}" ]; then\n'
+        '    (trap "" TERM; sleep "${FAKE_OPENCODE_CHILD_SLEEP_SECONDS:-120}") &\n'
+        '    child_pid=$!\n'
+        '    [ -z "${FAKE_OPENCODE_CHILD_PID_FILE:-}" ] || printf \'%s\' "$child_pid" > "$FAKE_OPENCODE_CHILD_PID_FILE"\n'
+        '  fi\n'
+        '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$prompt" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
         '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
         '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
-        '  sleep "${FAKE_OPENCODE_HANG_SECONDS:-0}"\n'
+        '  if [ -n "${FAKE_OPENCODE_FATAL_MODEL:-}" ] && [ "$model" != "$FAKE_OPENCODE_FATAL_MODEL" ]; then\n'
+        '    sleep "${FAKE_OPENCODE_NON_FATAL_HANG_SECONDS:-0}"\n'
+        '  else\n'
+        '    sleep "${FAKE_OPENCODE_HANG_SECONDS:-0}"\n'
+        '  fi\n'
         '  exit "${FAKE_OPENCODE_RUN_EXIT:-1}"\n'
         "fi\n"
         'if [ "${1:-}" = export ]; then\n'
-        '  [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"\n'
+        '  if [ -n "${FAKE_OPENCODE_SUCCESS_EXPORT:-}" ]; then printf \'%s\\n\' "$FAKE_OPENCODE_SUCCESS_EXPORT"; else [ -z "${FAKE_OPENCODE_EXPORT:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_EXPORT"; fi\n'
         '  exit "${FAKE_OPENCODE_EXPORT_EXIT:-0}"\n'
         "fi\n"
         "printf 'unexpected fake opencode command: %s\\n' \"$*\" >&2\n"
@@ -581,6 +607,47 @@ def test_fatal_provider_error_kills_hung_opencode_run_early(
     assert "logged a fatal provider error while still running" in result.stdout
     assert "skipping remaining attempts for this model" in result.stdout
     assert elapsed < 25
+
+
+def test_fatal_cleanup_kills_term_ignoring_child_before_next_model(
+    tmp_path: Path,
+) -> None:
+    """Captured process groups prevent a killed provider child from overlapping failover."""
+    child_pid_file = tmp_path / "child.pid"
+    model_log = tmp_path / "models.log"
+    overlap_file = tmp_path / "overlap"
+    result = run_failed_model(
+        tmp_path,
+        json_line=(
+            '{"type":"error","error":{"name":"ProviderQuotaError","data":'
+            '{"message":"insufficient_quota: request rejected"}}}'
+        ),
+        model_candidates="openrouter/fatal openrouter/next",
+        extra_env={
+            "OPENROUTER_API_KEY": "fake-openrouter-key",
+            "FAKE_OPENCODE_FATAL_MODEL": "openrouter/fatal",
+            "FAKE_OPENCODE_CHILD_PID_FILE": bash_path(child_pid_file),
+            "FAKE_OPENCODE_CHILD_SLEEP_SECONDS": "120",
+            "FAKE_OPENCODE_MODEL_LOG": bash_path(model_log),
+            "FAKE_OPENCODE_NEXT_MODEL": "openrouter/next",
+            "FAKE_OPENCODE_OVERLAP_FILE": bash_path(overlap_file),
+            "FAKE_OPENCODE_HANG_SECONDS": "120",
+            "FAKE_OPENCODE_NON_FATAL_HANG_SECONDS": "0",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "120",
+            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "240",
+        },
+    )
+
+    assert result.returncode == 1
+    assert model_log.read_text(encoding="utf-8").splitlines() == [
+        "openrouter/fatal",
+        "openrouter/next",
+    ]
+    assert not overlap_file.exists()
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    assert subprocess.run(
+        ["kill", "-0", str(child_pid)], check=False
+    ).returncode != 0
 
 
 def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:

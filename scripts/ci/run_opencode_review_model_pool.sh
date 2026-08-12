@@ -32,13 +32,49 @@ signal_process_tree() {
 	for child in $(pgrep -P "$pid" 2>/dev/null || true); do
 		signal_process_tree "$signum" "$child"
 	done
-	pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+	pgid="$(process_group_id_for_pid "$pid")"
 	shell_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
 	if [ -n "$pgid" ] && [ "$pgid" != "$shell_pgid" ]; then
-		kill "-$signum" -- "-$pgid" 2>/dev/null || true
+		signal_process_group "$signum" "$pgid"
 	else
 		kill "-$signum" "$pid" 2>/dev/null || true
 	fi
+}
+
+process_group_id_for_pid() {
+	ps -o pgid= -p "$1" 2>/dev/null | tr -d ' '
+}
+
+signal_process_group() {
+	local signum="$1"
+	local pgid="$2"
+	local shell_pgid
+	shell_pgid="$(process_group_id_for_pid "$$")"
+	if [[ "$pgid" =~ ^[0-9]+$ ]] && [ "$pgid" != "$shell_pgid" ]; then
+		kill "-$signum" -- "-$pgid" 2>/dev/null || true
+	fi
+}
+
+capture_process_group_ids() {
+	local pid="$1"
+	local child pgid
+	pgid="$(process_group_id_for_pid "$pid")"
+	if [ -n "$pgid" ]; then
+		printf '%s\n' "$pgid"
+	fi
+	for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+		capture_process_group_ids "$child"
+	done
+}
+
+signal_captured_process_groups() {
+	local signum="$1"
+	local captured_groups="$2"
+	local pgid
+	while IFS= read -r pgid; do
+		[ -n "$pgid" ] || continue
+		signal_process_group "$signum" "$pgid"
+	done <<<"$captured_groups"
 }
 
 record_review_status() {
@@ -494,7 +530,7 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
-	local opencode_pid fatal_poll_seconds
+	local opencode_pid fatal_poll_seconds opencode_process_groups
 	local -a opencode_timeout_command
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
@@ -531,6 +567,7 @@ run_one_model_attempt() {
 	# through to the next candidate within seconds instead of minutes.
 	while kill -0 "$opencode_pid" 2>/dev/null; do
 		if has_fatal_provider_error_event "$opencode_json_file"; then
+			opencode_process_groups="$(capture_process_group_ids "$opencode_pid")"
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
 			signal_process_tree TERM "$opencode_pid"
@@ -538,7 +575,11 @@ run_one_model_attempt() {
 				kill -0 "$opencode_pid" 2>/dev/null || break
 				sleep 1
 			done
-			signal_process_tree KILL "$opencode_pid"
+			if [ -n "$opencode_process_groups" ]; then
+				signal_captured_process_groups KILL "$opencode_process_groups"
+			else
+				signal_process_tree KILL "$opencode_pid"
+			fi
 			break
 		fi
 		sleep "$fatal_poll_seconds"
