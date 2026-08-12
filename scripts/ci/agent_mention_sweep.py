@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Sequence
@@ -144,10 +145,20 @@ def _fetch_repo_pulls(
     client: GitHubClient,
     repository: str,
     cutoff: datetime,
+    cancelled: threading.Event,
 ) -> list[dict[str, Any]]:
-    results = []
+    """Return normalized PRs until cutoff or cancellation.
+
+    Each result contains the validated pull-request number, repository, and API
+    URL. Updated-descending pagination stops before records older than
+    ``cutoff`` and checks ``cancelled`` before and after every page request.
+    Invalid or missing positive integer pull-request numbers raise
+    :class:`ValueError`.
+    """
+
+    results: list[dict[str, Any]] = []
     page = 1
-    while True:
+    while not cancelled.is_set():
         response = client.request(
             [
                 f"repos/{repository}/pulls",
@@ -165,6 +176,8 @@ def _fetch_repo_pulls(
                 f"page={page}",
             ]
         )
+        if cancelled.is_set():
+            break
         pull_requests = flatten_pages(response)
         if not pull_requests:
             break
@@ -216,9 +229,18 @@ def list_recent_pull_requests(
         repository_source=repository_source,
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    cancelled = threading.Event()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+    completed = False
+    try:
         future_to_repo = {
-            executor.submit(_fetch_repo_pulls, client, repository, cutoff): repository
+            executor.submit(
+                _fetch_repo_pulls,
+                client,
+                repository,
+                cutoff,
+                cancelled,
+            ): repository
             for repository in repositories
         }
         for future in concurrent.futures.as_completed(future_to_repo):
@@ -231,6 +253,12 @@ def list_recent_pull_requests(
                 if on_error is None:
                     raise
                 on_error(repository, exc)
+        completed = True
+    finally:
+        cancelled.set()
+        for future in future_to_repo:
+            future.cancel()
+        executor.shutdown(wait=completed, cancel_futures=True)
 
 
 def list_recent_comments(
@@ -329,46 +357,52 @@ def sweep(
             f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
         )
 
-    for issue in list_recent_pull_requests(
+    candidates = list_recent_pull_requests(
         target_client,
         organization=organization,
         repository_source=repository_source,
         since=since,
         on_error=record_failure,
-    ):
-        issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
-        try:
-            requests = build_requests_for_pull_request(
-                target_client,
-                issue=issue,
-                since=since,
-            )
-        except Exception as exc:  # noqa: BLE001 - pull-request isolation boundary
-            record_failure(issue_scope, exc)
-            continue
-        for request in requests:
-            request_scope = f"{issue_scope}/comment-{request.comment_id}"
+    )
+    try:
+        for issue in candidates:
+            issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
             try:
-                queued_agents = dispatch_request(
-                    request,
-                    target_client=target_client,
-                    dispatch_client=dispatch_client,
-                    opencode_allowlist=opencode_allowlist,
-                    dry_run=dry_run,
-                    ledger_artifact_cache=ledger_artifact_cache,
+                requests = build_requests_for_pull_request(
+                    target_client,
+                    issue=issue,
+                    since=since,
                 )
-            except Exception as exc:  # noqa: BLE001 - request isolation boundary
-                record_failure(request_scope, exc)
+            except Exception as exc:  # noqa: BLE001 - pull-request isolation boundary
+                record_failure(issue_scope, exc)
                 continue
-            if not queued_agents:
-                continue
-            dispatched += 1
-            if dispatched >= max_dispatches:
-                print(
-                    "Agent mention sweep reached dispatch limit "
-                    f"{max_dispatches}; isolated failures={counters.failures}."
-                )
-                return dispatched
+            for request in requests:
+                request_scope = f"{issue_scope}/comment-{request.comment_id}"
+                try:
+                    queued_agents = dispatch_request(
+                        request,
+                        target_client=target_client,
+                        dispatch_client=dispatch_client,
+                        opencode_allowlist=opencode_allowlist,
+                        dry_run=dry_run,
+                        ledger_artifact_cache=ledger_artifact_cache,
+                    )
+                except Exception as exc:  # noqa: BLE001 - request isolation boundary
+                    record_failure(request_scope, exc)
+                    continue
+                if not queued_agents:
+                    continue
+                dispatched += 1
+                if dispatched >= max_dispatches:
+                    print(
+                        "Agent mention sweep reached dispatch limit "
+                        f"{max_dispatches}; isolated failures={counters.failures}."
+                    )
+                    return dispatched
+    finally:
+        close_candidates = getattr(candidates, "close", None)
+        if callable(close_candidates):
+            close_candidates()
     print(
         "Agent mention sweep completed with "
         f"{dispatched} dispatch(es) and {counters.failures} isolated failure(s)."

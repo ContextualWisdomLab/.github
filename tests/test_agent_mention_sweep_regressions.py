@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -178,6 +180,107 @@ def test_repository_failure_is_isolated_and_later_repository_runs() -> None:
     assert failures == [("ContextualWisdomLab/broken", "forbidden")]
 
 
+def test_fetch_repo_pulls_stops_after_cancellation_during_page_request() -> None:
+    """Cancellation observed after a request prevents all later page work."""
+
+    sweep = module()
+    cancelled = threading.Event()
+
+    class CancellingClient(PagingClient):
+        """Set the shared cancellation signal as page one returns."""
+
+        def request(self, args, *, input_payload=None):
+            """Return one page and cancel before the caller processes it."""
+
+            response = super().request(args, input_payload=input_payload)
+            cancelled.set()
+            return response
+
+    client = CancellingClient(
+        {
+            ("repos/ContextualWisdomLab/example/pulls", 1): [
+                pull(number) for number in range(1, 101)
+            ],
+            ("repos/ContextualWisdomLab/example/pulls", 2): [pull(101)],
+        }
+    )
+
+    assert sweep._fetch_repo_pulls(
+        client,
+        "ContextualWisdomLab/example",
+        datetime(2026, 8, 5, tzinfo=timezone.utc),
+        cancelled,
+    ) == []
+    assert len(client.calls) == 1
+
+
+def test_fetch_repo_pulls_skips_requests_when_already_cancelled() -> None:
+    """A pre-cancelled worker returns before materializing an API request."""
+
+    sweep = module()
+    cancelled = threading.Event()
+    cancelled.set()
+    client = PagingClient({})
+
+    assert sweep._fetch_repo_pulls(
+        client,
+        "ContextualWisdomLab/example",
+        datetime(2026, 8, 5, tzinfo=timezone.utc),
+        cancelled,
+    ) == []
+    assert client.calls == []
+
+
+def test_closing_recent_pull_iterator_cancels_without_waiting(
+    monkeypatch,
+) -> None:
+    """Closing the lazy stream signals workers and never joins blocked work."""
+
+    sweep = module()
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+    observed_signals = []
+
+    monkeypatch.setattr(
+        sweep,
+        "list_accessible_repositories",
+        lambda *args, **kwargs: [
+            "ContextualWisdomLab/fast",
+            "ContextualWisdomLab/slow",
+        ],
+    )
+
+    def fetch(client, repository_name, cutoff, cancelled):
+        """Return one candidate while a peer worker remains blocked."""
+
+        del client, cutoff
+        observed_signals.append(cancelled)
+        if repository_name.endswith("/slow"):
+            slow_started.set()
+            release_slow.wait(2)
+            return []
+        assert slow_started.wait(1)
+        return [{"repository": repository_name, "number": 7}]
+
+    monkeypatch.setattr(sweep, "_fetch_repo_pulls", fetch)
+    iterator = sweep.list_recent_pull_requests(
+        object(),
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        since="2026-08-05T00:00:00Z",
+    )
+    try:
+        assert next(iterator)["repository"].endswith("/fast")
+        started = time.monotonic()
+        iterator.close()
+        assert time.monotonic() - started < 0.25
+        assert len(observed_signals) == 2
+        assert observed_signals[0] is observed_signals[1]
+        assert observed_signals[0].is_set()
+    finally:
+        release_slow.set()
+
+
 def mention_request(comment_id: int):
     """Build one Noema request for orchestration isolation tests."""
 
@@ -246,6 +349,67 @@ def test_sweep_continues_after_candidate_and_dispatch_failures(
     output = capsys.readouterr().out
     assert "comment inventory failed" in output
     assert "dispatch failed" in output
+
+
+def test_dispatch_limit_explicitly_closes_candidate_stream(monkeypatch) -> None:
+    """The bounded dispatch exit explicitly closes its concurrent source."""
+
+    sweep = module()
+
+    class CandidateStream:
+        """Expose whether the scheduler explicitly closed its source."""
+
+        def __init__(self) -> None:
+            """Initialize one candidate and an open state."""
+
+            self.remaining = iter([
+                {"repository": "ContextualWisdomLab/example", "number": 7}
+            ])
+            self.closed = False
+
+        def __iter__(self):
+            """Return this candidate iterator."""
+
+            return self
+
+        def __next__(self):
+            """Return the next candidate."""
+
+            return next(self.remaining)
+
+        def close(self) -> None:
+            """Record explicit source shutdown."""
+
+            self.closed = True
+
+    candidates = CandidateStream()
+    monkeypatch.setattr(
+        sweep,
+        "list_recent_pull_requests",
+        lambda *args, **kwargs: candidates,
+    )
+    monkeypatch.setattr(
+        sweep,
+        "build_requests_for_pull_request",
+        lambda *args, **kwargs: (mention_request(12),),
+    )
+    monkeypatch.setattr(
+        sweep,
+        "dispatch_request",
+        lambda *args, **kwargs: ("@cwl-noema-review",),
+    )
+
+    assert sweep.sweep(
+        target_client=object(),
+        dispatch_client=object(),
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        lookback_hours=24,
+        max_dispatches=1,
+        opencode_allowlist=frozenset(),
+        now=datetime(2026, 8, 6, tzinfo=timezone.utc),
+    ) == 1
+    assert candidates.closed is True
 
 
 def test_main_returns_failure_when_isolated_errors_were_observed(
