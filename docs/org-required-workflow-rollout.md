@@ -45,6 +45,14 @@ exact current head and require `evidence-binding.json`, a clean provider log,
 and a final exact-head re-fetch. Never treat a pre-merge green base-workflow
 run or a status-only comment as proof of the PR workflow change.
 
+The data-only contract is present on the active central PR but is not yet an
+active ruleset-required workflow path. Until the PR is integrated and the
+ruleset is explicitly re-read and updated, its green check is advisory and
+cannot substitute for the protected `strix.yml` workflow or its
+post-integration binding evidence. The contract validates the parsed reachable
+step structure and executable fail-closed commands; marker-only comments and
+statically unreachable steps must fail the contract.
+
 ## OpenCode required workflow posture
 
 The central `.github/workflows/opencode-review.yml` is now part of the active organization required workflow ruleset.

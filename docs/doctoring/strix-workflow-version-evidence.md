@@ -15,7 +15,10 @@ the protected-base workflow definition, as GitHub requires for
 
 Do not use that run as evidence that the PR changed workflow is safe. The
 non-privileged `strix-workflow-contract` workflow reads the PR workflow as data
-and rejects missing provenance or fail-open markers. Once the central
+and rejects missing provenance or fail-open markers. Its contract parses the
+YAML step graph with `Psych.safe_load`, requires the reachable fail-closed gate
+before collection/provenance/upload, and checks executable commands rather than
+accepting comment-only or `if: false` marker fixtures. Once the central
 workflow is integrated, rerun the linked security scans from the active
 protected workflow and require a current-head `evidence-binding.json`, a
 non-empty structured report, no provider-failure markers, and a final exact-head

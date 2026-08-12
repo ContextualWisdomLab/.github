@@ -96,6 +96,136 @@ assert_file_not_contains() {
 	fi
 }
 
+extract_strix_workflow_contract_policy() {
+	local contract_file="$1"
+	local output_file="$2"
+	local start_line
+	local end_line
+
+	start_line="$(grep -n 'ruby - .*workflow_file.*RUBY' "$contract_file" | head -1 | cut -d: -f1)"
+	end_line="$(awk -v start="$start_line" 'NR > start && /^[[:space:]]+RUBY$/ { print NR; exit }' "$contract_file")"
+	if [ -z "$start_line" ] || [ -z "$end_line" ] || [ "$end_line" -le "$((start_line + 1))" ]; then
+		record_failure "strix workflow contract policy heredoc is missing"
+		return 1
+	fi
+	sed -n "$((start_line + 1)),$((end_line - 1))p" "$contract_file" |
+		sed 's/^          //' > "$output_file"
+}
+
+assert_strix_workflow_contract_policy() {
+	local workflow_file="$REPO_ROOT/.github/workflows/strix.yml"
+	local contract_file="$REPO_ROOT/.github/workflows/strix-workflow-contract.yml"
+	local policy_file
+	local valid_fixture
+	local unreachable_fixture
+	local comment_fixture
+
+	policy_file="$(mktemp)"
+	valid_fixture="$(mktemp)"
+	unreachable_fixture="$(mktemp)"
+	comment_fixture="$(mktemp)"
+
+	if ! extract_strix_workflow_contract_policy "$contract_file" "$policy_file"; then
+		rm -f "$policy_file" "$valid_fixture" "$unreachable_fixture" "$comment_fixture"
+		return
+	fi
+	if ! ruby "$policy_file" "$workflow_file"; then
+		record_failure "strix workflow contract policy rejects the current trusted workflow"
+	fi
+
+	cat >"$valid_fixture" <<'YAML'
+jobs:
+  strix:
+    steps:
+      - name: Gate
+        run: |
+          if [ "$strix_rc" -eq 0 ]; then
+            exit 0
+          fi
+          strix_rc=0
+          echo "::error title=Strix evidence incomplete::Strix did not complete"
+          exit "$strix_rc"
+      - name: Collect Strix reports for artifact upload
+        run: echo collect
+      - name: Validate Strix report provenance
+        run: |
+          scan_stage_head_sha=abc
+          if ! jq -e '(.status == "completed") and (.scan_results.scan_completed == true) and (.scan_results.success == true)' "$candidate_run"; then continue; fi
+          candidate_metadata_matches=1
+          if [ "$candidate_metadata_matches" -ne 1 ]; then continue; fi
+          successful_run_file=run.json
+          candidate_report="$(dirname -- "$candidate_run")/penetration_test_report.md"
+          if [ -s "$candidate_report" ]; then report_file="$candidate_report"; fi
+          gate_console="$GITHUB_WORKSPACE/strix_runs/gate-console.log"
+          if [ -f "$gate_console" ] && grep -Eiq fail-closed/provider-infrastructure "$gate_console"; then exit 1; fi
+          report_sha256="$(sha256sum "$report_file" | awk '{print $1}')"
+          jq -n '{head_sha:$head_sha, run_id:$run_id, run_json:$run_json, report:$report, report_sha256:$report_sha256, scan_completed:true}' > "$GITHUB_WORKSPACE/strix_runs/evidence-binding.json"
+      - name: Upload Strix reports artifact
+        run: echo upload
+YAML
+	if ! ruby "$policy_file" "$valid_fixture"; then
+		record_failure "strix workflow contract policy rejects a structurally valid fail-closed fixture"
+	fi
+
+	cat >"$unreachable_fixture" <<'YAML'
+jobs:
+  strix:
+    steps:
+      - name: Gate
+        if: false
+        run: |
+          if [ "$strix_rc" -eq 0 ]; then exit 0; fi
+          echo "::error title=Strix evidence incomplete::Strix did not complete"
+          exit "$strix_rc"
+      - name: Collect Strix reports for artifact upload
+        run: echo collect
+      - name: Validate Strix report provenance
+        run: |
+          scan_stage_head_sha=abc
+          candidate_metadata_matches=1
+          successful_run_file=run.json
+          candidate_report=penetration_test_report.md
+          echo evidence-binding.json
+          report_sha256=abc
+          echo scan_completed:true
+          echo fail-closed/provider-infrastructure marker
+      - name: Upload Strix reports artifact
+        run: echo upload
+YAML
+	if ruby "$policy_file" "$unreachable_fixture"; then
+		record_failure "strix workflow contract policy accepts an unreachable fail-closed gate"
+	fi
+
+	cat >"$comment_fixture" <<'YAML'
+jobs:
+  strix:
+    steps:
+      - name: Gate
+        run: |
+          # strix_rc=0
+          # echo "Strix evidence incomplete"
+          # exit "$strix_rc"
+      - name: Collect Strix reports for artifact upload
+        run: echo collect
+      - name: Validate Strix report provenance
+        run: |
+          # scan_stage_head_sha=abc
+          # candidate_metadata_matches=1
+          # successful_run_file=run.json
+          # candidate_report=penetration_test_report.md
+          # echo evidence-binding.json
+          # report_sha256=abc
+          # echo scan_completed:true
+          # echo fail-closed/provider-infrastructure marker
+      - name: Upload Strix reports artifact
+        run: echo upload
+YAML
+	if ruby "$policy_file" "$comment_fixture"; then
+		record_failure "strix workflow contract policy accepts comment-only security markers"
+	fi
+	rm -f "$policy_file" "$valid_fixture" "$unreachable_fixture" "$comment_fixture"
+}
+
 seal_opencode_test_artifacts() {
 	local runner_temp="$1"
 	local head_sha="$2"
@@ -184,6 +314,10 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_contract_file" "HEAD_SHA" "strix workflow contract binds the PR head SHA"
 	assert_file_contains "$workflow_contract_file" "evidence-binding.json" "strix workflow contract requires evidence binding"
 	assert_file_contains "$workflow_contract_file" "Strix workflow still neutralizes missing security evidence" "strix workflow contract rejects the old neutral-success branch"
+	assert_file_contains "$workflow_contract_file" "Psych.safe_load" "strix workflow contract parses workflow structure instead of trusting marker strings"
+	assert_file_contains "$workflow_contract_file" "statically_reachable?" "strix workflow contract rejects unreachable security steps"
+	assert_file_contains "$workflow_contract_file" "executable_source" "strix workflow contract ignores comment-only markers"
+	assert_strix_workflow_contract_policy
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
 	assert_file_contains "$workflow_file" 'strix-${{ github.event_name }}-' "strix workflow isolates manual evidence runs from required PR contexts"

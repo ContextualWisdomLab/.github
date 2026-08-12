@@ -30,11 +30,90 @@ jobs:
             base64 --decode > "$RUNNER_TEMP/strix-pr-workflow.yml"
           workflow_file="$RUNNER_TEMP/strix-pr-workflow.yml"
           test -s "$workflow_file"
-          grep -Fq "Validate Strix report provenance" "$workflow_file"
-          grep -Fq "evidence-binding.json" "$workflow_file"
-          grep -Fq "scan-head-sha.txt" "$workflow_file"
-          grep -Fq "Strix evidence incomplete" "$workflow_file"
-          if grep -Fq "neutral skip so an infrastructure outage does not block merges" "$workflow_file"; then
-            echo "::error::PR Strix workflow still neutralizes missing security evidence."
+          ruby - "$workflow_file" <<'RUBY'
+          require "psych"
+
+          def reject!(message)
+            warn "::error::PR Strix workflow contract rejected: #{message}"
             exit 1
-          fi
+          end
+
+          def executable_source(run)
+            run.lines.reject { |line| line.lstrip.start_with?("#") }.join
+          end
+
+          def statically_reachable?(node)
+            condition = node["if"]
+            return true if condition.nil?
+            return false if condition == false
+
+            value = condition.to_s.strip
+            !value.match?(/\b(?:false|0\s*==\s*1|1\s*==\s*0)\b/i)
+          end
+
+          workflow_path = ARGV.fetch(0)
+          begin
+            workflow = Psych.safe_load(File.read(workflow_path), aliases: false)
+          rescue Psych::Exception => error
+            reject!("workflow is not valid YAML: #{error.message.lines.first.strip}")
+          end
+          reject!("top-level YAML value is not a mapping") unless workflow.is_a?(Hash)
+
+          jobs = workflow["jobs"]
+          strix = jobs.is_a?(Hash) && jobs["strix"]
+          steps = strix.is_a?(Hash) && strix["steps"]
+          reject!("jobs.strix.steps is not a sequence") unless steps.is_a?(Array)
+          reject!("jobs.strix is statically unreachable") unless statically_reachable?(strix)
+
+          reachable_steps = steps.select do |step|
+            step.is_a?(Hash) && statically_reachable?(step)
+          end
+          named_step = lambda do |name|
+            reachable_steps.find { |step| step["name"] == name }
+          end
+          run_source = lambda do |step|
+            step && step["run"].is_a?(String) ? executable_source(step["run"]) : ""
+          end
+
+          gate_step = reachable_steps.find do |step|
+            source = run_source.call(step)
+            source.include?("if [ \"$strix_rc\" -eq 0 ]; then") &&
+              source.include?("echo \"::error title=Strix evidence incomplete::") &&
+              source.match?(/exit\s+[\"']?\$strix_rc/)
+          end
+          reject!("fail-closed gate is missing from a reachable run step") unless gate_step
+
+          collect_step = named_step.call("Collect Strix reports for artifact upload")
+          validate_step = named_step.call("Validate Strix report provenance")
+          upload_step = named_step.call("Upload Strix reports artifact")
+          reject!("structured report collection step is missing or unreachable") unless collect_step
+          reject!("structured provenance validation step is missing or unreachable") unless validate_step
+          reject!("report upload step is missing or unreachable") unless upload_step
+
+          gate_index = reachable_steps.index(gate_step)
+          collect_index = reachable_steps.index(collect_step)
+          validate_index = reachable_steps.index(validate_step)
+          upload_index = reachable_steps.index(upload_step)
+          unless gate_index < collect_index && collect_index < validate_index && validate_index < upload_index
+            reject!("fail-closed gate, collection, provenance validation, and upload are out of order")
+          end
+
+          validation_source = run_source.call(validate_step)
+          required_fragments = {
+            "scan-stage head binding" => "scan_stage_head_sha",
+            "candidate metadata conflict rejection" => "if [ \"$candidate_metadata_matches\" -ne 1 ]; then",
+            "completed successful run selection" => "if ! jq -e '(.status == \"completed\") and (.scan_results.scan_completed == true) and (.scan_results.success == true)'",
+            "non-empty report requirement" => "if [ -s \"$candidate_report\" ]; then",
+            "artifact evidence binding" => "> \"$GITHUB_WORKSPACE/strix_runs/evidence-binding.json\"",
+            "report digest" => "report_sha256=\"$(sha256sum \"$report_file\" | awk '{print $1}')\"",
+            "completed binding flag" => "{head_sha:$head_sha, run_id:$run_id, run_json:$run_json, report:$report, report_sha256:$report_sha256, scan_completed:true}",
+            "provider fail-closed guard" => "if [ -f \"$gate_console\" ] && grep -Eiq",
+            "candidate report path" => "candidate_report=\"$(dirname -- \"$candidate_run\")/penetration_test_report.md\""
+          }
+          required_fragments.each do |label, fragment|
+            reject!("#{label} is absent from executable provenance validation") unless validation_source.include?(fragment)
+          end
+
+          neutral_marker = "neutral skip so an infrastructure outage does not block merges"
+          reject!("Strix workflow still neutralizes missing security evidence") if executable_source(File.read(workflow_path)).include?(neutral_marker)
+          RUBY
