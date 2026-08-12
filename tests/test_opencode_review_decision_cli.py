@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import runpy
 import sys
@@ -14,6 +15,23 @@ if str(TEST_DIR) not in sys.path:
     sys.path.insert(0, str(TEST_DIR))
 
 from opencode_review_decision_test_support import MODULE_PATH, decision, envelope, finding
+
+
+def test_direct_module_load_registers_its_support_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path-based invocation must make sibling decision modules importable."""
+    module_dir = str(MODULE_PATH.parent)
+    monkeypatch.setattr(sys, "path", [entry for entry in sys.path if entry != module_dir])
+    spec = importlib.util.spec_from_file_location(
+        "opencode_review_decision_direct", MODULE_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+
+    spec.loader.exec_module(module)
+
+    assert sys.path[0] == module_dir
 
 
 def test_markdown_keeps_findings_and_infrastructure_blockers_separate() -> None:

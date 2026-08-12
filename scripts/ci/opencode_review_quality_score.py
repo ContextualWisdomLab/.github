@@ -634,6 +634,30 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def confined_path(
+    path: Path,
+    root: Path,
+    label: str,
+    *,
+    must_exist: bool,
+) -> Path:
+    """Resolve one path and reject escapes from an explicit trusted root."""
+    try:
+        resolved_root = root.resolve(strict=True)
+        if not resolved_root.is_dir():
+            reject(f"{label} root must be a directory")
+        resolved_path = path.resolve(strict=must_exist)
+    except OSError as error:
+        reject(f"cannot resolve {label} path: {error}")
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError:
+        reject(f"{label} path must remain within its trusted root")
+    if must_exist and not resolved_path.is_file():
+        reject(f"{label} path must be a regular file")
+    return resolved_path
+
+
 def load_json(path: Path) -> Any:
     """Load one UTF-8 JSON document with stable errors."""
     try:
@@ -654,23 +678,51 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the scorer CLI and return stable gate-oriented statuses."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--input-root", type=Path, default=Path.cwd())
     parser.add_argument("--json-output", type=Path)
     parser.add_argument("--markdown-output", type=Path)
+    parser.add_argument("--output-root", type=Path, default=Path.cwd())
     parser.add_argument("--fail-on-parity-regression", action="store_true")
     parser.add_argument("--require-parity-evidence", action="store_true")
     arguments = parser.parse_args(argv)
     try:
-        report = score_benchmark(load_json(arguments.input))
+        input_path = confined_path(
+            arguments.input,
+            arguments.input_root,
+            "input",
+            must_exist=True,
+        )
+        json_output = (
+            confined_path(
+                arguments.json_output,
+                arguments.output_root,
+                "JSON output",
+                must_exist=False,
+            )
+            if arguments.json_output
+            else None
+        )
+        markdown_output = (
+            confined_path(
+                arguments.markdown_output,
+                arguments.output_root,
+                "Markdown output",
+                must_exist=False,
+            )
+            if arguments.markdown_output
+            else None
+        )
+        report = score_benchmark(load_json(input_path))
     except BenchmarkValidationError as error:
         print(f"review-quality benchmark rejected: {error}", file=sys.stderr)
         return 2
     json_text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    if arguments.json_output:
-        write_text(arguments.json_output, json_text)
+    if json_output:
+        write_text(json_output, json_text)
     else:
         sys.stdout.write(json_text)
-    if arguments.markdown_output:
-        write_text(arguments.markdown_output, render_markdown(report))
+    if markdown_output:
+        write_text(markdown_output, render_markdown(report))
     status = report["parity_gate"]["status"]
     if arguments.require_parity_evidence and status == "INSUFFICIENT_EVIDENCE":
         return 3
