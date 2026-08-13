@@ -6,3 +6,4 @@
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/review-inline-comment-422-fallback.md`](docs/doctoring/review-inline-comment-422-fallback.md).
 
 Overview receipts treat only a closed ```suggestion fence on a non-LEFT comment as applyable. Leftover Manual-edit excerpts strip HTML comment delimiters and metacharacters. See [`docs/doctoring/review-inline-comment-422-fallback.md`](docs/doctoring/review-inline-comment-422-fallback.md).
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted.
