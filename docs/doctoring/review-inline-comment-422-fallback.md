@@ -16,6 +16,8 @@ review expects (Bacchelli & Bird, 2013).
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
+Leftover overview receipts sanitize path and phrase; a leftover cannot close the HTML comment or reopen a suggestion fence.
+
 `scripts/ci/opencode_inline_comment_fallback.py` reads the trusted control
 JSON, keeps first-seen safe relative `path` plus positive integer `line`
 pairs, and appends them to the fallback body as `` `path:line` `` list
