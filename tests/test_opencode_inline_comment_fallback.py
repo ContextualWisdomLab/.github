@@ -4063,3 +4063,64 @@ def test_exclude_leftover_from_applyable_drops_interior_leftover_ranges():
         assert "- `scripts/ci/ok.py:4`" in applyable_section
         assert excerpt not in applyable_section
 
+
+def test_cli_overview_omits_applyable_range_containing_leftover_line(tmp_path):
+    excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    leftover_file = tmp_path / "leftover.txt"
+    leftover_file.write_text(
+        f"scripts/ci/example.py:6\tcannot-provide\t{encode_manual_edit_field(excerpt)}\n",
+        encoding="utf-8",
+    )
+    applyable_file = tmp_path / "applyable.txt"
+    applyable_file.write_text(
+        "scripts/ci/example.py:5-7\n"
+        "scripts/ci/ok.py:4\n",
+        encoding="utf-8",
+    )
+    control_path = tmp_path / "control.json"
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 6},
+                {"path": "scripts/ci/ok.py", "line": 4},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path = tmp_path / "body.md"
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    receipt = tmp_path / "receipt.md"
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--applyable-locations",
+                str(applyable_file),
+                "--leftover-diff-locations",
+                str(leftover_file),
+            ]
+        )
+        == 0
+    )
+    rendered = receipt.read_text(encoding="utf-8")
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    leftover_section = rendered.split(leftover_heading, 1)[1]
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    if applyable_heading in leftover_section:
+        leftover_section = leftover_section.split(applyable_heading, 1)[0]
+    assert excerpt in leftover_section
+    assert "- `scripts/ci/example.py:6` — cannot-provide" in leftover_section
+    applyable_section = rendered.split(applyable_heading, 1)[1]
+    if leftover_heading in applyable_section:
+        applyable_section = applyable_section.split(leftover_heading, 1)[0]
+    assert "scripts/ci/example.py:5-7" not in applyable_section
+    assert "- `scripts/ci/ok.py:4`" in applyable_section
+    assert excerpt not in applyable_section
+
