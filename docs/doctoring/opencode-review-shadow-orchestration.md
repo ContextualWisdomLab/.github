@@ -8,7 +8,7 @@ Owner: ContextualWisdomLab central review infrastructure
 
 This implementation provides a production-independent detector–verifier pool for exact-head OpenCode review experiments. It allocates a bounded review topology from trusted pull-request metadata, runs detectors before independent verifiers, and emits validated `shadow_findings` for evaluation.
 
-The capability is `active_pr`, not `implemented_on_protected_main`. It cannot publish a GitHub comment, review, check, approval, merge, branch update, or release. A later integration must preserve that authority separation and earn protected-main operational evidence before the capability is described as deployed.
+The capability is `active_pr`, not `implemented_on_protected_main`. It cannot publish a GitHub comment, review, check, approval, merge, branch update, or release. CWE-345 forbids treating unverified or evaluation-only output as authenticity evidence (MITRE, 2026). Shadow findings therefore cannot authorize merge. A later integration must preserve that authority separation and earn protected-main operational evidence before the capability is described as deployed.
 
 ## Components
 
@@ -114,3 +114,8 @@ Local evidence does not replace hosted exact-head evidence. A successful pull-re
 Malformed input, a changed executable or evidence digest, an unsafe worktree/output boundary, missing credentials, timeout, model failure, stale head, or verification-policy failure stops only the affected plan or attempt and produces no published finding. Operators should preserve the immutable inputs and attempt receipts, correct the first failing boundary, and generate a new content-addressed plan rather than editing evidence in place.
 
 Rollback is removal of this standalone pool and its caller integration. Because this slice has no GitHub publication or merge authority and no persistent database, rollback does not require data migration. Evaluation artifacts should be retained only under the repository's scoped evidence-retention policy.
+
+## References
+
+MITRE. (2026). *CWE-345: Insufficient verification of data authenticity*.
+https://cwe.mitre.org/data/definitions/345.html
