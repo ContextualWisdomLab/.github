@@ -55,38 +55,53 @@ def safe_finding_line(raw_line: object) -> int | None:
     return None
 
 
-def leftover_finding_range(finding: dict[str, Any]) -> tuple[str, int, int] | None:
-    """Return a trusted leftover ``(path, start, end)`` range, or None.
+def leftover_finding_side(raw_side: object) -> str:
+    """Return leftover ``LEFT`` when cited; default ``RIGHT`` otherwise."""
+    return "LEFT" if raw_side == "LEFT" else "RIGHT"
+
+
+def leftover_finding_range(
+    finding: dict[str, Any],
+) -> tuple[str, int, int, str] | None:
+    """Return a trusted leftover ``(path, start, end, side)`` range, or None.
 
     ``line`` is the last leftover line. ``start_line``, when present, is
     the first leftover line. A start after the end is not a range.
+    Leftover ``LEFT`` marks a deleted-line range GitHub cannot attach as
+    a RIGHT-side comment.
     """
     path = safe_finding_path(finding.get("path"))
     end = safe_finding_line(finding.get("line"))
     if path is None or end is None:
         return None
     start = safe_finding_line(finding.get("start_line"))
+    side = leftover_finding_side(finding.get("side"))
     if start is None:
-        return (path, end, end)
+        return (path, end, end, side)
     if start > end:
         return None
-    return (path, start, end)
+    return (path, start, end, side)
 
 
-def format_leftover_range(path: str, start: int, end: int) -> str:
+def format_leftover_range(
+    path: str, start: int, end: int, side: str = "RIGHT"
+) -> str:
     """Return ``path:line`` or leftover ``path:start-end`` for one finding."""
-    if start == end:
-        return f"{path}:{end}"
-    return f"{path}:{start}-{end}"
+    location = f"{path}:{end}" if start == end else f"{path}:{start}-{end}"
+    if leftover_finding_side(side) == "LEFT":
+        return f"{location} LEFT"
+    return location
 
 
-def trusted_finding_ranges(control: dict[str, Any]) -> list[tuple[str, int, int]]:
+def trusted_finding_ranges(
+    control: dict[str, Any],
+) -> list[tuple[str, int, int, str]]:
     """Return unique sanitized leftover path:start-end ranges in first-seen order."""
     findings = control.get("findings")
     if not isinstance(findings, list):
         return []
-    ranges: list[tuple[str, int, int]] = []
-    seen: set[tuple[str, int, int]] = set()
+    ranges: list[tuple[str, int, int, str]] = []
+    seen: set[tuple[str, int, int, str]] = set()
     for finding in findings:
         if not isinstance(finding, dict):
             continue
@@ -102,7 +117,7 @@ def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
     """Return unique sanitized finding path:line pairs in first-seen order."""
     locations: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = set()
-    for path, _start, end in trusted_finding_ranges(control):
+    for path, _start, end, _side in trusted_finding_ranges(control):
         location = (path, end)
         if location in seen:
             continue
@@ -112,7 +127,7 @@ def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
 
 
 def render_inline_comment_failure_suffix(
-    locations: list[tuple[str, int, int]],
+    locations: list[tuple[str, int, int, str]],
 ) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
     lines = [
@@ -127,8 +142,8 @@ def render_inline_comment_failure_suffix(
         )
         lines.append("")
         lines.extend(
-            f"- `{format_leftover_range(path, start, end)}`"
-            for path, start, end in locations
+            f"- `{format_leftover_range(path, start, end, side)}`"
+            for path, start, end, side in locations
         )
         lines.append("")
         lines.append(

@@ -16,8 +16,10 @@ review expects (Bacchelli & Bird, 2013).
 
 `scripts/ci/opencode_inline_comment_fallback.py` reads the trusted control
 JSON, keeps first-seen safe relative `path` plus positive integer `line`
-pairs, and appends them to the fallback body as `` `path:line` `` list
-items. Unsafe paths (`..`, absolute, drive, backslash, backtick, or
+pairs, and appends them to the fallback body as `` `path:line` `` or
+leftover `` `path:start-end` `` list items. Leftover ``LEFT``
+deleted-line ranges are labeled `` `path:start-end LEFT` `` so authors
+do not treat a deleted-side leftover as an attachable RIGHT hunk. Unsafe paths (`..`, absolute, drive, backslash, backtick, or
 HTML metacharacters) and non-positive lines are omitted. A decimal digit string such as `"9"` is accepted
 because LLM control JSON often emits line as text (CWE-20). An empty
 location set is stated explicitly.

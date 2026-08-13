@@ -56,13 +56,21 @@ def test_trusted_finding_locations_keeps_first_safe_path_line_pairs():
 def test_leftover_finding_range_keeps_start_end_and_rejects_inverted():
     assert leftover_finding_range(
         {"path": "scripts/ci/example.py", "start_line": 7, "line": 12}
-    ) == ("scripts/ci/example.py", 7, 12)
+    ) == ("scripts/ci/example.py", 7, 12, "RIGHT")
     assert leftover_finding_range(
         {"path": "scripts/ci/example.py", "start_line": "7", "line": "12"}
-    ) == ("scripts/ci/example.py", 7, 12)
+    ) == ("scripts/ci/example.py", 7, 12, "RIGHT")
     assert leftover_finding_range(
         {"path": "scripts/ci/example.py", "line": 9}
-    ) == ("scripts/ci/example.py", 9, 9)
+    ) == ("scripts/ci/example.py", 9, 9, "RIGHT")
+    assert leftover_finding_range(
+        {
+            "path": "scripts/ci/example.py",
+            "start_line": 7,
+            "line": 12,
+            "side": "LEFT",
+        }
+    ) == ("scripts/ci/example.py", 7, 12, "LEFT")
     assert leftover_finding_range(
         {"path": "scripts/ci/example.py", "start_line": 12, "line": 7}
     ) is None
@@ -74,17 +82,27 @@ def test_leftover_finding_range_keeps_start_end_and_rejects_inverted():
     assert format_leftover_range("scripts/ci/example.py", 7, 12) == (
         "scripts/ci/example.py:7-12"
     )
+    assert format_leftover_range("scripts/ci/example.py", 7, 12, "LEFT") == (
+        "scripts/ci/example.py:7-12 LEFT"
+    )
     assert trusted_finding_ranges(
         control(
             {"path": "scripts/ci/example.py", "start_line": 7, "line": 12},
             {"path": "scripts/ci/example.py", "start_line": 7, "line": 12},
             {"path": "scripts/ci/example.py", "start_line": 20, "line": 9},
             {"path": "README.md", "line": 3},
+            {
+                "path": "scripts/ci/deleted.py",
+                "start_line": 2,
+                "line": 4,
+                "side": "LEFT",
+            },
             "not-an-object",
         )
     ) == [
-        ("scripts/ci/example.py", 7, 12),
-        ("README.md", 3, 3),
+        ("scripts/ci/example.py", 7, 12, "RIGHT"),
+        ("README.md", 3, 3, "RIGHT"),
+        ("scripts/ci/deleted.py", 2, 4, "LEFT"),
     ]
     assert trusted_finding_ranges({"findings": None}) == []
     assert trusted_finding_ranges({}) == []
@@ -117,6 +135,18 @@ def test_fallback_body_cites_each_trusted_path_line():
     )
     assert "- `scripts/ci/example.py:7-12`" in ranged
     assert "- `scripts/ci/example.py:7`" not in ranged
+    leftover_left = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {
+                "path": "scripts/ci/example.py",
+                "start_line": 7,
+                "line": 12,
+                "side": "LEFT",
+            }
+        ),
+    )
+    assert "- `scripts/ci/example.py:7-12 LEFT`" in leftover_left
 
 
 def test_fallback_body_explains_missing_trusted_locations():

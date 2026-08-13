@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Labeled leftover LEFT deleted-line ranges as `path:start-end LEFT` in the GitHub 422 fallback so authors can tell leftover deleted-side ranges from attachable RIGHT hunks.
 - Cited leftover OpenCode findings as `path:start-end` in the GitHub 422 inline-comment fallback when control JSON carries a trusted `start_line`. Single-line leftovers stay `path:line`. An inverted start after the end is omitted rather than printed as a false range.
 - Named each trusted `path:line` in the OpenCode GitHub 422 inline-comment fallback so a refused attach still tells the author the exact current-head location instead of a generic “cited finding lines” sentence. Decimal digit strings such as `"9"` are accepted as line numbers so LLM control JSON cannot drop a valid location (CWE-20). Paths containing backticks or HTML metacharacters are omitted so a receipt cannot break the overview Markdown.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
