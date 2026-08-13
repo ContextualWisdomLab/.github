@@ -41,7 +41,8 @@ flowchart TD
   SweepQ --> Ledger
 ```
 
-A scheduled sweep cannot replace a pending interactive route.
+A scheduled sweep cannot replace a pending interactive route. CWE-362
+forbids sharing one concurrency group across those event classes.
 
 ## Control-plane data flow
 

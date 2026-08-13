@@ -13,6 +13,11 @@ GitHub Actions documents that a concurrency group permits one running member. Wi
 
 This is a queue-configuration defect, not evidence that the model, credential, allowlist, or review result is invalid.
 
+CWE-362 classifies concurrent use of a shared resource without proper
+synchronization (MITRE, 2026). One workflow-level concurrency group is
+that shared resource: a later sweep can replace a pending trusted
+comment before dispatch.
+
 ## Fail-first evidence
 
 Direct-main replacement PR #825 starts from protected `main` `1131b1bbafb24e455fc8619cdf316813e8721861`. Exact RED head `a319d513a2f67b707737651a9eb7fdbfe4bc23c4` changed only `tests/test_agent_mention_workflow_contract.py` and required separate job-scoped queue contracts while the inherited workflow still had one shared workflow-level group.
@@ -122,6 +127,10 @@ A downstream reviewer may still fail closed because credentials, providers, chec
 Rollback must preserve interactive requests. Restoring the shared workflow-level group is not acceptable. A safe emergency degradation is to suspend the scheduled sweep while retaining the isolated local queue. Removing `queue: max` from the local group requires another independently reviewed durable queue that preserves every eligible invocation.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-362: Concurrent execution using shared resource with
+improper synchronization ('race condition')*.
+https://cwe.mitre.org/data/definitions/362.html
 
 GitHub. (n.d.). *Concurrency*. GitHub Docs. Retrieved August 7, 2026, from https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency
 
