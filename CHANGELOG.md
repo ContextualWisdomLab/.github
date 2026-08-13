@@ -13,6 +13,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Bound OpenCode Rust coverage to the reviewed Debian `llvm-cov-19` and `llvm-profdata-19` executables across image build and the networkless sandbox runtime, failing closed instead of measuring an ambient or unversioned LLVM producer. The decision record now cites NIST SP 800-218 PW.4.1 so a runner `PATH` change cannot silently replace the coverage toolchain.
+- Recorded the org control-plane architecture, including the LLVM 19 Rust coverage boundary, so agents reconstruct the measurement trust boundary from the repo instead of private memory.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
 - Allowed commas and ASCII parentheses in the bounded Strix changed-file path policy so legal tracked Packrat fixtures can receive exact-head security analysis, while rejecting raw `..` components before normalization and keeping controls, backslashes, whitespace ambiguity, and shell punctuation fail-closed.
 - Bound each review-agent invocation key to the wrapper's complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.

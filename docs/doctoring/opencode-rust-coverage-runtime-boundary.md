@@ -21,6 +21,12 @@ host-runner tool, a pull-request-selected path, or a dynamically downloaded LLVM
 binary. Missing, changed, or non-executable reviewed paths are coverage-evidence
 failures rather than reasons to measure a different toolchain.
 
+NIST SP 800-218 PW.4.1 requires third-party software to come from expected,
+trusted sources with integrity verification (Souppaya et al., 2022). Binding
+coverage to the reviewed `/usr/bin/llvm-cov-19` and
+`/usr/bin/llvm-profdata-19` executables is that verification; an ambient
+`PATH` lookup would treat a runner-image change as a new producer.
+
 ## Why the boundary exists
 
 `cargo-llvm-cov` is a wrapper around Rust's LLVM source-based coverage and
@@ -108,6 +114,11 @@ https://packages.debian.org/bookworm/llvm-19
 Debian Project. (2026). *File list of package llvm-19*. Debian Packages.
 Retrieved August 10, 2026, from
 https://packages.debian.org/bookworm/amd64/llvm-19/filelist
+
+Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure Software Development
+Framework (SSDF) version 1.1: Recommendations for mitigating the risk of
+software vulnerabilities* (NIST Special Publication 800-218). National
+Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218
 
 Taiki Endo. (2026). *cargo-llvm-cov: Cargo subcommand to use LLVM source-based
 code coverage*. GitHub. Retrieved August 10, 2026, from
