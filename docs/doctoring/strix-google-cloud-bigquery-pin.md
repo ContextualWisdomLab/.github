@@ -10,6 +10,8 @@ install an unreviewed wheel.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Keep `google-cloud-bigquery==3.43.0` with both published SHA-256
 digests. The package is Apache-2.0 (permissive SPDX). Do not hand-edit
 the hashes file later: regenerate from `requirements-strix-ci.txt`.
