@@ -501,7 +501,11 @@ def applyable_suggestion_ranges(
         if not isinstance(comment, dict):
             continue
         body = comment.get("body")
-        if not isinstance(body, str) or "```suggestion" not in body:
+        if (
+            not isinstance(body, str)
+            or comment.get("side") == "LEFT"
+            or "```suggestion" not in body
+        ):
             continue
         path = safe_finding_path(comment.get("path"))
         end = safe_finding_line(comment.get("line"))
