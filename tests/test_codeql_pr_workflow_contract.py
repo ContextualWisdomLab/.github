@@ -57,6 +57,27 @@ def test_codeql_action_steps_use_one_version_per_workflow() -> None:
         assert len(refs) == 1, f"{filename} mixes CodeQL action refs: {sorted(refs)}"
 
 
+def test_codeql_workflows_share_one_upload_sarif_sha() -> None:
+    """CWE-829: every CodeQL action pin must be the Dependabot-reviewed SHA.
+
+    An upload-sarif-only bump that leaves init/analyze on 4.37.0/4.37.5
+    would analyze or upload with a second unreviewed control sphere.
+    """
+    shas: set[str] = set()
+    tags: set[str] = set()
+    pin = re.compile(
+        r"github/codeql-action/(?:init|analyze|upload-sarif)@"
+        r"([0-9a-f]{40}) # (v\d+\.\d+\.\d+)"
+    )
+    for path in (REPO_ROOT / ".github/workflows").glob("*.yml"):
+        for sha, tag in pin.findall(path.read_text(encoding="utf-8")):
+            shas.add(sha)
+            tags.add(tag)
+
+    assert shas == {"5595ccaf912efad79be6eef63a5619ff05969be3"}
+    assert tags == {"v4.37.6"}
+
+
 def test_codeql_sarif_gate_logs_and_fails_only_unsuppressed_medium_plus(
     tmp_path: Path,
 ) -> None:
