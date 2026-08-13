@@ -102,7 +102,10 @@ replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
 suggestion on the deleted side; GitHub, n.d.-b, n.d.-c). Each leftover
 row also keeps a bounded excerpt of that fence as a distinct
 “Manual edit (not a GitHub suggestion):” `` ```diff `` block so the
-author can copy the replacement by hand. That block is never a GitHub
+author can copy the replacement by hand. Excerpts drop ``<!--``, ``-->``,
+and HTML metacharacters so leftover text cannot close
+``<!-- opencode-review-overview -->`` (CWE-116; MITRE, 2026). That block
+is never a GitHub
 `` ```suggestion `` fence and is never listed under the applyable
 ``path:line`` / ``path:start-end`` heading (GitHub, n.d.-c). A comment
 that already has `` ```suggestion `` is applyable, not leftover.
