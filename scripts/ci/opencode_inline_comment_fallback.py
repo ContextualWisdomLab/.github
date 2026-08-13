@@ -14,6 +14,8 @@ from typing import Any
 DEFAULT_SINGLE_COMMENT_RETRY_LIMIT = 20
 ERROR_PHRASE_MAX_CHARS = 240
 LEFTOVER_DIFF_REASONS = frozenset({"LEFT", "cannot-provide"})
+LEFT_ORIGIN_LINE_KEY = "_left_origin_line"
+LEFT_ORIGIN_PATH_KEY = "_left_origin_path"
 MANUAL_EDIT_MAX_CHARS = 400
 MANUAL_EDIT_HEADING = "Manual edit (not a GitHub suggestion):"
 HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
@@ -387,6 +389,8 @@ def remap_left_comment_to_right_hunk(
     remapped = dict(comment)
     remapped["side"] = "RIGHT"
     remapped["line"] = anchor
+    remapped[LEFT_ORIGIN_PATH_KEY] = path
+    remapped[LEFT_ORIGIN_LINE_KEY] = line
     remapped.pop("start_line", None)
     remapped.pop("start_side", None)
     return remapped
@@ -449,15 +453,65 @@ def format_applyable_range(path: str, start: int, end: int) -> str:
     return f"{path}:{start}-{end}"
 
 
-def parse_applyable_ranges(text: str) -> list[tuple[str, int, int]]:
-    """Parse ``path:line`` or ``path:start-end`` applyable-suggestion rows."""
-    ranges: list[tuple[str, int, int]] = []
+def format_applyable_origin(
+    origin_path: str | None,
+    origin_line: int | None,
+) -> str:
+    """Return ``LEFT path:line`` for a remapped leftover origin, or empty."""
+    if origin_path is None or origin_line is None:
+        return ""
+    return f"LEFT {origin_path}:{origin_line}"
+
+
+def parse_applyable_origin_field(
+    text: str,
+) -> tuple[str | None, int | None]:
+    """Parse ``LEFT path:line`` from one applyable-receipt origin field."""
+    raw = (text or "").strip()
+    if not raw.startswith("LEFT "):
+        return None, None
+    loc_text = raw[5:].strip()
+    if ":" not in loc_text:
+        return None, None
+    path_text, _, line_text = loc_text.rpartition(":")
+    path = safe_finding_path(path_text)
+    try:
+        parsed_line = int(line_text)
+    except ValueError:
+        parsed_line = 0
+    line = safe_finding_line(parsed_line)
+    if path is None or line is None:
+        return None, None
+    return path, line
+
+
+def _applyable_receipt_parts(
+    item: tuple[str, int, int] | tuple[str, int, int, str | None, int | None],
+) -> tuple[str, int, int, str | None, int | None]:
+    """Normalize an applyable receipt to ``(path, start, end, origin_path, origin_line)``."""
+    path, start, end = item[0], item[1], item[2]
+    origin_path = item[3] if len(item) >= 5 else None
+    origin_line = item[4] if len(item) >= 5 else None
+    if not isinstance(origin_path, str):
+        origin_path = None
+    if not isinstance(origin_line, int) or isinstance(origin_line, bool):
+        origin_line = None
+    if origin_path is None or origin_line is None:
+        return path, start, end, None, None
+    return path, start, end, origin_path, origin_line
+
+
+def parse_applyable_ranges(
+    text: str,
+) -> list[tuple[str, int, int, str | None, int | None]]:
+    """Parse ``path:line`` or ``path:start-end`` applyable rows with optional LEFT origin."""
+    ranges: list[tuple[str, int, int, str | None, int | None]] = []
     seen: set[tuple[str, int, int]] = set()
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        loc_text, _sep, _phrase = line.partition("\t")
+        loc_text, sep, origin_text = line.partition("\t")
         if ":" not in loc_text:
             continue
         path_text, _, rest = loc_text.rpartition(":")
@@ -484,18 +538,21 @@ def parse_applyable_ranges(text: str) -> list[tuple[str, int, int]]:
         if key in seen:
             continue
         seen.add(key)
-        ranges.append(key)
+        origin_path, origin_line = (
+            parse_applyable_origin_field(origin_text) if sep else (None, None)
+        )
+        ranges.append((path, start, end, origin_path, origin_line))
     return ranges
 
 
 def applyable_suggestion_ranges(
     payload: dict[str, Any],
-) -> list[tuple[str, int, int]]:
-    """Return ``(path, start, end)`` for comments that carry a suggestion fence."""
+) -> list[tuple[str, int, int, str | None, int | None]]:
+    """Return applyable ranges plus leftover LEFT origins when a comment was remapped."""
     comments = payload.get("comments")
     if not isinstance(comments, list):
         return []
-    ranges: list[tuple[str, int, int]] = []
+    ranges: list[tuple[str, int, int, str | None, int | None]] = []
     seen: set[tuple[str, int, int]] = set()
     for comment in comments:
         if not isinstance(comment, dict):
@@ -515,13 +572,52 @@ def applyable_suggestion_ranges(
         if key in seen:
             continue
         seen.add(key)
-        ranges.append(key)
+        origin_path = safe_finding_path(comment.get(LEFT_ORIGIN_PATH_KEY))
+        origin_line = safe_finding_line(comment.get(LEFT_ORIGIN_LINE_KEY))
+        if origin_path is None or origin_line is None:
+            origin_path = None
+            origin_line = None
+        ranges.append((path, start, end, origin_path, origin_line))
     return ranges
 
 
-def render_applyable_receipts(ranges: list[tuple[str, int, int]]) -> list[str]:
-    """Return overview receipt lines for applyable suggestion ranges."""
-    return [f"- `{format_applyable_range(path, start, end)}`" for path, start, end in ranges]
+def render_applyable_receipts(
+    ranges: (
+        list[tuple[str, int, int]]
+        | list[tuple[str, int, int, str | None, int | None]]
+    ),
+) -> list[str]:
+    """Return overview receipt lines for applyable ranges, with LEFT origin when remapped."""
+    lines: list[str] = []
+    for item in ranges:
+        path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
+        line = f"- `{format_applyable_range(path, start, end)}`"
+        if origin_path is not None and origin_line is not None:
+            line += f" — from LEFT `{origin_path}:{origin_line}`"
+        lines.append(line)
+    return lines
+
+
+def strip_left_origin_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove local leftover-origin keys before the GitHub review payload is posted."""
+    comments = payload.get("comments")
+    if not isinstance(comments, list):
+        return payload
+    cleaned: list[Any] = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            cleaned.append(comment)
+            continue
+        cleaned.append(
+            {
+                key: value
+                for key, value in comment.items()
+                if key not in {LEFT_ORIGIN_PATH_KEY, LEFT_ORIGIN_LINE_KEY}
+            }
+        )
+    rewritten = dict(payload)
+    rewritten["comments"] = cleaned
+    return rewritten
 
 
 def leftover_manual_edit_text(body: object) -> str:
@@ -675,6 +771,8 @@ def write_hunk_filtered_payload(
     """Write a hunk-filtered review payload and optional skipped ``path:line`` rows."""
     filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
     filtered = apply_github_suggestion_blocks(filtered, hunks)
+    applyable = applyable_suggestion_ranges(filtered)
+    filtered = strip_left_origin_fields(filtered)
     comments = filtered.get("comments")
     output.write_text(json.dumps(filtered, ensure_ascii=True), encoding="utf-8")
     if skipped_path is not None:
@@ -683,13 +781,15 @@ def write_hunk_filtered_payload(
             encoding="utf-8",
         )
     if applyable_path is not None:
-        applyable_path.write_text(
-            "".join(
-                f"{format_applyable_range(path, start, end)}\n"
-                for path, start, end in applyable_suggestion_ranges(filtered)
-            ),
-            encoding="utf-8",
-        )
+        applyable_rows: list[str] = []
+        for path, start, end, origin_path, origin_line in applyable:
+            loc = format_applyable_range(path, start, end)
+            origin = format_applyable_origin(origin_path, origin_line)
+            if origin:
+                applyable_rows.append(f"{loc}\t{origin}\n")
+            else:
+                applyable_rows.append(f"{loc}\n")
+        applyable_path.write_text("".join(applyable_rows), encoding="utf-8")
     if leftover_path is not None:
         leftover_rows: list[str] = []
         for path, line, reason, excerpt in leftover_diff_fence_receipts(filtered):
@@ -880,7 +980,11 @@ def render_inline_comment_failure_suffix(
     attached_locations: list[tuple[str, int]] | None = None,
     deferred_locations: list[tuple[str, int]] | None = None,
     skipped_locations: list[tuple[str, int]] | None = None,
-    applyable_locations: list[tuple[str, int, int]] | None = None,
+    applyable_locations: (
+        list[tuple[str, int, int]]
+        | list[tuple[str, int, int, str | None, int | None]]
+        | None
+    ) = None,
     leftover_locations: (
         list[tuple[str, int, str, str]] | list[tuple[str, int, str]] | None
     ) = None,
@@ -1024,21 +1128,26 @@ def _trusted_location_subset(
 
 
 def _trusted_range_subset(
-    items: list[tuple[str, int, int]] | None,
+    items: (
+        list[tuple[str, int, int]]
+        | list[tuple[str, int, int, str | None, int | None]]
+        | None
+    ),
     allowed: set[tuple[str, int]],
-) -> list[tuple[str, int, int]]:
+) -> list[tuple[str, int, int, str | None, int | None]]:
     """Return first-seen applyable ranges on a path that has a trusted finding."""
     if not items:
         return []
     allowed_paths = {path for path, _line in allowed}
-    kept: list[tuple[str, int, int]] = []
+    kept: list[tuple[str, int, int, str | None, int | None]] = []
     seen: set[tuple[str, int, int]] = set()
     for item in items:
-        path, _start, _end = item
-        if path not in allowed_paths or item in seen:
+        path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
+        key = (path, start, end)
+        if path not in allowed_paths or key in seen:
             continue
-        seen.add(item)
-        kept.append(item)
+        seen.add(key)
+        kept.append((path, start, end, origin_path, origin_line))
     return kept
 
 
@@ -1074,7 +1183,11 @@ def render_inline_comment_failure_body(
     attached_locations: list[tuple[str, int]] | None = None,
     deferred_locations: list[tuple[str, int]] | None = None,
     skipped_locations: list[tuple[str, int]] | None = None,
-    applyable_locations: list[tuple[str, int, int]] | None = None,
+    applyable_locations: (
+        list[tuple[str, int, int]]
+        | list[tuple[str, int, int, str | None, int | None]]
+        | None
+    ) = None,
     leftover_locations: (
         list[tuple[str, int, str, str]] | list[tuple[str, int, str]] | None
     ) = None,

@@ -1660,6 +1660,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "right_hunk_anchor_line" in helper
     assert "_same_hunk_right_anchor" in helper
     assert '"SPANS"' in helper
+    assert "from LEFT" in helper
+    assert "strip_left_origin_fields" in helper
     assert "Manual edit (not a GitHub suggestion):" in helper
     assert (
         "These comments still have a suggested-diff fence that GitHub cannot apply:"

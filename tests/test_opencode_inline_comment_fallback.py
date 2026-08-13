@@ -13,6 +13,9 @@ from scripts.ci.opencode_inline_comment_fallback import (
     applyable_suggestion_ranges,
     decode_manual_edit_field,
     encode_manual_edit_field,
+    format_applyable_origin,
+    parse_applyable_origin_field,
+    strip_left_origin_fields,
     leftover_diff_fence_reason,
     leftover_diff_fence_receipts,
     leftover_manual_edit_text,
@@ -1525,8 +1528,8 @@ def test_applyable_ranges_parse_and_render_path_start_end():
         )
     )
     assert parsed == [
-        ("scripts/ci/example.py", 5, 7),
-        ("scripts/ci/ok.py", 4, 4),
+        ("scripts/ci/example.py", 5, 7, None, None),
+        ("scripts/ci/ok.py", 4, 4, None, None),
     ]
     assert render_applyable_receipts(parsed) == [
         "- `scripts/ci/example.py:5-7`",
@@ -1557,8 +1560,8 @@ def test_applyable_ranges_parse_and_render_path_start_end():
         parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF),
     )
     assert applyable_suggestion_ranges(payload) == [
-        ("scripts/ci/example.py", 5, 7),
-        ("scripts/ci/example.py", 7, 7),
+        ("scripts/ci/example.py", 5, 7, None, None),
+        ("scripts/ci/example.py", 7, 7, None, None),
     ]
     swapped = applyable_suggestion_ranges(
         {
@@ -1579,7 +1582,7 @@ def test_applyable_ranges_parse_and_render_path_start_end():
             ]
         }
     )
-    assert swapped == [("scripts/ci/example.py", 5, 7)]
+    assert swapped == [("scripts/ci/example.py", 5, 7, None, None)]
     assert applyable_suggestion_ranges(
         {
             "comments": [
@@ -1776,11 +1779,11 @@ def test_leftover_diff_receipts_separate_left_and_cannot_provide_from_applyable(
     applyable = applyable_suggestion_ranges(payload)
     leftover = leftover_diff_fence_receipts(payload)
     leftover_keys = {(path, line) for path, line, _reason, _excerpt in leftover}
-    applyable_starts = {(path, start) for path, start, _end in applyable}
+    applyable_starts = {(path, start) for path, start, _end, *_rest in applyable}
     cannot_excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
     left_excerpt = leftover_manual_edit_text(SUGGESTED_DIFF_BODY)
     na_excerpt = leftover_manual_edit_text(NA_DIFF_BODY)
-    assert applyable == [("scripts/ci/example.py", 5, 7)]
+    assert applyable == [("scripts/ci/example.py", 5, 7, None, None)]
     assert leftover == [
         ("scripts/ci/example.py", 12, "cannot-provide", cannot_excerpt),
         ("scripts/ci/removed.py", 11, "LEFT", left_excerpt),
@@ -2658,7 +2661,7 @@ def test_left_leftover_becomes_applyable_on_same_path_right_hunk(tmp_path):
     applyable = applyable_suggestion_ranges(payload)
     leftover = leftover_diff_fence_receipts(payload)
     leftover_keys = {(path, line) for path, line, _reason, _excerpt in leftover}
-    applyable_starts = {(path, start) for path, start, _end in applyable}
+    applyable_starts = {(path, start) for path, start, _end, *_rest in applyable}
     assert ("scripts/ci/example.py", 7) in applyable_starts
     assert ("scripts/ci/rewrite.py", 20) in applyable_starts
     assert leftover_keys.isdisjoint(applyable_starts)
@@ -2686,6 +2689,8 @@ def test_left_leftover_becomes_applyable_on_same_path_right_hunk(tmp_path):
     leftover_section = body.split(leftover_heading, 1)[1]
     assert "- `scripts/ci/example.py:7`" in applyable_section
     assert "- `scripts/ci/rewrite.py:20`" in applyable_section
+    assert "from LEFT `scripts/ci/example.py:7`" in applyable_section
+    assert "from LEFT `scripts/ci/rewrite.py:11`" in applyable_section
     assert "scripts/ci/removed.py" not in applyable_section
     assert "cannot-provide" not in applyable_section
     assert MANUAL_EDIT_HEADING not in applyable_section
@@ -2752,8 +2757,8 @@ def test_left_leftover_becomes_applyable_on_same_path_right_hunk(tmp_path):
     )
     applyable_text = applyable_file.read_text(encoding="utf-8")
     leftover_text = leftover_file.read_text(encoding="utf-8")
-    assert "scripts/ci/example.py:7\n" in applyable_text
-    assert "scripts/ci/rewrite.py:20\n" in applyable_text
+    assert "scripts/ci/example.py:7\tLEFT scripts/ci/example.py:7\n" in applyable_text
+    assert "scripts/ci/rewrite.py:20\tLEFT scripts/ci/rewrite.py:11\n" in applyable_text
     assert "scripts/ci/removed.py" not in applyable_text
     assert "scripts/ci/removed.py:11\tLEFT\t" in leftover_text
     assert "scripts/ci/example.py:8\tLEFT\t" in leftover_text
@@ -2803,8 +2808,8 @@ def test_multi_hunk_left_remap_attaches_to_same_at_hunk(tmp_path):
     applyable = applyable_suggestion_ranges(payload)
     leftover = leftover_diff_fence_receipts(payload)
     assert applyable == [
-        ("scripts/ci/multi.py", 50, 50),
-        ("scripts/ci/multi.py", 6, 6),
+        ("scripts/ci/multi.py", 50, 50, "scripts/ci/multi.py", 41),
+        ("scripts/ci/multi.py", 6, 6, "scripts/ci/multi.py", 6),
     ]
     assert leftover == []
     body = render_inline_comment_failure_body(
@@ -2816,8 +2821,8 @@ def test_multi_hunk_left_remap_attaches_to_same_at_hunk(tmp_path):
         applyable_locations=applyable,
         leftover_locations=leftover,
     )
-    assert "- `scripts/ci/multi.py:50`" in body
-    assert "- `scripts/ci/multi.py:6`" in body
+    assert "- `scripts/ci/multi.py:50` — from LEFT `scripts/ci/multi.py:41`" in body
+    assert "- `scripts/ci/multi.py:6` — from LEFT `scripts/ci/multi.py:6`" in body
     assert "These comments still have a suggested-diff fence that GitHub cannot apply:" not in body
     assert "- `scripts/ci/multi.py:5`" not in body
 
@@ -2857,6 +2862,128 @@ def test_multi_hunk_left_remap_attaches_to_same_at_hunk(tmp_path):
         )
         == 0
     )
-    assert applyable_file.read_text(encoding="utf-8") == "scripts/ci/multi.py:50\n"
+    assert applyable_file.read_text(encoding="utf-8") == (
+        "scripts/ci/multi.py:50\tLEFT scripts/ci/multi.py:41\n"
+    )
     assert leftover_file.read_text(encoding="utf-8") == ""
+    posted = json.loads((tmp_path / "filtered.json").read_text(encoding="utf-8"))
+    assert "_left_origin_path" not in posted["comments"][0]
+    assert "_left_origin_line" not in posted["comments"][0]
+
+
+def test_applyable_left_origin_parse_render_and_strip(tmp_path):
+    assert format_applyable_origin(None, 11) == ""
+    assert format_applyable_origin("scripts/ci/multi.py", None) == ""
+    assert format_applyable_origin("scripts/ci/multi.py", 41) == (
+        "LEFT scripts/ci/multi.py:41"
+    )
+    assert parse_applyable_origin_field("LEFT scripts/ci/multi.py:41") == (
+        "scripts/ci/multi.py",
+        41,
+    )
+    assert parse_applyable_origin_field("cannot-provide") == (None, None)
+    assert parse_applyable_origin_field("LEFT no-colon") == (None, None)
+    assert parse_applyable_origin_field("LEFT ../escape.py:1") == (None, None)
+    assert parse_applyable_origin_field("LEFT scripts/ci/multi.py:x") == (None, None)
+    parsed = parse_applyable_ranges(
+        "\n".join(
+            [
+                "scripts/ci/multi.py:50\tLEFT scripts/ci/multi.py:41",
+                "scripts/ci/ok.py:4",
+                "scripts/ci/bad.py:5\tLEFT ../escape.py:1",
+                "scripts/ci/also.py:6\tHTTP 422",
+            ]
+        )
+    )
+    assert parsed == [
+        ("scripts/ci/multi.py", 50, 50, "scripts/ci/multi.py", 41),
+        ("scripts/ci/ok.py", 4, 4, None, None),
+        ("scripts/ci/bad.py", 5, 5, None, None),
+        ("scripts/ci/also.py", 6, 6, None, None),
+    ]
+    assert render_applyable_receipts(parsed) == [
+        "- `scripts/ci/multi.py:50` — from LEFT `scripts/ci/multi.py:41`",
+        "- `scripts/ci/ok.py:4`",
+        "- `scripts/ci/bad.py:5`",
+        "- `scripts/ci/also.py:6`",
+    ]
+    assert render_applyable_receipts([("scripts/ci/ok.py", 4, 4)]) == [
+        "- `scripts/ci/ok.py:4`"
+    ]
+    assert render_applyable_receipts(
+        [("scripts/ci/ok.py", 4, 4, 12, "nope")]  # type: ignore[list-item]
+    ) == ["- `scripts/ci/ok.py:4`"]
+    remapped = remap_left_comment_to_right_hunk(
+        {
+            "path": "scripts/ci/rewrite.py",
+            "line": 11,
+            "side": "LEFT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        parse_unified_diff_hunk_lines(REWRITE_UNIFIED_DIFF),
+    )
+    assert remapped["_left_origin_path"] == "scripts/ci/rewrite.py"
+    assert remapped["_left_origin_line"] == 11
+    stripped = strip_left_origin_fields(_batch_payload(remapped, "not-an-object"))
+    assert "_left_origin_path" not in stripped["comments"][0]
+    assert "_left_origin_line" not in stripped["comments"][0]
+    assert stripped["comments"][1] == "not-an-object"
+    assert strip_left_origin_fields({"comments": "bad"})["comments"] == "bad"
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/rewrite.py", "line": 11}),
+        applyable_locations=[
+            ("scripts/ci/rewrite.py", 20, 20, "scripts/ci/rewrite.py", 11)
+        ],
+    )
+    assert (
+        "- `scripts/ci/rewrite.py:20` — from LEFT `scripts/ci/rewrite.py:11`"
+        in body
+    )
+    assert "GitHub can apply these suggested replacements:" in body
+    assert applyable_suggestion_ranges(
+        {
+            "comments": [
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "body": "```suggestion\nx\n```",
+                    "_left_origin_path": "../escape.py",
+                    "_left_origin_line": 11,
+                }
+            ]
+        }
+    ) == [("scripts/ci/example.py", 7, 7, None, None)]
+    applyable_file = tmp_path / "applyable.txt"
+    applyable_file.write_text(
+        "scripts/ci/rewrite.py:20\tLEFT scripts/ci/rewrite.py:11\n",
+        encoding="utf-8",
+    )
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    control_path.write_text(
+        json.dumps(control({"path": "scripts/ci/rewrite.py", "line": 11})),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--applyable-locations",
+                str(applyable_file),
+            ]
+        )
+        == 0
+    )
+    assert (
+        "- `scripts/ci/rewrite.py:20` — from LEFT `scripts/ci/rewrite.py:11`"
+        in receipt.read_text(encoding="utf-8")
+    )
 

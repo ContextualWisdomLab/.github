@@ -57,8 +57,12 @@ is remapped onto a same-path current-head RIGHT hunk when one exists
 (same line when that line is still commentable, otherwise the first
 RIGHT line of the same ``@@`` hunk — not the first RIGHT line of the
 whole path) so GitHub can apply it as a suggestion instead of a
-manual edit (GitHub, n.d.-b, n.d.-c). A LEFT line whose own hunk has
-no RIGHT side (a deletion hunk inside a multi-hunk file) stays leftover. Only `+` lines become the
+manual edit (GitHub, n.d.-b, n.d.-c). The overview applyable receipt
+then names both the RIGHT range GitHub will apply and the original
+LEFT ``path:line`` (``from LEFT `path:line```) so the author can see
+the finding moved. Local origin keys are stripped before the GitHub
+POST. A LEFT line whose own hunk has no RIGHT side (a deletion hunk
+inside a multi-hunk file) stays leftover. Only `+` lines become the
 replacement; `n/a`, “cannot provide”, fence-breaking replacements, and
 LEFT comments on paths with no RIGHT hunk (pure deletions) stay as the
 original `` ```diff `` leftover. When the suggested_diff removes more
@@ -104,7 +108,8 @@ with the same control object used to build the inline `comments` array.
   a non-applyable manual-edit `` ```diff `` block, and remapping of
   applyable LEFT leftovers onto a same-path RIGHT hunk so they become
   GitHub suggestion ranges, using the same ``@@`` hunk rather than the
-  first RIGHT line of the whole path.
+  first RIGHT line of the whole path, and overview labels that name
+  the original LEFT ``path:line`` beside the applyable RIGHT range.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
