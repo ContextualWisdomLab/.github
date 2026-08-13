@@ -2466,6 +2466,23 @@ diff --git a/scripts/ci/rewrite.py b/scripts/ci/rewrite.py
 """
 
 
+MULTI_HUNK_UNIFIED_DIFF = """\
+diff --git a/scripts/ci/multi.py b/scripts/ci/multi.py
+--- a/scripts/ci/multi.py
++++ b/scripts/ci/multi.py
+@@ -5,3 +5,3 @@
+ keep
+-old
++new
+ keep
+@@ -40,3 +50,3 @@
+ keep
+-old
++new
+ keep
+"""
+
+
 def test_right_hunk_anchor_prefers_same_line_then_first_right_line():
     hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF + REWRITE_UNIFIED_DIFF)
     assert right_hunk_anchor_line("scripts/ci/example.py", 7, hunks) == 7
@@ -2475,6 +2492,54 @@ def test_right_hunk_anchor_prefers_same_line_then_first_right_line():
     assert right_hunk_anchor_line("scripts/ci/example.py", 7, {}) is None
     assert right_hunk_anchor_line("../escape.py", 7, hunks) is None
     assert right_hunk_anchor_line("scripts/ci/example.py", 0, hunks) is None
+
+
+def test_right_hunk_anchor_uses_same_at_hunk_not_path_min():
+    hunks = parse_unified_diff_hunk_lines(MULTI_HUNK_UNIFIED_DIFF)
+    assert hunks["scripts/ci/multi.py"]["LEFT"] == {5, 6, 7, 40, 41, 42}
+    assert hunks["scripts/ci/multi.py"]["RIGHT"] == {5, 6, 7, 50, 51, 52}
+    assert right_hunk_anchor_line("scripts/ci/multi.py", 6, hunks) == 6
+    assert right_hunk_anchor_line("scripts/ci/multi.py", 41, hunks) == 50
+    assert right_hunk_anchor_line("scripts/ci/multi.py", 41, hunks) != min(
+        hunks["scripts/ci/multi.py"]["RIGHT"]
+    )
+    delete_then_edit = parse_unified_diff_hunk_lines(
+        "diff --git a/scripts/ci/mixed.py b/scripts/ci/mixed.py\n"
+        "--- a/scripts/ci/mixed.py\n+++ b/scripts/ci/mixed.py\n"
+        "@@ -10,3 +0,0 @@\n-gone\n-gone\n-gone\n"
+        "@@ -40,3 +50,3 @@\n keep\n-old\n+new\n keep\n"
+    )
+    assert right_hunk_anchor_line("scripts/ci/mixed.py", 11, delete_then_edit) is None
+    assert right_hunk_anchor_line("scripts/ci/mixed.py", 41, delete_then_edit) == 50
+    assert right_hunk_anchor_line(
+        "scripts/ci/x.py", 2, {"scripts/ci/x.py": "bad"}
+    ) is None
+    assert right_hunk_anchor_line(
+        "scripts/ci/x.py", 2, {"scripts/ci/x.py": {"RIGHT": {2, 3}, "SPANS": "bad"}}
+    ) == 2
+    assert right_hunk_anchor_line(
+        "scripts/ci/x.py", 11, {"scripts/ci/x.py": {"RIGHT": {20}, "SPANS": "bad"}}
+    ) is None
+    assert right_hunk_anchor_line(
+        "scripts/ci/x.py",
+        11,
+        {
+            "scripts/ci/x.py": {
+                "RIGHT": {20},
+                "SPANS": [
+                    None,
+                    (1,),
+                    ("n", {20}),
+                    ({11}, "n"),
+                    ({11}, set()),
+                    ({11}, {20}),
+                ],
+            }
+        },
+    ) == 20
+    assert right_hunk_anchor_line(
+        "scripts/ci/x.py", 11, {"scripts/ci/x.py": {"RIGHT": "bad"}}
+    ) is None
 
 
 def test_remap_left_comment_onto_same_path_right_hunk():
@@ -2698,4 +2763,100 @@ def test_left_leftover_becomes_applyable_on_same_path_right_hunk(tmp_path):
     assert ("scripts/ci/example.py", "RIGHT", 7) in sides
     assert ("scripts/ci/rewrite.py", "RIGHT", 20) in sides
     assert ("scripts/ci/removed.py", "LEFT", 11) in sides
+
+
+def test_multi_hunk_left_remap_attaches_to_same_at_hunk(tmp_path):
+    hunks = parse_unified_diff_hunk_lines(MULTI_HUNK_UNIFIED_DIFF)
+    remapped = remap_left_comment_to_right_hunk(
+        {
+            "path": "scripts/ci/multi.py",
+            "line": 41,
+            "side": "LEFT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        hunks,
+    )
+    assert remapped["side"] == "RIGHT"
+    assert remapped["line"] == 50
+    payload = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/multi.py",
+                "line": 41,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/multi.py",
+                "line": 6,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+        ),
+        hunks,
+    )
+    comments = payload["comments"]
+    assert comments[0]["line"] == 50
+    assert comments[0]["side"] == "RIGHT"
+    assert "```suggestion\n    new\n```" in comments[0]["body"]
+    assert comments[1]["line"] == 6
+    applyable = applyable_suggestion_ranges(payload)
+    leftover = leftover_diff_fence_receipts(payload)
+    assert applyable == [
+        ("scripts/ci/multi.py", 50, 50),
+        ("scripts/ci/multi.py", 6, 6),
+    ]
+    assert leftover == []
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/multi.py", "line": 41},
+            {"path": "scripts/ci/multi.py", "line": 6},
+        ),
+        applyable_locations=applyable,
+        leftover_locations=leftover,
+    )
+    assert "- `scripts/ci/multi.py:50`" in body
+    assert "- `scripts/ci/multi.py:6`" in body
+    assert "These comments still have a suggested-diff fence that GitHub cannot apply:" not in body
+    assert "- `scripts/ci/multi.py:5`" not in body
+
+    payload_path = tmp_path / "batch.json"
+    payload_path.write_text(
+        json.dumps(
+            _batch_payload(
+                {
+                    "path": "scripts/ci/multi.py",
+                    "line": 41,
+                    "side": "LEFT",
+                    "body": SUGGESTED_DIFF_BODY,
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+    hunks_diff = tmp_path / "hunks.diff"
+    hunks_diff.write_text(MULTI_HUNK_UNIFIED_DIFF, encoding="utf-8")
+    applyable_file = tmp_path / "applyable.txt"
+    leftover_file = tmp_path / "leftover.txt"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload_path),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(tmp_path / "filtered.json"),
+                "--applyable-locations",
+                str(applyable_file),
+                "--leftover-diff-locations",
+                str(leftover_file),
+            ]
+        )
+        == 0
+    )
+    assert applyable_file.read_text(encoding="utf-8") == "scripts/ci/multi.py:50\n"
+    assert leftover_file.read_text(encoding="utf-8") == ""
 

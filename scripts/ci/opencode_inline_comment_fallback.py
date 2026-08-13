@@ -150,11 +150,16 @@ def _diff_path(raw_path: str) -> str | None:
     return safe_finding_path(raw_path.strip().strip('"'))
 
 
+def _empty_hunk_bucket() -> dict[str, Any]:
+    """Return an empty LEFT/RIGHT/SPANS hunk bucket."""
+    return {"LEFT": set(), "RIGHT": set(), "SPANS": []}
+
+
 def parse_unified_diff_hunk_lines(
     diff_text: str,
-) -> dict[str, dict[str, set[int]]]:
-    """Return LEFT/RIGHT commentable lines for each path in a unified diff."""
-    hunks: dict[str, dict[str, set[int]]] = {}
+) -> dict[str, dict[str, Any]]:
+    """Return LEFT/RIGHT commentable lines and per-``@@`` spans for each path."""
+    hunks: dict[str, dict[str, Any]] = {}
     current_left: str | None = None
     current_right: str | None = None
     for raw in (diff_text or "").splitlines():
@@ -172,11 +177,16 @@ def parse_unified_diff_hunk_lines(
         left_lines = _hunk_side_lines(header.group(1), header.group(2))
         right_lines = _hunk_side_lines(header.group(3), header.group(4))
         if current_left and left_lines:
-            bucket = hunks.setdefault(current_left, {"LEFT": set(), "RIGHT": set()})
+            bucket = hunks.setdefault(current_left, _empty_hunk_bucket())
             bucket["LEFT"].update(left_lines)
         if current_right and right_lines:
-            bucket = hunks.setdefault(current_right, {"LEFT": set(), "RIGHT": set()})
+            bucket = hunks.setdefault(current_right, _empty_hunk_bucket())
             bucket["RIGHT"].update(right_lines)
+        span = (set(left_lines), set(right_lines))
+        if current_right:
+            hunks.setdefault(current_right, _empty_hunk_bucket())["SPANS"].append(span)
+        if current_left and current_left != current_right:
+            hunks.setdefault(current_left, _empty_hunk_bucket())["SPANS"].append(span)
     return hunks
 
 
@@ -303,24 +313,49 @@ def suggestion_comment_range(
     return None, safe_line
 
 
+def _same_hunk_right_anchor(
+    bucket: dict[str, Any],
+    left_line: int,
+) -> int | None:
+    """Return the first RIGHT line of the ``@@`` hunk that contains ``left_line``."""
+    spans = bucket.get("SPANS")
+    if not isinstance(spans, list):
+        return None
+    for item in spans:
+        if not isinstance(item, tuple) or len(item) != 2:
+            continue
+        left_span, right_span = item
+        if (
+            isinstance(left_span, set)
+            and isinstance(right_span, set)
+            and left_line in left_span
+            and right_span
+        ):
+            return min(right_span)
+    return None
+
+
 def right_hunk_anchor_line(
     path: str,
     left_line: int,
-    hunks: dict[str, dict[str, set[int]]] | None,
+    hunks: dict[str, dict[str, Any]] | None,
 ) -> int | None:
-    """Return a same-path RIGHT hunk line to host a remapped LEFT comment."""
+    """Return a same-``@@``-hunk RIGHT line to host a remapped LEFT comment."""
     if not hunks:
         return None
     safe_path = safe_finding_path(path)
     safe_line = safe_finding_line(left_line)
     if safe_path is None or safe_line is None:
         return None
-    right = hunks.get(safe_path, {}).get("RIGHT", set())
-    if not right:
+    bucket = hunks.get(safe_path)
+    if not isinstance(bucket, dict):
+        return None
+    right = bucket.get("RIGHT", set())
+    if not isinstance(right, set) or not right:
         return None
     if safe_line in right:
         return safe_line
-    return min(right)
+    return _same_hunk_right_anchor(bucket, safe_line)
 
 
 def remap_left_comment_to_right_hunk(
