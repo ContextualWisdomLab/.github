@@ -20,7 +20,13 @@ SEALED_422_RE = re.compile(
 
 
 def safe_finding_path(raw_path: object) -> str | None:
-    """Return a repository-relative finding path, or None when it is unsafe."""
+    """Return a repository-relative finding path, or None when it is unsafe.
+
+    Rejects traversal, absolute and drive paths, backslashes, and characters
+    that would break Markdown receipt fences (backtick, ``<``, ``>``, ``&``)
+    or close the overview HTML comment / reopen a suggestion fence
+    (``-->``, ``<!--``, triple-backtick).
+    """
     if not isinstance(raw_path, str):
         return None
     path = raw_path.strip()
@@ -35,6 +41,8 @@ def safe_finding_path(raw_path: object) -> str | None:
         or bool(windows_path.drive)
         or ".." in posix_path.parts
         or path != posix_path.as_posix()
+        or any(char in path for char in ("`", "<", ">", "&"))
+        or any(token in path for token in ("-->", "<!--", "```"))
     ):
         return None
     return path
