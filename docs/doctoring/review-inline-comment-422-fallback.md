@@ -21,7 +21,8 @@ items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
 lines are omitted. An empty location set is stated explicitly.
 
 After a refused attach, the publisher first checks that the failure is
-HTTP 422, splits the batch `comments` array into at most 20
+HTTP 422 (not a bare `422` substring in a SHA or issue number; CWE-1288),
+splits the batch `comments` array into at most 20
 single-comment review payloads (`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`,
 default 20), and retries each with the same write helper. Comments past
 that cap are recorded as not retried instead of opening unbounded `gh
@@ -36,7 +37,8 @@ locations left untried by the retry cap. JSON `errors[].message` such as
 `pull_request_review_thread.path is invalid`, or the first `HTTP 422`
 line, is the phrase source. A later comment's different GitHub error
 does not overwrite an earlier one. URLs are stripped and each phrase is
-bounded to 240 characters.
+bounded to 240 characters. Backticks and HTML metacharacters are
+escaped before the phrase is written into the overview body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -62,6 +64,9 @@ If GitHub later accepts off-diff comments, keep citing the attempted
 `path:line` in the fallback. Do not restore a location-free sentence.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-1288: Improper validation of syntactic correctness of
+input*. https://cwe.mitre.org/data/definitions/1288.html
 
 Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of
 modern code review. In *Proceedings of the 35th International Conference on
