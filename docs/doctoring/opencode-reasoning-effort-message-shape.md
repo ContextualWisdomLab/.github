@@ -2,6 +2,8 @@
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 `validate_candidate` still requires reasoning-capable models to declare
 `reasoning=true`, `options.reasoningEffort=high`, and
 `variants.high.reasoningEffort=high`. The repair only extracts the shared
