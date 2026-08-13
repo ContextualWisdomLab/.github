@@ -63,6 +63,18 @@ def test_invalid_repository_roots_fail_closed(
         scope.build_snapshot(root)
 
 
+def test_repository_root_under_symlink_parent_fails_closed(tmp_path: Path) -> None:
+    """A symlink parent cannot redirect the canonical repository root."""
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    _repository(real_parent)
+    linked_parent = tmp_path / "linked"
+    os.symlink(real_parent, linked_parent)
+
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        scope.build_snapshot(linked_parent / "repository")
+
+
 @pytest.mark.parametrize(
     "raw_path",
     [

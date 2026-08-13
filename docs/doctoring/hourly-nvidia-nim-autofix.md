@@ -180,7 +180,8 @@ ignored-path inventory. Combining both results prevents model-created cache,
 credential, build-output, or other ignored paths from escaping comparison merely
 because a later `git add -A` would normally omit them.
 
-The helper refuses noncanonical roots and paths, oversized inventories, malformed
+The helper refuses noncanonical roots and paths, a repository root whose
+immediate parent is a symbolic link, oversized inventories, malformed
 snapshot documents, unrecognized fingerprint schemas, and allowlist paths absent
 from the pre-model snapshot. Every symlink must resolve to a regular file inside
 the repository whose target is present in the reviewable Git inventory.

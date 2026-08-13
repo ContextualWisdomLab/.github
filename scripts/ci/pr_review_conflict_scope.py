@@ -38,9 +38,19 @@ _SHA256_SEAL_RE = re.compile(r"[0-9a-f]{64}\n")
 
 
 def _validated_root(root: Path) -> Path:
-    """Return a canonical, non-symlink repository directory."""
+    """Return a canonical, non-symlink repository directory.
+
+    The last component and its immediate parent are both checked with
+    ``Path.is_symlink()`` before ``resolve``. A parent swapped to a
+    symbolic link after the caller constructed the path cannot redirect
+    the canonical root (CWE-367).
+    """
     candidate = root.absolute()
-    if candidate.is_symlink() or not candidate.is_dir():
+    if (
+        candidate.is_symlink()
+        or candidate.parent.is_symlink()
+        or not candidate.is_dir()
+    ):
         raise ValueError("repository root must be a non-symlink directory")
     try:
         return candidate.resolve(strict=True)
