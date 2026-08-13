@@ -5702,13 +5702,18 @@ jobs:
           prefilter_inline_comments_to_hunks() {
             local payload_file="$1"
             local skipped_file="$2"
+            local applyable_file="${3:-}"
             local hunks_diff_file
             local filtered_file
             local merge_base
+            local -a filter_args
             hunks_diff_file="$(mktemp)"
             filtered_file="$(mktemp)"
             : >"$skipped_file"
             : >"$hunks_diff_file"
+            if [ -n "$applyable_file" ]; then
+              : >"$applyable_file"
+            fi
             if [ -n "${OPENCODE_SOURCE_WORKDIR:-}" ] && [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
               merge_base="$(git -C "$OPENCODE_SOURCE_WORKDIR" merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null || true)"
               if [ -z "$merge_base" ]; then
@@ -5717,12 +5722,18 @@ jobs:
               git -C "$OPENCODE_SOURCE_WORKDIR" diff --unified=3 --find-renames --no-color --no-ext-diff \
                 "$merge_base" "$PR_HEAD_SHA" >"$hunks_diff_file" || : >"$hunks_diff_file"
             fi
-            if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
-              --filter-hunks \
-              --payload "$payload_file" \
-              --hunks-diff "$hunks_diff_file" \
-              --output "$filtered_file" \
-              --skipped-locations "$skipped_file"; then
+            filter_args=(
+              python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py"
+              --filter-hunks
+              --payload "$payload_file"
+              --hunks-diff "$hunks_diff_file"
+              --output "$filtered_file"
+              --skipped-locations "$skipped_file"
+            )
+            if [ -n "$applyable_file" ]; then
+              filter_args+=(--applyable-locations "$applyable_file")
+            fi
+            if "${filter_args[@]}"; then
               mv "$filtered_file" "$payload_file"
             else
               rm -f "$filtered_file"
@@ -5738,24 +5749,26 @@ jobs:
             local rewritten_payload_file
             local review_response_file
             local skipped_locations_file
+            local applyable_locations_file
             local comment_count
             gh_error_file="$(mktemp)"
             rewritten_payload_file="$(mktemp)"
             review_response_file="$(mktemp)"
             skipped_locations_file="$(mktemp)"
+            applyable_locations_file="$(mktemp)"
             body="$(ensure_review_body_has_change_graph "$body")"
             if jq --arg body "$body" '.body = $body' "$review_payload_file" >"$rewritten_payload_file"; then
               mv "$rewritten_payload_file" "$review_payload_file"
             else
               rm -f "$rewritten_payload_file"
             fi
-            prefilter_inline_comments_to_hunks "$review_payload_file" "$skipped_locations_file"
+            prefilter_inline_comments_to_hunks "$review_payload_file" "$skipped_locations_file" "$applyable_locations_file"
             comment_count="$(jq '.comments | length' "$review_payload_file" 2>/dev/null || printf '0')"
             if [ "$comment_count" = "0" ] && [ -s "$skipped_locations_file" ] \
               && [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
               build_inline_comment_failure_body \
                 "$source_body_file" "$fallback_body_file" "$control_json" \
-                "" "" "" "" "$skipped_locations_file" || true
+                "" "" "" "" "$skipped_locations_file" "$applyable_locations_file" || true
               if [ -s "$fallback_body_file" ]; then
                 body="$(cat "$fallback_body_file")"
                 if jq --arg body "$body" '.body = $body | del(.comments)' \
@@ -5779,7 +5792,7 @@ jobs:
                   "$review_payload_file" "$body" "$refused_locations_file" \
                   "$attached_locations_file" "$deferred_locations_file"; then
                   if { [ -s "$refused_locations_file" ] || [ -s "$deferred_locations_file" ] \
-                    || [ -s "$skipped_locations_file" ]; } \
+                    || [ -s "$skipped_locations_file" ] || [ -s "$applyable_locations_file" ]; } \
                     && [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
                     mixed_error_file="$gh_error_file"
                     if [ -s "${refused_locations_file}.errors" ]; then
@@ -5789,7 +5802,7 @@ jobs:
                       "$source_body_file" "$fallback_body_file" "$control_json" \
                       "$mixed_error_file" "$refused_locations_file" \
                       "$attached_locations_file" "$deferred_locations_file" \
-                      "$skipped_locations_file" || true
+                      "$skipped_locations_file" "$applyable_locations_file" || true
                     update_review_overview "$event" "$(cat "$fallback_body_file")"
                   else
                     update_review_overview "$event" "$body"
@@ -5797,7 +5810,7 @@ jobs:
                   rm -f "$gh_error_file" "$review_response_file" \
                     "$refused_locations_file" "${refused_locations_file}.errors" \
                     "$attached_locations_file" "$deferred_locations_file" \
-                    "$skipped_locations_file"
+                    "$skipped_locations_file" "$applyable_locations_file"
                   return 0
                 fi
                 rm -f "$refused_locations_file" "${refused_locations_file}.errors" \
@@ -5806,9 +5819,11 @@ jobs:
               if [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
                 build_inline_comment_failure_body \
                   "$source_body_file" "$fallback_body_file" "$control_json" \
-                  "$gh_error_file" "" "" "" "$skipped_locations_file" || true
+                  "$gh_error_file" "" "" "" "$skipped_locations_file" \
+                  "$applyable_locations_file" || true
               fi
-              rm -f "$gh_error_file" "$review_response_file" "$skipped_locations_file"
+              rm -f "$gh_error_file" "$review_response_file" \
+                "$skipped_locations_file" "$applyable_locations_file"
               if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" = "1" ]; then
                 printf '::error::OpenCode inline review publication stopped because PR head advanced beyond %s.\n' "$HEAD_SHA"
                 return 1
@@ -5820,15 +5835,17 @@ jobs:
               fi
               return 1
             fi
-            if [ -s "$skipped_locations_file" ] && [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
+            if { [ -s "$skipped_locations_file" ] || [ -s "$applyable_locations_file" ]; } \
+              && [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
               build_inline_comment_failure_body \
                 "$source_body_file" "$fallback_body_file" "$control_json" \
-                "" "" "" "" "$skipped_locations_file" || true
+                "" "" "" "" "$skipped_locations_file" "$applyable_locations_file" || true
               if [ -s "$fallback_body_file" ]; then
                 body="$(cat "$fallback_body_file")"
               fi
             fi
-            rm -f "$gh_error_file" "$review_response_file" "$skipped_locations_file"
+            rm -f "$gh_error_file" "$review_response_file" \
+              "$skipped_locations_file" "$applyable_locations_file"
             update_review_overview "$event" "$body"
           }
 
@@ -5948,6 +5965,7 @@ jobs:
             local attached_locations_file="${6:-}"
             local deferred_locations_file="${7:-}"
             local skipped_locations_file="${8:-}"
+            local applyable_locations_file="${9:-}"
             local -a fallback_args
 
             fallback_args=(
@@ -5971,6 +5989,9 @@ jobs:
             fi
             if [ -n "$skipped_locations_file" ]; then
               fallback_args+=(--skipped-locations "$skipped_locations_file")
+            fi
+            if [ -n "$applyable_locations_file" ]; then
+              fallback_args+=(--applyable-locations "$applyable_locations_file")
             fi
             "${fallback_args[@]}"
           }

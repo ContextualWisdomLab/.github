@@ -349,11 +349,94 @@ def apply_github_suggestion_blocks(
     return rewritten
 
 
+def format_applyable_range(path: str, start: int, end: int) -> str:
+    """Return ``path:line`` or ``path:start-end`` for one applyable suggestion."""
+    if start == end:
+        return f"{path}:{start}"
+    return f"{path}:{start}-{end}"
+
+
+def parse_applyable_ranges(text: str) -> list[tuple[str, int, int]]:
+    """Parse ``path:line`` or ``path:start-end`` applyable-suggestion rows."""
+    ranges: list[tuple[str, int, int]] = []
+    seen: set[tuple[str, int, int]] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        loc_text, _sep, _phrase = line.partition("\t")
+        if ":" not in loc_text:
+            continue
+        path_text, _, rest = loc_text.rpartition(":")
+        path = safe_finding_path(path_text)
+        if path is None:
+            continue
+        if "-" in rest:
+            start_text, _, end_text = rest.partition("-")
+            try:
+                start_value = int(start_text)
+                end_value = int(end_text)
+            except ValueError:
+                continue
+        else:
+            try:
+                start_value = end_value = int(rest)
+            except ValueError:
+                continue
+        start = safe_finding_line(start_value)
+        end = safe_finding_line(end_value)
+        if start is None or end is None or end < start:
+            continue
+        key = (path, start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        ranges.append(key)
+    return ranges
+
+
+def applyable_suggestion_ranges(
+    payload: dict[str, Any],
+) -> list[tuple[str, int, int]]:
+    """Return ``(path, start, end)`` for comments that carry a suggestion fence."""
+    comments = payload.get("comments")
+    if not isinstance(comments, list):
+        return []
+    ranges: list[tuple[str, int, int]] = []
+    seen: set[tuple[str, int, int]] = set()
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str) or "```suggestion" not in body:
+            continue
+        path = safe_finding_path(comment.get("path"))
+        end = safe_finding_line(comment.get("line"))
+        start_raw = comment.get("start_line")
+        start = safe_finding_line(start_raw) if start_raw is not None else end
+        if path is None or end is None or start is None:
+            continue
+        if start > end:
+            start, end = end, start
+        key = (path, start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        ranges.append(key)
+    return ranges
+
+
+def render_applyable_receipts(ranges: list[tuple[str, int, int]]) -> list[str]:
+    """Return overview receipt lines for applyable suggestion ranges."""
+    return [f"- `{format_applyable_range(path, start, end)}`" for path, start, end in ranges]
+
+
 def write_hunk_filtered_payload(
     payload: dict[str, Any],
     hunks: dict[str, dict[str, set[int]]],
     output: Path,
     skipped_path: Path | None = None,
+    applyable_path: Path | None = None,
 ) -> int:
     """Write a hunk-filtered review payload and optional skipped ``path:line`` rows."""
     filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
@@ -363,6 +446,14 @@ def write_hunk_filtered_payload(
     if skipped_path is not None:
         skipped_path.write_text(
             "".join(f"{path}:{line}\n" for path, line in skipped),
+            encoding="utf-8",
+        )
+    if applyable_path is not None:
+        applyable_path.write_text(
+            "".join(
+                f"{format_applyable_range(path, start, end)}\n"
+                for path, start, end in applyable_suggestion_ranges(filtered)
+            ),
             encoding="utf-8",
         )
     return len(comments) if isinstance(comments, list) else 0
@@ -546,15 +637,17 @@ def render_inline_comment_failure_suffix(
     attached_locations: list[tuple[str, int]] | None = None,
     deferred_locations: list[tuple[str, int]] | None = None,
     skipped_locations: list[tuple[str, int]] | None = None,
+    applyable_locations: list[tuple[str, int, int]] | None = None,
     retry_limit: int | None = None,
 ) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
     attached = attached_locations or []
     deferred = deferred_locations or []
     skipped = skipped_locations or []
+    applyable = applyable_locations or []
     heading = (
         "## Inline comment publication receipts"
-        if error_phrase or mixed_success or attached or deferred or skipped
+        if error_phrase or mixed_success or attached or deferred or skipped or applyable
         else "## Inline comment publishing failed"
     )
     lines = [
@@ -596,7 +689,7 @@ def render_inline_comment_failure_suffix(
             "current-head changed hunks, or inspect the workflow log/control "
             "JSON and apply the changes manually."
         )
-    elif not attached and not deferred and not skipped:
+    elif not attached and not deferred and not skipped and not applyable:
         lines.append(
             "GitHub did not accept the inline review comments, and the "
             "control JSON had no trusted path:line findings. Inspect the "
@@ -640,6 +733,12 @@ def render_inline_comment_failure_suffix(
                 "current-head changed hunks, or inspect the workflow log/control "
                 "JSON and apply the changes manually."
             )
+    if applyable:
+        if locations or attached or deferred or skipped:
+            lines.append("")
+        lines.append("GitHub can apply these suggested replacements:")
+        lines.append("")
+        lines.extend(render_applyable_receipts(applyable))
     lines.append("")
     return "\n".join(lines)
 
@@ -661,6 +760,24 @@ def _trusted_location_subset(
     return kept
 
 
+def _trusted_range_subset(
+    items: list[tuple[str, int, int]] | None,
+    allowed: set[tuple[str, int]],
+) -> list[tuple[str, int, int]]:
+    """Return first-seen applyable ranges whose start is a trusted finding."""
+    if not items:
+        return []
+    kept: list[tuple[str, int, int]] = []
+    seen: set[tuple[str, int, int]] = set()
+    for item in items:
+        path, start, _end = item
+        if (path, start) not in allowed or item in seen:
+            continue
+        seen.add(item)
+        kept.append(item)
+    return kept
+
+
 def render_inline_comment_failure_body(
     body: str,
     control: dict[str, Any],
@@ -671,6 +788,7 @@ def render_inline_comment_failure_body(
     attached_locations: list[tuple[str, int]] | None = None,
     deferred_locations: list[tuple[str, int]] | None = None,
     skipped_locations: list[tuple[str, int]] | None = None,
+    applyable_locations: list[tuple[str, int, int]] | None = None,
     retry_limit: int | None = None,
 ) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""
@@ -691,6 +809,11 @@ def render_inline_comment_failure_body(
         if skipped_locations is not None
         else []
     )
+    applyable = (
+        _trusted_range_subset(applyable_locations, allowed)
+        if applyable_locations is not None
+        else []
+    )
     phrases: dict[tuple[str, int], str] | None = None
     if refused_receipts is not None:
         locations = [
@@ -704,25 +827,26 @@ def render_inline_comment_failure_body(
             if phrase and (path, line) in allowed
         }
         mixed_success = True
-        if not locations and not attached and not deferred and not skipped:
+        if not locations and not attached and not deferred and not skipped and not applyable:
             return body.rstrip("\n") + "\n"
     elif (
         refused_locations is None
         and attached_locations is None
         and deferred_locations is None
         and skipped_locations is None
+        and applyable_locations is None
     ):
         locations = trusted_finding_locations(control)
         mixed_success = False
     elif refused_locations is None:
         locations = []
         mixed_success = True
-        if not attached and not deferred and not skipped:
+        if not attached and not deferred and not skipped and not applyable:
             return body.rstrip("\n") + "\n"
     else:
         locations = [item for item in refused_locations if item in allowed]
         mixed_success = True
-        if not locations and not attached and not deferred and not skipped:
+        if not locations and not attached and not deferred and not skipped and not applyable:
             return body.rstrip("\n") + "\n"
     return body.rstrip("\n") + render_inline_comment_failure_suffix(
         locations,
@@ -732,6 +856,7 @@ def render_inline_comment_failure_body(
         attached_locations=attached or None,
         deferred_locations=deferred or None,
         skipped_locations=skipped or None,
+        applyable_locations=applyable or None,
         retry_limit=retry_limit,
     )
 
@@ -761,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attached-locations", type=Path)
     parser.add_argument("--deferred-locations", type=Path)
     parser.add_argument("--skipped-locations", type=Path)
+    parser.add_argument("--applyable-locations", type=Path)
     parser.add_argument("--retry-limit", type=int)
     parser.add_argument("--record-refusal", action="store_true")
     parser.add_argument("--record-attach", action="store_true")
@@ -785,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
                 hunks,
                 args.output,
                 skipped_path=args.skipped_locations,
+                applyable_path=args.applyable_locations,
             )
             return 0
         if args.record_attach:
@@ -864,6 +991,7 @@ def main(argv: list[str] | None = None) -> int:
         attached_locations = None
         deferred_locations = None
         skipped_locations = None
+        applyable_locations = None
         if args.refused_locations is not None:
             parsed_receipts = parse_refused_receipts(
                 args.refused_locations.read_text(encoding="utf-8")
@@ -886,6 +1014,10 @@ def main(argv: list[str] | None = None) -> int:
             skipped_locations = parse_refused_locations(
                 args.skipped_locations.read_text(encoding="utf-8")
             )
+        if args.applyable_locations is not None:
+            applyable_locations = parse_applyable_ranges(
+                args.applyable_locations.read_text(encoding="utf-8")
+            )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -899,6 +1031,7 @@ def main(argv: list[str] | None = None) -> int:
             attached_locations=attached_locations,
             deferred_locations=deferred_locations,
             skipped_locations=skipped_locations,
+            applyable_locations=applyable_locations,
             retry_limit=args.retry_limit,
         ),
         encoding="utf-8",

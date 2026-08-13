@@ -7,9 +7,11 @@ import pytest
 from scripts.ci.opencode_inline_comment_fallback import (
     DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
     apply_github_suggestion_blocks,
+    applyable_suggestion_ranges,
     comment_on_changed_hunk,
     count_removed_suggestion_lines,
     extract_suggestion_replacement,
+    format_applyable_range,
     filter_payload_comments_to_hunks,
     github_error_is_unprocessable,
     github_publication_error_phrase,
@@ -20,6 +22,8 @@ from scripts.ci.opencode_inline_comment_fallback import (
     parse_unified_diff_hunk_lines,
     record_attached_receipt,
     record_refused_receipt,
+    parse_applyable_ranges,
+    render_applyable_receipts,
     render_github_suggestion_block,
     suggestion_comment_range,
     render_inline_comment_failure_body,
@@ -1483,3 +1487,217 @@ def test_apply_github_suggestion_blocks_sets_multiline_range(tmp_path):
     written = json.loads(output.read_text(encoding="utf-8"))
     assert written["comments"][0]["start_line"] == 5
     assert written["comments"][0]["line"] == 7
+
+
+def test_applyable_ranges_parse_and_render_path_start_end():
+    assert format_applyable_range("scripts/ci/example.py", 5, 5) == (
+        "scripts/ci/example.py:5"
+    )
+    assert format_applyable_range("scripts/ci/example.py", 5, 7) == (
+        "scripts/ci/example.py:5-7"
+    )
+    parsed = parse_applyable_ranges(
+        "\n".join(
+            [
+                "scripts/ci/example.py:5-7",
+                "scripts/ci/ok.py:4",
+                "scripts/ci/example.py:5-7",
+                "../escape.py:1-2",
+                "scripts/ci/bad.py:7-3",
+                "scripts/ci/nope.py:abc",
+                "scripts/ci/nope.py:1-x",
+                "# comment",
+                "",
+                "not-a-location",
+            ]
+        )
+    )
+    assert parsed == [
+        ("scripts/ci/example.py", 5, 7),
+        ("scripts/ci/ok.py", 4, 4),
+    ]
+    assert render_applyable_receipts(parsed) == [
+        "- `scripts/ci/example.py:5-7`",
+        "- `scripts/ci/ok.py:4`",
+    ]
+    assert applyable_suggestion_ranges({"comments": "bad"}) == []
+    payload = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "side": "RIGHT",
+                "body": MULTILINE_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "side": "RIGHT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/plain.py",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "no suggestion",
+            },
+        ),
+        parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF),
+    )
+    assert applyable_suggestion_ranges(payload) == [
+        ("scripts/ci/example.py", 5, 7),
+        ("scripts/ci/example.py", 7, 7),
+    ]
+    swapped = applyable_suggestion_ranges(
+        {
+            "comments": [
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 5,
+                    "start_line": 7,
+                    "body": "```suggestion\nx\n```",
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "start_line": 5,
+                    "body": "```suggestion\ny\n```",
+                },
+                "not-an-object",
+            ]
+        }
+    )
+    assert swapped == [("scripts/ci/example.py", 5, 7)]
+    assert applyable_suggestion_ranges(
+        {
+            "comments": [
+                {
+                    "path": "../escape.py",
+                    "line": 1,
+                    "body": "```suggestion\nx\n```",
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": True,
+                    "body": "```suggestion\nx\n```",
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 5,
+                    "start_line": 0,
+                    "body": "```suggestion\nx\n```",
+                },
+            ]
+        }
+    ) == []
+
+
+def test_overview_receipts_list_applyable_suggestion_ranges(tmp_path):
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 5},
+            {"path": "scripts/ci/ok.py", "line": 4},
+            {"path": "scripts/ci/skip.py", "line": 9},
+        ),
+        skipped_locations=[("scripts/ci/skip.py", 9)],
+        applyable_locations=[
+            ("scripts/ci/example.py", 5, 7),
+            ("scripts/ci/ok.py", 4, 4),
+            ("scripts/ci/foreign.py", 1, 2),
+        ],
+    )
+    assert "GitHub can apply these suggested replacements:" in body
+    assert "- `scripts/ci/example.py:5-7`" in body
+    assert "- `scripts/ci/ok.py:4`" in body
+    assert "scripts/ci/foreign.py" not in body
+    assert "sit outside every current-head changed hunk" in body
+    applyable_only = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/example.py", "line": 5}),
+        applyable_locations=[("scripts/ci/example.py", 5, 7)],
+    )
+    assert "GitHub can apply these suggested replacements:" in applyable_only
+    assert "- `scripts/ci/example.py:5-7`" in applyable_only
+    assert "did not accept the inline review comments" not in applyable_only
+    empty_applyable = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/ok.py", "line": 4}),
+        applyable_locations=[],
+    )
+    assert "GitHub can apply these suggested replacements:" not in empty_applyable
+
+    payload = tmp_path / "batch.json"
+    payload.write_text(
+        json.dumps(
+            _batch_payload(
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 5,
+                    "side": "RIGHT",
+                    "body": MULTILINE_DIFF_BODY,
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+    hunks_diff = tmp_path / "hunks.diff"
+    hunks_diff.write_text(EXAMPLE_UNIFIED_DIFF, encoding="utf-8")
+    output = tmp_path / "filtered.json"
+    applyable = tmp_path / "applyable.txt"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(output),
+                "--applyable-locations",
+                str(applyable),
+            ]
+        )
+        == 0
+    )
+    assert applyable.read_text(encoding="utf-8") == "scripts/ci/example.py:5-7\n"
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    control_path.write_text(
+        json.dumps(control({"path": "scripts/ci/example.py", "line": 5})),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--applyable-locations",
+                str(applyable),
+            ]
+        )
+        == 0
+    )
+    assert "scripts/ci/example.py:5-7" in receipt.read_text(encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--applyable-locations",
+                str(tmp_path / "missing-applyable.txt"),
+            ]
+        )
+        == 2
+    )

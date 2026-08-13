@@ -59,7 +59,10 @@ than one current-head line and every line from the finding through that
 span sits on the same hunk, the comment also sets `start_line`, `line`,
 and `start_side` so GitHub applies one multi-line suggestion range
 (GitHub, n.d.-b). A range that would leave the hunk stays single-line.
-Suggested diffs still stay out of the PR-level body.
+The publisher then persists those applyable ranges as overview receipts
+(``path:line`` or ``path:start-end``) so the author can see which hunks
+shipped as one-click GitHub suggestions (GitHub, n.d.-c). Suggested diffs
+still stay out of the PR-level body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -76,8 +79,9 @@ with the same control object used to build the inline `comments` array.
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,
-  and `start_line`/`line` ranges when a multi-line replacement sits on
-  one current-head hunk.
+  `start_line`/`line` ranges when a multi-line replacement sits on one
+  current-head hunk, and overview receipts that list applyable
+  ``path:start-end`` suggestion ranges.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
