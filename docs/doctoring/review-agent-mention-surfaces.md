@@ -39,7 +39,9 @@ ContextualWisdomLab/.github#954 and then failed the job with
 receipt was posted. Review-comment mentions use
 ``POST /pulls/comments/{id}/reactions`` and treat the same 403 as a
 warning. Submitted review bodies have no REST reaction endpoint, so
-those surfaces acknowledge only with the existing receipt issue comment. The local job uses `pull-requests: write` so
+they resolve the review ``node_id`` and call GraphQL ``addReaction``
+with ``EYES``. A 403 or GraphQL ``errors`` payload is a warning after
+dispatch; the existing receipt issue comment still posts. The local job uses `pull-requests: write` so
 conversation receipts on pull requests can be created, and
 `reactions: write` so the optional eyes reaction is an allowed GitHub
 App write. Live `route-local-agent-mention` run `31686563920` still
@@ -75,7 +77,8 @@ still hashes the flat claim, so review-agent keying is unchanged.
 `tests/test_agent_mention_router.py` and `tests/test_agent_mention_sweep.py`
 drive `parse_event` and `build_requests_for_pull_request` with GitHub-shaped
 review-comment and submitted-review payloads, including mixed-case handles,
-and pin ``POST /pulls/comments/{id}/reactions`` for review-comment mentions.
+and pin ``POST /pulls/comments/{id}/reactions`` for review-comment mentions
+and GraphQL ``addReaction`` for submitted review bodies.
 `tests/test_agent_mention_workflow_contract.py` pins the new workflow triggers
 and the absence of the case-sensitive body `contains` filter.
 `tests/test_opencode_agent_contract.py` pins the per-file walk and
@@ -109,6 +112,10 @@ https://docs.github.com/en/rest/pulls/comments
 GitHub. (n.d.). *REST API endpoints for pull request reviews*. GitHub Docs.
 Retrieved August 13, 2026, from
 https://docs.github.com/en/rest/pulls/reviews
+
+GitHub. (n.d.-c). *Mutations: addReaction*. GitHub Docs. Retrieved
+August 13, 2026, from
+https://docs.github.com/en/graphql/reference/mutations#addreaction
 
 Lu, C., Holt, S., Fanconi, C., Chan, A. J., Lange, R. T., Foerster, M.,
 Tegmark, M., & Lange, R. (2025). *The AI scientist-v2: Workshop-level automated

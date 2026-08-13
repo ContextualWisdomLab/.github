@@ -527,10 +527,109 @@ def test_add_mention_reaction_targets_review_comments() -> None:
     assert "/issues/comments/" not in client.calls[0][0][0]
     review_body = module.parse_event(submitted_review_event("@cwl-noema-review"))
     assert review_body is not None
-    body_client = FakeClient()
-    assert module.add_mention_reaction(body_client, review_body) is False
-    assert body_client.calls == []
     assert module.mention_reaction_path(review_body) is None
+
+
+def test_add_mention_reaction_targets_submitted_review_bodies() -> None:
+    """Submitted review bodies react through GraphQL addReaction, not REST comments."""
+
+    module = load_module()
+    review_request = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_request is not None
+
+    class ReviewReactionClient(FakeClient):
+        """Return a review node ID and record the GraphQL eyes mutation."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve the review lookup, then record addReaction."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+            return None
+
+    client = ReviewReactionClient()
+    assert module.add_mention_reaction(client, review_request) is True
+    lookup, mutation = client.calls
+    assert "/pulls/953/reviews/49019778" in lookup[0][0]
+    assert mutation[0][0] == "graphql"
+    assert mutation[1]["variables"]["id"] == "PRR_kwDOReviewBody"
+    assert "addReaction" in mutation[1]["query"]
+
+    class MissingNodeClient(FakeClient):
+        """Return an empty review lookup so GraphQL is skipped."""
+
+        def request(self, args, *, input_payload=None):
+            """Record the lookup and return no node ID."""
+
+            self.calls.append((list(args), input_payload))
+            return {}
+
+    assert module.add_mention_reaction(MissingNodeClient(), review_request) is False
+    assert module.add_mention_reaction(FakeClient(), review_request) is False
+
+    class EmptyNodeClient(FakeClient):
+        """Return a blank review node ID."""
+
+        def request(self, args, *, input_payload=None):
+            """Record the lookup and return an unusable node ID."""
+
+            self.calls.append((list(args), input_payload))
+            return {"node_id": "   "}
+
+    assert module.add_mention_reaction(EmptyNodeClient(), review_request) is False
+
+    class IntNodeClient(FakeClient):
+        """Return a non-string review node ID."""
+
+        def request(self, args, *, input_payload=None):
+            """Record the lookup and return a numeric node ID."""
+
+            self.calls.append((list(args), input_payload))
+            return {"node_id": 12}
+
+    assert module.add_mention_reaction(IntNodeClient(), review_request) is False
+    unknown = module.MentionRequest(
+        repository="ContextualWisdomLab/.github",
+        pull_request_number=953,
+        pull_request_head_sha="a" * 40,
+        pull_request_base_branch="main",
+        comment_id=1,
+        actor="maintainer",
+        agents=("cwl-noema-review",),
+        source_kind="unknown",
+    )
+    assert module.add_mention_reaction(FakeClient(), unknown) is False
+
+    class ForbiddenGraphqlClient(ReviewReactionClient):
+        """Raise the live GitHub App 403 on GraphQL addReaction."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail GraphQL the same way the installation token failed."""
+
+            if args and args[0] == "graphql":
+                raise RuntimeError(
+                    "gh api failed with exit code 1: gh: Resource not "
+                    "accessible by integration (HTTP 403)"
+                )
+            return super().request(args, input_payload=input_payload)
+
+    assert module.add_mention_reaction(ForbiddenGraphqlClient(), review_request) is False
+
+    class GraphqlErrorClient(ReviewReactionClient):
+        """Return a GraphQL error payload with HTTP 200."""
+
+        def request(self, args, *, input_payload=None):
+            """Record GraphQL errors without raising."""
+
+            recorded = super().request(args, input_payload=input_payload)
+            if args and args[0] == "graphql":
+                return {"errors": [{"message": "Resource not accessible by integration"}]}
+            return recorded
+
+    assert module.add_mention_reaction(GraphqlErrorClient(), review_request) is False
 
     class ReactionForbiddenClient(FakeClient):
         """Raise the live GitHub App 403 only on the eyes reaction."""
@@ -575,11 +674,29 @@ def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
 
     review_request = module.parse_event(submitted_review_event("@cwl-noema-review"))
     assert review_request is not None
-    review_target = FakeClient()
+
+    class ReviewDispatchClient(FakeClient):
+        """Return a review node ID so dispatch can post GraphQL eyes."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve review lookup and record later mutations."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+            return None
+
+    review_target = ReviewDispatchClient()
     assert module.dispatch_request(
         review_request,
         target_client=review_target,
         dispatch_client=FakeClient(),
         opencode_allowlist=frozenset(),
     ) == ("@cwl-noema-review",)
-    assert all("reactions" not in args[0] for args, _ in review_target.calls)
+    assert any(args[0] == "graphql" for args, _ in review_target.calls)
+    assert all("/issues/comments/" not in args[0] for args, _ in review_target.calls)
+    assert any(
+        args[0].endswith("/issues/953/comments") for args, _ in review_target.calls
+    )
