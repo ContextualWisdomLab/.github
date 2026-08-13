@@ -46,6 +46,8 @@ def test_trusted_finding_locations_keeps_first_safe_path_line_pairs():
             {"path": "scripts/ci/<script>.py", "line": 4},
             {"path": "scripts/ci/`tick`.py", "line": 5},
             {"path": "scripts/ci/a&b.py", "line": 6},
+            {"path": "scripts/ci/close-->comment.py", "line": 8},
+            {"path": "scripts/ci/fence```suggestion.py", "line": 9},
             "not-an-object",
         )
     )

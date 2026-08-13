@@ -8,3 +8,4 @@ Finding paths with backticks or HTML metacharacters are not trusted 422 receipts
 After a batch 422, retry comments one at a time, capped at 20.
 422 receipt phrases cite leftover JSON `errors[].code` next to `message`.
 Leftover overview receipts sanitize path and phrase so a leftover cannot close the HTML comment or reopen a suggestion fence.
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted.
