@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a GitHub 422 inline-comment fallback that cites trusted path:line."""
+"""Render a GitHub 422 inline-comment fallback that cites leftover ranges."""
 
 from __future__ import annotations
 
@@ -55,21 +55,55 @@ def safe_finding_line(raw_line: object) -> int | None:
     return None
 
 
-def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
-    """Return unique sanitized finding path:line pairs in first-seen order."""
+def leftover_finding_range(finding: dict[str, Any]) -> tuple[str, int, int] | None:
+    """Return a trusted leftover ``(path, start, end)`` range, or None.
+
+    ``line`` is the last leftover line. ``start_line``, when present, is
+    the first leftover line. A start after the end is not a range.
+    """
+    path = safe_finding_path(finding.get("path"))
+    end = safe_finding_line(finding.get("line"))
+    if path is None or end is None:
+        return None
+    start = safe_finding_line(finding.get("start_line"))
+    if start is None:
+        return (path, end, end)
+    if start > end:
+        return None
+    return (path, start, end)
+
+
+def format_leftover_range(path: str, start: int, end: int) -> str:
+    """Return ``path:line`` or leftover ``path:start-end`` for one finding."""
+    if start == end:
+        return f"{path}:{end}"
+    return f"{path}:{start}-{end}"
+
+
+def trusted_finding_ranges(control: dict[str, Any]) -> list[tuple[str, int, int]]:
+    """Return unique sanitized leftover path:start-end ranges in first-seen order."""
     findings = control.get("findings")
     if not isinstance(findings, list):
         return []
-    locations: list[tuple[str, int]] = []
-    seen: set[tuple[str, int]] = set()
+    ranges: list[tuple[str, int, int]] = []
+    seen: set[tuple[str, int, int]] = set()
     for finding in findings:
         if not isinstance(finding, dict):
             continue
-        path = safe_finding_path(finding.get("path"))
-        line = safe_finding_line(finding.get("line"))
-        if path is None or line is None:
+        item = leftover_finding_range(finding)
+        if item is None or item in seen:
             continue
-        location = (path, line)
+        seen.add(item)
+        ranges.append(item)
+    return ranges
+
+
+def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
+    """Return unique sanitized finding path:line pairs in first-seen order."""
+    locations: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for path, _start, end in trusted_finding_ranges(control):
+        location = (path, end)
         if location in seen:
             continue
         seen.add(location)
@@ -77,7 +111,9 @@ def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
     return locations
 
 
-def render_inline_comment_failure_suffix(locations: list[tuple[str, int]]) -> str:
+def render_inline_comment_failure_suffix(
+    locations: list[tuple[str, int, int]],
+) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
     lines = [
         "",
@@ -90,7 +126,10 @@ def render_inline_comment_failure_suffix(locations: list[tuple[str, int]]) -> st
             "trusted current-head finding locations:"
         )
         lines.append("")
-        lines.extend(f"- `{path}:{line}`" for path, line in locations)
+        lines.extend(
+            f"- `{format_leftover_range(path, start, end)}`"
+            for path, start, end in locations
+        )
         lines.append("")
         lines.append(
             "OpenCode did not copy suggested diffs into this PR-level body. "
@@ -112,7 +151,7 @@ def render_inline_comment_failure_suffix(locations: list[tuple[str, int]]) -> st
 def render_inline_comment_failure_body(body: str, control: dict[str, Any]) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""
     return body.rstrip("\n") + render_inline_comment_failure_suffix(
-        trusted_finding_locations(control)
+        trusted_finding_ranges(control)
     )
 
 
@@ -128,7 +167,7 @@ def load_control(path: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Write a REQUEST_CHANGES body plus the exact path:line 422 suffix."""
+    """Write a REQUEST_CHANGES body plus leftover path:start-end 422 suffix."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control", required=True, type=Path)
     parser.add_argument("--body", required=True, type=Path)
