@@ -18,7 +18,9 @@ review expects (Bacchelli & Bird, 2013).
 JSON, keeps first-seen safe relative `path` plus positive integer `line`
 pairs, and appends them to the fallback body as `` `path:line` `` list
 items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
-lines are omitted. An empty location set is stated explicitly.
+lines are omitted. A decimal digit string such as `"9"` is accepted
+because LLM control JSON often emits line as text (CWE-20). An empty
+location set is stated explicitly.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -39,6 +41,9 @@ If GitHub later accepts off-diff comments, keep citing the attempted
 `path:line` in the fallback. Do not restore a location-free sentence.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-20: Improper input validation*.
+https://cwe.mitre.org/data/definitions/20.html
 
 Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of
 modern code review. In *Proceedings of the 35th International Conference on

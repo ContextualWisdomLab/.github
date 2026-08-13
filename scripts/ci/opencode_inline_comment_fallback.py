@@ -32,10 +32,22 @@ def safe_finding_path(raw_path: object) -> str | None:
 
 
 def safe_finding_line(raw_line: object) -> int | None:
-    """Return a positive integer finding line, or None when it is not one."""
-    if isinstance(raw_line, bool) or not isinstance(raw_line, int) or raw_line <= 0:
+    """Return a positive integer finding line, or None when it is not one.
+
+    Control JSON and LLM output often emit ``line`` as a decimal string.
+    CWE-20: reject bools, non-decimal text, and non-positive values; accept
+    only a positive ``int`` or a digit-only string of that int.
+    """
+    if isinstance(raw_line, bool):
         return None
-    return raw_line
+    if isinstance(raw_line, int):
+        return raw_line if raw_line > 0 else None
+    if isinstance(raw_line, str):
+        text = raw_line.strip()
+        if text.isdigit():
+            value = int(text)
+            return value if value > 0 else None
+    return None
 
 
 def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
