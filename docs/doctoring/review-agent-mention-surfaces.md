@@ -41,13 +41,15 @@ ContextualWisdomLab/.github#954 and then failed the job with
 `403 Resource not accessible by integration` on the reaction POST, so no
 receipt was posted. Review-comment and review identifiers are not
 issue-comment IDs, so those surfaces acknowledge only with the existing
-receipt issue comment. The local job uses `pull-requests: write` so
-conversation receipts on pull requests can be created, and
-`reactions: write` so the optional eyes reaction is an allowed GitHub
-App write. Live `route-local-agent-mention` run `31686563920` still
-failed on `main` after dispatch because the default-branch job token
-lacked `reactions` and POST `/issues/comments/{id}/reactions` returned
-`403 Resource not accessible by integration`.
+receipt issue comment. The local job uses `issues: write` for
+``POST /issues/comments/{id}/reactions`` and `pull-requests: write` for
+conversation receipts plus ``POST /pulls/comments/{id}/reactions``.
+`reactions: write` is not a documented `GITHUB_TOKEN` permission
+(GitHub, n.d.-c); declaring it can make the workflow invalid so mention
+dispatch never starts. Live `route-local-agent-mention` run `31686563920`
+still failed on `main` after dispatch because the default-branch job token
+lacked a valid reaction write and POST `/issues/comments/{id}/reactions`
+returned `403 Resource not accessible by integration`.
 
 CWE-755 forbids treating an exceptional secondary condition as a primary
 failure (MITRE, 2026). A 403 on the optional eyes reaction is therefore a
@@ -77,8 +79,9 @@ still hashes the flat claim, so review-agent keying is unchanged.
 `tests/test_agent_mention_router.py` and `tests/test_agent_mention_sweep.py`
 drive `parse_event` and `build_requests_for_pull_request` with GitHub-shaped
 review-comment and submitted-review payloads, including mixed-case handles.
-`tests/test_agent_mention_workflow_contract.py` pins the new workflow triggers
-and the absence of the case-sensitive body `contains` filter.
+`tests/test_agent_mention_workflow_contract.py` pins the new workflow triggers,
+the absence of the case-sensitive body `contains` filter, and the absence of
+the invalid `reactions: write` job permission.
 `tests/test_opencode_agent_contract.py` pins the per-file walk and
 Fugu / Conductor / TRINITY allocation strings. Permanent quality remains
 100% statement/branch coverage and 100% public docstrings on `scripts/ci`.
@@ -102,6 +105,10 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-t
 GitHub. (n.d.-b). *REST API endpoints for repositories: Create a repository
 dispatch event*. GitHub Docs. Retrieved August 13, 2026, from
 https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event
+
+GitHub. (n.d.-c). *Controlling permissions for GITHUB_TOKEN*. GitHub Docs.
+Retrieved August 14, 2026, from
+https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token
 
 GitHub. (n.d.). *REST API endpoints for pull request review comments*. GitHub
 Docs. Retrieved August 13, 2026, from
