@@ -7,4 +7,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 One-at-a-time 422 retries must keep multi-line start_line/start_side.
 Applyable overview ``path:start-end`` rows strip HTML comment delimiters and metacharacters before they enter ``<!-- opencode-review-overview -->``.
 Overview receipts treat only a closed ```suggestion fence as applyable.
-
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted.

@@ -58,6 +58,8 @@ def test_trusted_finding_locations_keeps_first_safe_path_line_pairs():
             {"path": "scripts/ci/other.py", "line": 0},
             {"path": "scripts/ci/other.py", "line": True},
             {"path": "scripts/ci/other.py", "line": 12},
+            {"path": "scripts/ci/close-->comment.py", "line": 8},
+            {"path": "scripts/ci/fence```suggestion.py", "line": 9},
             "not-an-object",
         )
     )
