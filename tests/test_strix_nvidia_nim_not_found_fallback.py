@@ -163,6 +163,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             "provider failures and missing reports remain fail-closed",
             workflow,
         )
+        self.assertIn(
+            "grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence'",
+            workflow,
+        )
         self.assertNotIn("backend_unavailable_signal", workflow)
         self.assertNotIn("reported_vulnerability_signal", workflow)
         self.assertNotIn("Treating as a neutral skip", workflow)

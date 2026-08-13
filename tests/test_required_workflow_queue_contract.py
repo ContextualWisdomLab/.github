@@ -1086,7 +1086,10 @@ def test_strix_provider_outage_without_findings_fails_closed() -> None:
     assert 'if [ "$strix_rc" -ne 0 ]; then' in workflow
     assert 'exit "$strix_rc"' in workflow
     assert "provider failures and missing reports remain fail-closed" in workflow
-    assert "grep -Eiq 'failing closed|incomplete evidence'" in workflow
+    assert (
+        "grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence'"
+        in workflow
+    )
     assert "printed fail-closed or incomplete-evidence text but exited 0" in workflow
     assert "Treating as a neutral skip" not in workflow
     assert "backend_unavailable_signal" not in workflow

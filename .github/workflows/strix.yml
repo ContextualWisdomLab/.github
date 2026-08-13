@@ -856,7 +856,7 @@ jobs:
           fi
           # CWE-754: a zero exit is not complete evidence if the gate itself
           # printed fail-closed or incomplete-evidence text (IEEE, 2008).
-          if grep -Eiq 'failing closed|incomplete evidence' "$strix_run_log"; then
+          if grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence' "$strix_run_log"; then
             echo "::error title=Strix evidence incomplete::The trusted Strix gate printed fail-closed or incomplete-evidence text but exited 0; refusing to convert that into a successful required check. See the strix-reports artifact and the run log."
             exit 1
           fi

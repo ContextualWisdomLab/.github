@@ -23,7 +23,8 @@ workflow wrapper now propagates every non-zero gate result. Provider outages,
 timeouts, missing reports, and malformed evidence therefore remain failed
 security checks until a clean, current-head scan is available. A successful
 check is reserved for a trusted gate exit of zero that did not also print
-fail-closed or incomplete-evidence text.
+fail-closed, fail closed, failing closed, incomplete-evidence, or
+incomplete evidence text.
 
 CWE-754 (MITRE, 2026) and IEEE 1028 (IEEE, 2008): a zero process exit is
 an unusual condition when the same log says the scan is failing closed.
