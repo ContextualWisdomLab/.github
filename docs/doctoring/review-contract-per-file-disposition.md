@@ -12,15 +12,15 @@ CodeRabbit” gap.
 
 ## Decision
 
-`unnamed_changed_files(reason, summary)` returns every path from
-`current_changed_files()` that is not named as a whole path token.
-A longer sibling such as ``example.py.bak`` contains ``example.py`` as a
-prefix substring; that is not a disposition of the shorter file
-(CWE-1288; MITRE, 2026). ``path:line`` still counts. `valid_control`
-rejects APPROVE when that tuple is non-empty, both before and after
-bounded-evidence repair. Developer experience / User experience
-section labels were already required; this change only closes the file-walk
-hole.
+`unnamed_changed_files(reason, summary, findings=None)` returns every path
+from `current_changed_files()` that is not named as a whole path token
+and is not a REQUEST_CHANGES finding path. A longer sibling such as
+``example.py.bak`` contains ``example.py`` as a prefix substring; that is
+not a disposition of the shorter file (CWE-1288; MITRE, 2026).
+``path:line`` still counts. `valid_control` rejects APPROVE and
+REQUEST_CHANGES when that tuple is non-empty. A REQUEST_CHANGES finding
+on one file plus a named no-blocker disposition of the rest is enough;
+a blocker-only review that never mentions the other files is not.
 
 An empty changed-file set remains a no-op (`()`), so identity-only PRs are
 unchanged.
@@ -42,11 +42,15 @@ current-head list (`scripts/ci/example.py` and `.github/workflows/strix.yml`).
 Naming only the first file is rejected. Naming both is accepted. A post-repair
 reason that drops the second path is still rejected. Naming only
 ``scripts/ci/example.py.bak`` still leaves ``scripts/ci/example.py`` unnamed.
+`test_request_changes_must_name_every_current_head_changed_file` rejects a
+REQUEST_CHANGES finding on only the first file, accepts a finding plus a
+named no-blocker on the second, and accepts findings that cover both paths.
 
 ## Rollback
 
-Remove the `unnamed_changed_files` checks from the two APPROVE blocks and
-the helper. Existing “at least one file” detection remains.
+Remove the `unnamed_changed_files` checks from the two APPROVE blocks,
+the REQUEST_CHANGES block, and the helper. Existing “at least one file”
+detection remains.
 
 ## References (APA 7th)
 

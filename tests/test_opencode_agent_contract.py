@@ -2322,9 +2322,12 @@ def test_opencode_strix_security_regressions_are_closed():
     assert "The model is intentionally isolated" in workflow
     assert "# Trusted CodeGraph current-head evidence" in workflow
     assert '"$CODEGRAPH_BIN" explore' in workflow
-    assert "repair_approval_summary" in Path(
-        "scripts/ci/opencode_review_normalize_output.py"
-    ).read_text(encoding="utf-8")
+    helper = Path("scripts/ci/opencode_review_normalize_output.py").read_text(
+        encoding="utf-8"
+    )
+    assert "repair_approval_summary" in helper
+    assert "unnamed_changed_files" in helper
+    assert "request-changes review does not name every current-head" in helper
 
 
 def test_opencode_review_publication_prefers_app_token_for_review_writes():

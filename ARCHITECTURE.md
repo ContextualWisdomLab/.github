@@ -42,7 +42,8 @@ flowchart TD
 ```
 
 IEEE 1028 requires every changed item in the review package to receive
-a disposition. The model cannot invent a smaller file set.
+a disposition on APPROVE and on REQUEST_CHANGES. The model cannot invent
+a smaller file set.
 
 ## Control-plane data flow
 

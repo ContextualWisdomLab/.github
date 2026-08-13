@@ -967,6 +967,111 @@ def test_approval_must_name_every_current_head_changed_file(tmp_path, monkeypatc
     )
 
 
+def test_request_changes_must_name_every_current_head_changed_file(
+    tmp_path, monkeypatch
+):
+    """A REQUEST_CHANGES review that ignores a current-head file is not CodeRabbit-deep."""
+
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        "scripts/ci/example.py\n.github/workflows/strix.yml\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
+
+    assert norm.unnamed_changed_files(
+        "Need a guard.",
+        "Coverage: 100%.",
+        findings=[finding()],
+    ) == (".github/workflows/strix.yml",)
+    assert (
+        norm.unnamed_changed_files(
+            "Need a guard.",
+            "Also reviewed .github/workflows/strix.yml.",
+            findings=[finding()],
+        )
+        == ()
+    )
+    assert (
+        norm.unnamed_changed_files(
+            "Need a guard.",
+            "Coverage: 100%.",
+            findings=[
+                finding(),
+                finding(path=".github/workflows/strix.yml", line=1),
+            ],
+        )
+        == ()
+    )
+    assert norm.unnamed_changed_files(
+        "Need a guard.",
+        "Coverage: 100%.",
+        findings=["not-an-object", finding(path=12)],
+    ) == (".github/workflows/strix.yml", "scripts/ci/example.py")
+
+    reasons: list[str] = []
+    thin = control(
+        result="REQUEST_CHANGES",
+        reason="Need a guard in scripts/ci/example.py.",
+        findings=[finding()],
+    )
+    assert (
+        norm.valid_control(
+            thin,
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any(
+        "does not name every current-head changed file" in reason
+        and ".github/workflows/strix.yml" in reason
+        for reason in reasons
+    )
+
+    reasons.clear()
+    named = control(
+        result="REQUEST_CHANGES",
+        reason=(
+            "Need a guard in scripts/ci/example.py. "
+            ".github/workflows/strix.yml has no blocker."
+        ),
+        findings=[finding()],
+    )
+    accepted = norm.valid_control(
+        named,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+        rejection_reasons=reasons,
+    )
+    assert accepted is not None
+    assert accepted["result"] == "REQUEST_CHANGES"
+
+    reasons.clear()
+    covered = control(
+        result="REQUEST_CHANGES",
+        reason="Need a guard.",
+        findings=[
+            finding(),
+            finding(path=".github/workflows/strix.yml", line=1),
+        ],
+    )
+    accepted_findings = norm.valid_control(
+        covered,
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+        rejection_reasons=reasons,
+    )
+    assert accepted_findings is not None
+    assert accepted_findings["result"] == "REQUEST_CHANGES"
+
+
 def test_actual_changed_file_detection_prefers_current_head_file_list(
     tmp_path, monkeypatch
 ):

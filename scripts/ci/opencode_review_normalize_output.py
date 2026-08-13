@@ -906,23 +906,36 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     )
 
 
-def unnamed_changed_files(reason: str, summary: str) -> tuple[str, ...]:
-    """Return current-head changed files the approval never names.
+def unnamed_changed_files(
+    reason: str,
+    summary: str,
+    findings: list[Any] | None = None,
+) -> tuple[str, ...]:
+    """Return current-head changed files the review never names.
 
-    Naming one file is not a file-by-file walk. Live OpenCode approvals that
+    Naming one file is not a file-by-file walk. Live OpenCode reviews that
     cited a single path while leaving the rest unnamed were thinner than the
-    CodeRabbit per-file contract the buyer asked for.
+    CodeRabbit per-file contract the buyer asked for. A REQUEST_CHANGES
+    finding path counts as naming that file.
     """
 
     changed_files = current_changed_files()
     if not changed_files:
         return ()
     combined = f"{reason}\n{summary}"
+    finding_paths: set[str] = set()
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        path = finding.get("path")
+        if isinstance(path, str) and path:
+            finding_paths.add(path)
     return tuple(
         sorted(
             path
             for path in changed_files
             if not changed_file_named_in_text(combined, path)
+            and path not in finding_paths
         )
     )
 
@@ -1331,6 +1344,13 @@ def valid_control(
         return reject("APPROVE cannot contain findings")
     if result == "REQUEST_CHANGES" and not findings:
         return reject("REQUEST_CHANGES requires at least one finding")
+    if result == "REQUEST_CHANGES":
+        unnamed = unnamed_changed_files(reason, summary, findings)
+        if unnamed:
+            return reject(
+                "request-changes review does not name every current-head "
+                "changed file: " + ", ".join(unnamed)
+            )
     adversarial_error = adversarial_validation_error(
         value.get("adversarial_validation"),
         result=result,
