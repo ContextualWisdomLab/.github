@@ -861,19 +861,30 @@ jobs:
           fi
 
           # Recognized signals that the LLM backend was unavailable / starved.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
+          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|github_models_retirement_brownout|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the
           # severity branch anchored away from identifiers so environment lines
           # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.
           reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:'
+          # Trusted gate verdicts that the console Severity:/Vulnerabilities N
+          # lines came from an incomplete retry without a report artifact.
+          # Live run 31665090829 printed both those TUI lines and then this
+          # exact incomplete-evidence sentence, after which GitHub Models
+          # returned 410 retirement brownout. Honor the gate instead of
+          # treating the leftover TUI text as an accepted finding.
+          incomplete_log_only_signal='log-only severity markers are incomplete evidence|Strix reported zero vulnerabilities before provider infrastructure failure'
 
-          # Neutral skip only when ALL hold: a backend-unavailability signal is
-          # present and no vulnerability was reported anywhere. This preserves
-          # real security gating while keeping uncontrollable provider outages
-          # from blocking current-head merge progress.
+          # Neutral skip when the LLM backend was unavailable and either no
+          # vulnerability signal exists or the trusted gate already classified
+          # leftover console severity as incomplete log-only evidence. This
+          # preserves real security gating while keeping uncontrollable
+          # provider outages from blocking current-head merge progress.
           if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
-            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
+            && {
+              ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log" \
+                || grep -Eiq "$incomplete_log_only_signal" "$strix_run_log"
+            }; then
             echo "::warning title=Strix backend unavailable::Strix could not complete because its LLM backend was unavailable (rate limit / token cap / connection or warm-up failure) before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
             exit 0
           fi

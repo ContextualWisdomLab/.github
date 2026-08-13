@@ -97,6 +97,10 @@ def _workflow_neutralizes(log_text: str) -> bool:
         workflow,
         "reported_vulnerability_signal",
     )
+    incomplete_pattern = _workflow_signal_pattern(
+        workflow,
+        "incomplete_log_only_signal",
+    )
     with tempfile.TemporaryDirectory(prefix="strix-workflow-404-") as temp_dir:
         log_path = Path(temp_dir) / "strix.log"
         log_path.write_text(log_text, encoding="utf-8")
@@ -112,11 +116,21 @@ def _workflow_neutralizes(log_text: str) -> bool:
             capture_output=True,
             text=True,
         )
+        incomplete = subprocess.run(
+            ["grep", "-Eiq", incomplete_pattern, str(log_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     if backend.returncode not in {0, 1}:
         raise AssertionError(backend.stderr)
     if vulnerability.returncode not in {0, 1}:
         raise AssertionError(vulnerability.stderr)
-    return backend.returncode == 0 and vulnerability.returncode == 1
+    if incomplete.returncode not in {0, 1}:
+        raise AssertionError(incomplete.stderr)
+    return backend.returncode == 0 and (
+        vulnerability.returncode == 1 or incomplete.returncode == 0
+    )
 
 
 class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
@@ -243,6 +257,41 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_incomplete_retry_console_severity_does_not_block_neutralization(
+        self,
+    ) -> None:
+        """Honor the gate when a failed retry left only log-only severity text."""
+
+        self.assertTrue(
+            _workflow_neutralizes(
+                "LLM CONNECTION FAILED\n"
+                "Could not establish connection to the language model\n"
+                "│  Title: Argument Injection in Noema Review Gate\n"
+                "│  Severity: HIGH\n"
+                "│  Vulnerabilities 2\n"
+                "No Strix vulnerability report artifact was produced; "
+                "log-only severity markers are incomplete evidence, so the "
+                "scan is failing closed.\n"
+                "github_models_retirement_brownout\n"
+                "Strix reported zero vulnerabilities before provider "
+                "infrastructure failure; failing closed because provider "
+                "infrastructure failures are not clean scan evidence.\n"
+            )
+        )
+
+    def test_accepted_findings_remain_blocking_when_later_fallback_is_incomplete(
+        self,
+    ) -> None:
+        """Do not let a later incomplete fallback hide an accepted finding count."""
+
+        self.assertFalse(
+            _workflow_neutralizes(
+                "LLM CONNECTION FAILED\n"
+                "Vulnerabilities 1\n"
+                "Severity: HIGH\n"
+            )
+        )
+
     def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
         """Retain the static fail-closed vulnerability evidence contract."""
 
@@ -250,9 +299,16 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("Nvidia_nimException", workflow)
         self.assertIn("Error code:[[:space:]]*404", workflow)
         self.assertIn("reported_vulnerability_signal", workflow)
+        self.assertIn("incomplete_log_only_signal", workflow)
         self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
+        self.assertIn("log-only severity markers are incomplete evidence", workflow)
         self.assertIn(
-            '! grep -Eiq "$reported_vulnerability_signal"',
+            "Strix reported zero vulnerabilities before provider infrastructure "
+            "failure",
+            workflow,
+        )
+        self.assertIn(
+            'grep -Eiq "$incomplete_log_only_signal"',
             workflow,
         )
 

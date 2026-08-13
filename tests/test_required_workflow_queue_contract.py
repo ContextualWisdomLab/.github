@@ -1091,8 +1091,11 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
     assert "before producing a vulnerability report" in workflow
     assert "genuine findings still fail the check" in workflow
+    assert "incomplete_log_only_signal" in workflow
+    assert "log-only severity markers are incomplete evidence" in workflow
+    assert "github_models_retirement_brownout" in workflow
     assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+        'grep -Eiq "$incomplete_log_only_signal" "$strix_run_log"' in workflow
     )
 
 
