@@ -70,6 +70,28 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Review-agent mention surfaces
+
+```mermaid
+flowchart TD
+  Surfaces["issue comment · review comment · submitted review body"]
+  Trust{"OWNER/MEMBER/COLLABORATOR, non-bot, exact handle, open PR?"}
+  Dispatch["Queue exact-head review dispatch"]
+  Eyes{"Optional eyes reaction 403?"}
+  Receipt["Post conversation receipt"]
+  Drop["Ignore the mention"]
+
+  Surfaces --> Trust
+  Trust -->|"no"| Drop
+  Trust -->|"yes"| Dispatch
+  Dispatch --> Eyes
+  Eyes -->|"yes"| Receipt
+  Eyes -->|"no"| Receipt
+```
+
+CWE-755: a 403 on the optional eyes reaction must not look like a missed
+dispatch. Review agents stay `edit: deny` and bind `NVIDIA_NIM_API_KEY`.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -124,3 +146,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/review-agent-mention-surfaces.md`](docs/doctoring/review-agent-mention-surfaces.md)
+  — current increment's mention-surface decision and APA 7th citations.
