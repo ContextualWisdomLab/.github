@@ -910,23 +910,30 @@ _SUGGESTED_DIFF_GIT_RE = re.compile(
     r"^diff --git a/(.+?) b/\1$",
     re.MULTILINE,
 )
+_SUGGESTED_DIFF_PLUS_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$", re.MULTILINE)
+_SUGGESTED_DIFF_MINUS_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$", re.MULTILINE)
 
 
 def suggested_diff_named_files(diff: object) -> set[str]:
-    """Return current-head files named by identical ``diff --git a/X b/X`` headers.
+    """Return current-head files named by identical suggested-diff path pairs.
 
     A finding whose ``path`` is missing or unsafe can still dispose a file
     when its suggested diff cites that exact current-head path on both
-    sides. A mismatched ``a/`` and ``b/`` pair is not a name.
+    sides of ``diff --git a/X b/X`` or of matching ``--- a/X`` / ``+++ b/X``
+    headers. A mismatched pair is not a name (CWE-1288).
     """
     if not isinstance(diff, str) or not diff:
         return set()
     changed = set(current_changed_files())
-    return {
+    named = {
         path
         for path in _SUGGESTED_DIFF_GIT_RE.findall(diff)
         if path in changed
     }
+    plus = set(_SUGGESTED_DIFF_PLUS_RE.findall(diff))
+    minus = set(_SUGGESTED_DIFF_MINUS_RE.findall(diff))
+    named.update(path for path in (plus & minus) if path in changed)
+    return named
 
 
 def unnamed_changed_files(
@@ -939,8 +946,8 @@ def unnamed_changed_files(
     Naming one file is not a file-by-file walk. Live OpenCode reviews that
     cited a single path while leaving the rest unnamed were thinner than the
     CodeRabbit per-file contract the buyer asked for. A REQUEST_CHANGES
-    finding path or an identical ``diff --git a/X b/X`` header counts as
-    naming that file.
+    finding path, an identical ``diff --git a/X b/X`` header, or matching
+    ``--- a/X`` / ``+++ b/X`` headers counts as naming that file.
     """
 
     changed_files = current_changed_files()

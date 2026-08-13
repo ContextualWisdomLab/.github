@@ -1033,6 +1033,30 @@ def test_request_changes_must_name_every_current_head_changed_file(
     assert norm.suggested_diff_named_files(
         "diff --git a/scripts/ci/example.py b/.github/workflows/strix.yml\n"
     ) == set()
+    assert norm.suggested_diff_named_files(
+        "--- a/.github/workflows/strix.yml\n"
+        "+++ b/.github/workflows/strix.yml\n"
+    ) == {".github/workflows/strix.yml"}
+    assert (
+        norm.unnamed_changed_files(
+            "Need a guard.",
+            "Coverage: 100%.",
+            findings=[
+                finding(
+                    path="scripts/ci/example.py",
+                    suggested_diff=(
+                        "--- a/.github/workflows/strix.yml\n"
+                        "+++ b/.github/workflows/strix.yml\n"
+                    ),
+                )
+            ],
+        )
+        == ()
+    )
+    assert norm.suggested_diff_named_files(
+        "--- a/scripts/ci/example.py\n"
+        "+++ b/.github/workflows/strix.yml\n"
+    ) == set()
 
     reasons: list[str] = []
     thin = control(
