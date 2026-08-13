@@ -1,5 +1,7 @@
 # OpenCode review quality evaluation and commercial parity program
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Status: Proposed empirical baseline  
 Date: 2026-08-08  
 Owner: ContextualWisdomLab central review infrastructure
