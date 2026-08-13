@@ -48,6 +48,14 @@ The schedule runs at minute 7 rather than minute 0 to reduce exposure to the doc
 
 Organization, workflow, active-run, and pull-request inventories are paginated. One inaccessible repository is recorded as an inspection error while other independently safe repositories continue. A run fails nonzero when every selected repository inspection fails or when every planned dispatch fails; partial, independently contained failures remain visible without discarding successful work.
 
+NIST SP 800-53 Rev. 5 AC-6 requires least privilege: this coordinator accepts only
+`ContextualWisdomLab`, keeps `PR_REVIEW_MERGE_TOKEN` on the final dispatch step,
+and never treats `GITHUB_TOKEN` or `OPENCODE_APPROVE_TOKEN` as a fleet writer
+(Joint Task Force, 2020). SI-4 requires system monitoring that surfaces failed
+collection rather than an empty success; a fleet-wide inspection or dispatch
+outage therefore exits nonzero and the three-day receipt remains the only
+coordinator evidence.
+
 Each run writes one deterministic JSON receipt and the same bounded evidence to the GitHub Actions job summary. The JSON is uploaded through the immutable, SHA-pinned artifact action with a three-day retention period. Artifact upload receives no maintainer or model credential. The receipt proves only coordinator observations and downstream dispatch acceptance; it is not merge, release, or product-quality evidence.
 
 No queued, pending, skipped-required, cancelled, absent, stale-head, predecessor-head, synthetic-merge-only, or failed check is converted to passing evidence. The coordinator's successful dispatch means only that exact state was revalidated and a bounded downstream workflow was accepted by GitHub.
@@ -57,6 +65,10 @@ Rollback is removal or disabling of `.github/workflows/organization-commercial-r
 ## APA 7 references
 
 GitHub. (n.d.). *Automatic token authentication*. GitHub Docs. Retrieved August 8, 2026, from https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication
+
+Joint Task Force. (2020). *Security and privacy controls for information systems
+and organizations* (NIST SP 800-53 Rev. 5). National Institute of Standards and
+Technology. https://doi.org/10.6028/NIST.SP.800-53r5
 
 GitHub. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved August 8, 2026, from https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows
 
