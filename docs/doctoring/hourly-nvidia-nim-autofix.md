@@ -2,6 +2,8 @@
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 The write-capable scheduled pull-request autofix agent uses OpenCode with the
 NVIDIA NIM API and the organization Actions secret `NVIDIA_NIM_API_KEY`. The
 independent read-only review agent remains unchanged and continues to use its
