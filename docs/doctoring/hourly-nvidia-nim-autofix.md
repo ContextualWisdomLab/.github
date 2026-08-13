@@ -47,8 +47,10 @@ Without the explicit `ref`, `actions/checkout` would resolve the repository's
 moving default branch at checkout time. A later default-branch push could then
 replace trusted scripts after GitHub had already selected the workflow run,
 creating a time-of-check/time-of-use gap around a job that receives OIDC and
-branch-write capability. The exact SHA keeps helper source aligned with the
-workflow revision selected for dispatch.
+branch-write capability. CWE-367 classifies that race: a later default-branch
+push must not replace privileged helpers after dispatch has already selected
+the workflow revision (MITRE, 2026). The exact SHA keeps helper source
+aligned with the workflow revision selected for dispatch.
 
 The client payload remains untrusted metadata. It identifies a target only after
 the worker re-reads live pull-request state and verifies the exact repository,
@@ -326,6 +328,9 @@ https://git-scm.com/docs/git-ls-files
 
 Git Project. (2026). *githooks*. Retrieved August 7, 2026, from
 https://git-scm.com/docs/githooks
+
+MITRE. (2026). *CWE-367: Time-of-check time-of-use (TOCTOU) race condition*.
+https://cwe.mitre.org/data/definitions/367.html
 
 GitHub, Inc. (n.d.-a). *Events that trigger workflows*. GitHub Docs. Retrieved
 August 7, 2026, from
