@@ -49,6 +49,18 @@ review-thread resolution, and latest-head required checks. Historical
 approved-changeset ratios are monitored but not used to waive current-head
 review gates.
 
+## Token-Permissions
+
+Top-level or job-level `contents: write` on a one-shot repair workflow
+is a Scorecard Token-Permissions score-0 finding. Temporary branch
+writers that only rewrite comments or version strings are not merge
+evidence. Apply those edits in the pull-request tree and delete the
+writer. Keep `contents: write` only on the documented dispatch and
+scheduler exception paths in
+[`docs/automation/review-agent-comment-invocation.md`](automation/review-agent-comment-invocation.md).
+Pinned action comments must name the release the SHA embeds so a
+buyer can audit which scanner ran.
+
 ## Failure Evidence
 
 Every central workflow failure must print the actionable reason in its logs.
