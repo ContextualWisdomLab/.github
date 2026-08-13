@@ -129,5 +129,6 @@ repeatable compile command.
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
 
-Pending and dismissed reviews do not dispatch mention agents. See
-`ARCHITECTURE.md` and `docs/doctoring/review-agent-mention-surfaces.md`.
+Pending and dismissed reviews do not dispatch mention agents. The local
+mention job grants `reactions: write`. See `ARCHITECTURE.md` and
+`docs/doctoring/review-agent-mention-surfaces.md`.

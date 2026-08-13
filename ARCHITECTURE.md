@@ -44,7 +44,8 @@ flowchart TD
   Eyes -->|"no"| Receipt
 ```
 
-CWE-755: a 403 on the optional eyes reaction must not look like a missed
+The local job grants `reactions: write` so the optional eyes reaction is
+an allowed write. CWE-755: a leftover 403 must not look like a missed
 dispatch. Review agents stay `edit: deny` and bind `NVIDIA_NIM_API_KEY`.
 
 ## Control-plane data flow
