@@ -7,3 +7,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 One-at-a-time 422 retries must keep multi-line start_line/start_side.
 Attach and refusal receipts cite start_line when a multi-line suggestion rewrote line to the span end.
 Leftover overview receipts sanitize path and phrase so a leftover cannot close the HTML comment or reopen a suggestion fence.
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted.
