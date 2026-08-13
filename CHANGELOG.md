@@ -49,7 +49,7 @@ Semantic Versioning where the repository publishes a release.
 - Bind reusable scheduler implementation to the validated called-workflow repository, SHA, ref, and file path, and verify the checked-out commit before executing privileged scheduler logic.
 - Removed the ambiguous central-repository schedule fallback that could scan `.github` instead of Clearfolio when no external variable was configured; the active product caller now names Clearfolio explicitly while the reusable engine retains caller and dispatch overrides.
 - Corrected the conflict-ordering regression contract to select the conflict-specific snapshot and verification after the ordinary path adopted the same trusted helper.
-- Hardened base-owned Python requirements materialization so candidate package lines require exact `==` pins with complete SHA-256 hashes and requirement includes use only bounded relative paths; range pins, malformed digests, pip option lines, URL/absolute/traversing/home/query/fragment/backslash/option-like includes, and include lines carrying extra inline options are rejected before the trusted build context.
+- Hardened base-owned Python requirements materialization so candidate package lines require exact `==` pins with complete SHA-256 hashes and requirement includes use only normalized relative candidate lock paths; `./` and doubled-slash targets, range pins, malformed digests, pip option lines, URL/absolute/traversing/home/query/fragment/backslash/option-like includes, and include lines carrying extra inline options are rejected before the trusted build context.
 
 ### Security
 

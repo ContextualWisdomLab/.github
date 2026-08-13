@@ -67,9 +67,11 @@ preflight rather than relying on file names or hash-looking text alone.
   ineligible.
 - Exact `==` package pins with complete SHA-256 hashes are accepted; `>=` and
   malformed/truncated hash forms are rejected.
-- Bounded relative includes such as `--requirement other.txt` and
-  `-r ./locks/other.txt` are accepted; URL, absolute, traversal, home-expansion,
-  query/fragment, backslash, and option-like forms are rejected.
+- Bounded relative includes such as `--requirement requirements-other.txt` and
+  `-r requirements/other.txt` are accepted. Current-directory prefixes
+  (`./requirements/other.txt`), empty path components (`requirements//other.txt`),
+  URL, absolute, traversal, home-expansion, query/fragment, backslash, and
+  option-like forms are rejected.
 - A global `--require-hashes` directive combined with an unpinned requirement is
   rejected rather than promoted into the networked coverage image.
 - Only qualifying base-owned candidates are emitted from realistic temporary Git
