@@ -18,6 +18,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     parse_refused_locations,
     parse_refused_receipts,
     parse_unified_diff_hunk_lines,
+    receipt_finding_line,
     record_attached_receipt,
     record_refused_receipt,
     render_github_suggestion_block,
@@ -287,6 +288,45 @@ def test_mixed_success_receipts_keep_per_comment_422_phrases(tmp_path):
         == 0
     )
     assert "example.py:7\tGitHub HTTP 422: pull_request_review_thread.path is invalid" in dest2.read_text(
+        encoding="utf-8"
+    )
+    assert receipt_finding_line({"start_line": 5, "line": 7}) == 5
+    assert receipt_finding_line({"line": 7}) == 7
+    assert receipt_finding_line({"start_line": 0, "line": 7}) == 7
+    assert receipt_finding_line({"start_line": True, "line": 7}) == 7
+    assert receipt_finding_line({}) is None
+    ranged_comment = tmp_path / "ranged-comment.json"
+    ranged_comment.write_text(
+        json.dumps(
+            {
+                "comments": [
+                    {
+                        "path": "scripts/ci/example.py",
+                        "start_line": 5,
+                        "line": 7,
+                        "body": "x",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    dest_ranged = tmp_path / "cli-refused-ranged.txt"
+    assert (
+        main(
+            [
+                "--record-refusal",
+                "--refused-locations",
+                str(dest_ranged),
+                "--comment-file",
+                str(ranged_comment),
+                "--error-file",
+                str(error),
+            ]
+        )
+        == 0
+    )
+    assert "example.py:5\tGitHub HTTP 422: pull_request_review_thread.path is invalid" in dest_ranged.read_text(
         encoding="utf-8"
     )
     assert main(["--record-refusal"]) == 2
@@ -911,6 +951,36 @@ def test_cli_records_attached_and_bounded_split(tmp_path):
         == 0
     )
     assert attached.read_text(encoding="utf-8") == "scripts/ci/a.py:1\n"
+    ranged_attach = tmp_path / "ranged-attach.json"
+    ranged_attach.write_text(
+        json.dumps(
+            {
+                "comments": [
+                    {
+                        "path": "scripts/ci/example.py",
+                        "start_line": 5,
+                        "line": 7,
+                        "body": "x",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    attached_ranged = tmp_path / "attached-ranged.txt"
+    assert (
+        main(
+            [
+                "--record-attach",
+                "--attached-locations",
+                str(attached_ranged),
+                "--comment-file",
+                str(ranged_attach),
+            ]
+        )
+        == 0
+    )
+    assert attached_ranged.read_text(encoding="utf-8") == "scripts/ci/example.py:5\n"
     record_attached_receipt(tmp_path / "skip.txt", "../escape.py", 1)
     record_attached_receipt(tmp_path / "skip.txt", "scripts/ci/a.py", 0)
     assert not (tmp_path / "skip.txt").exists()

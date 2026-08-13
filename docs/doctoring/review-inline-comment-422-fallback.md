@@ -58,7 +58,10 @@ the original `` ```diff `` context. When the suggested_diff removes more
 than one current-head line and every line from the finding through that
 span sits on the same hunk, the comment also sets `start_line`, `line`,
 `side`, and `start_side` so GitHub applies one multi-line suggestion range
-(GitHub, n.d.-b). A range that would leave the hunk stays single-line. A bare ``422``
+(GitHub, n.d.-b). A range that would leave the hunk stays single-line.
+When ``line`` becomes the span end, attach and refusal receipts cite
+``start_line`` so the overview still names the trusted finding
+(GitHub, n.d.-b, n.d.-c). A bare ``422``
 substring in a SHA or issue number is not treated as HTTP 422 (CWE-1288).
 Suggested diffs still stay out of the PR-level body.
 
