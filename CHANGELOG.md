@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Stopped listing LEFT-side leftover GitHub suggestion fences as applyable ranges, because GitHub cannot apply a suggestion on the deleted side.
 - Kept leftover Manual-edit excerpts that sit inside a trusted deferred multi-line `path:start-end` even when that exact leftover line is not itself a trusted finding, so authors still see the deferred range then the Manual-edit.
 - Grouped leftover Manual-edit excerpts that sit inside the same deferred multi-line `path:start-end` under one deferred range line, so authors do not see a repeated deferred prefix.
 - Omitted the duplicate leftover reason bullet when a leftover line sits inside a deferred multi-line `path:start-end`, so authors see the deferred range then the Manual-edit excerpt.
