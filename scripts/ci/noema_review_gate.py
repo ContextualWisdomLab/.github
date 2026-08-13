@@ -68,7 +68,6 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     """Run a command without invoking a shell and return stdout."""
     if isinstance(args, str):
         raise TypeError("run() requires argv, not a shell command string")
-
     completed = subprocess.run(
         list(args),
         input=stdin,
