@@ -147,7 +147,13 @@ def _fetch_repo_pulls(
     cutoff: datetime,
     cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch pull requests from a single repository."""
+    """Return recent open pull requests for one repository until ``cutoff``.
+
+    Each item contains ``number``, ``repository``, and a ``pull_request.url``.
+    Pagination stops at the first page whose ``updated_at`` is older than
+    ``cutoff`` or after a short page. ``cancel_event`` is checked before each
+    request. Invalid GitHub numbers raise ``ValueError``.
+    """
     results = []
     page = 1
     while not (cancel_event and cancel_event.is_set()):
