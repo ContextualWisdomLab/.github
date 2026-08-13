@@ -14,6 +14,7 @@ review expects (Bacchelli & Bird, 2013).
 
 ## Decision
 
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted so a leftover cannot close the HTML comment.
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
 `scripts/ci/opencode_inline_comment_fallback.py` reads the trusted control
