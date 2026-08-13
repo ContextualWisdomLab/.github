@@ -43,8 +43,10 @@ Before the first GitHub POST, the publisher runs
 only comments whose `path:line` sits inside a parsed hunk range, including
 hunk context lines. GitHub accepts review comments only on those diff
 hunks (GitHub, n.d.-b); off-hunk comments are recorded as skipped
-`path:line` receipts instead of being sent. An empty hunk map leaves the
-payload unchanged so a failed diff collection cannot drop every comment.
+`path:line` receipts instead of being sent. An empty collected diff
+leaves the payload unchanged so a failed `git diff` cannot drop every
+comment. A present collected diff with no commentable hunks (binary-only
+or unparseable headers) skips every comment instead of posting them.
 This matches the modern-review expectation that discussion belongs on the
 changed hunk rather than elsewhere in the file (Bacchelli & Bird, 2013;
 Sadowski et al., 2018).

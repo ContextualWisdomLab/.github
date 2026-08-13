@@ -15,6 +15,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     parse_refused_locations,
     parse_refused_receipts,
     parse_unified_diff_hunk_lines,
+    unified_diff_has_content,
     record_attached_receipt,
     record_refused_receipt,
     render_inline_comment_failure_body,
@@ -1037,6 +1038,10 @@ def test_parse_unified_diff_hunk_lines_covers_github_commentable_ranges():
     assert hunks["old/name.py"]["LEFT"] == {2}
     assert parse_unified_diff_hunk_lines("") == {}
     assert parse_unified_diff_hunk_lines("+++ not-a-path\n--- also-bad\n") == {}
+    assert unified_diff_has_content("") is False
+    assert unified_diff_has_content("notes only\n") is False
+    assert unified_diff_has_content("Binary files a/icon.png and b/icon.png differ\n")
+    assert unified_diff_has_content("+++ not-a-path\n")
     assert comment_on_changed_hunk("scripts/ci/example.py", 5, hunks)
     assert comment_on_changed_hunk("scripts/ci/example.py", 12, hunks)
     assert not comment_on_changed_hunk("scripts/ci/example.py", 20, hunks)
@@ -1181,6 +1186,50 @@ def test_cli_filters_payload_to_current_head_hunks(tmp_path):
         parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF),
         tmp_path / "again.json",
     ) == 1
+    binary_diff = tmp_path / "binary.diff"
+    binary_diff.write_text(
+        "diff --git a/icon.png b/icon.png\n"
+        "Binary files a/icon.png and b/icon.png differ\n",
+        encoding="utf-8",
+    )
+    binary_out = tmp_path / "binary.json"
+    binary_skipped = tmp_path / "binary-skipped.txt"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload),
+                "--hunks-diff",
+                str(binary_diff),
+                "--output",
+                str(binary_out),
+                "--skipped-locations",
+                str(binary_skipped),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(binary_out.read_text(encoding="utf-8"))["comments"] == []
+    assert "scripts/ci/example.py:7" in binary_skipped.read_text(encoding="utf-8")
+    empty_diff = tmp_path / "empty.diff"
+    empty_diff.write_text("", encoding="utf-8")
+    empty_out = tmp_path / "empty.json"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload),
+                "--hunks-diff",
+                str(empty_diff),
+                "--output",
+                str(empty_out),
+            ]
+        )
+        == 0
+    )
+    assert len(json.loads(empty_out.read_text(encoding="utf-8"))["comments"]) == 2
     assert main(["--filter-hunks"]) == 2
     assert (
         main(

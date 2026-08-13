@@ -17,6 +17,14 @@ HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
 HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
 MINUS_PATH_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$")
+DIFF_CONTENT_PREFIXES = (
+    "diff --git",
+    "@@ ",
+    "+++ ",
+    "--- ",
+    "Binary files ",
+    "GIT binary patch",
+)
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -146,6 +154,13 @@ def _diff_path(raw_path: str) -> str | None:
     return safe_finding_path(raw_path.strip().strip('"'))
 
 
+def unified_diff_has_content(diff_text: str) -> bool:
+    """Return whether collected diff text is present, not a failed-collection blank."""
+    return any(
+        raw.startswith(DIFF_CONTENT_PREFIXES) for raw in (diff_text or "").splitlines()
+    )
+
+
 def parse_unified_diff_hunk_lines(
     diff_text: str,
 ) -> dict[str, dict[str, set[int]]]:
@@ -230,8 +245,17 @@ def write_hunk_filtered_payload(
     hunks: dict[str, dict[str, set[int]]],
     output: Path,
     skipped_path: Path | None = None,
+    *,
+    diff_text: str = "",
 ) -> int:
-    """Write a hunk-filtered review payload and optional skipped ``path:line`` rows."""
+    """Write a hunk-filtered review payload and optional skipped ``path:line`` rows.
+
+    A blank collected diff stays fail-open so a failed ``git diff`` cannot
+    drop every comment. A present diff with no commentable hunks (binary-only
+    or unparseable headers) skips every comment instead of posting them.
+    """
+    if not hunks and unified_diff_has_content(diff_text):
+        hunks = {"": {"LEFT": set(), "RIGHT": set()}}
     filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
     comments = filtered.get("comments")
     output.write_text(json.dumps(filtered, ensure_ascii=True), encoding="utf-8")
@@ -652,14 +676,14 @@ def main(argv: list[str] | None = None) -> int:
                     "with --filter-hunks"
                 )
             payload = load_control(args.payload)
-            hunks = parse_unified_diff_hunk_lines(
-                args.hunks_diff.read_text(encoding="utf-8")
-            )
+            diff_text = args.hunks_diff.read_text(encoding="utf-8")
+            hunks = parse_unified_diff_hunk_lines(diff_text)
             write_hunk_filtered_payload(
                 payload,
                 hunks,
                 args.output,
                 skipped_path=args.skipped_locations,
+                diff_text=diff_text,
             )
             return 0
         if args.record_attach:
