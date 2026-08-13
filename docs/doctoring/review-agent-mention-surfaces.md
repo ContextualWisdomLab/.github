@@ -32,9 +32,14 @@ head SHA):
 The workflow hydrates `PR_NUMBER` from `github.event.issue.number ||
 github.event.pull_request.number`. Body-handle filtering stays in the
 case-insensitive Python parser. Issue-comment eye reactions stay on the
-issue-comment reaction endpoint; review-comment and review identifiers are
-not issue-comment IDs, so those surfaces acknowledge only with the existing
-receipt issue comment.
+issue-comment reaction endpoint and are non-fatal: live run
+`31670687388` queued `@cwl-noema-review` on
+ContextualWisdomLab/.github#954 and then failed the job with
+`403 Resource not accessible by integration` on the reaction POST, so no
+receipt was posted. Review-comment and review identifiers are not
+issue-comment IDs, so those surfaces acknowledge only with the existing
+receipt issue comment. The local job uses `pull-requests: write` so
+conversation receipts on pull requests can be created.
 
 Review thoroughness is tightened in the existing prompts rather than by adding
 a second reviewer product. Every current-head changed file must be named in

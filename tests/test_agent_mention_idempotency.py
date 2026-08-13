@@ -319,7 +319,7 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
     module = load_module()
     mention_request = request(module)
     central = ArtifactAwareClient()
-    failing_target = ArtifactAwareClient(fail_target_call=1)
+    failing_target = ArtifactAwareClient(fail_target_call=2)
     with pytest.raises(RuntimeError, match="target call"):
         module.dispatch_request(
             mention_request,

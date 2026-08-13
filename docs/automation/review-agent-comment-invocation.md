@@ -38,7 +38,7 @@ This preserves the central MSA boundary without copying privileged workflow code
 - Bot comments, ordinary contributors, issue comments outside PRs, closed PRs, pending reviews, malformed metadata, and lookalike handles fail closed.
 - Historical, duplicate, rejected, or already-ledgered requests do not consume the bounded new-work dispatch budget.
 - The workflow default token is read-only.
-- The local routing job receives job-scoped `actions: read`, `contents: write`, `issues: write`, and `pull-requests: read`.
+- The local routing job receives job-scoped `actions: read`, `contents: write`, `issues: write`, and `pull-requests: write`. Pull-request conversation comments and receipts use the pull-requests permission; a 403 on the optional eyes reaction is non-fatal after dispatch.
 - The organization sweep receives job-scoped `actions: read`, `contents: write`, and `id-token: write`.
 - The two agent-specific wrapper workflows receive only job-scoped `actions: read` and `contents: write`; their workflow defaults remain `contents: read`.
 - `actions: read` permits exact-name artifact inventory checks. Artifact upload uses the workflow artifact service and is pinned to immutable `actions/upload-artifact` v7.0.1.
