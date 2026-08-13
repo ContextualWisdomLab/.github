@@ -14,6 +14,10 @@ from typing import Any
 DEFAULT_SINGLE_COMMENT_RETRY_LIMIT = 20
 ERROR_PHRASE_MAX_CHARS = 240
 HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
+LEFTOVER_DIFF_FENCE_RE = re.compile(
+    r"```(?:diff|patch)\b[\s\S]*?```",
+    re.IGNORECASE,
+)
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -157,6 +161,11 @@ def single_comment_range_fields(
     return {"start_line": start, "start_side": start_side}
 
 
+def strip_leftover_diff_fences(body: str) -> str:
+    """Remove leftover unapplyable `` ```diff `` fences from a retry body."""
+    return LEFTOVER_DIFF_FENCE_RE.sub("", body).strip()
+
+
 def iter_single_comment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Return safe single-comment slices from a batch review payload."""
     comments = payload.get("comments")
@@ -173,7 +182,10 @@ def iter_single_comment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]
         path = safe_finding_path(comment.get("path"))
         line = safe_finding_line(comment.get("line"))
         body = comment.get("body")
-        if path is None or line is None or not isinstance(body, str) or not body.strip():
+        if path is None or line is None or not isinstance(body, str):
+            continue
+        body = strip_leftover_diff_fences(body)
+        if not body:
             continue
         side = comment.get("side")
         side_key = side if side in {"LEFT", "RIGHT"} else "RIGHT"

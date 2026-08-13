@@ -15,6 +15,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     render_single_comment_review,
     single_comment_range_fields,
     single_comment_retry_limit,
+    strip_leftover_diff_fences,
     trusted_finding_locations,
     write_single_comment_payloads,
 )
@@ -413,6 +414,32 @@ def test_iter_single_comment_payloads_keeps_only_safe_comments():
     assert rendered_range["comments"][0]["start_line"] == 5
     assert rendered_range["comments"][0]["start_side"] == "RIGHT"
     assert rendered_range["comments"][0]["line"] == 7
+    assert (
+        strip_leftover_diff_fences(
+            "keep prose\n```diff\n- leftover\n+ leftover\n```\n"
+        )
+        == "keep prose"
+    )
+    leftover_only = iter_single_comment_payloads(
+        {
+            "commit_id": "c" * 40,
+            "comments": [
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "body": "```diff\n- leftover\n+ leftover\n```\n",
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 8,
+                    "body": "apply this\n```patch\n- leftover\n```\n",
+                },
+            ],
+        }
+    )
+    assert [(item["path"], item["line"], item["body"]) for item in leftover_only] == [
+        ("scripts/ci/example.py", 8, "apply this"),
+    ]
 
 
 def test_cli_splits_batch_payload_into_single_comment_files(tmp_path):

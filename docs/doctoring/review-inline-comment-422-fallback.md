@@ -25,7 +25,10 @@ HTTP 422, splits the batch `comments` array into at most 20
 single-comment review payloads (`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`,
 default 20), and retries each with the same write helper. Comments past
 that cap are recorded as not retried instead of opening unbounded `gh
-api` writes. The first success
+api` writes. Leftover unapplyable `` ```diff `` / `` ```patch ``
+fences are stripped from each retry body so a leftover manual diff
+cannot 422 a comment that still has prose (GitHub, n.d.-a). Applyable
+`` ```suggestion `` fences stay. The first success
 uses `REQUEST_CHANGES` plus the review body; later successes use
 `COMMENT`. Survivors therefore still appear on Files changed. Remaining
 failures still rebuild the fallback from the `gh api` error file and
@@ -53,7 +56,8 @@ SHA, issue number) must not start the one-at-a-time retry.
   the exact location list, GitHub JSON `errors[].message` phrases, HTTP 422
   line fallback, empty-set sentence, CLI success with `--error-file`,
   fail-closed unreadable control or error input, batch-to-single comment
-  splitting, and `--is-unprocessable` classification.
+  splitting, leftover `` ```diff `` fence stripping, and
+  `--is-unprocessable` classification.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.

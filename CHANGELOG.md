@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Stripped leftover unapplyable `` ```diff `` / `` ```patch `` fences from one-at-a-time OpenCode inline retries so leftover manual diffs cannot 422 the retry, while applyable `` ```suggestion `` fences stay on the surviving hunk.
 - Capped one-at-a-time OpenCode inline retries at 20 comments and recorded leftover `path:line` rows past that cap so a batch 422 cannot open unbounded `gh api` writes.
 - Kept `start_line`/`start_side` on one-at-a-time 422 retries so a multi-line GitHub suggestion still posts as one range instead of a single comment on the last line.
 - After a batch GitHub 422, retried OpenCode inline comments one at a time so comments on surviving hunks still attach instead of dropping the entire review thread. Classification now requires an `HTTP 422` line, `Unprocessable Entity`, or a JSON error phrase — a `422` substring inside a SHA or issue number no longer starts that retry (CWE-1288). Receipt phrases now escape backticks and HTML metacharacters before they are written into the overview body.
