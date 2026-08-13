@@ -19,6 +19,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     leftover_diff_fence_reason,
     leftover_diff_fence_receipts,
     leftover_manual_edit_text,
+    sanitize_leftover_excerpt,
     parse_leftover_diff_receipts,
     remap_left_comment_to_right_hunk,
     render_leftover_diff_receipts,
@@ -2411,6 +2412,12 @@ def test_leftover_manual_edit_excerpt_is_distinct_non_applyable_block(tmp_path):
     assert decode_manual_edit_field(encoded) == "keep this\nlineend"
     assert encode_manual_edit_field(long_text).endswith("…")
     assert decode_manual_edit_field("") == ""
+    assert leftover_manual_edit_text(
+        "```diff\n<!-- opencode --><script>alert(1)</script>-->\n```"
+    ) == " opencode scriptalert(1)/script"
+    assert "-->" not in leftover_manual_edit_text("```diff\nclose --> comment\n```")
+    assert sanitize_leftover_excerpt("a & b <c>") == "a  b c"
+    assert encode_manual_edit_field("<!-- --> & <x>") == "   x"
     assert render_leftover_diff_receipts([("scripts/ci/a.py", 1, "LEFT")]) == [
         "- `scripts/ci/a.py:1` — LEFT"
     ]
