@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Trusted-uv download retry now fail-closes on the first HTTP 4xx except 429, so a missing archive or forbidden origin is not probed three times. 503/429 and non-HTTP `OSError` still use the bounded linear backoff.
 - Retried the trusted-uv archive download a bounded number of times on transient network failures instead of failing the whole `coverage-evidence` job on a single `HTTPError`/`URLError` from the shared `releases.astral.sh` origin, which every pull request's review across the organization fetches; every attempt still runs the unchanged redirect-rejection, host/port pin, size bound, and checksum/member verification, so the fix adds resilience without weakening the trust boundary. Exhaustion tests now assert the linear backoff sequence. The contract now raises the production `HTTPError` 503 type so CWE-755 cannot recast that OSError subclass as an unretried trust-boundary failure.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.

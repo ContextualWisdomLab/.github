@@ -2,6 +2,9 @@
 
 ## Incident and buyer impact
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r`
+include; a lone `--require-hashes` line is not lock evidence.
+
 Every organization pull request runs `coverage-evidence`, which downloads one
 pinned `uv` archive from `releases.astral.sh`. A single transient `HTTPError`
 on that shared origin failed the gate and produced a false-negative
