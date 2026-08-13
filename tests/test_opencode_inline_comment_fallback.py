@@ -32,6 +32,13 @@ def test_trusted_finding_locations_keeps_first_safe_path_line_pairs():
             {"path": "scripts/ci/other.py", "line": 0},
             {"path": "scripts/ci/other.py", "line": True},
             {"path": "scripts/ci/other.py", "line": 12},
+            {"path": "scripts/ci/string-line.py", "line": "9"},
+            {"path": "scripts/ci/bad-line.py", "line": "1.5"},
+            {"path": "scripts/ci/zero-string.py", "line": "0"},
+            {"path": "scripts/ci/none-line.py", "line": None},
+            {"path": "scripts/ci/<script>.py", "line": 4},
+            {"path": "scripts/ci/`tick`.py", "line": 5},
+            {"path": "scripts/ci/a&b.py", "line": 6},
             "not-an-object",
         )
     )
@@ -39,6 +46,7 @@ def test_trusted_finding_locations_keeps_first_safe_path_line_pairs():
     assert locations == [
         ("scripts/ci/example.py", 7),
         ("scripts/ci/other.py", 12),
+        ("scripts/ci/string-line.py", 9),
     ]
     assert trusted_finding_locations({"findings": None}) == []
     assert trusted_finding_locations({}) == []
