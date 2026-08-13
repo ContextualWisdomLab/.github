@@ -13,6 +13,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Stopped listing LEFT-side leftover GitHub suggestion fences as applyable ranges, because GitHub cannot apply a suggestion on the deleted side.
+
 - Remapped leftover OpenCode LEFT suggested-diff comments onto a same-path current-head RIGHT hunk when one exists so those replacements become one-click GitHub suggestions instead of leftover manual-edit blocks. Pure deletions and cannot-provide fences stay leftover.
 - Persisted leftover OpenCode `cannot-provide` and `LEFT` suggested-diff replacement text as a distinct overview “Manual edit (not a GitHub suggestion):” ```diff block so authors can copy the change by hand without treating it as an applyable `path:line` / `path:start-end` GitHub suggestion.
 - Distinguished applyable OpenCode GitHub suggestion ranges from leftover ```diff fences (`cannot-provide` or `LEFT`) in the overview receipts so authors can see which hunks are one-click applies and which still need a manual edit.
