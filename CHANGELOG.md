@@ -13,7 +13,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
-- Short-circuited R testthat failure classification when the terminal failure marker is absent, avoiding unnecessary regular-expression scans over bounded multi-megabyte logs without changing fail-closed classification.
+- Short-circuited R testthat failure classification when the terminal failure marker is absent, avoiding unnecessary regular-expression scans over bounded multi-megabyte logs without changing fail-closed classification. The decision record cites Crochemore–Perrin two-way matching, Thompson regular-expression search, and CWE-407 so the marker-absent path is documented as a linear membership rejection rather than a classification change.
+- Recorded the org control-plane architecture, including R coverage marker short-circuit, so agents reconstruct the trust boundary from the repo instead of private memory.
 
 ### Fixed
 
