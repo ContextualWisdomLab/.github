@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Stripped leftover unapplyable `` ```diff `` / `` ```patch `` fences from one-at-a-time OpenCode inline retries so leftover manual diffs cannot 422 the retry, while applyable `` ```suggestion `` fences stay on the surviving hunk.
 - Capped one-at-a-time OpenCode inline retries at 20 comments and recorded leftover `path:line` rows past that cap so a batch 422 cannot open unbounded `gh api` writes.
 - Kept `start_line`/`start_side` on one-at-a-time 422 retries so a multi-line GitHub suggestion still posts as one range instead of a single comment on the last line.
