@@ -185,6 +185,54 @@ def test_parse_args_rejects_invalid_inputs():
         sandboxed_verify.parse_args(["--allow-env", "not-valid-name!", "--", "true"])
 
 
+def test_main_redacts_github_pat_in_command_argv_and_evidence(tmp_path, capsys):
+    """A real GitHub PAT shape is stripped from command logs and result JSON."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    github_pat = "ghp_" + ("A" * 36)
+    slack_token = "xoxb-" + ("B" * 24)
+    note = f"token={github_pat} authorization: Bearer {slack_token}"
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--evidence-note",
+            note,
+            "--",
+            sys.executable,
+            "-c",
+            f"print('ok {github_pat}')",
+        ]
+    )
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+
+    assert exit_code == 0
+    assert github_pat not in combined
+    assert slack_token not in combined
+    assert "[REDACTED]" in captured.out
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    serialized = json.dumps(payload)
+    assert github_pat not in serialized
+    assert slack_token not in serialized
+    assert "ok" in captured.out
+    assert payload["evidence_note"]
+
+
+def test_redact_logged_argv_keeps_operational_selectors():
+    """Pytest selectors stay readable after credential-shaped fragments are removed."""
+    github_pat = "ghp_" + ("C" * 36)
+    redacted = sandboxed_verify.redact_logged_argv(
+        [sys.executable, "-m", "pytest", "tests/test_sandboxed_verify.py", f"--token={github_pat}"]
+    )
+    assert redacted[2] == "pytest"
+    assert redacted[3] == "tests/test_sandboxed_verify.py"
+    assert github_pat not in redacted[-1]
+    assert "[REDACTED]" in redacted[-1]
+
+
 def test_module_main_entrypoint(monkeypatch, tmp_path):
     """The script entrypoint exits with the verification command status."""
     repo = tmp_path / "repo"

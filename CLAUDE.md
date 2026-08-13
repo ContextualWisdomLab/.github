@@ -35,7 +35,7 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
 
 **OpenCode judges PRs; GitHub Actions performs mechanical updates and merges.** OpenCode approval is
 evidence-gated (changed files, CodeGraph evidence, Change Flow DAG, test/coverage/docstring evidence,
-an actually-executed PoC via `scripts/ci/sandboxed_verify.py` or `scripts/ci/sandboxed_web_e2e.py`,
+an actually-executed PoC via `scripts/ci/sandboxed_verify.py` or `scripts/ci/sandboxed_web_e2e.py` (stdout, stderr, command argv, and evidence notes are secret-redacted, not PII-masked),
 split `Developer experience:` / `User experience:` sections). The scheduler updates a PR branch only
 when the latest review is approved, no current-head check has failed, and GitHub reports the PR as
 behind. The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
