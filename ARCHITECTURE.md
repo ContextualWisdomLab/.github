@@ -70,6 +70,29 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Requirements-directory lock gate
+
+```mermaid
+flowchart TD
+  Base["Authenticated base-commit blob"]
+  Path{"Direct child of a requirements/ directory, or conventional lock name?"}
+  Grammar{"Every non-directive line is an exact == SHA-256 pin or a bounded -r include?"}
+  Preflight{"Independent pip --require-hashes closure succeeds?"}
+  Accept["Materialize into the coverage image"]
+  Reject["Leave the file out of the networked build context"]
+
+  Base --> Path
+  Path -->|"no"| Reject
+  Path -->|"yes"| Grammar
+  Grammar -->|"no"| Reject
+  Grammar -->|"yes"| Preflight
+  Preflight -->|"no"| Reject
+  Preflight -->|"yes"| Accept
+```
+
+A global `--require-hashes` directive is not integrity evidence. CWE-494
+forbids downloading code without verifying origin and digest.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -124,3 +147,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/trusted-requirements-directory-lock-discovery.md`](docs/doctoring/trusted-requirements-directory-lock-discovery.md)
+  — current increment's lock-discovery decision and APA 7th citations.

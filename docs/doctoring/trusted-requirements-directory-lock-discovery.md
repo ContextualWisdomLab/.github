@@ -31,6 +31,11 @@ pip's hash-checking mode intentionally fails when a requirement participating in
 the installation is not fully hashed. Syntax qualification therefore cannot
 substitute for dependency-closure proof.
 
+CWE-494 forbids downloading source or an executable from a remote location
+without verifying origin and integrity (MITRE, 2026). A global
+`--require-hashes` directive therefore cannot promote an unpinned or
+range-pinned line into the networked coverage image.
+
 Unpinned notes, directive-only files, input files, deeper descendants, symbolic
 links, pull-request-only files, malformed Git tree entries, and unsafe include
 syntax remain excluded from the networked coverage image.
@@ -73,6 +78,9 @@ preflight rather than relying on file names or hash-looking text alone.
   remains a separate minimum-runtime contract.
 
 ## References
+
+MITRE. (2026). *CWE-494: Download of code without integrity check*.
+https://cwe.mitre.org/data/definitions/494.html
 
 Python Packaging Authority. (2026). *Install requires vs requirements files*.
 Python Packaging User Guide. Retrieved August 10, 2026, from
