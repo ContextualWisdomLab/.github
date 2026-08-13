@@ -117,6 +117,15 @@ introduces the fix still requires a post-merge default-branch
 `repository_dispatch` run with a matching `evidence-binding.json`; a green
 `pull_request_target` result before that run remains base-workflow evidence only.
 
+After this fix was pushed, central run `31708982141` for the exact head
+`e1cfbed814431533ffbe03ba0f33aca671c160da` was cancelled at
+`2026-08-13T14:16:42Z` before Strix could produce a report. The same
+`pull_request_target` event cancelled the linked required jobs, while the
+contextual-orchestrator and fast-mlsirm exact-head jobs remained queued and the
+three repository runner APIs reported `0 total / 0 online / 0 busy`. This is
+CI-capacity evidence, not a code or security conclusion; no cancelled run may
+supersede the required checks or structured-evidence gate.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
