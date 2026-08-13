@@ -1474,7 +1474,7 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$workflow_file" "create_pull_review_with_payload" "opencode review can post custom review payloads"
 	assert_file_contains "$workflow_file" "comments: [" "opencode review payload includes inline review comments"
 	assert_file_contains "$workflow_file" '#### Suggested diff\n```diff\n' "opencode review puts suggested diffs inside inline review comments"
-	assert_file_contains "$workflow_file" "GitHub did not accept the inline review comments" "opencode review explains anchor failures instead of copying diffs to the PR body"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "GitHub did not accept the inline review comments" "opencode review explains anchor failures instead of copying diffs to the PR body"
 	assert_file_contains "$workflow_file" "opencode_inline_comment_fallback.py" "opencode 422 fallback cites trusted path:line via the dedicated helper"
 	assert_file_contains "$workflow_file" 'build_inline_comment_failure_body "$body_file" "$fallback_body_file" "$control_json"' "opencode 422 fallback receives the trusted control JSON"
 	assert_file_contains "$workflow_file" 'fallback_args+=(--error-file "$error_file")' "opencode 422 overview receipt includes the GitHub error file"
