@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Treated only sealed GitHub HTTP 422 tokens (`HTTP 422`, `status code 422`, `Error code: 422`, `Unprocessable Entity`) as unprocessable review writes, so issue `#422` or a path containing `422` cannot trigger the inline-comment 422 fallback.
 - Dropped OpenCode inline comments that sit outside every current-head changed hunk before the GitHub POST so those comments become overview receipts instead of a 422 that wipes the batch. A present collected diff with no commentable hunks (binary-only) now skips every comment instead of fail-opening the original payload.
 - Capped one-at-a-time OpenCode inline retries at 20 comments and listed attached `path:line` beside refused receipts so the overview shows both outcomes, plus any locations left untried by the cap.
 - Kept each refused OpenCode inline comment's own GitHub 422 phrase next to its `path:line` so mixed retries do not collapse every failure into one shared error sentence.

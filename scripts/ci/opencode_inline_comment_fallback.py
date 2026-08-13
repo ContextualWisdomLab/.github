@@ -14,6 +14,9 @@ from typing import Any
 DEFAULT_SINGLE_COMMENT_RETRY_LIMIT = 20
 ERROR_PHRASE_MAX_CHARS = 240
 HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
+SEALED_422_RE = re.compile(
+    r"(?i)(?:HTTP\s+422|status(?:\s+code)?\s+422|Error code:\s*422|Unprocessable Entity)"
+)
 HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
 MINUS_PATH_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$")
@@ -319,7 +322,7 @@ def github_publication_error_phrase(text: str) -> str:
         if line.casefold().startswith("github http 422"):
             return line[:ERROR_PHRASE_MAX_CHARS]
         return f"GitHub HTTP 422: {line}".rstrip(": ")[:ERROR_PHRASE_MAX_CHARS]
-    if "422" in raw:
+    if SEALED_422_RE.search(raw):
         return "GitHub HTTP 422"
     return "GitHub review write failed"
 
@@ -327,9 +330,9 @@ def github_publication_error_phrase(text: str) -> str:
 def github_error_is_unprocessable(text: str) -> bool:
     """Return whether GitHub rejected the review write as HTTP 422."""
     raw = text or ""
-    if "422" in raw or "Unprocessable Entity" in raw:
+    if SEALED_422_RE.search(raw):
         return True
-    return "422" in github_publication_error_phrase(raw)
+    return SEALED_422_RE.search(github_publication_error_phrase(raw)) is not None
 
 
 def iter_single_comment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
