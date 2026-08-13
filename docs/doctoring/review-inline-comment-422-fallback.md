@@ -61,8 +61,13 @@ and `start_side` so GitHub applies one multi-line suggestion range
 (GitHub, n.d.-b). A range that would leave the hunk stays single-line.
 The publisher then persists those applyable ranges as overview receipts
 (``path:line`` or ``path:start-end``) so the author can see which hunks
-shipped as one-click GitHub suggestions (GitHub, n.d.-c). Suggested diffs
-still stay out of the PR-level body.
+shipped as one-click GitHub suggestions (GitHub, n.d.-c). Comments that
+kept only a `` ```diff `` fence are listed separately with the reason
+``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
+replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
+suggestion on the deleted side; GitHub, n.d.-b, n.d.-c). A comment that
+already has `` ```suggestion `` is applyable, not leftover. Suggested
+diffs still stay out of the PR-level body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -80,8 +85,10 @@ with the same control object used to build the inline `comments` array.
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,
   `start_line`/`line` ranges when a multi-line replacement sits on one
-  current-head hunk, and overview receipts that list applyable
-  ``path:start-end`` suggestion ranges.
+  current-head hunk, overview receipts that list applyable
+  ``path:start-end`` suggestion ranges, and a separate leftover-diff
+  receipt list that labels remaining `` ```diff `` fences as
+  ``cannot-provide`` or ``LEFT``.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.

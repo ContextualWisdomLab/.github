@@ -6,8 +6,13 @@ import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
     DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
+    LEFTOVER_DIFF_REASONS,
     apply_github_suggestion_blocks,
     applyable_suggestion_ranges,
+    leftover_diff_fence_reason,
+    leftover_diff_fence_receipts,
+    parse_leftover_diff_receipts,
+    render_leftover_diff_receipts,
     comment_on_changed_hunk,
     count_removed_suggestion_lines,
     extract_suggestion_replacement,
@@ -1697,6 +1702,559 @@ def test_overview_receipts_list_applyable_suggestion_ranges(tmp_path):
                 str(receipt),
                 "--applyable-locations",
                 str(tmp_path / "missing-applyable.txt"),
+            ]
+        )
+        == 2
+    )
+
+
+CANNOT_PROVIDE_DIFF_BODY = """\
+### HIGH no replacement
+
+- Location: `scripts/ci/example.py:12`
+
+#### Suggested diff
+```diff
+Cannot provide diff - original file inaccessible
+```
+"""
+
+NA_DIFF_BODY = """\
+### HIGH n/a
+
+#### Suggested diff
+```diff
+n/a
+```
+"""
+
+
+def test_leftover_diff_receipts_separate_left_and_cannot_provide_from_applyable():
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    payload = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "side": "RIGHT",
+                "body": MULTILINE_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 12,
+                "side": "RIGHT",
+                "body": CANNOT_PROVIDE_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/removed.py",
+                "line": 11,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 8,
+                "side": "RIGHT",
+                "body": NA_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/plain.py",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "no suggested diff",
+            },
+        ),
+        hunks,
+    )
+    applyable = applyable_suggestion_ranges(payload)
+    leftover = leftover_diff_fence_receipts(payload)
+    leftover_keys = {(path, line) for path, line, _reason in leftover}
+    applyable_starts = {(path, start) for path, start, _end in applyable}
+    assert applyable == [("scripts/ci/example.py", 5, 7)]
+    assert leftover == [
+        ("scripts/ci/example.py", 12, "cannot-provide"),
+        ("scripts/ci/removed.py", 11, "LEFT"),
+        ("scripts/ci/example.py", 8, "cannot-provide"),
+    ]
+    assert leftover_keys.isdisjoint(applyable_starts)
+    assert leftover_diff_fence_reason(
+        {"side": "RIGHT", "body": CANNOT_PROVIDE_DIFF_BODY}
+    ) == "cannot-provide"
+    assert leftover_diff_fence_reason(
+        {"side": "LEFT", "body": SUGGESTED_DIFF_BODY}
+    ) == "LEFT"
+    assert leftover_diff_fence_reason(
+        {"side": "RIGHT", "body": "already\n```suggestion\nnew\n```\n"}
+    ) is None
+    assert leftover_diff_fence_reason({"side": "RIGHT", "body": "no fence"}) is None
+    assert leftover_diff_fence_receipts({"comments": "bad"}) == []
+    assert leftover_diff_fence_receipts(
+        {
+            "comments": [
+                {
+                    "path": "../escape.py",
+                    "line": 1,
+                    "side": "LEFT",
+                    "body": SUGGESTED_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 12,
+                    "side": "RIGHT",
+                    "body": CANNOT_PROVIDE_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 12,
+                    "side": "RIGHT",
+                    "body": CANNOT_PROVIDE_DIFF_BODY,
+                },
+                "not-an-object",
+            ]
+        }
+    ) == [("scripts/ci/example.py", 12, "cannot-provide")]
+    parsed = parse_leftover_diff_receipts(
+        "scripts/ci/example.py:12\tcannot-provide\n"
+        "scripts/ci/removed.py:11\tLEFT\n"
+        "scripts/ci/example.py:9\tunknown\n"
+    )
+    assert parsed == [
+        ("scripts/ci/example.py", 12, "cannot-provide"),
+        ("scripts/ci/removed.py", 11, "LEFT"),
+    ]
+    assert LEFTOVER_DIFF_REASONS == {"LEFT", "cannot-provide"}
+    assert render_leftover_diff_receipts(parsed) == [
+        "- `scripts/ci/example.py:12` — cannot-provide",
+        "- `scripts/ci/removed.py:11` — LEFT",
+    ]
+
+
+def test_overview_lists_applyable_and_leftover_under_distinct_headings(tmp_path):
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 5},
+            {"path": "scripts/ci/example.py", "line": 12},
+            {"path": "scripts/ci/removed.py", "line": 11},
+            {"path": "scripts/ci/foreign.py", "line": 1},
+        ),
+        applyable_locations=[("scripts/ci/example.py", 5, 7)],
+        leftover_locations=[
+            ("scripts/ci/example.py", 12, "cannot-provide"),
+            ("scripts/ci/removed.py", 11, "LEFT"),
+            ("scripts/ci/foreign.py", 1, "cannot-provide"),
+        ],
+    )
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    assert applyable_heading in body
+    assert leftover_heading in body
+    applyable_section = body.split(applyable_heading, 1)[1].split(leftover_heading, 1)[0]
+    leftover_section = body.split(leftover_heading, 1)[1]
+    assert "- `scripts/ci/example.py:5-7`" in applyable_section
+    assert "cannot-provide" not in applyable_section
+    assert "LEFT" not in applyable_section
+    assert "- `scripts/ci/example.py:12` — cannot-provide" in leftover_section
+    assert "- `scripts/ci/removed.py:11` — LEFT" in leftover_section
+    assert "scripts/ci/example.py:5-7" not in leftover_section
+    leftover_only = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/example.py", "line": 12}),
+        leftover_locations=[("scripts/ci/example.py", 12, "cannot-provide")],
+    )
+    assert leftover_heading in leftover_only
+    assert applyable_heading not in leftover_only
+    empty_leftover = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/ok.py", "line": 4}),
+        leftover_locations=[],
+    )
+    assert leftover_heading not in empty_leftover
+
+    payload = tmp_path / "batch.json"
+    payload.write_text(
+        json.dumps(
+            _batch_payload(
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 5,
+                    "side": "RIGHT",
+                    "body": MULTILINE_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 12,
+                    "side": "RIGHT",
+                    "body": CANNOT_PROVIDE_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/removed.py",
+                    "line": 11,
+                    "side": "LEFT",
+                    "body": SUGGESTED_DIFF_BODY,
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    hunks_diff = tmp_path / "hunks.diff"
+    hunks_diff.write_text(EXAMPLE_UNIFIED_DIFF, encoding="utf-8")
+    output = tmp_path / "filtered.json"
+    applyable = tmp_path / "applyable.txt"
+    leftover = tmp_path / "leftover.txt"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(output),
+                "--applyable-locations",
+                str(applyable),
+                "--leftover-diff-locations",
+                str(leftover),
+            ]
+        )
+        == 0
+    )
+    assert applyable.read_text(encoding="utf-8") == "scripts/ci/example.py:5-7\n"
+    leftover_text = leftover.read_text(encoding="utf-8")
+    assert "scripts/ci/example.py:12\tcannot-provide\n" in leftover_text
+    assert "scripts/ci/removed.py:11\tLEFT\n" in leftover_text
+    assert "scripts/ci/example.py:5-7" not in leftover_text
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 5},
+                {"path": "scripts/ci/example.py", "line": 12},
+                {"path": "scripts/ci/removed.py", "line": 11},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--applyable-locations",
+                str(applyable),
+                "--leftover-diff-locations",
+                str(leftover),
+            ]
+        )
+        == 0
+    )
+    rendered = receipt.read_text(encoding="utf-8")
+    assert applyable_heading in rendered
+    assert leftover_heading in rendered
+    assert "- `scripts/ci/example.py:5-7`" in rendered
+    assert "- `scripts/ci/example.py:12` — cannot-provide" in rendered
+    assert "- `scripts/ci/removed.py:11` — LEFT" in rendered
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--leftover-diff-locations",
+                str(tmp_path / "missing-leftover.txt"),
+            ]
+        )
+        == 2
+    )
+
+
+CANNOT_PROVIDE_DIFF_BODY = """\
+### HIGH no replacement
+
+- Location: `scripts/ci/blocked.py:4`
+
+#### Suggested diff
+```diff
+Cannot provide diff - inaccessible
+```
+"""
+
+
+def test_leftover_diff_fences_are_not_applyable_suggestions():
+    left_comment = {
+        "path": "scripts/ci/removed.py",
+        "line": 11,
+        "side": "LEFT",
+        "body": SUGGESTED_DIFF_BODY,
+    }
+    cannot_comment = {
+        "path": "scripts/ci/blocked.py",
+        "line": 4,
+        "side": "RIGHT",
+        "body": CANNOT_PROVIDE_DIFF_BODY,
+    }
+    applyable_comment = {
+        "path": "scripts/ci/example.py",
+        "line": 7,
+        "side": "RIGHT",
+        "body": SUGGESTED_DIFF_BODY,
+    }
+    assert leftover_diff_fence_reason(left_comment) == "LEFT"
+    assert leftover_diff_fence_reason(cannot_comment) == "cannot-provide"
+    assert leftover_diff_fence_reason({"body": "no fence"}) is None
+    assert leftover_diff_fence_reason({"body": 12, "side": "LEFT"}) is None
+    assert leftover_diff_fence_reason({"body": "```suggestion\nx\n```"}) is None
+    assert leftover_diff_fence_reason(
+        {"body": "```diff\nn/a\n```\n\n```suggestion\nkept\n```\n"}
+    ) is None
+    converted = apply_github_suggestion_blocks(
+        _batch_payload(applyable_comment, left_comment, cannot_comment)
+    )
+    assert leftover_diff_fence_reason(converted["comments"][0]) is None
+    assert leftover_diff_fence_receipts({"comments": "bad"}) == []
+    assert leftover_diff_fence_receipts(
+        _batch_payload(
+            converted["comments"][0],
+            left_comment,
+            cannot_comment,
+            {
+                "path": "scripts/ci/removed.py",
+                "line": 11,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "../escape.py",
+                "line": 1,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/blocked.py",
+                "line": True,
+                "side": "RIGHT",
+                "body": CANNOT_PROVIDE_DIFF_BODY,
+            },
+            "not-an-object",
+        )
+    ) == [
+        ("scripts/ci/removed.py", 11, "LEFT"),
+        ("scripts/ci/blocked.py", 4, "cannot-provide"),
+    ]
+    parsed = parse_leftover_diff_receipts(
+        "\n".join(
+            [
+                "scripts/ci/removed.py:11\tLEFT",
+                "scripts/ci/blocked.py:4\tcannot-provide",
+                "scripts/ci/removed.py:11\tLEFT",
+                "scripts/ci/example.py:7\tHTTP 422",
+                "scripts/ci/ok.py:4",
+                "../escape.py:1\tLEFT",
+                "# comment",
+                "",
+            ]
+        )
+    )
+    assert parsed == [
+        ("scripts/ci/removed.py", 11, "LEFT"),
+        ("scripts/ci/blocked.py", 4, "cannot-provide"),
+    ]
+    assert render_leftover_diff_receipts(parsed) == [
+        "- `scripts/ci/removed.py:11` — LEFT",
+        "- `scripts/ci/blocked.py:4` — cannot-provide",
+    ]
+
+
+def test_overview_receipts_distinguish_applyable_from_leftover_diff_fences(tmp_path):
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 5},
+            {"path": "scripts/ci/removed.py", "line": 11},
+            {"path": "scripts/ci/blocked.py", "line": 4},
+        ),
+        applyable_locations=[("scripts/ci/example.py", 5, 7)],
+        leftover_locations=[
+            ("scripts/ci/removed.py", 11, "LEFT"),
+            ("scripts/ci/blocked.py", 4, "cannot-provide"),
+            ("scripts/ci/foreign.py", 1, "LEFT"),
+            ("scripts/ci/blocked.py", 4, "LEFT"),
+            ("scripts/ci/example.py", 5, "HTTP 422"),
+        ],
+    )
+    assert "GitHub can apply these suggested replacements:" in body
+    assert "- `scripts/ci/example.py:5-7`" in body
+    assert "These comments still have a suggested-diff fence that GitHub cannot apply:" in body
+    assert "- `scripts/ci/removed.py:11` — LEFT" in body
+    assert "- `scripts/ci/blocked.py:4` — cannot-provide" in body
+    assert body.index("GitHub can apply these suggested replacements:") < body.index(
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    assert "scripts/ci/foreign.py" not in body
+    leftover_only = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/removed.py", "line": 11}),
+        leftover_locations=[("scripts/ci/removed.py", 11, "LEFT")],
+    )
+    assert "These comments still have a suggested-diff fence that GitHub cannot apply:" in leftover_only
+    assert "- `scripts/ci/removed.py:11` — LEFT" in leftover_only
+    assert "GitHub can apply these suggested replacements:" not in leftover_only
+    assert "did not accept the inline review comments" not in leftover_only
+    empty_leftover = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/ok.py", "line": 4}),
+        leftover_locations=[],
+    )
+    assert (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+        not in empty_leftover
+    )
+    refused_with_leftover = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/blocked.py", "line": 4},
+        ),
+        refused_receipts=[],
+        leftover_locations=[("scripts/ci/blocked.py", 4, "cannot-provide")],
+    )
+    assert "- `scripts/ci/blocked.py:4` — cannot-provide" in refused_with_leftover
+    refused_locations_with_leftover = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/removed.py", "line": 11}),
+        refused_locations=[],
+        leftover_locations=[("scripts/ci/removed.py", 11, "LEFT")],
+    )
+    assert "- `scripts/ci/removed.py:11` — LEFT" in refused_locations_with_leftover
+    empty_trusted_leftover = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/ok.py", "line": 4}),
+        leftover_locations=[("scripts/ci/removed.py", 11, "LEFT")],
+    )
+    assert (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+        not in empty_trusted_leftover
+    )
+
+    payload = tmp_path / "batch.json"
+    payload.write_text(
+        json.dumps(
+            _batch_payload(
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "side": "RIGHT",
+                    "body": SUGGESTED_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/removed.py",
+                    "line": 11,
+                    "side": "LEFT",
+                    "body": SUGGESTED_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/blocked.py",
+                    "line": 4,
+                    "side": "RIGHT",
+                    "body": CANNOT_PROVIDE_DIFF_BODY,
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    hunks_diff = tmp_path / "hunks.diff"
+    hunks_diff.write_text(
+        EXAMPLE_UNIFIED_DIFF
+        + "diff --git a/scripts/ci/blocked.py b/scripts/ci/blocked.py\n"
+        + "--- a/scripts/ci/blocked.py\n+++ b/scripts/ci/blocked.py\n"
+        + "@@ -4,1 +4,1 @@\n-    old\n+    new\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "filtered.json"
+    leftover = tmp_path / "leftover.txt"
+    applyable = tmp_path / "applyable.txt"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(output),
+                "--applyable-locations",
+                str(applyable),
+                "--leftover-diff-locations",
+                str(leftover),
+            ]
+        )
+        == 0
+    )
+    assert applyable.read_text(encoding="utf-8") == "scripts/ci/example.py:7\n"
+    assert leftover.read_text(encoding="utf-8") == (
+        "scripts/ci/removed.py:11\tLEFT\n"
+        "scripts/ci/blocked.py:4\tcannot-provide\n"
+    )
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 7},
+                {"path": "scripts/ci/removed.py", "line": 11},
+                {"path": "scripts/ci/blocked.py", "line": 4},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--applyable-locations",
+                str(applyable),
+                "--leftover-diff-locations",
+                str(leftover),
+            ]
+        )
+        == 0
+    )
+    receipt_text = receipt.read_text(encoding="utf-8")
+    assert "scripts/ci/example.py:7" in receipt_text
+    assert "scripts/ci/removed.py:11` — LEFT" in receipt_text
+    assert "scripts/ci/blocked.py:4` — cannot-provide" in receipt_text
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--leftover-diff-locations",
+                str(tmp_path / "missing-leftover.txt"),
             ]
         )
         == 2

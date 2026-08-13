@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Distinguished applyable OpenCode GitHub suggestion ranges from leftover ```diff fences (`cannot-provide` or `LEFT`) in the overview receipts so authors can see which hunks are one-click applies and which still need a manual edit.
 - Listed applyable OpenCode GitHub suggestion ranges (`path:line` or `path:start-end`) in the overview receipts so authors can see which surviving hunks shipped as one-click applies.
 - Set `start_line`/`line` on surviving multi-line OpenCode GitHub suggestions so a replacement that spans more than one current-head hunk line applies as one range.
 - Converted surviving OpenCode inline suggested diffs into GitHub `suggestion` blocks so authors can apply the replacement on the current-head hunk in one click.
