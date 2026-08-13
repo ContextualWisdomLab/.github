@@ -1615,6 +1615,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert (
+        'build_inline_comment_failure_body "$body_file" "$fallback_body_file"\n'
+        not in workflow
+    )
+    assert (
         'create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$body_file")" "$payload_file" "$fallback_body_file" "$body_file" "$control_json"'
         in workflow
     )

@@ -512,7 +512,7 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     for path, candidate in regular_blobs:
-        if _is_candidate_lock_name(candidate.name):
+        if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
             if _is_hash_pinned(content):
                 locks.append((path, content))

@@ -1056,17 +1056,21 @@ def github_publication_error_phrase(text: str) -> str:
         if line.casefold().startswith("github http 422"):
             return line[:ERROR_PHRASE_MAX_CHARS]
         return f"GitHub HTTP 422: {line}".rstrip(": ")[:ERROR_PHRASE_MAX_CHARS]
-    if "422" in raw:
-        return "GitHub HTTP 422"
     return "GitHub review write failed"
 
 
 def github_error_is_unprocessable(text: str) -> bool:
-    """Return whether GitHub rejected the review write as HTTP 422."""
+    """Return whether GitHub rejected the review write as HTTP 422.
+
+    CWE-1288: a bare ``422`` substring (commit SHA, issue number, run
+    URL) is not an HTTP status. Retry one-at-a-time only for a real
+    ``HTTP 422`` line, ``Unprocessable Entity``, or a JSON error phrase
+    already classified as GitHub HTTP 422.
+    """
     raw = text or ""
-    if "422" in raw or "Unprocessable Entity" in raw:
+    if HTTP_422_LINE_RE.search(raw) or "Unprocessable Entity" in raw:
         return True
-    return "422" in github_publication_error_phrase(raw)
+    return github_publication_error_phrase(raw).startswith("GitHub HTTP 422")
 
 
 def single_comment_range_fields(

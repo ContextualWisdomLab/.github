@@ -155,6 +155,41 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
     assert not materializer._is_candidate_lock_name("pyproject.toml")
 
 
+def test_lock_path_candidates_include_direct_requirements_txt_children() -> None:
+    """A hash-pinned ``requirements/ci.txt`` is a lock even though its name is not."""
+    ci_lock = materializer.pathlib.PurePosixPath("requirements/ci.txt")
+    assert materializer._is_candidate_lock_path(ci_lock)
+    assert not materializer._is_candidate_lock_name(ci_lock.name)
+    assert not materializer._is_candidate_lock_path(
+        materializer.pathlib.PurePosixPath("docs/ci.txt")
+    )
+
+
+def test_materializes_hash_pinned_requirements_directory_txt(tmp_path: Path) -> None:
+    """``base_hash_locks`` discovers fully pinned ``requirements/ci.txt``."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+
+    requirements = repo / "requirements"
+    requirements.mkdir()
+    (requirements / "ci.txt").write_text(
+        "demo==1 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    (requirements / "notes.md").write_text("not a lock\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+
+    assert [entry["source"] for entry in manifest] == ["requirements/ci.txt"]
+
+
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")

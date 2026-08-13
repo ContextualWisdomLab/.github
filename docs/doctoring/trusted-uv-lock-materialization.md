@@ -81,6 +81,13 @@ then match the pinned digest. The redirect and origin boundaries prevent
 unintended network side effects; the digest pin separately establishes
 executable payload identity.
 
+Hash-pinned pip closures may also live as direct children of a directory
+named `requirements`, such as `requirements/ci.txt`. File-name matching
+alone misses those paths. `base_hash_locks` therefore uses
+`_is_candidate_lock_path`, which treats a `.txt` child of a `requirements`
+directory as eligible; content must still be a complete SHA-256 pin or a
+bounded relative `-r` include before it enters the trusted image.
+
 ## Modular and workspace boundary
 
 Nested standalone services are supported: a repository may contain several

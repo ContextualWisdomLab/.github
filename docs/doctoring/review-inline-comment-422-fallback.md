@@ -23,7 +23,10 @@ items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
 lines are omitted. An empty location set is stated explicitly.
 
 After a refused attach, the publisher first checks that the failure is
-HTTP 422, splits the batch `comments` array into at most 20
+a real HTTP 422 (`HTTP 422` line, `Unprocessable Entity`, or a JSON
+error phrase already classified as GitHub HTTP 422). A bare `422`
+substring in a commit SHA, issue number, or Actions run URL is not
+enough (CWE-1288). The publisher then splits the batch `comments` array into at most 20
 single-comment review payloads (`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`,
 default 20), and retries each with the same write helper. A remapped
 leftover that already has a multi-line GitHub suggestion range keeps
@@ -123,6 +126,9 @@ Suggested diffs still stay out of the PR-level body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
+`run_failed_check_diagnosis` must pass that local `$control_json` as the
+third argument; a two-argument call under `set -u` aborts the step and
+discards a valid REQUEST_CHANGES failed-check diagnosis.
 
 ## Verification contract
 
@@ -198,6 +204,9 @@ https://docs.github.com/en/rest/pulls/comments#create-a-review-comment-for-a-pul
 GitHub. (n.d.-c). *Commenting on a pull request*. GitHub Docs. Retrieved
 August 13, 2026, from
 https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/commenting-on-a-pull-request#suggesting-changes-to-a-file
+
+MITRE. (n.d.). *CWE-1288: Improper validation of consistency within input*.
+Retrieved August 14, 2026, from https://cwe.mitre.org/data/definitions/1288.html
 
 Sadowski, C., Söderberg, E., Church, L., Sipko, M., & Bacchelli, A. (2018).
 Modern code review: A case study at Google. In *Proceedings of the 40th

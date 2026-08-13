@@ -13,6 +13,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- `run_failed_check_diagnosis` now passes the local `$control_json` into `build_inline_comment_failure_body`, so a valid REQUEST_CHANGES failed-check diagnosis is not discarded by `set -u` when the helper requires the third argument.
+- `base_hash_locks` now discovers hash-pinned direct children such as `requirements/ci.txt` via `_is_candidate_lock_path`, not only `requirements*.txt` file names.
+- Inline-comment 422 retry now recognizes HTTP 422 only from `HTTP 422` / `Unprocessable Entity` / classified GitHub HTTP 422 JSON phrases. A bare `422` in a SHA, issue number, or run URL no longer starts the 20-comment retry loop (CWE-1288).
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Posted review JSON now strips closed GitHub ` ```suggestion ` fences whose range overlaps leftover `path:start-end` coverage, so leftover `example.py:5-7` cannot still offer a one-click apply on interior `example.py:6` (CWE-1288).
 - Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).

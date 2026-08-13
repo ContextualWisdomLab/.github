@@ -6608,7 +6608,7 @@ jobs:
               build_request_changes_review_payload "$control_json" "$body_file" "$review_payload_file"
             fi
             if [ -n "$fallback_body_file" ]; then
-              build_inline_comment_failure_body "$body_file" "$fallback_body_file"
+              build_inline_comment_failure_body "$body_file" "$fallback_body_file" "$control_json"
             fi
           }
 
