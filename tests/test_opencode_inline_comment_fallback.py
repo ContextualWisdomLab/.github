@@ -8,6 +8,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
     apply_github_suggestion_blocks,
     comment_on_changed_hunk,
+    count_removed_suggestion_lines,
     extract_suggestion_replacement,
     filter_payload_comments_to_hunks,
     github_error_is_unprocessable,
@@ -20,6 +21,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     record_attached_receipt,
     record_refused_receipt,
     render_github_suggestion_block,
+    suggestion_comment_range,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
     render_single_comment_review,
@@ -1341,6 +1343,100 @@ def test_apply_github_suggestion_blocks_on_surviving_right_comments():
         )
     )
     assert "```suggestion\nfixed\n```" in second_fence["comments"][0]["body"]
+
+
+MULTILINE_DIFF_BODY = """\
+### HIGH replace three lines
+
+- Location: `scripts/ci/example.py:5`
+
+#### Suggested diff
+```diff
+@@ -5,3 +5,2 @@
+-    keep
+-    keep
+-    keep
++    first
++    second
+```
+"""
+
+
+def test_apply_github_suggestion_blocks_sets_multiline_range(tmp_path):
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 5,
+            "side": "RIGHT",
+            "body": MULTILINE_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/example.py",
+            "line": 11,
+            "side": "RIGHT",
+            "body": MULTILINE_DIFF_BODY,
+        },
+    )
+    updated = apply_github_suggestion_blocks(payload, hunks)
+    first, second = updated["comments"]
+    assert first["start_line"] == 5
+    assert first["line"] == 7
+    assert first["side"] == "RIGHT"
+    assert first["start_side"] == "RIGHT"
+    assert "```suggestion\n    first\n    second\n```" in first["body"]
+    assert "start_line" not in second
+    assert second["line"] == 11
+    already = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "side": "RIGHT",
+                "body": MULTILINE_DIFF_BODY + "\n```suggestion\nkept\n```\n",
+            }
+        ),
+        hunks,
+    )
+    assert already["comments"][0]["start_line"] == 5
+    assert already["comments"][0]["body"].count("```suggestion") == 1
+    no_line = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": True,
+                "side": "RIGHT",
+                "body": MULTILINE_DIFF_BODY,
+            }
+        ),
+        hunks,
+    )
+    assert "start_line" not in no_line["comments"][0]
+    assert "```suggestion" in no_line["comments"][0]["body"]
+    output = tmp_path / "ranged.json"
+    assert write_hunk_filtered_payload(payload, hunks, output) == 2
+    written = json.loads(output.read_text(encoding="utf-8"))
+    assert written["comments"][0]["start_line"] == 5
+    assert written["comments"][0]["line"] == 7
+    assert count_removed_suggestion_lines("@@ -5,3 +5,2 @@\n-    keep\n-    keep\n") == 2
+    assert suggestion_comment_range(
+        "scripts/ci/example.py", 5, "@@\n-    old\n+    new\n", hunks
+    ) == (None, 5)
+    assert suggestion_comment_range("../escape.py", 9, MULTILINE_DIFF_BODY, hunks) == (
+        None,
+        9,
+    )
+    assert suggestion_comment_range("../escape.py", True, MULTILINE_DIFF_BODY, hunks) == (
+        None,
+        1,
+    )
+    assert suggestion_comment_range(
+        "scripts/ci/example.py",
+        5,
+        "@@ -5,3 +5,2 @@\n-    keep\n-    keep\n-    keep\n+    first\n+    second\n",
+        hunks,
+        side="NOPE",
+    ) == (5, 7)
 
 
 def test_write_hunk_filtered_payload_adds_suggestion_on_surviving_hunk(tmp_path):

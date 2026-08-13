@@ -264,8 +264,47 @@ def render_github_suggestion_block(replacement: str) -> str:
     return f"```suggestion\n{replacement}\n```"
 
 
-def apply_github_suggestion_blocks(payload: dict[str, Any]) -> dict[str, Any]:
-    """Append GitHub suggestion fences to surviving RIGHT-side inline comments."""
+def count_removed_suggestion_lines(diff_text: str) -> int:
+    """Return how many current-file lines a unified suggested_diff removes."""
+    count = 0
+    for line in (diff_text or "").splitlines():
+        if line.startswith(("diff ", "index ", "---", "+++", "@@")):
+            continue
+        if line.startswith("-"):
+            count += 1
+    return count
+
+
+def suggestion_comment_range(
+    path: str,
+    line: int,
+    diff_text: str,
+    hunks: dict[str, dict[str, set[int]]] | None,
+    *,
+    side: str = "RIGHT",
+) -> tuple[int | None, int]:
+    """Return ``(start_line, end_line)`` when a multi-line hunk range is safe."""
+    safe_path = safe_finding_path(path)
+    safe_line = safe_finding_line(line)
+    if safe_path is None or safe_line is None:
+        fallback = line if isinstance(line, int) and not isinstance(line, bool) and line > 0 else 1
+        return None, fallback
+    removed = count_removed_suggestion_lines(diff_text)
+    if removed <= 1 or not hunks:
+        return None, safe_line
+    end = safe_line + removed - 1
+    side_key = side if side in {"LEFT", "RIGHT"} else "RIGHT"
+    hunk_lines = hunks.get(safe_path, {}).get(side_key, set())
+    if all(candidate in hunk_lines for candidate in range(safe_line, end + 1)):
+        return safe_line, end
+    return None, safe_line
+
+
+def apply_github_suggestion_blocks(
+    payload: dict[str, Any],
+    hunks: dict[str, dict[str, set[int]]] | None = None,
+) -> dict[str, Any]:
+    """Append GitHub suggestion fences and multi-line ranges on surviving comments."""
     comments = payload.get("comments")
     if not isinstance(comments, list):
         return payload
@@ -276,21 +315,35 @@ def apply_github_suggestion_blocks(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         body = comment.get("body")
         side = comment.get("side")
-        if not isinstance(body, str) or side == "LEFT" or "```suggestion" in body:
+        if not isinstance(body, str) or side == "LEFT":
             updated.append(comment)
             continue
         replacement: str | None = None
+        diff_text: str | None = None
         for match in DIFF_FENCE_RE.finditer(body):
-            replacement = extract_suggestion_replacement(match.group(1))
-            if replacement is not None:
+            candidate = extract_suggestion_replacement(match.group(1))
+            if candidate is not None:
+                replacement = candidate
+                diff_text = match.group(1)
                 break
-        if replacement is None:
-            updated.append(comment)
-            continue
         new_comment = dict(comment)
-        new_comment["body"] = (
-            f"{body.rstrip()}\n\n{render_github_suggestion_block(replacement)}\n"
-        )
+        if replacement is not None:
+            if "```suggestion" not in body:
+                new_comment["body"] = (
+                    f"{body.rstrip()}\n\n{render_github_suggestion_block(replacement)}\n"
+                )
+            path = safe_finding_path(comment.get("path"))
+            line = safe_finding_line(comment.get("line"))
+            side_key = side if side in {"LEFT", "RIGHT"} else "RIGHT"
+            if path is not None and line is not None:
+                start, end = suggestion_comment_range(
+                    path, line, diff_text or "", hunks, side=side_key
+                )
+                if start is not None:
+                    new_comment["start_line"] = start
+                    new_comment["line"] = end
+                    new_comment["side"] = side_key
+                    new_comment["start_side"] = side_key
         updated.append(new_comment)
     rewritten = dict(payload)
     rewritten["comments"] = updated
@@ -305,7 +358,7 @@ def write_hunk_filtered_payload(
 ) -> int:
     """Write a hunk-filtered review payload and optional skipped ``path:line`` rows."""
     filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
-    filtered = apply_github_suggestion_blocks(filtered)
+    filtered = apply_github_suggestion_blocks(filtered, hunks)
     comments = filtered.get("comments")
     output.write_text(json.dumps(filtered, ensure_ascii=True), encoding="utf-8")
     if skipped_path is not None:
